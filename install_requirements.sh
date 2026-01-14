@@ -3,11 +3,11 @@
 # Exit on error
 set -e
 
-echo "🚀 Starting project setup..."
+echo "Starting project setup..."
 
 # --- 1. Python (uv) Setup ---
 echo ""
-echo "🐍 Setting up Python environment with uv..."
+echo "Setting up Python environment with uv..."
 
 if ! command -v uv &> /dev/null; then
     echo "uv not found. Installing uv..."
@@ -40,7 +40,7 @@ fi
 
 # --- 3. Node.js/npm Setup ---
 echo ""
-echo "📦 Setting up Node.js environment..."
+echo "Setting up Node.js environment..."
 
 if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
     echo "Node.js/npm not found. Installing via nvm..."
@@ -73,7 +73,7 @@ fi
 
 # --- 4. JavaScript Dependencies ---
 echo ""
-echo "📦 Installing JavaScript dependencies..."
+echo "Installing JavaScript dependencies..."
 if [ -d "embedding_visualization" ]; then
     cd embedding_visualization
     
@@ -87,4 +87,4 @@ else
 fi
 
 echo ""
-echo "✅ All requirements installed successfully!"
+echo "All requirements installed successfully!"

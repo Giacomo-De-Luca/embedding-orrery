@@ -8,6 +8,8 @@ Polish is not there, a lot of the functionalities are iffy at best, but the arch
 
 (I'm trying to make it work for sparse embeddings as well and qwen embeddings, there were some interpretability experiments in the backend folder, but the code was... raw.)
 
+*Note:* the first time it launches, there are no data to display, probably I should add a test little dataset. Anyways, click on the "Embed" button on the top right, it opens the collection manager page. There one can embed datasets or use the default "emotion one" (which is quite terrible as an example). Select the columns to embed, and click embed. Remotely the only provider tested that it's working is sentence-transformers. I will add more later. 
+
 ## Quick Start
 
 ```bash
