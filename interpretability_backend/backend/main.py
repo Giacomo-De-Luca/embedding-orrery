@@ -3,8 +3,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
-from .schema import schema
-import uvicorn
+from .API import schema
+from .API.upload import router as upload_router
 
 
 # Create FastAPI app
@@ -30,6 +30,9 @@ app.add_middleware(
 
 # Create GraphQL router
 graphql_app = GraphQLRouter(schema)
+
+# Mount upload router
+app.include_router(upload_router)
 
 # Mount GraphQL endpoint
 app.include_router(graphql_app, prefix="/graphql")
