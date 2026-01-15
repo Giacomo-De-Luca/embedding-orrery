@@ -806,8 +806,6 @@ export function ScatterPlot3D({
     graphDiv.on('plotly_unhover', handlePlotlyUnhover);
 
     return () => {
-      graphDiv.removeListener('plotly_hover', handlePlotlyHover);
-      graphDiv.removeListener('plotly_unhover', handlePlotlyUnhover);
     };
   }, [plotReady, containerRef]);
 
