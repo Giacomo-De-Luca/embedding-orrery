@@ -13,6 +13,7 @@ import { VisualizationControls } from './VisualizationControls';
 import { SelectedPointCard } from './SelectedPointCard';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import type { VisualizationState, Point2D, Point3D, CategoryFieldOption } from '../../lib/types/types';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   state: VisualizationState;
@@ -96,7 +97,10 @@ export function EmbeddingSidebar({
               />
             </>
           )}
+
         </div>
+        <ScrollBar orientation="vertical" />
+
       </SidebarContent>
 
       <SidebarFooter className="border-t px-4 py-3">

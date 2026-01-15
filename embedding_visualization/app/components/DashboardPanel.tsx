@@ -11,6 +11,7 @@ import { ScatterPlot3D } from './ScatterPlot3D';
 import { Legend } from './Legend';
 import { SimilarItemsTable } from './SimilarItemsTable';
 
+
 import type {
   VisualizationState,
   Point2D,
@@ -18,6 +19,7 @@ import type {
   SemanticSearchResult,
   HighlightMap,
 } from '../../lib/types/types';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface DashboardPanelProps {
   state: VisualizationState;
@@ -115,13 +117,13 @@ export function DashboardPanel({
               
               <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none">
                 <div className="flex flex-col h-full pt-12 pb-2 pr-2 pl-2 pointer-events-none">
-                  <div className="flex flex-col overflow-y-auto rounded-lg border bg-background/90 backdrop-blur shadow-sm max-h-full pointer-events-auto">
-                    <div className="overflow-y-auto p-4">
+                  <div className="flex flex-col rounded-lg border bg-background/90 backdrop-blur shadow-sm max-h-full pointer-events-auto">
+                    <ScrollArea className="overflow-y-auto p-4">
                       <Legend
                         categoryField={colorByField}
                         categoryValues={categoryValues}
                       />
-                    </div>
+                    </ScrollArea>
                   </div>
                 </div>
               </ResizablePanel>
@@ -149,13 +151,14 @@ export function DashboardPanel({
               >
                 <div className="h-full w-full px-2 pb-2">
                    {/* Added background/blur so text is readable over the plot points */}
-                  <div className="h-full overflow-y-auto rounded-md shadow-lg">
+                  <ScrollArea className="h-full overflow-y-auto rounded-md shadow-lg">
                     <SimilarItemsTable
                       results={semanticSearchResults}
                       queryLabel={searchQueryLabel}
                       categoryField={colorByField}
                     />
-                  </div>
+                     <ScrollBar orientation="vertical" />
+                  </ScrollArea>
                 </div>
               </ResizablePanel>
   

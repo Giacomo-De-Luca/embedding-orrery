@@ -8,6 +8,7 @@ import { useTheme } from 'next-themes';
 import { buildCategoryColorMap, getCategoryLabel } from '../../lib/utils/categoryColors';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
+import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 
 // Factory pattern: use pre-bundled plotly.js-dist-min to avoid glslify bundler issues
 // Use dynamic import to avoid "self is not defined" error in SSR
@@ -148,6 +149,7 @@ export function ScatterPlot3D({
   const isAnimatingRef = useRef(false);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
   const [plotReady, setPlotReady] = useState(false);
+  const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
   const plotlyLibRef = useRef<any>(null);
 
   // Load Plotly lib for direct manipulation
@@ -345,11 +347,11 @@ export function ScatterPlot3D({
   const baseTraces = useMemo((): PlotlyData[] => {
     const traces: PlotlyData[] = [];
     const hasHighlights = highlightedIndices && highlightedIndices.size > 0;
-    
+
     // --- PART A: THE "BACKGROUND" (ALL POINTS) ---
     // We render ALL points here. If highlighted, we just dim this entire layer.
     // The highlighted points will be drawn AGAIN on top, covering their dim versions.
-    
+
     // --- PART A: THE "BACKGROUND" (ALL POINTS) ---
     if (!showOnlyHighlighted) {
       let bgColors: any;
@@ -360,14 +362,14 @@ export function ScatterPlot3D({
         // We use your original gold color here
         bgColors = '#e5a819ff'; // grey : #334155
         // We multiply your calculated opacity by 0.2 to get that "dimmed" look
-        bgOpacity = markerStyle.opacity * 0.2; 
+        bgOpacity = markerStyle.opacity * 0.2;
       } else {
         // MODE: FULL VIEW (Standard Colors)
         bgOpacity = markerStyle.opacity;
         if (colorBy === 'category' && categoryValues.length > 0) {
-           bgColors = points.map(p => colorMap[p.category || ''] || '#7f7f7f');
+          bgColors = points.map(p => colorMap[p.category || ''] || '#7f7f7f');
         } else {
-           bgColors = '#1f77b4';
+          bgColors = '#1f77b4';
         }
       }
 
@@ -386,7 +388,7 @@ export function ScatterPlot3D({
           opacity: bgOpacity,
         },
         text: allText,
-        hovertemplate: '<b>%{text}</b><extra></extra>',
+        hoverinfo: 'none',
         customdata: allCustomData as any,
         showlegend: false,
       });
@@ -396,21 +398,21 @@ export function ScatterPlot3D({
     // These are rendered ON TOP of the background trace.
     if (hasHighlights) {
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
-      
+
       if (highlightedPoints.length > 0) {
         // We map ONLY the ~50 highlighted points (Instant)
         const hX = highlightedPoints.map(p => p.x);
         const hY = highlightedPoints.map(p => p.y);
         const hZ = highlightedPoints.map(p => p.z);
-        
+
         const outerSizes: number[] = [];
         const outerColors: string[] = [];
         const outerOpacities: number[] = [];
-        
+
         const innerSizes: number[] = [];
         const innerColors: string[] = [];
         const innerOpacities: number[] = [];
-        
+
         const coreSizes: number[] = [];
         const coreColors: string[] = [];
         const coreTexts: string[] = [];
@@ -432,7 +434,7 @@ export function ScatterPlot3D({
 
           coreSizes.push(Math.max(markerStyle.size * highlightScale.coreMultiplier, 9));
           coreColors.push(colors.coreColor);
-          
+
           coreTexts.push(formatHoverText(point));
           coreCustomData.push(point);
         });
@@ -446,7 +448,7 @@ export function ScatterPlot3D({
             sizemode: 'diameter',
             size: outerSizes,
             color: outerColors,
-            opacity: 0.15, 
+            opacity: 0.15,
             line: { width: 0 },
           },
           hoverinfo: 'skip',
@@ -462,7 +464,7 @@ export function ScatterPlot3D({
             sizemode: 'diameter',
             size: innerSizes,
             color: innerColors,
-            opacity: 0.3, 
+            opacity: 0.3,
             line: { width: 0 },
           },
           hoverinfo: 'skip',
@@ -479,10 +481,10 @@ export function ScatterPlot3D({
             size: coreSizes,
             color: coreColors,
             opacity: 1,
-            line: { color: innerColors[0], width: 1 }, 
+            line: { color: innerColors[0], width: 1 },
           },
           text: coreTexts,
-          hovertemplate: '<b>%{text}</b><extra></extra>',
+          hoverinfo: 'none',
           customdata: coreCustomData as any,
           showlegend: false,
         });
@@ -494,13 +496,13 @@ export function ScatterPlot3D({
     // Dependencies
     allX, allY, allZ, allText, allCustomData, // Fast stable refs
     points, // Needed for color mapping logic if state changes
-    highlightedIndices, 
-    markerStyle, 
-    highlightScale, 
-    showOnlyHighlighted, 
-    colorBy, 
-    isDark, 
-    categoryValues, 
+    highlightedIndices,
+    markerStyle,
+    highlightScale,
+    showOnlyHighlighted,
+    colorBy,
+    isDark,
+    categoryValues,
     colorMap
   ]);
 
@@ -600,7 +602,7 @@ export function ScatterPlot3D({
         line: { color: 'rgba(255, 200, 100, 0.6)', width: 1.5 },
       },
       text: [formatHoverText(selectedPoint)],
-      hovertemplate: '<b>%{text}</b><extra></extra>',
+      hoverinfo: 'none',
       customdata: [selectedPoint] as any,
       showlegend: false,
     });
@@ -656,7 +658,7 @@ export function ScatterPlot3D({
           backgroundcolor: sceneBg,
           gridcolor: gridColor,
           zerolinecolor: gridColor,
-          showgrid: false, 
+          showgrid: false,
           zeroline: false,
           showspikes: false,
           showticklabels: false,
@@ -753,8 +755,64 @@ export function ScatterPlot3D({
     onPointClick(clickedPoint);
   }, [onPointClick]);
 
+  // Attach hover events directly to graphDiv (vanilla Plotly pattern)
+  // react-plotly.js onHover prop may not work reliably for 3D scatter plots
+  useEffect(() => {
+    if (!plotReady || !graphDivRef.current) return;
+
+    const graphDiv = graphDivRef.current as any;
+
+    const handlePlotlyHover = (data: any) => {
+      if (data.points && data.points.length > 0) {
+        const pt = data.points[0];
+
+        // Only show tooltip for points with valid customdata (skip glow layers)
+        if (pt.customdata && typeof pt.customdata === 'object') {
+          const point = pt.customdata as unknown as Point3D;
+          const containerRect = containerRef.current?.getBoundingClientRect();
+
+          // For 3D, try to use event coordinates or fallback to bbox
+          let x: number, y: number;
+          const mouseEvent = data.event as MouseEvent | undefined;
+
+          if (mouseEvent && mouseEvent.clientX !== undefined) {
+            x = mouseEvent.clientX - (containerRect?.left ?? 0);
+            y = mouseEvent.clientY - (containerRect?.top ?? 0);
+          } else if (pt.bbox) {
+            x = pt.bbox.x0 + (pt.bbox.x1 - pt.bbox.x0) / 2;
+            y = pt.bbox.y0;
+          } else {
+            // Use xaxis/yaxis pixel positions if available
+            x = pt.xaxis?.l2p?.(pt.x) ?? (containerRect?.width ?? 400) / 2;
+            y = pt.yaxis?.l2p?.(pt.y) ?? (containerRect?.height ?? 300) / 2;
+          }
+
+          setTooltipData({
+            x,
+            y,
+            label: point.label || point.id,
+            document: point.document,
+            visible: true,
+          });
+        }
+      }
+    };
+
+    const handlePlotlyUnhover = () => {
+      setTooltipData(null);
+    };
+
+    graphDiv.on('plotly_hover', handlePlotlyHover);
+    graphDiv.on('plotly_unhover', handlePlotlyUnhover);
+
+    return () => {
+      graphDiv.removeListener('plotly_hover', handlePlotlyHover);
+      graphDiv.removeListener('plotly_unhover', handlePlotlyUnhover);
+    };
+  }, [plotReady, containerRef]);
+
   return (
-    <div ref={containerRef} className={className ?? 'h-full w-full'}>
+    <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
       <Plot
         data={plotData}
         layout={layout}
@@ -766,6 +824,7 @@ export function ScatterPlot3D({
         }}
         onRelayout={handleRelayout}
       />
+      <FrostedTooltip data={tooltipData} />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Label } from '@/lib/ui-primitives/label';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Textarea } from '@/lib/ui-primitives/textarea';
 import { Badge } from '@/lib/ui-primitives/badge';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import {
   Select,
   SelectContent,
@@ -95,7 +96,7 @@ export function ColumnSelector({
               Columns to combine for embedding text
             </p>
           </div>
-          <div className="space-y-2 max-h-60 overflow-y-auto border rounded-md p-3">
+          <ScrollArea className="space-y-2 max-h-60 overflow-y-auto border rounded-md p-3">
             {columns.map((col) => (
               <div key={col.name} className="flex items-center space-x-2">
                 <Checkbox
@@ -114,7 +115,7 @@ export function ColumnSelector({
                 </Label>
               </div>
             ))}
-          </div>
+          </ScrollArea>
           {selectedEmbeddingColumns.length === 0 && (
             <p className="text-xs text-destructive">Select at least one column</p>
           )}

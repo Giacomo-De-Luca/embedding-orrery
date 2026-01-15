@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import type { Point2D, Point3D } from '../../lib/types/types';
 
 interface TextSearchResultsListProps {
