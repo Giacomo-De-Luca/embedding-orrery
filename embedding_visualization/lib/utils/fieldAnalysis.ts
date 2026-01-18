@@ -157,3 +157,116 @@ export function getFieldValues(
   const analysis = analyzeField(field, itemMetadata);
   return analysis.values;
 }
+
+/**
+ * Unified color field option with proper type detection.
+ */
+export interface ColorFieldOption {
+  field: string;
+  displayName: string;
+  valueType: 'string' | 'numeric' | 'mixed';
+  uniqueCount: number;
+  recommendedScale: 'categorical' | 'sequential';
+}
+
+/**
+ * Analyze all fields with proper type detection for coloring.
+ *
+ * Logic:
+ * - String fields → categorical
+ * - Numeric fields with <20 unique values → categorical (treat as discrete)
+ * - Numeric fields with ≥20 unique values → sequential (continuous)
+ */
+export function analyzeColorFields(
+  availableFields: string[],
+  itemMetadata: Record<string, unknown>[],
+  sampleSize: number = 500
+): ColorFieldOption[] {
+  if (itemMetadata.length === 0) return [];
+
+  const sample = itemMetadata.slice(0, Math.min(sampleSize, itemMetadata.length));
+  const results: ColorFieldOption[] = [];
+
+  for (const field of availableFields) {
+    if (EXCLUDE_FIELDS.has(field)) continue;
+
+    let numericCount = 0;
+    let stringCount = 0;
+    const uniqueNumbers = new Set<number>();
+    const uniqueStrings = new Set<string>();
+
+    for (const meta of sample) {
+      const value = meta[field];
+      if (value === null || value === undefined || value === '') continue;
+
+      if (typeof value === 'number' && !isNaN(value)) {
+        numericCount++;
+        uniqueNumbers.add(value);
+      } else if (typeof value === 'string') {
+        // Try to parse as number
+        const parsed = parseFloat(value);
+        if (!isNaN(parsed) && isFinite(parsed)) {
+          numericCount++;
+          uniqueNumbers.add(parsed);
+        } else {
+          stringCount++;
+          uniqueStrings.add(value);
+        }
+      } else {
+        // Treat other types as strings
+        stringCount++;
+        uniqueStrings.add(String(value));
+      }
+    }
+
+    const totalValues = numericCount + stringCount;
+    if (totalValues === 0) continue;
+
+    // Determine value type
+    let valueType: 'string' | 'numeric' | 'mixed';
+    let uniqueCount: number;
+
+    if (numericCount > 0 && stringCount === 0) {
+      valueType = 'numeric';
+      uniqueCount = uniqueNumbers.size;
+    } else if (stringCount > 0 && numericCount === 0) {
+      valueType = 'string';
+      uniqueCount = uniqueStrings.size;
+    } else {
+      valueType = 'mixed';
+      // For mixed, count all unique values
+      uniqueCount = uniqueNumbers.size + uniqueStrings.size;
+    }
+
+    // Skip fields with too many unique values for categorical, but include for sequential
+    // Skip fields with only 1 unique value (no variation to show)
+    if (uniqueCount < 2) continue;
+
+    // Determine recommended scale
+    let recommendedScale: 'categorical' | 'sequential';
+    if (valueType === 'string' || valueType === 'mixed') {
+      // String/mixed fields: categorical if reasonable count, otherwise skip
+      if (uniqueCount > 100) continue;
+      recommendedScale = 'categorical';
+    } else {
+      // Numeric fields: categorical if <20 unique, sequential otherwise
+      recommendedScale = uniqueCount < 20 ? 'categorical' : 'sequential';
+    }
+
+    results.push({
+      field,
+      displayName: fieldToDisplayName(field),
+      valueType,
+      uniqueCount,
+      recommendedScale,
+    });
+  }
+
+  // Sort: categorical fields first (by unique count), then sequential
+  return results.sort((a, b) => {
+    if (a.recommendedScale !== b.recommendedScale) {
+      return a.recommendedScale === 'categorical' ? -1 : 1;
+    }
+    return a.uniqueCount - b.uniqueCount;
+  });
+}

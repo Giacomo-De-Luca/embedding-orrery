@@ -1,6 +1,8 @@
 
 import { scaleSequential, scaleDiverging } from 'd3-scale';
-import { interpolateViridis, interpolateRdBu } from 'd3-scale-chromatic';
+import { interpolateViridis } from 'd3-scale-chromatic';
+import { interpolateRgb } from 'd3-interpolate';
+import { color } from 'd3-color';
 
 
 /**
@@ -20,20 +22,83 @@ export interface CategoryColorPreset {
 
 // ============ Sequential & Diverging Generators ============
 
+// Cache D3 scales by domain to avoid recreation on every render
+const sequentialScaleCache = new Map<string, (v: number) => string>();
+const divergingScaleCache = new Map<string, (v: number) => string>();
+const monochromeScaleCache = new Map<string, (v: number) => string>();
+
+/**
+ * Custom blue-gold interpolator (Tableau-style diverging).
+ * Deep blue (#1f4e79) → White (#f5f5f5) → Gold (#d4a017)
+ */
+function interpolateBlueGold(t: number): string {
+  if (t < 0.5) {
+    // Blue to white (t: 0 → 0.5 maps to 0 → 1)
+    return interpolateRgb('#1f4e79', '#f5f5f5')(t * 2);
+  } else {
+    // White to gold (t: 0.5 → 1 maps to 0 → 1)
+    return interpolateRgb('#f5f5f5', '#d4a017')((t - 0.5) * 2);
+  }
+}
+
 /**
  * Creates a sequential scale (e.g., for probability, density).
- * Maps [0, 1] -> Color
+ * Maps [min, max] -> Color (Viridis)
+ * Cached by domain for performance.
  */
-export function getSequentialScale(domain: [number, number] = [0, 1]) {
-  return scaleSequential(interpolateViridis).domain(domain);
+export function getSequentialScale(domain: [number, number] = [0, 1]): (v: number) => string {
+  const key = `seq_${domain[0]}_${domain[1]}`;
+  if (!sequentialScaleCache.has(key)) {
+    sequentialScaleCache.set(key, scaleSequential(interpolateViridis).domain(domain));
+  }
+  return sequentialScaleCache.get(key)!;
 }
 
 /**
  * Creates a diverging scale (e.g., for sentiment, correlation).
- * Maps [-1, 0, 1] -> [Red, White, Blue]
+ * Maps [min, mid, max] -> Blue → White → Gold (Tableau-style)
+ * Cached by domain for performance.
  */
-export function getDivergingScale(domain: [number, number, number] = [-1, 0, 1]) {
-  return scaleDiverging(interpolateRdBu).domain(domain);
+export function getDivergingScale(domain: [number, number, number] = [-1, 0, 1]): (v: number) => string {
+  const key = `div_${domain[0]}_${domain[1]}_${domain[2]}`;
+  if (!divergingScaleCache.has(key)) {
+    divergingScaleCache.set(key, scaleDiverging(interpolateBlueGold).domain(domain));
+  }
+  return divergingScaleCache.get(key)!;
+}
+
+/**
+ * Creates a monochrome scale (single-color opacity gradient).
+ * Low values fade out (10% opacity), high values solid (100%).
+ * Cached by domain + baseColor for performance.
+ */
+export function getMonochromeScale(
+  baseColor: string = '#1f77b4',
+  domain: [number, number] = [0, 1]
+): (v: number) => string {
+  const key = `mono_${baseColor}_${domain[0]}_${domain[1]}`;
+  if (!monochromeScaleCache.has(key)) {
+    const rgb = color(baseColor)?.rgb();
+    if (!rgb) {
+      // Fallback to blue if color parsing fails
+      monochromeScaleCache.set(key, (t: number) => `rgba(31, 119, 180, ${0.1 + t * 0.9})`);
+    } else {
+      monochromeScaleCache.set(key, scaleSequential((t: number) => {
+        const opacity = 0.1 + t * 0.9; // 10% → 100%
+        return `rgba(${Math.round(rgb.r)}, ${Math.round(rgb.g)}, ${Math.round(rgb.b)}, ${opacity})`;
+      }).domain(domain));
+    }
+  }
+  return monochromeScaleCache.get(key)!;
+}
+
+/**
+ * Clear scale caches (useful if memory is a concern).
+ */
+export function clearScaleCaches(): void {
+  sequentialScaleCache.clear();
+  divergingScaleCache.clear();
+  monochromeScaleCache.clear();
 }
 
 

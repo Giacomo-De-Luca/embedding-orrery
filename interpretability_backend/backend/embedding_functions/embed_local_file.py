@@ -23,6 +23,7 @@ from .config import (
 )
 from .create_embedding_function import create_embedding_function, get_device
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
+from ..utils.id_utils import IDDeduplicator
 from .embed_images import embed_images
 from .embed_vectors import embed_vectors
 
@@ -192,6 +193,7 @@ def embed_text_from_local(
 
     # Process in batches
     total_embedded = 0
+    id_deduplicator = IDDeduplicator()
 
     for batch_start in tqdm(range(0, len(rows), EMBEDDING_BATCH_SIZE),
                             desc="Embedding batches", unit="batch"):
@@ -206,7 +208,8 @@ def embed_text_from_local(
 
             # Generate ID
             if config.id_column and config.id_column in row:
-                doc_id = str(row[config.id_column])
+                base_id = str(row[config.id_column])
+                doc_id = id_deduplicator.get_unique_id(base_id)
             else:
                 doc_id = f"{config.collection_name}_{row_idx}"
 

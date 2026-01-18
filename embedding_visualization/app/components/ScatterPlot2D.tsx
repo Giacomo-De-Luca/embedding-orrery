@@ -11,8 +11,8 @@ import type {
   PlotMouseEvent,
   PlotHoverEvent,
 } from 'plotly.js';
-import type { Point2D, HighlightMap } from '../../lib/types/types';
-import { buildCategoryColorMap, getCategoryLabel } from '../../lib/utils/categoryColors';
+import type { Point2D, HighlightMap, ColorScaleType } from '../../lib/types/types';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale } from '../../lib/utils/categoryColors';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -25,8 +25,10 @@ const Plot = dynamic<PlotParams>(() => import('react-plotly.js'), { ssr: false }
 interface ScatterPlot2DProps {
   points: Point2D[];
   colorBy?: 'category' | 'none';
-  categoryField?: string | null;
+  categoryField?: string | null;  // Field to color by (used for both categorical AND numeric)
   categoryValues?: string[];
+  colorScaleType?: ColorScaleType;
+  monochromeColor?: string;
   highlightedIndices?: HighlightMap;
   selectedPoint?: Point2D | null;
   onPointClick?: (point: Point2D) => void;
@@ -53,6 +55,8 @@ export function ScatterPlot2D({
   colorBy = 'none',
   categoryField = null,
   categoryValues = [],
+  colorScaleType = 'categorical',
+  monochromeColor = '#1f77b4',
   highlightedIndices,
   selectedPoint,
   onPointClick,
@@ -76,6 +80,56 @@ export function ScatterPlot2D({
   const colorMap = useMemo(() => {
     return buildCategoryColorMap(categoryField, categoryValues);
   }, [categoryField, categoryValues]);
+
+  // Extract raw numeric data for native Plotly colorscales
+  const numericData = useMemo(() => {
+    if (colorScaleType === 'categorical' || !categoryField) return null;
+
+    const values: (number | null)[] = points.map(p => {
+      const val = p.metadata?.[categoryField];
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+        const parsed = parseFloat(val);
+        return isNaN(parsed) ? null : parsed;
+      }
+      return null;
+    });
+
+    const validValues = values.filter((v): v is number => v !== null);
+    if (validValues.length === 0) return null;
+
+    const min = Math.min(...validValues);
+    const max = Math.max(...validValues);
+    if (min === max) return null;
+
+    return {
+      values,
+      min,
+      max,
+      cleanValues: values.map(v => (v === null) ? NaN : v)
+    };
+  }, [colorScaleType, categoryField, points]);
+
+  // Generate Plotly-compatible colorscale array
+  const plotlyColorScale = useMemo(() => {
+    if (colorScaleType === 'categorical') return undefined;
+
+    let scaleFunc: (t: number) => string;
+    if (colorScaleType === 'monochrome') {
+      scaleFunc = getMonochromeScale(monochromeColor, [0, 1]);
+    } else if (colorScaleType === 'diverging') {
+      scaleFunc = getDivergingScale([0, 0.5, 1]);
+    } else {
+      scaleFunc = getSequentialScale([0, 1]);
+    }
+
+    // Sample the scale to create Plotly gradient definition
+    const steps = 20;
+    return Array.from({ length: steps + 1 }, (_, i) => {
+      const t = i / steps;
+      return [t, scaleFunc(t)] as [number, string];
+    });
+  }, [colorScaleType, monochromeColor]);
 
   // Calculate dynamic marker style based on point count
   const markerStyle = useMemo(() => {
@@ -111,8 +165,36 @@ export function ScatterPlot2D({
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
 
       // A. Background Points (dimmed) - skip if showOnlyHighlighted is true
+      // Color priority: numericData > categorical > default gold
+      // Preserve the user's color mode, just apply dim factor
       if (unhighlightedPoints.length > 0 && !showOnlyHighlighted) {
-        if (colorBy === 'category' && categoryValues.length > 0) {
+        const dimOpacity = markerStyle.opacity * 0.3; // Consistent dim factor
+
+        if (numericData && plotlyColorScale) {
+          // MODE: NATIVE COLORSCALE (GPU ACCELERATED) - preserve colors with dimming
+          const unhighlightedNumericValues = unhighlightedPoints.map(p => numericData.cleanValues[p.index]);
+          traces.push({
+            x: unhighlightedPoints.map(p => p.x),
+            y: unhighlightedPoints.map(p => p.y),
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            name: 'Context',
+            marker: {
+              size: markerStyle.size,
+              color: unhighlightedNumericValues,
+              colorscale: plotlyColorScale as any,
+              cmin: numericData.min,
+              cmax: numericData.max,
+              opacity: dimOpacity,
+              showscale: false,
+            },
+            text: unhighlightedPoints.map(formatHoverText),
+            hovertemplate: '<b>%{text}</b><extra></extra>',
+            customdata: unhighlightedPoints as any,
+            showlegend: false,
+          } satisfies PlotlyData);
+        } else if (colorBy === 'category' && categoryValues.length > 0) {
+          // MODE: CATEGORICAL - preserve category colors with dimming
           const pointsByCategory: Record<string, Point2D[]> = {};
           unhighlightedPoints.forEach(point => {
             const cat = point.category || 'unknown';
@@ -132,7 +214,7 @@ export function ScatterPlot2D({
               marker: {
                 size: markerStyle.size,
                 color: colorMap[cat] || '#7f7f7f',
-                opacity: 0.15, // Very dim
+                opacity: dimOpacity,
               },
               text: catPoints.map(formatHoverText),
               hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -141,6 +223,7 @@ export function ScatterPlot2D({
             } satisfies PlotlyData);
           });
         } else {
+          // MODE: NO COLORING - use gold fallback
           traces.push({
             x: unhighlightedPoints.map(p => p.x),
             y: unhighlightedPoints.map(p => p.y),
@@ -150,7 +233,7 @@ export function ScatterPlot2D({
             marker: {
               size: markerStyle.size,
               color: '#e5a819ff',
-              opacity: markerStyle.opacity * 0.2, // Dimmed relative to calculated opacity
+              opacity: dimOpacity,
             },
             text: unhighlightedPoints.map(formatHoverText),
             hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -198,63 +281,97 @@ export function ScatterPlot2D({
           : highlightedPoints;
 
         if (otherHighlights.length > 0) {
-          // Render each highlighted point individually with similarity-based opacity and color
+          // OPTIMIZED: Collect all highlight data into arrays, then create 3 traces total
+          // Instead of 3 traces per point (O(n) → O(1) trace count)
+          const hX: number[] = [];
+          const hY: number[] = [];
+          const outerSizes: number[] = [];
+          const outerColors: string[] = [];
+          const outerOpacities: number[] = [];
+          const innerSizes: number[] = [];
+          const innerColors: string[] = [];
+          const innerOpacities: number[] = [];
+          const coreSizes: number[] = [];
+          const coreColors: string[] = [];
+          const coreOpacities: number[] = [];
+          const coreLineColors: string[] = [];
+          const coreTexts: string[] = [];
+          const coreCustomData: any[] = [];
+
           otherHighlights.forEach(point => {
             const similarity = highlightedIndices!.get(point.index) ?? 1.0;
             const luminosity = calculateLuminosity(similarity);
             const colors = calculateSimilarityColors(similarity);
 
-            // Layer 1: Outer glow (largest, most transparent)
-            traces.push({
-              x: [point.x],
-              y: [point.y],
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              hoverinfo: 'skip',
-              marker: {
-                size: markerStyle.size * highlightScale.outerMultiplier,
-                color: colors.outerGlow,
-                opacity: luminosity.outer,
-                line: { width: 0 },
-              },
-              showlegend: false,
-            } satisfies PlotlyData);
+            hX.push(point.x);
+            hY.push(point.y);
 
-            // Layer 2: Inner glow (medium)
-            traces.push({
-              x: [point.x],
-              y: [point.y],
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              hoverinfo: 'skip',
-              marker: {
-                size: markerStyle.size * highlightScale.innerMultiplier,
-                color: colors.glowColor,
-                opacity: luminosity.inner,
-                line: { width: 0 },
-              },
-              showlegend: false,
-            } satisfies PlotlyData);
+            outerSizes.push(markerStyle.size * highlightScale.outerMultiplier);
+            outerColors.push(colors.outerGlow);
+            outerOpacities.push(luminosity.outer);
 
-            // Layer 3: Bright core
-            traces.push({
-              x: [point.x],
-              y: [point.y],
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              name: 'Search results',
-              marker: {
-                size: Math.max(markerStyle.size * highlightScale.coreMultiplier, 3),
-                color: colors.coreColor,
-                opacity: luminosity.core,
-                line: { color: colors.glowColor, width: 1 },
-              },
-              text: [formatHoverText(point)],
-              hovertemplate: '<b>%{text}</b><extra></extra>',
-              customdata: [point] as any,
-              showlegend: false,
-            } satisfies PlotlyData);
+            innerSizes.push(markerStyle.size * highlightScale.innerMultiplier);
+            innerColors.push(colors.glowColor);
+            innerOpacities.push(luminosity.inner);
+
+            coreSizes.push(Math.max(markerStyle.size * highlightScale.coreMultiplier, 3));
+            coreColors.push(colors.coreColor);
+            coreOpacities.push(luminosity.core);
+            coreLineColors.push(colors.glowColor);
+            coreTexts.push(formatHoverText(point));
+            coreCustomData.push(point);
           });
+
+          // Layer 1: Outer glow (single trace for all points)
+          traces.push({
+            x: hX,
+            y: hY,
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            hoverinfo: 'skip',
+            marker: {
+              size: outerSizes,
+              color: outerColors,
+              opacity: 0.15, // Use average, scattergl doesn't support per-point opacity arrays well
+              line: { width: 0 },
+            },
+            showlegend: false,
+          } satisfies PlotlyData);
+
+          // Layer 2: Inner glow (single trace for all points)
+          traces.push({
+            x: hX,
+            y: hY,
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            hoverinfo: 'skip',
+            marker: {
+              size: innerSizes,
+              color: innerColors,
+              opacity: 0.3,
+              line: { width: 0 },
+            },
+            showlegend: false,
+          } satisfies PlotlyData);
+
+          // Layer 3: Bright core (single trace for all points)
+          traces.push({
+            x: hX,
+            y: hY,
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            name: 'Search results',
+            marker: {
+              size: coreSizes,
+              color: coreColors,
+              opacity: 1,
+              line: { color: coreLineColors[0] || 'rgba(100, 150, 255, 0.6)', width: 1 },
+            },
+            text: coreTexts,
+            hovertemplate: '<b>%{text}</b><extra></extra>',
+            customdata: coreCustomData as any,
+            showlegend: false,
+          } satisfies PlotlyData);
         }
 
         // D. Selected Point - golden tint to distinguish it
@@ -312,8 +429,35 @@ export function ScatterPlot2D({
         }
       }
     }
-    // No highlighting - render normally with lower opacity
-    else if (colorBy === 'category' && categoryValues.length > 0) {
+    // No highlighting - render normally
+    else if (numericData && plotlyColorScale) {
+      // MODE: NATIVE COLORSCALE (GPU ACCELERATED)
+      traces = [{
+        x: points.map(p => p.x),
+        y: points.map(p => p.y),
+        mode: 'markers' as const,
+        type: 'scattergl' as const,
+        name: 'Data',
+        marker: {
+          size: markerStyle.size,
+          color: numericData.cleanValues,
+          colorscale: plotlyColorScale as any,
+          cmin: numericData.min,
+          cmax: numericData.max,
+          opacity: markerStyle.opacity,
+          showscale: true,
+          colorbar: {
+            title: { text: categoryField || '', font: { color: isDark ? '#e2e8f0' : '#1e293b' } },
+            thickness: 10,
+            len: 0.6,
+            tickfont: { color: isDark ? '#e2e8f0' : '#1e293b' }
+          }
+        },
+        text: points.map(formatHoverText),
+        hovertemplate: '<b>%{text}</b><extra></extra>',
+        customdata: points as any,
+      } satisfies PlotlyData];
+    } else if (colorBy === 'category' && categoryValues.length > 0) {
       const pointsByCategory: Record<string, Point2D[]> = {};
       points.forEach(point => {
         const cat = point.category || 'unknown';
@@ -413,7 +557,7 @@ export function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels]);
+  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({

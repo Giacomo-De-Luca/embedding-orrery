@@ -1,6 +1,6 @@
 'use client';
 
-import { Moon, Sun, Search, Upload } from 'lucide-react';
+import { Moon, Sun, Search, Upload, Settings2 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState, KeyboardEvent } from 'react';
 import Link from 'next/link';
@@ -14,7 +14,6 @@ import {
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Separator } from '@/lib/ui-primitives/separator';
-import { SidebarTrigger, useSidebar } from '@/lib/ui-primitives/sidebar';
 import { Button } from '@/lib/ui-primitives/button';
 import { cn } from '@/lib/utils/utils';
 import { Input } from '@/lib/ui-primitives/input';
@@ -39,6 +38,8 @@ function ModeToggle() {
   );
 }
 
+type ActivePanel = 'controls' | 'search' | null;
+
 interface AppHeaderProps {
   collections: CollectionsManifest | null;
   collectionsLoading: boolean;
@@ -49,6 +50,9 @@ interface AppHeaderProps {
   embeddingDim?: number;
   onSemanticSearch?: (query: string) => void;
   searchLoading?: boolean;
+  activePanel?: ActivePanel;
+  onToggleControls?: () => void;
+  onToggleSearch?: () => void;
 }
 
 export function AppHeader({
@@ -61,9 +65,10 @@ export function AppHeader({
   embeddingDim,
   onSemanticSearch,
   searchLoading = false,
+  activePanel,
+  onToggleControls,
+  onToggleSearch,
 }: AppHeaderProps) {
-  const { state } = useSidebar();
-  const isExpanded = state === 'expanded';
   const [searchQuery, setSearchQuery] = useState('');
 
   const handleSearch = () => {
@@ -78,15 +83,34 @@ export function AppHeader({
     }
   };
 
+  const isExpanded = activePanel !== null;
+
   return (
     <header
       className={cn(
         "flex bg-transparent h-16 shrink-0 items-center transition-all duration-300 ease-in-out",
-        isExpanded ? "pl-84" : "pl-0"
+        "pl-0"
+        // isExpanded ? "pl-84" : "pl-0"
       )}
     >
       <div className="flex w-full items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
+        <Button
+          variant={activePanel === 'controls' ? 'secondary' : 'ghost'}
+          size="icon"
+          onClick={onToggleControls}
+          aria-label="Toggle controls panel"
+          className="-ml-1"
+        >
+          <Settings2 className="h-4 w-4" />
+        </Button>
+        <Button
+          variant={activePanel === 'search' ? 'secondary' : 'ghost'}
+          size="icon"
+          onClick={onToggleSearch}
+          aria-label="Toggle search panel"
+        >
+          <Search className="h-4 w-4" />
+        </Button>
         <Separator orientation="vertical" className="mr-2 h-4" />
 
         <div className="flex items-center gap-3 flex-1">

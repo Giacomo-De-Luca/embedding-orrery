@@ -1,19 +1,18 @@
 'use client';
 
 import * as React from 'react';
+import { Settings2 } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
 } from '@/lib/ui-primitives/sidebar';
-import { Badge } from '@/lib/ui-primitives/badge';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { VisualizationControls } from './VisualizationControls';
-import { SelectedPointCard } from './SelectedPointCard';
-import { TextSearchResultsList } from './TextSearchResultsList';
-import type { VisualizationState, Point2D, Point3D, CategoryFieldOption } from '../../lib/types/types';
-import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
+import type { VisualizationState, Point2D, Point3D } from '../../lib/types/types';
+import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   state: VisualizationState;
@@ -24,12 +23,7 @@ interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
     pca_3d_variance?: number[];
   };
   selectedPoint: Point2D | Point3D | null;
-  searchQuery?: string;
-  highlightedCount?: number;
-  categoryField?: string | null;
-  categoryFieldOptions?: CategoryFieldOption[];
-  textSearchResults?: (Point2D | Point3D)[];
-  onTextResultClick?: (point: Point2D | Point3D) => void;
+  colorFieldOptions?: ColorFieldOption[];
 }
 
 export function EmbeddingSidebar({
@@ -38,17 +32,10 @@ export function EmbeddingSidebar({
   embeddingDim,
   metadata,
   selectedPoint,
-  searchQuery,
-  highlightedCount,
-  categoryField,
-  categoryFieldOptions,
-  textSearchResults,
-  onTextResultClick,
+  colorFieldOptions = [],
   ...props
 }: EmbeddingSidebarProps) {
   const { className, ...rest } = props;
-  const hasSearch = Boolean(searchQuery && searchQuery.trim().length > 0);
-  const showSearchSummary = hasSearch && highlightedCount !== undefined;
 
   return (
     <Sidebar
@@ -59,7 +46,7 @@ export function EmbeddingSidebar({
       <SidebarHeader className="border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <span className="text-sm font-bold">E</span>
+            <Settings2 className="size-3.5" />
           </div>
           <span className="font-semibold">Controls</span>
         </div>
@@ -72,8 +59,7 @@ export function EmbeddingSidebar({
             onStateChange={onStateChange}
             embeddingDim={embeddingDim}
             metadata={metadata}
-            categoryFieldOptions={categoryFieldOptions}
-            hasHighlights={Boolean(highlightedCount && highlightedCount > 0)}
+            colorFieldOptions={colorFieldOptions}
           />
 
           {selectedPoint && (
@@ -84,20 +70,6 @@ export function EmbeddingSidebar({
               </div>*/}
             </>
           )}
-
-          {showSearchSummary && textSearchResults && textSearchResults.length > 0 && (
-            <>
-              <Separator />
-              <TextSearchResultsList
-                results={textSearchResults}
-                selectedPointId={selectedPoint?.id}
-                onResultClick={onTextResultClick}
-                categoryField={categoryField}
-                maxHeight={280}
-              />
-            </>
-          )}
-
         </div>
         <ScrollBar orientation="vertical" />
 
