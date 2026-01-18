@@ -218,7 +218,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
   }
 
   return (
-    <Card className="min-w-0 backdrop-blur-md">
+    <Card className="min-w-0 backdrop-blur-sm">
       <CardHeader className="flex flex-row items-center gap-4">
         <CardTitle>Similar Items</CardTitle>
         {queryLabel && (

@@ -1,24 +1,25 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { EmbeddingData, CategoryFieldOption } from '../types/types';
+import type { EmbeddingData } from '../types/types';
 import {
   detectDisplayConfig,
-  computeCategoryFieldOptions,
+  analyzeColorFields,
+  type ColorFieldOption,
 } from '../utils/fieldAnalysis';
 
 interface UseEmbeddingDataResult {
   data: EmbeddingData | null;
   loading: boolean;
   error: Error | null;
-  categoryFieldOptions: CategoryFieldOption[];
+  colorFieldOptions: ColorFieldOption[];
 }
 
 export function useEmbeddingData(collectionName: string | null): UseEmbeddingDataResult {
   const [data, setData] = useState<EmbeddingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const [categoryFieldOptions, setCategoryFieldOptions] = useState<CategoryFieldOption[]>([]);
+  const [colorFieldOptions, setColorFieldOptions] = useState<ColorFieldOption[]>([]);
 
   useEffect(() => {
     if (!collectionName) {
@@ -93,19 +94,19 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
           itemMetadata
         );
 
-        // Compute category field options for the Color By dropdown
-        const fieldOptions = computeCategoryFieldOptions(
+        // Compute color field options with proper type detection
+        const fieldOptions = analyzeColorFields(
           collectionData.availableFields || [],
           itemMetadata
         );
-        setCategoryFieldOptions(fieldOptions);
+        setColorFieldOptions(fieldOptions);
 
         console.log('Loaded collection:', {
           ids: collectionData.ids?.length,
           documents: collectionData.documents?.length,
           availableFields: collectionData.availableFields,
           displayConfig,
-          categoryFieldOptions: fieldOptions,
+          colorFieldOptions: fieldOptions,
         });
 
         const embeddingData: EmbeddingData = {
@@ -145,5 +146,5 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
     loadData();
   }, [collectionName]);
 
-  return { data, loading, error, categoryFieldOptions };
+  return { data, loading, error, colorFieldOptions };
 }

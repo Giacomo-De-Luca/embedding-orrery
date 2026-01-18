@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import type { Point2D, Point3D } from '../../lib/types/types';
 
 interface TextSearchResultsListProps {
@@ -38,11 +38,10 @@ export function TextSearchResultsList({
             <button
               key={point.id}
               onClick={() => onResultClick?.(point)}
-              className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent hover:text-accent-foreground ${
-                selectedPointId === point.id
+              className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent hover:text-accent-foreground ${selectedPointId === point.id
                   ? 'bg-accent text-accent-foreground'
                   : ''
-              }`}
+                }`}
             >
               <div className="flex items-center gap-2">
                 <span className="font-medium truncate flex-1">
@@ -63,6 +62,8 @@ export function TextSearchResultsList({
             </button>
           ))}
         </div>
+        <ScrollBar orientation="vertical" />
+        <ScrollBar orientation="horizontal" />
       </ScrollArea>
     </div>
   );

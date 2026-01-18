@@ -6,9 +6,9 @@ import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { Separator } from '@/lib/ui-primitives/separator';
-import { Checkbox } from '@/lib/ui-primitives/checkbox';
-import { DebouncedSearchInput } from './DebouncedSearchInput';
-import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState, CategoryFieldOption } from '../../lib/types/types';
+import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
+import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import { ColorScaleSelector } from './ColorScaleSelector';
 
 interface VisualizationControlsProps {
   state: VisualizationState;
@@ -18,8 +18,7 @@ interface VisualizationControlsProps {
     pca_2d_variance?: number[];
     pca_3d_variance?: number[];
   };
-  categoryFieldOptions?: CategoryFieldOption[];
-  hasHighlights?: boolean;
+  colorFieldOptions?: ColorFieldOption[];
 }
 
 export function VisualizationControls({
@@ -27,9 +26,22 @@ export function VisualizationControls({
   onStateChange,
   embeddingDim,
   metadata,
-  categoryFieldOptions,
-  hasHighlights = false,
+  colorFieldOptions = [],
 }: VisualizationControlsProps) {
+  // Handle field selection with auto-detection of scale type
+  const handleFieldChange = (value: string) => {
+    if (value === 'none') {
+      onStateChange({ colorByField: null, colorScaleType: 'categorical' });
+      return;
+    }
+
+    const fieldOption = colorFieldOptions.find(f => f.field === value);
+    if (!fieldOption) return;
+
+    // Use the recommended scale from the field analysis
+    onStateChange({ colorByField: value, colorScaleType: fieldOption.recommendedScale });
+  };
+
   return (
     <div className="space-y-6">
         {/* Projection Method */}
@@ -163,22 +175,36 @@ export function VisualizationControls({
         {/* Color By */}
         <div className="space-y-3">
           <Label htmlFor="color-by" className="text-base">Color By</Label>
-          <Select
-            value={state.colorByField ?? 'none'}
-            onValueChange={(value) => onStateChange({ colorByField: value === 'none' ? null : value })}
-          >
-            <SelectTrigger id="color-by">
-              <SelectValue placeholder="Select coloring" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">None (Single Color)</SelectItem>
-              {categoryFieldOptions?.map((option) => (
-                <SelectItem key={option.field} value={option.field}>
-                  {option.displayName} ({option.uniqueCount})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select
+              value={state.colorByField ?? 'none'}
+              onValueChange={handleFieldChange}
+            >
+              <SelectTrigger id="color-by" className="flex-1">
+                <SelectValue placeholder="Select coloring" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None (Single Color)</SelectItem>
+                {colorFieldOptions.map((option) => (
+                  <SelectItem key={option.field} value={option.field}>
+                    {option.displayName}
+                    <span className="ml-1 text-muted-foreground text-xs">
+                      ({option.recommendedScale === 'sequential' ? 'numeric' : `${option.uniqueCount} values`})
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Show scale selector when a field is selected (allows override of auto-detected type) */}
+            {state.colorByField && (
+              <ColorScaleSelector
+                colorScaleType={state.colorScaleType ?? 'categorical'}
+                onColorScaleTypeChange={(type) => onStateChange({ colorScaleType: type })}
+                monochromeColor={state.monochromeColor}
+                onMonochromeColorChange={(color) => onStateChange({ monochromeColor: color })}
+              />
+            )}
+          </div>
         </div>
 
         <Separator />
@@ -202,55 +228,6 @@ export function VisualizationControls({
           <p className="text-xs text-muted-foreground">
             Used for semantic search similarity calculations
           </p>
-        </div>
-
-        <Separator />
-
-        {/* Search */}
-        <div className="space-y-3">
-          <Label htmlFor="search" className="text-base">Search</Label>
-          <DebouncedSearchInput
-            id="search"
-            placeholder="Type to search..."
-            value={state.searchQuery ?? ''}
-            onChange={(value) => onStateChange({ searchQuery: value })}
-            delay={300}
-          />
-          <p className="text-xs text-muted-foreground">
-            Search will highlight matching words in the visualization
-          </p>
-        </div>
-
-        {/* Show Only Highlighted */}
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="show-only-highlighted"
-            checked={state.showOnlyHighlighted ?? false}
-            onCheckedChange={(checked) => onStateChange({ showOnlyHighlighted: checked === true })}
-            disabled={!hasHighlights}
-          />
-          <Label
-            htmlFor="show-only-highlighted"
-            className={`font-normal cursor-pointer ${!hasHighlights ? 'text-muted-foreground' : ''}`}
-          >
-            Show only highlighted
-          </Label>
-        </div>
-
-        {/* Show Labels */}
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="show-labels"
-            checked={state.showLabels ?? false}
-            onCheckedChange={(checked) => onStateChange({ showLabels: checked === true })}
-            disabled={!hasHighlights}
-          />
-          <Label
-            htmlFor="show-labels"
-            className={`font-normal cursor-pointer ${!hasHighlights ? 'text-muted-foreground' : ''}`}
-          >
-            Show labels
-          </Label>
         </div>
 
         {/* Show Contours 

@@ -24,6 +24,7 @@ from ..clients.huggingface_client import (
     load_dataset_portion,
 )
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
+from ..utils.id_utils import IDDeduplicator
 
 
 def embed_huggingface_dataset(
@@ -153,6 +154,7 @@ def embed_huggingface_dataset(
 
         # Process in batches
         total_embedded = 0
+        id_deduplicator = IDDeduplicator()
 
         for batch_start in tqdm(range(0, len(rows), EMBEDDING_BATCH_SIZE),
                                 desc="Embedding batches", unit="batch"):
@@ -167,7 +169,8 @@ def embed_huggingface_dataset(
 
                 # Generate ID
                 if config.id_column and config.id_column in row:
-                    doc_id = str(row[config.id_column])
+                    base_id = str(row[config.id_column])
+                    doc_id = id_deduplicator.get_unique_id(base_id)
                 else:
                     doc_id = f"{config.collection_name}_{config.split}_{row_idx}"
 

@@ -30,11 +30,13 @@ export function useAppSearch(
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);
     setSearchType('point');
-    setSelectedPoint(point);
     try {
       const results = await findSimilarById(point.id, 20, distanceMetric);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(point.label || point.id);
+      // Set selected point AFTER semantic search completes
+      // This ensures camera animation and highlights appear together
+      setSelectedPoint(point);
     } catch (error) {
       console.error('Point click search error:', error);
     }

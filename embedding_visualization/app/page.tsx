@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { AppFooter } from './components/AppFooter';
-import { EmbeddingSidebar } from './components/EmbeddingSidebar';
-import { DashboardPanel } from './components/DashboardPanel';
+import { DashboardPanel, type ActivePanel } from './components/DashboardPanel';
 import { SidebarInset, SidebarProvider } from '@/lib/ui-primitives/sidebar';
 import { useEmbeddingData } from '../lib/hooks/useEmbeddingData';
 import { useCollections } from '../lib/hooks/useCollections';
@@ -31,7 +30,7 @@ export default function Home() {
     }
   }, [collections, selectedCollection]);
 
-  const { data, loading, error, categoryFieldOptions } = useEmbeddingData(selectedCollection);
+  const { data, loading, error, colorFieldOptions } = useEmbeddingData(selectedCollection);
 
   const [visualizationState, setVisualizationState] = useState<VisualizationState>({
     method: 'umap',
@@ -41,6 +40,33 @@ export default function Home() {
     selectedDimensions: [0, 1, 2],
     distanceMetric: 'COSINE',
   });
+
+  // Panel state for dual sidebars (controls vs search)
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+
+  const toggleControls = useCallback(() => {
+    setActivePanel(prev => prev === 'controls' ? null : 'controls');
+  }, []);
+
+  const toggleSearch = useCallback(() => {
+    setActivePanel(prev => prev === 'search' ? null : 'search');
+  }, []);
+
+  // Keyboard shortcuts: ⌘B for controls, ⌘K for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        toggleControls();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        toggleSearch();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleControls, toggleSearch]);
 
   // Use the new custom hook for search logic
   const {
@@ -133,6 +159,9 @@ export default function Home() {
               embeddingDim={data?.metadata.embedding_dim}
               onSemanticSearch={handleSemanticSearch}
               searchLoading={searchLoading}
+              activePanel={activePanel}
+              onToggleControls={toggleControls}
+              onToggleSearch={toggleSearch}
             />
           </div>
         </div>
@@ -175,9 +204,10 @@ export default function Home() {
                   }}
                   searchQuery={visualizationState.searchQuery}
                   highlightedCount={combinedHighlightedIndices?.size}
-                  categoryFieldOptions={categoryFieldOptions}
+                  colorFieldOptions={colorFieldOptions}
                   textSearchResults={textSearchResults}
                   onTextResultClick={handlePointClick}
+                  activePanel={activePanel}
                 />
               </div>
               {/*<AppFooter

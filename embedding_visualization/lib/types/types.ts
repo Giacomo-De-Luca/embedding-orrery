@@ -85,11 +85,22 @@ export type ProjectionMethod = 'pca' | 'umap' | 'manual';
 export type DimensionMode = '2d' | '3d';
 export type DistanceMetric = 'COSINE' | 'L2' | 'IP';
 
+/**
+ * Color scale types for visualization:
+ * - categorical: Discrete colors for categories (D3 category10/20)
+ * - sequential: Continuous scale for numeric values (Viridis)
+ * - diverging: Centered scale for values with midpoint (Blue-Gold)
+ * - monochrome: Single-color opacity gradient (10% → 100%)
+ */
+export type ColorScaleType = 'categorical' | 'sequential' | 'diverging' | 'monochrome';
+
 export interface VisualizationState {
   method: ProjectionMethod;
   mode: DimensionMode;
   selectedDimensions?: number[];
-  colorByField?: string | null;  // Field name to color by, null for no coloring
+  colorByField?: string | null;  // Field name to color by (used for both categorical AND numeric)
+  colorScaleType?: ColorScaleType;  // Type of color scale (auto-detected, can be overridden)
+  monochromeColor?: string;  // Base color for monochrome scale (default: #1f77b4)
   searchQuery?: string;
   distanceMetric?: DistanceMetric;  // Distance metric for semantic search
   showOnlyHighlighted?: boolean;  // When true, only show highlighted/selected points
@@ -173,3 +184,14 @@ export interface CategoryColorPreset {
  * - Text search: 1.0 (perfect match)
  */
 export type HighlightMap = Map<number, number>;
+
+// ============ Color scale configuration ============
+
+/**
+ * Configuration for color scale behavior.
+ */
+export interface ColorScaleConfig {
+  type: ColorScaleType;
+  /** Numeric field to use for sequential/diverging scales */
+  numericField?: string;
+}

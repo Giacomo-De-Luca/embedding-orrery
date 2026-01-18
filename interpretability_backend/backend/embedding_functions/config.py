@@ -12,6 +12,11 @@ TEXT_MODEL_NAME = "all-MiniLM-L6-v2"
 IMAGE_MODEL_NAME = "google/vit-base-patch16-384"
 TEXT_EMBEDDING_DIMENSIONS = 384
 IMAGE_EMBEDDING_DIMENSIONS = 768
+
+# TODO: make these automatically adjust 
+# first call for the amount of available memory
+# second, check how much memory the model takes
+# third, automatically set up batch size
 EMBEDDING_BATCH_SIZE = 1000
 IMAGE_BATCH_SIZE = 16
 
