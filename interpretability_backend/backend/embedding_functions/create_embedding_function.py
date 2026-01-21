@@ -5,18 +5,47 @@ from typing import Optional, Any
 from chromadb.utils import embedding_functions
 
 from .config import EmbeddingModelConfig, EmbeddingProvider
+import json
+from pathlib import Path
+from chromadb.utils.embedding_functions import EmbeddingFunction
+
+
+DIMENSIONS_FILE = Path(__file__).parent / "utils" / "known_dimensions.json"
+
+
+def _load_known_dimensions() -> dict[str, int]:
+    """Load dimensions from the JSON file."""
+    if not DIMENSIONS_FILE.exists():
+        return {}
+    try:
+        with open(DIMENSIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+def _save_known_dimension(model_name: str, dimension: int, current_dims: dict[str, int]) -> None:
+    """Update the JSON file with a new model dimension."""    
+    try:
+        with open(DIMENSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(current_dims, f, indent=1, sort_keys=True)
+            print(f"Updated known dimensions file with {model_name}: {dimension}")
+    except IOError as e:
+        print(f"Warning: Could not save dimension to file: {e}")
 
 
 def create_embedding_function(
     config: Optional[EmbeddingModelConfig],
-    device: str
-) -> tuple[Any, int]:
+    device: str,
+    known_dimension: Optional[int] = None
+) -> tuple[EmbeddingFunction, int]:
     """
     Create an embedding function based on the configuration.
 
     Args:
         config: Embedding model configuration (None uses defaults)
         device: Device for local models (cpu, cuda, mps)
+        known_dimension: Pre-computed dimension (from metadata or cache).
+                        If provided, skips test embedding.
 
     Returns:
         Tuple of (embedding_function, embedding_dimension)
@@ -30,15 +59,31 @@ def create_embedding_function(
     provider = config.provider
     model_name = config.model_name
 
+    # Helper to get dimension (with fallback chain)
+    def get_dimension(ef_for_test: Any) -> int:
+        # 1. Use provided dimension (from ChromaDB metadata)
+        if known_dimension is not None:
+            return known_dimension
+        
+        known_dimensions = _load_known_dimensions()
+
+        # 2. Check local cache
+        if model_name in known_dimensions:
+            return known_dimensions[model_name]
+
+        # 3. Fallback: Run test embedding (only if needed)
+        print(f"Warning: Unknown dimension for {model_name}, running test embedding...")
+        test_embedding = ef_for_test(["test"])
+        _save_known_dimension(model_name, len(test_embedding[0]), known_dimensions)
+        return len(test_embedding[0])
+
     if provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
         # Local sentence-transformers model
         ef = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name=model_name,
             device=device
         )
-        # Get dimension by doing a test embedding
-        test_embedding = ef(["test"])
-        dim = len(test_embedding[0])
+        dim = get_dimension(ef)  # Use helper instead of test embedding
         return ef, dim
 
     elif provider == EmbeddingProvider.OPENAI:
@@ -47,13 +92,8 @@ def create_embedding_function(
             model_name=model_name
             # api_key read from CHROMA_OPENAI_API_KEY by default
         )
-        # OpenAI dimensions vary by model
-        dim_map = {
-            "text-embedding-3-small": 1536,
-            "text-embedding-3-large": 3072,
-            "text-embedding-ada-002": 1536,
-        }
-        dim = dim_map.get(model_name, 1536)
+        dim = get_dimension(ef)
+
         return ef, dim
 
     elif provider == EmbeddingProvider.COHERE:
@@ -62,8 +102,8 @@ def create_embedding_function(
             model_name=model_name
             # api_key read from CHROMA_COHERE_API_KEY by default
         )
-        # Cohere v3 models are 1024 dim
-        dim = 1024
+        # Cohere v3 default is 1024 dim, but respect provided dimension
+        dim = get_dimension(ef)
         return ef, dim
 
     elif provider == EmbeddingProvider.OLLAMA:
@@ -73,9 +113,7 @@ def create_embedding_function(
             url=url,
             model_name=model_name
         )
-        # Get dimension by doing a test embedding
-        test_embedding = ef(["test"])
-        dim = len(test_embedding[0])
+        dim = get_dimension(ef)  
         return ef, dim
 
     elif provider == EmbeddingProvider.HUGGINGFACE_API:
@@ -84,9 +122,26 @@ def create_embedding_function(
             model_name=model_name
             # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
         )
-        # Get dimension by doing a test embedding
-        test_embedding = ef(["test"])
-        dim = len(test_embedding[0])
+        dim = get_dimension(ef)  # Use helper instead of test embedding
+        return ef, dim
+    
+    elif provider == EmbeddingProvider.GEMINI:
+        from .specific_functions.embed_gemini import EmbedTextGemini
+
+        ef = EmbedTextGemini(model=model_name)
+        dim = get_dimension(ef) 
+        return ef, dim
+
+    elif provider == EmbeddingProvider.BGE:
+        from .specific_functions.embed_bge import EmbedTextBGE
+        ef = EmbedTextBGE(model=model_name)
+        dim = get_dimension(ef) 
+        return ef, dim
+    
+    elif provider == EmbeddingProvider.QWEN:
+        from .specific_functions.embed_qwen import EmbedTextQWEN
+        ef = EmbedTextQWEN(model=model_name, device=device)
+        dim = get_dimension(ef) 
         return ef, dim
 
     else:

@@ -21,23 +21,7 @@ import { DataTypeSelector } from './DataTypeSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-
-// Default models for each provider
-const DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
-  SENTENCE_TRANSFORMERS: 'all-MiniLM-L6-v2',
-  OPENAI: 'text-embedding-3-small',
-  COHERE: 'embed-english-v3.0',
-  OLLAMA: 'nomic-embed-text',
-  HUGGINGFACE_API: 'sentence-transformers/all-MiniLM-L6-v2',
-};
-
-const PROVIDER_DESCRIPTIONS: Record<EmbeddingProvider, string> = {
-  SENTENCE_TRANSFORMERS: 'Local (no API key)',
-  OPENAI: 'Requires CHROMA_OPENAI_API_KEY',
-  COHERE: 'Requires CHROMA_COHERE_API_KEY',
-  OLLAMA: 'Local Ollama server',
-  HUGGINGFACE_API: 'Requires CHROMA_HUGGINGFACE_API_KEY',
-};
+import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
 
 interface LocalFileTabProps {
   fetchLocalFileInfo: (filePath: string) => Promise<LocalFileInfo | null>;
@@ -101,7 +85,7 @@ export function LocalFileTab({
 
   // Embedding model state
   const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider>('SENTENCE_TRANSFORMERS');
-  const [modelName, setModelName] = useState(DEFAULT_MODELS.SENTENCE_TRANSFORMERS);
+  const [modelName, setModelName] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultModel);
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
 
   // Reset columns when file changes
@@ -185,7 +169,7 @@ export function LocalFileTab({
 
   const handleProviderChange = (provider: EmbeddingProvider) => {
     setEmbeddingProvider(provider);
-    setModelName(DEFAULT_MODELS[provider]);
+    setModelName(EMBEDDING_PROVIDERS[provider].defaultModel);
   };
 
   const isLoading = infoLoading || previewLoading;
@@ -340,15 +324,15 @@ export function LocalFileTab({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="SENTENCE_TRANSFORMERS">SentenceTransformers</SelectItem>
-                    <SelectItem value="OPENAI">OpenAI</SelectItem>
-                    <SelectItem value="COHERE">Cohere</SelectItem>
-                    <SelectItem value="OLLAMA">Ollama</SelectItem>
-                    <SelectItem value="HUGGINGFACE_API">HuggingFace API</SelectItem>
+                    {(Object.keys(EMBEDDING_PROVIDERS) as Array<keyof typeof EMBEDDING_PROVIDERS>).map((provider) => (
+                      <SelectItem key={provider} value={provider}>
+                        {provider}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  {PROVIDER_DESCRIPTIONS[embeddingProvider]}
+                  {EMBEDDING_PROVIDERS[embeddingProvider].description}
                 </p>
               </div>
               <div className="space-y-2">
@@ -357,7 +341,7 @@ export function LocalFileTab({
                   id="model-name"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
-                  placeholder={DEFAULT_MODELS[embeddingProvider]}
+                  placeholder={EMBEDDING_PROVIDERS[embeddingProvider].defaultModel}
                 />
               </div>
               {embeddingProvider === 'OLLAMA' && (

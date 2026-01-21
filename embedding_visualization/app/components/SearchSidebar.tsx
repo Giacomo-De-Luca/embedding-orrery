@@ -70,6 +70,7 @@ export function SearchSidebar({
             <Label htmlFor="sidebar-search" className="text-base">Search</Label>
             <DebouncedSearchInput
               id="sidebar-search"
+              className="max-w-5/6"
               placeholder="Type to search..."
               value={searchQuery}
               onChange={onSearchChange}

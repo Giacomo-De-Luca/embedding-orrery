@@ -51,24 +51,31 @@ class ChromaDBClient:
             for col in collections
         ]
 
-    def get_collection(self, name: str):
+    def get_collection(self, name: str, load_embedding_function: bool = False):
         """Get a collection by name.
 
         Args:
             name: Collection name
+            load_embedding_function: If True, loads the embedding function for query operations.
+                                     If False (default), returns collection without EF for read-only ops.
 
         Returns:
-            ChromaDB collection
+            ChromaDB collection (with or without embedding function)
         """
         try:
-            # First get with default EF to read metadata
+            if not load_embedding_function:
+                # Fast path: read-only operations (projection data, get items)
+                # No embedding function needed - just return collection
+                return self.client.get_collection(name=name)
+
+            # Slow path: load embedding function for semantic search with text
             collection = self.client.get_collection(name=name)
-            
+
             # Check metadata for embedding model info
             metadata = collection.metadata or {}
             provider_str = metadata.get("embedding_provider")
             model_name = metadata.get("embedding_model")
-            
+
             if provider_str and model_name:
                 try:
                     # Construct config to create correct EF
@@ -77,20 +84,27 @@ class ChromaDBClient:
                         provider=provider,
                         model_name=model_name
                     )
-                    
+
+                    # Get embedding dimension from metadata (avoid test embedding)
+                    embedding_dim = metadata.get("embedding_dim")
+
                     # Create EF (autodetect device is safe for inference)
                     device = get_device()
-                    ef, _ = create_embedding_function(config, device)
-                    
+                    ef, _ = create_embedding_function(
+                        config,
+                        device,
+                        known_dimension=embedding_dim  # Pass stored dimension
+                    )
+
                     # Re-get collection with specific EF
                     return self.client.get_collection(name=name, embedding_function=ef)
-                    
+
                 except Exception as e:
-                    # If we can't load the specific model (e.g. missing API key), 
-                    # fallback to the collection with default EF (will work for retreival, fail for query)
+                    # If we can't load the specific model (e.g. missing API key),
+                    # fallback to the collection with default EF (will work for retrieval, fail for query)
                     print(f"Warning: Could not load embedding function for '{name}': {e}")
                     return collection
-            
+
             return collection
         except Exception as e:
             raise ValueError(f"Collection '{name}' not found: {e}")
@@ -115,7 +129,8 @@ class ChromaDBClient:
         Returns:
             Dictionary with ids, embeddings, metadatas, documents
         """
-        collection = self.get_collection(collection_name)
+        # Read-only operation - no embedding function needed
+        collection = self.get_collection(collection_name, load_embedding_function=False)
 
         # Get total count first
         if where:
@@ -159,7 +174,9 @@ class ChromaDBClient:
         Returns:
             Query results with ids, distances, metadatas, documents
         """
-        collection = self.get_collection(collection_name)
+        # Only load EF if using query_texts (not query_embeddings)
+        needs_ef = query_texts is not None
+        collection = self.get_collection(collection_name, load_embedding_function=needs_ef)
 
         # Validate inputs
         if query_texts is None and query_embeddings is None:
@@ -215,7 +232,8 @@ class ChromaDBClient:
         Returns:
             Dictionary with projection data and metadata
         """
-        collection = self.get_collection(collection_name)
+        # Read-only operation - no embedding function needed
+        collection = self.get_collection(collection_name, load_embedding_function=False)
 
         # Get all items with metadata
         results = collection.get(
@@ -311,7 +329,8 @@ class ChromaDBClient:
         Returns:
             Dictionary with collection info and metadata
         """
-        collection = self.get_collection(collection_name)
+        # Read-only operation - no embedding function needed
+        collection = self.get_collection(collection_name, load_embedding_function=False)
         metadata = collection.metadata or {}
 
         # Parse JSON fields in metadata
@@ -351,7 +370,8 @@ class ChromaDBClient:
         Returns:
             Dictionary with updated metadata
         """
-        collection = self.get_collection(collection_name)
+        # Read-only operation initially (just metadata update) - no embedding function needed
+        collection = self.get_collection(collection_name, load_embedding_function=False)
         current_metadata = collection.metadata or {}
 
         # Merge: existing metadata + updates (updates overwrite existing keys)

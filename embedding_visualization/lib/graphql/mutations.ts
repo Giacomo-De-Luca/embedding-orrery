@@ -235,6 +235,9 @@ export type EmbeddingProvider =
   | 'OPENAI'
   | 'COHERE'
   | 'OLLAMA'
+  | 'GEMINI'
+  | 'BGE'
+  | 'QWEN'
   | 'HUGGINGFACE_API';
 
 /**

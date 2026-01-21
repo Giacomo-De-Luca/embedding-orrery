@@ -25,6 +25,7 @@ from ..clients.huggingface_client import (
 )
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
 from ..utils.id_utils import IDDeduplicator
+from ..utils.batch_utils import sort_items_by_length
 
 
 def embed_huggingface_dataset(
@@ -90,6 +91,13 @@ def embed_huggingface_dataset(
                     embedding_model=model_config.model_name
                 )
         print(f"Embedding columns: {columns}")
+
+        # Sort rows by text length for efficient batching (reduces padding waste)
+        rows = sort_items_by_length(
+            rows,
+            lambda row: format_text_for_embedding(row, columns, config.text_template)
+        )
+        print(f"Sorted {len(rows)} rows by text length for efficient batching")
 
         # Initialize ChromaDB
         db_path = str(DB_PATH.resolve())

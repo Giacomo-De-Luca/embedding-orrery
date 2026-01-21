@@ -43,6 +43,9 @@ EMBEDDING_PROVIDER_MAP = {
     EmbeddingProviderEnum.COHERE: EmbeddingProvider.COHERE,
     EmbeddingProviderEnum.OLLAMA: EmbeddingProvider.OLLAMA,
     EmbeddingProviderEnum.HUGGINGFACE_API: EmbeddingProvider.HUGGINGFACE_API,
+    EmbeddingProviderEnum.GEMINI: EmbeddingProvider.GEMINI,
+    EmbeddingProviderEnum.BGE: EmbeddingProvider.BGE,
+    EmbeddingProviderEnum.QWEN: EmbeddingProvider.QWEN,
 }
 
 DATA_TYPE_MAP = {
