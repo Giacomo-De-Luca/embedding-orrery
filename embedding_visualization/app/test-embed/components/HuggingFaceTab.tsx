@@ -20,23 +20,7 @@ import { SplitSelector } from './SplitSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-
-// Default models for each provider
-const DEFAULT_MODELS: Record<EmbeddingProvider, string> = {
-  SENTENCE_TRANSFORMERS: 'all-MiniLM-L6-v2',
-  OPENAI: 'text-embedding-3-small',
-  COHERE: 'embed-english-v3.0',
-  OLLAMA: 'nomic-embed-text',
-  HUGGINGFACE_API: 'sentence-transformers/all-MiniLM-L6-v2',
-};
-
-const PROVIDER_DESCRIPTIONS: Record<EmbeddingProvider, string> = {
-  SENTENCE_TRANSFORMERS: 'Local (no API key)',
-  OPENAI: 'Requires CHROMA_OPENAI_API_KEY',
-  COHERE: 'Requires CHROMA_COHERE_API_KEY',
-  OLLAMA: 'Local Ollama server',
-  HUGGINGFACE_API: 'Requires CHROMA_HUGGINGFACE_API_KEY',
-};
+import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
 
 interface HuggingFaceTabProps {
   fetchHFDatasetInfo: (datasetId: string) => Promise<HFDatasetInfo | null>;
@@ -104,7 +88,7 @@ export function HuggingFaceTab({
 
   // Embedding model state
   const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider>('SENTENCE_TRANSFORMERS');
-  const [modelName, setModelName] = useState(DEFAULT_MODELS.SENTENCE_TRANSFORMERS);
+  const [modelName, setModelName] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultModel);
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
 
   // Reset columns when dataset changes
@@ -250,7 +234,7 @@ export function HuggingFaceTab({
 
   const handleProviderChange = (provider: EmbeddingProvider) => {
     setEmbeddingProvider(provider);
-    setModelName(DEFAULT_MODELS[provider]);
+    setModelName(EMBEDDING_PROVIDERS[provider].defaultModel);
   };
 
   const isLoading = infoLoading || previewLoading;
@@ -414,16 +398,22 @@ export function HuggingFaceTab({
                   <SelectTrigger id="provider">
                     <SelectValue />
                   </SelectTrigger>
+
                   <SelectContent>
-                    <SelectItem value="SENTENCE_TRANSFORMERS">SentenceTransformers</SelectItem>
-                    <SelectItem value="OPENAI">OpenAI</SelectItem>
-                    <SelectItem value="COHERE">Cohere</SelectItem>
-                    <SelectItem value="OLLAMA">Ollama</SelectItem>
-                    <SelectItem value="HUGGINGFACE_API">HuggingFace API</SelectItem>
+                    {(Object.keys(EMBEDDING_PROVIDERS) as Array<keyof typeof EMBEDDING_PROVIDERS>).map((provider) => (
+                      <SelectItem key={provider} value={provider}>
+                        {provider}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
+
+
+
+
+
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  {PROVIDER_DESCRIPTIONS[embeddingProvider]}
+                  {EMBEDDING_PROVIDERS[embeddingProvider].description}
                 </p>
               </div>
               <div className="space-y-2">
@@ -432,7 +422,7 @@ export function HuggingFaceTab({
                   id="model-name"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
-                  placeholder={DEFAULT_MODELS[embeddingProvider]}
+                  placeholder={EMBEDDING_PROVIDERS[embeddingProvider].defaultModel}
                 />
               </div>
               {embeddingProvider === 'OLLAMA' && (
@@ -447,22 +437,24 @@ export function HuggingFaceTab({
                 </div>
               )}
             </div>
+
+            {/* Embed Button */}
+            {isDataLoaded && (
+              <Button
+                onClick={handleEmbed}
+                disabled={embedLoading || selectedEmbeddingColumns.length === 0}
+                size="lg"
+                className="w-full md:w-auto"
+              >
+                {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
+                Embed Dataset
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}
 
-      {/* Embed Button */}
-      {isDataLoaded && (
-        <Button
-          onClick={handleEmbed}
-          disabled={embedLoading || selectedEmbeddingColumns.length === 0}
-          size="lg"
-          className="w-full md:w-auto"
-        >
-          {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
-          Embed Dataset
-        </Button>
-      )}
+  
 
       {/* Embed Result */}
       {lastEmbedResult && (

@@ -24,6 +24,7 @@ from .config import (
 from .create_embedding_function import create_embedding_function, get_device
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
 from ..utils.id_utils import IDDeduplicator
+from ..utils.batch_utils import sort_items_by_length
 from .embed_images import embed_images
 from .embed_vectors import embed_vectors
 
@@ -159,6 +160,13 @@ def embed_text_from_local(
 
     print(f"Embedding columns: {columns}")
 
+    # Sort rows by text length for efficient batching (reduces padding waste)
+    rows = sort_items_by_length(
+        rows,
+        lambda row: format_text_for_embedding(row, columns, config.text_template)
+    )
+    print(f"Sorted {len(rows)} rows by text length for efficient batching")
+
     # Create embedding function using factory
     embedding_func, embedding_dim = create_embedding_function(model_config, device)
     print(f"Using embedding model: {model_config.provider.value} / {model_config.model_name}")
@@ -245,7 +253,3 @@ def embed_text_from_local(
         embedding_provider=model_config.provider.value,
         embedding_model=model_config.model_name
     )
-
-
-# Alias for backward compatibility
-_embed_text_from_local = embed_text_from_local

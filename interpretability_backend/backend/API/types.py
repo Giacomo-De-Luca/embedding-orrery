@@ -101,6 +101,9 @@ class EmbeddingProviderEnum(Enum):
     COHERE = "cohere"
     OLLAMA = "ollama"
     HUGGINGFACE_API = "huggingface_api"
+    GEMINI = "gemini"
+    BGE = "bge"
+    QWEN = "qwen"
 
 
 @strawberry.input

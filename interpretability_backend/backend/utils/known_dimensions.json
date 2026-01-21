@@ -1,0 +1,17 @@
+{
+ "BAAI/bge-base-en-v1.5": 768,
+ "BAAI/bge-large-en-v1.5": 1024,
+ "BAAI/bge-m3": 1024,
+ "BAAI/bge-small-en-v1.5": 384,
+ "all-MiniLM-L12-v2": 384,
+ "all-MiniLM-L6-v2": 384,
+ "all-mpnet-base-v2": 768,
+ "embed-english-v3.0": 1024,
+ "embed-multilingual-v3.0": 1024,
+ "mxbai-embed-large": 1024,
+ "nomic-embed-text": 768,
+ "paraphrase-MiniLM-L6-v2": 384,
+ "text-embedding-3-large": 3072,
+ "text-embedding-3-small": 1536,
+ "text-embedding-ada-002": 1536
+}

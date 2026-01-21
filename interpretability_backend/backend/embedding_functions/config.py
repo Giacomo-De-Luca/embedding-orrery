@@ -35,6 +35,10 @@ class EmbeddingProvider(Enum):
     COHERE = "cohere"
     OLLAMA = "ollama"
     HUGGINGFACE_API = "huggingface_api"
+    GEMINI = "gemini"
+    BGE = "bge" 
+    QWEN = "qwen"
+
 
 
 @dataclass
@@ -71,7 +75,7 @@ class EmbeddingConfig:
     collection_name: str
     config: Optional[str] = None
     split: str = "train"
-    columns: List[str] = None  # Columns to embed (combined into text)
+    columns: Optional[List[str]] = None  # Columns to embed (combined into text)
     text_template: Optional[str] = None  # Template for combining columns, e.g., "{title}: {text}"
     id_column: Optional[str] = None  # Column to use as document ID (default: row index)
     portion: Optional[PortionConfig] = None  # Portion of dataset to embed

@@ -186,7 +186,6 @@ export default function Home() {
             </div>
           ) : data ? (
             <>
-              <div className="flex-1 min-h-0">
                 <DashboardPanel
                   state={visualizationState}
                   points2d={filteredPoints2d}
@@ -209,7 +208,6 @@ export default function Home() {
                   onTextResultClick={handlePointClick}
                   activePanel={activePanel}
                 />
-              </div>
               {/*<AppFooter
                     timestamp={data.metadata.timestamp}
                     selectedCollection={selectedCollection}

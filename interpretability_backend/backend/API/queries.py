@@ -359,7 +359,8 @@ class Query:
             List of search results with similarities
         """
         client = get_chromadb_client()
-        collection = client.get_collection(collection_name)
+        # Don't load EF - we're using pre-computed embeddings
+        collection = client.get_collection(collection_name, load_embedding_function=False)
 
         # Get the embedding for the item
         item_data = collection.get(

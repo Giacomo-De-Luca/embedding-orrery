@@ -26,7 +26,7 @@ export function TextSearchResultsList({
 
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">
+      <p className="text-sm font-medium text-muted-foreground pb-2">
         Text matches ({results.length})
       </p>
       <ScrollArea
@@ -44,7 +44,7 @@ export function TextSearchResultsList({
                 }`}
             >
               <div className="flex items-center gap-2">
-                <span className="font-medium truncate flex-1">
+                <span className="font-medium flex-1">
                   {point.label}
                 </span>
                 {categoryField && point.category && (
@@ -54,9 +54,10 @@ export function TextSearchResultsList({
                 )}
               </div>
               {point.document && point.document !== point.label && (
-                <p className="text-xs text-muted-foreground truncate mt-0.5">
-                  {point.document.slice(0, 80)}
-                  {point.document.length > 80 ? '...' : ''}
+                <p className="text-xs text-muted-foreground  mt-0.5">
+                  {point.document}
+                 {/*{point.document.slice(0, 80)}
+                  {point.document.length > 80 ? '...' : ''}*/}
                 </p>
               )}
             </button>
