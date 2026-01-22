@@ -10,6 +10,10 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent.parent.parent / "resources" / "vector_db"
 TEXT_MODEL_NAME = "all-MiniLM-L6-v2"
 IMAGE_MODEL_NAME = "google/vit-base-patch16-384"
+
+
+###TODO: this is terrible, it should be dynamic based on model used
+## at the moment it's only used for errors
 TEXT_EMBEDDING_DIMENSIONS = 384
 IMAGE_EMBEDDING_DIMENSIONS = 768
 
@@ -28,6 +32,8 @@ class DataType(Enum):
     VECTOR = "vector"  # Pre-computed embeddings
 
 
+ 
+### HACK: Terrible replace it with the correct enum used also by strawberry
 class EmbeddingProvider(Enum):
     """Embedding model provider."""
     SENTENCE_TRANSFORMERS = "sentence_transformers"
@@ -40,7 +46,7 @@ class EmbeddingProvider(Enum):
     QWEN = "qwen"
 
 
-
+### TODO why this is has only Sentence Transformers?
 @dataclass
 class EmbeddingModelConfig:
     """Configuration for embedding model."""
@@ -68,34 +74,37 @@ class EmbeddingResult:
 # Ideally configs shouldn't depend on clients, but let's import for now to match original struct.
 from ..clients.huggingface_client import PortionConfig
 
-@dataclass
-class EmbeddingConfig:
-    """Configuration for embedding a HuggingFace dataset."""
-    dataset_id: str
+
+
+
+
+@dataclass(kw_only=True)
+class BaseConfig:
+    """base configuration for embedding collections"""
     collection_name: str
-    config: Optional[str] = None
-    split: str = "train"
+    embedding_model: Optional[EmbeddingModelConfig] = None  # Embedding model config
     columns: Optional[List[str]] = None  # Columns to embed (combined into text)
     text_template: Optional[str] = None  # Template for combining columns, e.g., "{title}: {text}"
     id_column: Optional[str] = None  # Column to use as document ID (default: row index)
-    portion: Optional[PortionConfig] = None  # Portion of dataset to embed
     metadata_columns: Optional[List[str]] = None  # Additional columns to store as metadata
-    embedding_model: Optional[EmbeddingModelConfig] = None  # Embedding model config
 
 
-@dataclass
-class LocalFileEmbeddingConfig:
+@dataclass(kw_only=True)
+class EmbeddingConfig(BaseConfig):
+    """Configuration for embedding a HuggingFace dataset."""
+    dataset_id: str
+    config: Optional[str] = None
+    split: str = "train"
+    portion: Optional[PortionConfig] = None  # Portion of dataset to embed
+
+
+@dataclass(kw_only=True)
+class LocalFileEmbeddingConfig(BaseConfig):
     """Configuration for embedding a local file."""
     file_path: str
-    collection_name: str
     data_type: DataType = DataType.TEXT
-    columns: Optional[List[str]] = None  # Columns to embed (for text)
-    text_template: Optional[str] = None
     image_column: Optional[str] = None  # Column containing image data/paths
     vector_column: Optional[str] = None  # Column containing pre-computed vectors
-    id_column: Optional[str] = None
-    metadata_columns: Optional[List[str]] = None
     n_rows: Optional[int] = None  # Limit rows
     sample_n: Optional[int] = None  # Random sample
     sample_seed: int = 42
-    embedding_model: Optional[EmbeddingModelConfig] = None  # Only used for TEXT data_type
