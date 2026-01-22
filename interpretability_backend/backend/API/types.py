@@ -122,7 +122,9 @@ class EmbedDatasetInput:
     id_column: Optional[str] = None  # Column to use as document ID
     portion: Optional[PortionInput] = None
     metadata_columns: Optional[List[str]] = None
+    metadata_columns: Optional[List[str]] = None
     compute_projections: bool = True  # Whether to compute PCA/UMAP after embedding
+    batch_size: Optional[int] = 100
     # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2)
     embedding_model: Optional[EmbeddingModelInput] = None
 
@@ -188,7 +190,9 @@ class EmbedLocalFileInput:
     n_rows: Optional[int] = None  # Limit rows
     sample_n: Optional[int] = None  # Random sample
     sample_seed: int = 42
+    sample_seed: int = 42
     compute_projections: bool = True
+    batch_size: Optional[int] = 100
     # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2)
     # Only used for TEXT data_type; IMAGE uses ViT, VECTOR uses pre-computed
     embedding_model: Optional[EmbeddingModelInput] = None

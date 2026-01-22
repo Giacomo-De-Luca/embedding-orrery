@@ -88,6 +88,7 @@ class BaseConfig:
     text_template: Optional[str] = None  # Template for combining columns, e.g., "{title}: {text}"
     id_column: Optional[str] = None  # Column to use as document ID (default: row index)
     metadata_columns: Optional[List[str]] = None  # Additional columns to store as metadata
+    batch_size: int = 100  # Batch size for embedding
 
 @dataclass(kw_only=True)
 class EmbeddingConfig(BaseConfig):

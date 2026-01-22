@@ -265,8 +265,12 @@ export function ScatterPlot3D({
     // Fallback if no valid numbers
     if (validValues.length === 0) return null;
 
-    const min = Math.min(...validValues);
-    const max = Math.max(...validValues);
+    let min = Infinity;
+    let max = -Infinity;
+    for (const v of validValues) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
 
     return {
       values,
