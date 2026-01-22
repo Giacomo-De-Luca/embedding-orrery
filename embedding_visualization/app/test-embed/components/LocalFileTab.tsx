@@ -14,7 +14,7 @@ import {
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
+import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, GeminiTaskType } from '@/lib/graphql/mutations';
 
 import { FileUploadZone } from './FileUploadZone';
 import { DataTypeSelector } from './DataTypeSelector';
@@ -40,7 +40,7 @@ interface LocalFileTabProps {
     sampleN?: number;
     sampleSeed?: number;
     computeProjections?: boolean;
-    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string };
+    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType };
   }) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
   localFileInfo: LocalFileInfo | null;
@@ -87,6 +87,8 @@ export function LocalFileTab({
   const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider>('SENTENCE_TRANSFORMERS');
   const [modelName, setModelName] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultModel);
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [qwenTask, setQwenTask] = useState('Given a web search query, retrieve relevant passages that answer the query');
+  const [geminiTaskType, setGeminiTaskType] = useState<GeminiTaskType>('SEMANTIC_SIMILARITY');
 
   // Reset columns when file changes
   useEffect(() => {
@@ -161,6 +163,8 @@ export function LocalFileTab({
         provider: embeddingProvider,
         modelName,
         ollamaUrl: embeddingProvider === 'OLLAMA' ? ollamaUrl : undefined,
+        task: embeddingProvider === 'QWEN' ? qwenTask : undefined,
+        taskType: embeddingProvider === 'GEMINI' ? geminiTaskType : undefined,
       } : undefined,
     });
 
@@ -353,6 +357,46 @@ export function LocalFileTab({
                     onChange={(e) => setOllamaUrl(e.target.value)}
                     placeholder="http://localhost:11434"
                   />
+                </div>
+              )}
+              {embeddingProvider === 'QWEN' && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="qwen-task">Query Task Instruction</Label>
+                  <Input
+                    id="qwen-task"
+                    value={qwenTask}
+                    onChange={(e) => setQwenTask(e.target.value)}
+                    placeholder="Given a web search query, retrieve relevant passages that answer the query"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Instruction prefix added to queries during semantic search (not used during document embedding)
+                  </p>
+                </div>
+              )}
+              {embeddingProvider === 'GEMINI' && (
+                <div className="space-y-2">
+                  <Label htmlFor="gemini-task-type">Task Type</Label>
+                  <Select
+                    value={geminiTaskType}
+                    onValueChange={(v) => setGeminiTaskType(v as GeminiTaskType)}
+                  >
+                    <SelectTrigger id="gemini-task-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="SEMANTIC_SIMILARITY">Semantic Similarity</SelectItem>
+                      <SelectItem value="CLASSIFICATION">Classification</SelectItem>
+                      <SelectItem value="CLUSTERING">Clustering</SelectItem>
+                      <SelectItem value="RETRIEVAL_DOCUMENT">Retrieval (Document)</SelectItem>
+                      <SelectItem value="RETRIEVAL_QUERY">Retrieval (Query)</SelectItem>
+                      <SelectItem value="CODE_RETRIEVAL_QUERY">Code Retrieval</SelectItem>
+                      <SelectItem value="QUESTION_ANSWERING">Question Answering</SelectItem>
+                      <SelectItem value="FACT_VERIFICATION">Fact Verification</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Optimizes embeddings for the selected task type
+                  </p>
                 </div>
               )}
             </div>

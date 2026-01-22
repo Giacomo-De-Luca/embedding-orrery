@@ -37,15 +37,11 @@ PORTION_STRATEGY_MAP = {
     PortionStrategyEnum.ALL: PortionStrategy.ALL,
 }
 
+# Auto-generate provider mapping - no manual maintenance needed
+# When a new provider is added to provider_list.py, it automatically appears here
 EMBEDDING_PROVIDER_MAP = {
-    EmbeddingProviderEnum.SENTENCE_TRANSFORMERS: EmbeddingProvider.SENTENCE_TRANSFORMERS,
-    EmbeddingProviderEnum.OPENAI: EmbeddingProvider.OPENAI,
-    EmbeddingProviderEnum.COHERE: EmbeddingProvider.COHERE,
-    EmbeddingProviderEnum.OLLAMA: EmbeddingProvider.OLLAMA,
-    EmbeddingProviderEnum.HUGGINGFACE_API: EmbeddingProvider.HUGGINGFACE_API,
-    EmbeddingProviderEnum.GEMINI: EmbeddingProvider.GEMINI,
-    EmbeddingProviderEnum.BGE: EmbeddingProvider.BGE,
-    EmbeddingProviderEnum.QWEN: EmbeddingProvider.QWEN,
+    getattr(EmbeddingProviderEnum, member.name): member
+    for member in EmbeddingProvider
 }
 
 DATA_TYPE_MAP = {
@@ -86,7 +82,9 @@ class Mutation:
             embedding_model = EmbeddingModelConfig(
                 provider=EMBEDDING_PROVIDER_MAP[input.embedding_model.provider],
                 model_name=input.embedding_model.model_name,
-                ollama_url=input.embedding_model.ollama_url
+                ollama_url=input.embedding_model.ollama_url,
+                task=input.embedding_model.task,  # QWEN: query instruction
+                task_type=input.embedding_model.task_type  # Gemini: optimization type
             )
 
         config = EmbeddingConfig(
@@ -140,7 +138,9 @@ class Mutation:
             embedding_model = EmbeddingModelConfig(
                 provider=EMBEDDING_PROVIDER_MAP[input.embedding_model.provider],
                 model_name=input.embedding_model.model_name,
-                ollama_url=input.embedding_model.ollama_url
+                ollama_url=input.embedding_model.ollama_url,
+                task=input.embedding_model.task,  # QWEN: query instruction
+                task_type=input.embedding_model.task_type  # Gemini: optimization type
             )
 
         config = LocalFileEmbeddingConfig(

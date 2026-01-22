@@ -3,6 +3,7 @@
 import strawberry
 from typing import List, Optional, Dict, Any
 from enum import Enum
+from ..utils.provider_list import EmbeddingProviderEnum
 
 
 # ========== JSON Scalar ==========
@@ -84,26 +85,6 @@ class PortionInput:
     seed: int = 42  # For RANDOM_SAMPLE
 
 
-# ========== Embedding Model Types ==========
-
-@strawberry.enum
-class EmbeddingProviderEnum(Enum):
-    """Embedding model provider.
-
-    - SENTENCE_TRANSFORMERS: Local models via sentence-transformers library
-    - OPENAI: OpenAI API (requires CHROMA_OPENAI_API_KEY env var)
-    - COHERE: Cohere API (requires CHROMA_COHERE_API_KEY env var)
-    - OLLAMA: Local Ollama server (no API key required)
-    - HUGGINGFACE_API: HuggingFace Inference API (requires CHROMA_HUGGINGFACE_API_KEY env var)
-    """
-    SENTENCE_TRANSFORMERS = "sentence_transformers"
-    OPENAI = "openai"
-    COHERE = "cohere"
-    OLLAMA = "ollama"
-    HUGGINGFACE_API = "huggingface_api"
-    GEMINI = "gemini"
-    BGE = "bge"
-    QWEN = "qwen"
 
 
 @strawberry.input
@@ -118,11 +99,15 @@ class EmbeddingModelInput:
     - Cohere: "embed-english-v3.0", "embed-multilingual-v3.0"
     - Ollama: "nomic-embed-text", "mxbai-embed-large"
     - HuggingFace API: "sentence-transformers/all-MiniLM-L6-v2"
+    - QWEN: "Qwen/Qwen3-Embedding-0.6B" (supports task instruction for queries)
+    - Gemini: "gemini-embedding-001" (supports task_type for embedding optimization)
     """
     provider: EmbeddingProviderEnum
     model_name: str
     # Provider-specific options
-    ollama_url: Optional[str] = None  # Default: http://localhost:11434
+    ollama_url: Optional[str] = None  # Ollama: server URL (default: http://localhost:11434)
+    task: Optional[str] = None  # QWEN: Query instruction prefix (used at query time only)
+    task_type: Optional[str] = None  # Gemini: Embedding optimization (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
 
 
 @strawberry.input

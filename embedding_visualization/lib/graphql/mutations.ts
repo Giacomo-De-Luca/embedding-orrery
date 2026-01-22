@@ -241,6 +241,19 @@ export type EmbeddingProvider =
   | 'HUGGINGFACE_API';
 
 /**
+ * Gemini task types for embedding optimization.
+ */
+export type GeminiTaskType =
+  | 'SEMANTIC_SIMILARITY'
+  | 'CLASSIFICATION'
+  | 'CLUSTERING'
+  | 'RETRIEVAL_DOCUMENT'
+  | 'RETRIEVAL_QUERY'
+  | 'CODE_RETRIEVAL_QUERY'
+  | 'QUESTION_ANSWERING'
+  | 'FACT_VERIFICATION';
+
+/**
  * Embedding model configuration.
  * Model names are free-form strings - any valid model for the provider works.
  *
@@ -250,11 +263,15 @@ export type EmbeddingProvider =
  * - Cohere: "embed-english-v3.0", "embed-multilingual-v3.0"
  * - Ollama: "nomic-embed-text", "mxbai-embed-large"
  * - HuggingFace API: "sentence-transformers/all-MiniLM-L6-v2"
+ * - QWEN: "Qwen/Qwen3-Embedding-0.6B" (supports task instruction for queries)
+ * - Gemini: "gemini-embedding-001" (supports taskType for embedding optimization)
  */
 export interface EmbeddingModelInput {
   provider: EmbeddingProvider;
   modelName: string;
-  ollamaUrl?: string; // Default: http://localhost:11434
+  ollamaUrl?: string; // Ollama: server URL (default: http://localhost:11434)
+  task?: string; // QWEN: Query instruction prefix (used at query time only)
+  taskType?: GeminiTaskType; // Gemini: Embedding optimization type
 }
 
 export interface EmbedDatasetInput {

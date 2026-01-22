@@ -30,10 +30,7 @@ export function FrostedTooltip({ data }: FrostedTooltipProps) {
         top: data.y - 10,
         pointerEvents: 'none',
         zIndex: 1000,
-        backdropFilter: 'blur(12px) saturate(150%)',
-        WebkitBackdropFilter: 'blur(12px) saturate(150%)',
-        border: '1px solid rgba(255, 200, 120, 0.25);',
-        borderRadius: 8,
+
         fontSize: 13,
         lineHeight: 1.4,
 

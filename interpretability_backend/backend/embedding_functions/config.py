@@ -21,7 +21,7 @@ IMAGE_EMBEDDING_DIMENSIONS = 768
 # first call for the amount of available memory
 # second, check how much memory the model takes
 # third, automatically set up batch size
-EMBEDDING_BATCH_SIZE = 1000
+EMBEDDING_BATCH_SIZE = 100
 IMAGE_BATCH_SIZE = 16
 
 
@@ -53,6 +53,8 @@ class EmbeddingModelConfig:
     provider: EmbeddingProvider = EmbeddingProvider.SENTENCE_TRANSFORMERS
     model_name: str = "all-MiniLM-L6-v2"
     ollama_url: Optional[str] = None  # Default: http://localhost:11434
+    task: Optional[str] = None  # QWEN: Query instruction prefix (used at query time only)
+    task_type: Optional[str] = None  # Gemini: Embedding optimization type (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
 
 
 @dataclass
@@ -77,7 +79,6 @@ from ..clients.huggingface_client import PortionConfig
 
 
 
-
 @dataclass(kw_only=True)
 class BaseConfig:
     """base configuration for embedding collections"""
@@ -88,7 +89,6 @@ class BaseConfig:
     id_column: Optional[str] = None  # Column to use as document ID (default: row index)
     metadata_columns: Optional[List[str]] = None  # Additional columns to store as metadata
 
-
 @dataclass(kw_only=True)
 class EmbeddingConfig(BaseConfig):
     """Configuration for embedding a HuggingFace dataset."""
@@ -96,7 +96,6 @@ class EmbeddingConfig(BaseConfig):
     config: Optional[str] = None
     split: str = "train"
     portion: Optional[PortionConfig] = None  # Portion of dataset to embed
-
 
 @dataclass(kw_only=True)
 class LocalFileEmbeddingConfig(BaseConfig):
