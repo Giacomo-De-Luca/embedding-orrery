@@ -40,6 +40,7 @@ interface LocalFileTabProps {
     sampleN?: number;
     sampleSeed?: number;
     computeProjections?: boolean;
+    batchSize?: number;
     embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType };
   }) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
@@ -77,6 +78,26 @@ export function LocalFileTab({
   const [selectedMetadataColumns, setSelectedMetadataColumns] = useState<string[]>([]);
   const [textTemplate, setTextTemplate] = useState('');
   const [idColumn, setIdColumn] = useState('auto');
+  const [batchSize, setBatchSize] = useState(100);
+
+  // Wrapper for setting columns that also updates template
+  const handleEmbeddingColumnsChange = (cols: string[]) => {
+    setSelectedEmbeddingColumns(cols);
+
+    // Auto-update template if it's empty or looks like a default template
+    // Default pattern is like: {col1}, {col2}
+    const isDefaultTemplate = !textTemplate || /^{([\w\s]+)}(, {([\w\s]+)})*$/.test(textTemplate);
+
+    // Check if the current template only contains previously selected columns
+    // This is a heuristic to decide if we should overwrite
+    if (isDefaultTemplate) {
+      if (cols.length > 0) {
+        setTextTemplate(cols.map(c => `{${c}}`).join(', '));
+      } else {
+        setTextTemplate('');
+      }
+    }
+  };
 
   // Portion configuration
   const [portionStrategy, setPortionStrategy] = useState<PortionStrategy>('FIRST_N');
@@ -159,6 +180,7 @@ export function LocalFileTab({
       sampleN: portionStrategy === 'RANDOM_SAMPLE' ? numRows : undefined,
       sampleSeed: portionStrategy === 'RANDOM_SAMPLE' ? randomSeed : undefined,
       computeProjections: true,
+      batchSize,
       embeddingModel: dataType === 'TEXT' ? {
         provider: embeddingProvider,
         modelName,
@@ -268,7 +290,7 @@ export function LocalFileTab({
               columns={columns}
               selectedEmbeddingColumns={selectedEmbeddingColumns}
               selectedMetadataColumns={selectedMetadataColumns}
-              onEmbeddingColumnsChange={setSelectedEmbeddingColumns}
+              onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
               onMetadataColumnsChange={setSelectedMetadataColumns}
               textTemplate={textTemplate}
               onTemplateChange={setTextTemplate}
@@ -295,9 +317,9 @@ export function LocalFileTab({
               n={numRows}
               onNChange={setNumRows}
               start={0}
-              onStartChange={() => {}}
+              onStartChange={() => { }}
               end={1000}
-              onEndChange={() => {}}
+              onEndChange={() => { }}
               seed={randomSeed}
               onSeedChange={setRandomSeed}
               totalRows={totalRows || null}

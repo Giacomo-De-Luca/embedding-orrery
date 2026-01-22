@@ -15,7 +15,6 @@ from tqdm import tqdm
 from .config import (
     DB_PATH,
     TEXT_EMBEDDING_DIMENSIONS,
-    EMBEDDING_BATCH_SIZE,
     DataType,
     EmbeddingModelConfig,
     EmbeddingResult,
@@ -208,9 +207,9 @@ def embed_text_from_local(
     total_embedded = 0
     id_deduplicator = IDDeduplicator()
 
-    for batch_start in tqdm(range(0, len(rows), EMBEDDING_BATCH_SIZE),
+    for batch_start in tqdm(range(0, len(rows), config.batch_size),
                             desc="Embedding batches", unit="batch"):
-        batch = rows[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
+        batch = rows[batch_start:batch_start + config.batch_size]
 
         ids = []
         documents = []
@@ -244,7 +243,7 @@ def embed_text_from_local(
             total_embedded += len(ids)
 
         if progress_callback:
-            progress_callback(min(batch_start + EMBEDDING_BATCH_SIZE, len(rows)), len(rows))
+            progress_callback(min(batch_start + config.batch_size, len(rows)), len(rows))
 
     duration = time.time() - start_time
     print(f"Embedded {total_embedded} items in {duration:.2f}s")

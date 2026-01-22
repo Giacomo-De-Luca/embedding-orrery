@@ -97,7 +97,8 @@ class Mutation:
             id_column=input.id_column,
             portion=portion,
             metadata_columns=input.metadata_columns,
-            embedding_model=embedding_model
+            embedding_model=embedding_model,
+            batch_size=input.batch_size or 100
         )
 
         # Run embedding
@@ -156,7 +157,8 @@ class Mutation:
             n_rows=input.n_rows,
             sample_n=input.sample_n,
             sample_seed=input.sample_seed,
-            embedding_model=embedding_model
+            embedding_model=embedding_model,
+            batch_size=input.batch_size or 100
         )
 
         # Run embedding
