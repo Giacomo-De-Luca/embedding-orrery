@@ -51,13 +51,14 @@ class ChromaDBClient:
             for col in collections
         ]
 
-    def get_collection(self, name: str, load_embedding_function: bool = False):
+    def get_collection(self, name: str, load_embedding_function: bool = False, for_query: bool = False):
         """Get a collection by name.
 
         Args:
             name: Collection name
             load_embedding_function: If True, loads the embedding function for query operations.
                                      If False (default), returns collection without EF for read-only ops.
+            for_query: If True, configures EF for query embedding (QWEN adds instruction prefix)
 
         Returns:
             ChromaDB collection (with or without embedding function)
@@ -80,9 +81,16 @@ class ChromaDBClient:
                 try:
                     # Construct config to create correct EF
                     provider = EmbeddingProvider(provider_str)
+
+                    # Retrieve provider-specific params from metadata
+                    task = metadata.get("embedding_task")  # QWEN: query instruction
+                    task_type = metadata.get("embedding_task_type")  # Gemini: optimization type
+
                     config = EmbeddingModelConfig(
                         provider=provider,
-                        model_name=model_name
+                        model_name=model_name,
+                        task=task,
+                        task_type=task_type
                     )
 
                     # Get embedding dimension from metadata (avoid test embedding)
@@ -93,7 +101,8 @@ class ChromaDBClient:
                     ef, _ = create_embedding_function(
                         config,
                         device,
-                        known_dimension=embedding_dim  # Pass stored dimension
+                        known_dimension=embedding_dim,
+                        is_query=for_query  # QWEN: adds instruction prefix when True
                     )
 
                     # Re-get collection with specific EF
@@ -176,7 +185,8 @@ class ChromaDBClient:
         """
         # Only load EF if using query_texts (not query_embeddings)
         needs_ef = query_texts is not None
-        collection = self.get_collection(collection_name, load_embedding_function=needs_ef)
+        # When embedding text queries, use query mode (QWEN adds instruction prefix)
+        collection = self.get_collection(collection_name, load_embedding_function=needs_ef, for_query=needs_ef)
 
         # Validate inputs
         if query_texts is None and query_embeddings is None:

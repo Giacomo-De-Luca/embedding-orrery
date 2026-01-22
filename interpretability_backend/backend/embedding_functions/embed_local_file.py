@@ -180,9 +180,14 @@ def embed_text_from_local(
         "embedding_provider": model_config.provider.value,
         "embedding_model": model_config.model_name,
         "embedding_dim": embedding_dim,
+        "embedding_task": model_config.task,  # QWEN: query instruction (used at query time)
+        "embedding_task_type": model_config.task_type,  # Gemini: optimization type
         "total_in_file": total,
         "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
     }
+
+    # Filter out None values from metadata (ChromaDB doesn't like them)
+    collection_metadata = {k: v for k, v in collection_metadata.items() if v is not None}
 
     collection = client.create_collection(
         name=config.collection_name,

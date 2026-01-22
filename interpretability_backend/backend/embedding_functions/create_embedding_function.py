@@ -10,7 +10,7 @@ from pathlib import Path
 from chromadb.utils.embedding_functions import EmbeddingFunction
 
 
-DIMENSIONS_FILE = Path(__file__).parent / "utils" / "known_dimensions.json"
+DIMENSIONS_FILE = Path(__file__).parent.parent / "utils" / "known_dimensions.json"
 
 
 def _load_known_dimensions() -> dict[str, int]:
@@ -36,7 +36,8 @@ def _save_known_dimension(model_name: str, dimension: int, current_dims: dict[st
 def create_embedding_function(
     config: Optional[EmbeddingModelConfig],
     device: str,
-    known_dimension: Optional[int] = None
+    known_dimension: Optional[int] = None,
+    is_query: bool = False
 ) -> tuple[EmbeddingFunction, int]:
     """
     Create an embedding function based on the configuration.
@@ -46,6 +47,7 @@ def create_embedding_function(
         device: Device for local models (cpu, cuda, mps)
         known_dimension: Pre-computed dimension (from metadata or cache).
                         If provided, skips test embedding.
+        is_query: If True, configures EF for query embedding (QWEN adds instruction prefix)
 
     Returns:
         Tuple of (embedding_function, embedding_dimension)
@@ -128,8 +130,11 @@ def create_embedding_function(
     elif provider == EmbeddingProvider.GEMINI:
         from .specific_functions.embed_gemini import EmbedTextGemini
 
-        ef = EmbedTextGemini(model=model_name)
-        dim = get_dimension(ef) 
+        ef = EmbedTextGemini(
+            model=model_name,
+            task_type=config.task_type or "SEMANTIC_SIMILARITY"
+        )
+        dim = get_dimension(ef)
         return ef, dim
 
     elif provider == EmbeddingProvider.BGE:
@@ -140,8 +145,16 @@ def create_embedding_function(
     
     elif provider == EmbeddingProvider.QWEN:
         from .specific_functions.embed_qwen import EmbedTextQWEN
-        ef = EmbedTextQWEN(model=model_name, device=device)
-        dim = get_dimension(ef) 
+        # Build kwargs - only include task if explicitly set (to preserve default)
+        qwen_kwargs = {
+            "model": model_name,
+            "device": device,
+            "is_query": is_query,
+        }
+        if config.task is not None:
+            qwen_kwargs["task"] = config.task
+        ef = EmbedTextQWEN(**qwen_kwargs)
+        dim = get_dimension(ef)
         return ef, dim
 
     else:

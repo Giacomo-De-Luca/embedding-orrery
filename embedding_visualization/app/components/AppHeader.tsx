@@ -95,7 +95,7 @@ export function AppHeader({
     >
       <div className="flex w-full items-center gap-2 px-4">
         <Button
-          variant={activePanel === 'controls' ? 'secondary' : 'ghost'}
+          variant={activePanel === 'controls' ? 'circular' : 'circularghost'}
           size="icon"
           onClick={onToggleControls}
           aria-label="Toggle controls panel"
@@ -104,7 +104,7 @@ export function AppHeader({
           <Settings2 className="h-4 w-4" />
         </Button>
         <Button
-          variant={activePanel === 'search' ? 'secondary' : 'ghost'}
+          variant={activePanel === 'search' ? 'circular' : 'circularghost'}
           size="icon"
           onClick={onToggleSearch}
           aria-label="Toggle search panel"

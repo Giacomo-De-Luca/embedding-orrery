@@ -4,6 +4,7 @@ from chromadb import Documents, EmbeddingFunction, Embeddings
 import numpy as np 
 from dotenv import load_dotenv
 import os
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()  
 
@@ -16,6 +17,7 @@ class EmbedTextGemini(EmbeddingFunction[Documents]):
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.GEMINI_API_KEY)
 
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=10))
     def __call__(self, input: Documents) -> Embeddings:
         
         response = self.client.models.embed_content(
