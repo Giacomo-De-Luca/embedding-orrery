@@ -87,21 +87,34 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
       {
         accessorKey: 'id',
         header: 'ID',
+        size: 100,
+        minSize: 80,
+        maxSize: 150,
         cell: ({ row }) => (
-          <div className="font-mono text-xs">{row.getValue('id')}</div>
+          <div className="font-mono text-xs whitespace-nowrap overflow-x-auto">
+            {row.getValue('id')}
+          </div>
         ),
       },
       // Label column - shows friendly name (word/title/name)
       {
         accessorKey: 'label',
         header: 'Label',
+        size: 150,
+        minSize: 100,
+        maxSize: 250,
         cell: ({ row }) => (
-          <div className="font-medium">{row.getValue('label')}</div>
+          <div className="font-medium whitespace-nowrap overflow-x-auto">
+            {row.getValue('label')}
+          </div>
         ),
       },
       // Similarity column with progress bar
       {
         accessorKey: 'similarity',
+        size: 200,
+        minSize: 180,
+        maxSize: 250,
         header: ({ column }) => {
           return (
             <Button
@@ -118,13 +131,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
           const similarity = parseFloat(row.getValue('similarity'));
           return (
             <div className="flex items-center gap-2">
-              <div className="w-full max-w-[200px] bg-muted rounded-full h-2">
+              <div className="flex-1 bg-muted rounded-full h-2 min-w-[60px]">
                 <div
                   className="bg-primary h-2 rounded-full transition-all"
                   style={{ width: `${similarity * 100}%` }}
                 />
               </div>
-              <span className="text-sm font-medium tabular-nums">
+              <span className="text-sm font-medium tabular-nums whitespace-nowrap">
                 {(similarity * 100).toFixed(1)}%
               </span>
             </div>
@@ -138,10 +151,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
       cols.push({
         accessorKey: 'category',
         header: getCategoryDisplayName(categoryField ?? null),
+        size: 120,
+        minSize: 80,
+        maxSize: 150,
         cell: ({ row }) => {
           const category = row.getValue('category') as string;
           return category ? (
-            <Badge variant="outline" className="uppercase">
+            <Badge variant="outline" className="uppercase whitespace-nowrap">
               {getCategoryLabel(categoryField ?? null, category)}
             </Badge>
           ) : null;
@@ -149,12 +165,15 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
       });
     }
 
-    // Add document/content column
+    // Add document/content column - allows text wrapping
     cols.push({
       accessorKey: 'document',
       header: 'Content',
+      size: 300,
+      minSize: 200,
+      maxSize: 500,
       cell: ({ row }) => (
-        <div className="max-w-[400px] truncate text-sm text-muted-foreground">
+        <div className="text-sm text-muted-foreground whitespace-normal line-clamp-3">
           {row.getValue('document')}
         </div>
       ),
@@ -165,6 +184,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
       cols.push({
         id: `metadata_${field}`,
         header: fieldToDisplayName(field),
+        size: 180,
+        minSize: 150,
+        maxSize: 350,
         cell: ({ row }) => {
           const value = row.original.metadata?.[field];
           if (value === null || value === undefined) {
@@ -176,7 +198,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
               typeof v === 'object' ? JSON.stringify(v) : String(v)
             ).join(', ');
             return (
-              <div className="max-w-[200px] truncate text-sm">
+              <div className="text-sm whitespace-normal line-clamp-3">
                 {preview}{value.length > 2 ? ` (+${value.length - 2} more)` : ''}
               </div>
             );
@@ -184,14 +206,14 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
           // Handle objects
           if (typeof value === 'object') {
             return (
-              <div className="max-w-[200px] truncate text-sm font-mono">
+              <div className="text-sm font-mono whitespace-normal line-clamp-3">
                 {JSON.stringify(value)}
               </div>
             );
           }
           // Handle primitives
           return (
-            <div className="max-w-[200px] truncate text-sm">
+            <div className="text-sm whitespace-normal line-clamp-3">
               {String(value)}
             </div>
           );
@@ -205,6 +227,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
   const table = useReactTable({
     data: results || [],
     columns,
+    columnResizeMode: 'onChange',
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     onSortingChange: setSorting,
@@ -234,13 +257,28 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
+                    <TableHead
+                      key={header.id}
+                      className="relative"
+                      style={{
+                        width: header.getSize(),
+                        minWidth: header.column.columnDef.minSize,
+                        maxWidth: header.column.columnDef.maxSize,
+                      }}
+                    >
                       {header.isPlaceholder
                         ? null
                         : flexRender(
                             header.column.columnDef.header,
                             header.getContext()
                           )}
+                      {/* Resize handle */}
+                      <div
+                        onDoubleClick={() => header.column.resetSize()}
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        className={`table-resizer ${header.column.getIsResizing() ? 'isResizing' : ''}`}
+                      />
                     </TableHead>
                   ))}
                 </TableRow>
@@ -254,7 +292,15 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
                     data-state={row.getIsSelected() && 'selected'}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
+                      <TableCell
+                        key={cell.id}
+                        className="align-top whitespace-normal"
+                        style={{
+                          width: cell.column.getSize(),
+                          minWidth: cell.column.columnDef.minSize,
+                          maxWidth: cell.column.columnDef.maxSize,
+                        }}
+                      >
                         {flexRender(
                           cell.column.columnDef.cell,
                           cell.getContext()
