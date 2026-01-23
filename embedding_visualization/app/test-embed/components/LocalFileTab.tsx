@@ -369,6 +369,13 @@ export function LocalFileTab({
                   onChange={(e) => setModelName(e.target.value)}
                   placeholder={EMBEDDING_PROVIDERS[embeddingProvider].defaultModel}
                 />
+                <Label htmlFor="batch-size">Batch Size</Label>
+                <Input
+                  id="batch-size"
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Number(e.target.value))}
+                  placeholder={batchSize.toString()}
+                />
               </div>
               {embeddingProvider === 'OLLAMA' && (
                 <div className="space-y-2">

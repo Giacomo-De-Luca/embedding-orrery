@@ -23,17 +23,16 @@ export function FrostedTooltip({ data }: FrostedTooltipProps) {
 
   return (
     <div
-      className="frosted-tooltip backdrop-blur-md"
+      className="frosted-tooltip"
       style={{
         position: 'absolute',
         left: data.x + 12,
         top: data.y - 10,
         pointerEvents: 'none',
         zIndex: 1000,
-
-        fontSize: 13,
-        lineHeight: 1.4,
-
+        // Inline backdrop-filter to ensure it works over WebGL canvas
+        backdropFilter: 'blur(8px) saturate(150%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(150%)',
       }}
     >
       <div className="font-medium">{data.label}</div>
