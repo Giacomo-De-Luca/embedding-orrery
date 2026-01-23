@@ -123,6 +123,7 @@
 }
 
 @layer utilities {
+
   /* Frosted glass border utility */
   .border-glass {
     position: relative;
@@ -135,13 +136,11 @@
     inset: 0;
     border-radius: inherit;
     padding: 1px;
-    background: linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.35) 0%,
-      rgba(255, 255, 255, 0) 40%,
-      rgba(255, 255, 255, 0) 60%,
-      rgba(255, 255, 255, 0.35) 100%
-    );
+    background: linear-gradient(135deg,
+        rgba(255, 255, 255, 0.35) 0%,
+        rgba(255, 255, 255, 0) 40%,
+        rgba(255, 255, 255, 0) 60%,
+        rgba(255, 255, 255, 0.35) 100%);
     -webkit-mask:
       linear-gradient(#fff 0 0) content-box,
       linear-gradient(#fff 0 0);
@@ -161,20 +160,51 @@
   background: rgba(255, 255, 255, 0.3);
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
-  border-radius: 8px;
+  border-radius: 1px;
   padding: 8px 12px;
   max-width: 280px;
 
   color: #1e293b;
   font-size: 13px;
   line-height: 1.4;
-  filter: url(#de-glass-distortion);  /* SVG filter ID for distortion effect */
 }
 
 .dark .frosted-tooltip {
   background: rgba(255, 255, 255, 0.05);
 
   color: #f1f5f9;
+}
+
+
+/* Frosted glass tooltip - warm gold tint */
+.frosted-tooltip {
+  background: rgba(255, 245, 230, 0.75);
+  border: 1px solid rgba(255, 215, 140, 0.4);
+  border-radius: 12px;
+  padding: 8px 12px;
+  max-width: 280px;
+  box-shadow:
+    0 4px 16px rgba(200, 160, 80, 0.15),
+    0 1px 3px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dark .frosted-tooltip {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 1px 3px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 200, 100, 0.1);
+  color: #f1f5f9;
+}
+
+/* Hide Plotly's native hover tooltip */
+.js-plotly-plot .hoverlayer .hovertext {
+  display: none !important;
 }
 
 /* Hide Plotly's native hover tooltip */
@@ -218,38 +248,9 @@
   opacity: 1;
 }
 
-/* The Partial Border */
-.frosted-tooltip::before {
-  content: "";
-  position: absolute;
-  inset: 0;               /* Aligns border to the edge */
-  border-radius: inherit; /* Inherits 24px radius */
-  padding: 1px;           /* Border thickness */
-  
-  /* 
-     Diagonal Gradient (135deg) 
-     - Starts White (Top Left)
-     - Fades to Transparent (Top Right area)
-     - Fades back to White (Bottom Right)
-  */
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.35) 35%, 
-    rgba(255, 255, 255, 0) 40%, 
-    rgba(255, 255, 255, 0) 60%, 
-    rgba(255, 255, 255, 0.35) 100%
-  );
-  
-  /* Mask to cut out the center */
-  -webkit-mask: 
-    linear-gradient(#fff 0 0) content-box, 
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  
-  /* Place behind text, but inside the button's 'isolated' stack */
-  z-index: -1; 
-  pointer-events: none;
+
+.modebar-container {
+  top: 80px !important;
+  right: 24px !important;
+
 }
-
-

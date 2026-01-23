@@ -1,19 +1,62 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils/utils"
+import { cva, type VariantProps } from "class-variance-authority"
+import { Slot } from "@radix-ui/react-slot"
 
-function Card({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card"
-      className={cn(
-        "dark:bg-input/10 backdrop-blur-sm border flex flex-col gap-6 rounded-xl py-6 shadow-sm",
-        className
-      )}
-      {...props}
-    />
-  )
-}
+
+
+
+const cardVariant = cva(
+  "dark:bg-input/10 backdrop-blur-sm flex flex-col gap-6 rounded-xl py-6 shadow-sm",  {
+    variants: {
+      variant: {
+        default: "",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+        outline:
+          "border",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        circular:
+          "bg-secondary/30 backdrop-blur-md border-glass text-secondary-foreground  rounded-full aspect-square  hover:bg-secondary/80",
+        circularghost:
+          "hover:bg-accent backdrop-blur-md border-glass hover:text-accent-foreground rounded-full aspect-square dark:hover:bg-accent/50",
+        link: "text-primary underline-offset-4 hover:underline",
+
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  }
+)
+
+
+
+
+function Card({ className, 
+                variant,
+                asChild = false,
+                ...props 
+              }: React.ComponentProps<"div">  &
+                  VariantProps<typeof cardVariant> & {
+                      asChild?: boolean
+                    }) {
+                    const Comp = asChild ? Slot : "div"
+                  
+                  return (
+
+
+                  <Comp
+                    data-slot="card"
+                    className={cn(cardVariant({ variant, className }))}
+                    {...props}
+                  />
+                )
+              }
 
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (

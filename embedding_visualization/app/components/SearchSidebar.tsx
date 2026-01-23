@@ -56,9 +56,9 @@ export function SearchSidebar({
     >
       <SidebarHeader className="border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          <div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          {/*<div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Search className="size-3.5" />
-          </div>
+          </div>*/}
           <span className="font-semibold">Search</span>
         </div>
       </SidebarHeader>

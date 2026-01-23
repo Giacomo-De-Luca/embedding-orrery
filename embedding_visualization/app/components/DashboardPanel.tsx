@@ -143,17 +143,18 @@ export function DashboardPanel({
             <ResizableHandle className="bg-transparent hover:bg-border/30 w-2 pointer-events-auto" />
 
             <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none">
-                  <ScrollArea className="overflow-y-auto p-4">
-                    <Legend
-                      categoryField={colorByField}
-                      categoryValues={categoryValues}
-                    />
-                  </ScrollArea>
-     
+              <ScrollArea className="overflow-y-auto p-4">
+                <Legend
+                  categoryField={colorByField}
+                  categoryValues={categoryValues}
+                />
+              </ScrollArea>
+
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
       )}
+
 
       {/* 3. LAYER: Table Overlay (Z-20) */}
       {showResultsTable && (
@@ -161,10 +162,10 @@ export function DashboardPanel({
           "absolute inset-0 z-20 pointer-events-none transition-all duration-300 ease-in-out",
           isExpanded ? "pl-84" : "pl-0"
         )}>
-          <ResizablePanelGroup direction="vertical" className="h-full w-full px-8 pb-2">
+          <ResizablePanelGroup direction="vertical" className="h-full w-full">
 
             {/* Vertical Spacer - Allows clicking through to the plot above */}
-            <ResizablePanel defaultSize={70} minSize={10} className="bg-transparent"  />
+            <ResizablePanel defaultSize={70} minSize={10} className="bg-transparent" />
 
             {/* Handle - Needs pointer-events-auto to be draggable */}
             <ResizableHandle className="bg-transparent hover:bg-border/30 h-2 pointer-events-auto" />
@@ -174,10 +175,11 @@ export function DashboardPanel({
               defaultSize={30}
               minSize={5}
               maxSize={120}
-              className="pointer-events-auto rounded-xl border" // Re-enable clicks for the table
+              className="pointer-events-auto" // Re-enable clicks for the table
             >
+              <div className="h-full w-full px-2 pb-2">
                 {/* Added background/blur so text is readable over the plot points */}
-                <ScrollArea className="h-full overflow-y-auto rounded-md shadow-lg">
+                <ScrollArea className="h-full overflow-y-auto border rounded-md shadow-lg">
                   <SimilarItemsTable
                     results={semanticSearchResults}
                     queryLabel={searchQueryLabel}
@@ -185,6 +187,7 @@ export function DashboardPanel({
                   />
                   <ScrollBar orientation="vertical" />
                 </ScrollArea>
+              </div>
             </ResizablePanel>
 
           </ResizablePanelGroup>

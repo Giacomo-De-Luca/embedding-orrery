@@ -25,7 +25,7 @@ function ModeToggle() {
 
   return (
     <Button
-      variant="outline"
+      variant="circular"
       size="icon"
       className="relative"
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
@@ -168,7 +168,7 @@ export function AppHeader({
               value={selectedCollection || undefined}
               onValueChange={onCollectionChange}
             >
-              <SelectTrigger className="w-[200px] lg:w-[280px]">
+              <SelectTrigger className="w-[200px] lg:w-[280px] backdrop-blur-sm">
                 <SelectValue placeholder="Select collection" />
               </SelectTrigger>
               <SelectContent>
@@ -184,8 +184,8 @@ export function AppHeader({
             </Select>
           ) : null}
           <Link href="/test-embed">
-            <Button variant="outline" size="sm" className="gap-2">
-              <Upload className="h-4 w-4" />
+            <Button variant="outline" className="gap-2 embeddingButton">
+              <Upload className=" w-4" />
               <span className="hidden sm:inline">Embed</span>
             </Button>
           </Link>
