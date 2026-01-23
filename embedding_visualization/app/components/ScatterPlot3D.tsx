@@ -127,6 +127,7 @@ export function ScatterPlot3D({
   const currentCameraRef = useRef({ eye: defaultEye, center: defaultCenter });
   const animationFrameRef = useRef<number | undefined>(undefined);
   const isAnimatingRef = useRef(false);
+  const lastClickTimeRef = useRef<number>(0);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
   const [plotReady, setPlotReady] = useState(false);
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
@@ -573,9 +574,17 @@ export function ScatterPlot3D({
   const handleClick = useCallback((event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) return;
     const now = Date.now();
+
+    // Check drag
     if (now - mouseDownTimeRef.current > 500) return;
+
+    // Prevent double-firing (coalesce multiple events including re-render ghosts)
+    if (now - lastClickTimeRef.current < 600) return;
+    lastClickTimeRef.current = now;
+
     const point = event.points[0];
     if (!point.customdata || typeof point.customdata !== 'object') return;
+
     onPointClick(point.customdata as unknown as Point3D);
   }, [onPointClick]);
 

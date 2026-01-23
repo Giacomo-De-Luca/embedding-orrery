@@ -12,6 +12,27 @@ from ..embedding_functions.create_embedding_function import create_embedding_fun
 from ..embedding_functions.config import EmbeddingModelConfig, EmbeddingProvider
 
 
+# Gemini task type mapping: document task type -> query task type
+# When documents are embedded with RETRIEVAL_DOCUMENT, queries should use RETRIEVAL_QUERY
+GEMINI_QUERY_TASK_MAP = {
+    "RETRIEVAL_DOCUMENT": "RETRIEVAL_QUERY",
+    # Other task types don't have document/query variants, so they stay the same
+}
+
+
+def _map_gemini_task_type_for_query(task_type: Optional[str]) -> Optional[str]:
+    """Map Gemini document task type to query task type.
+
+    Args:
+        task_type: The stored task type (used for document embedding)
+
+    Returns:
+        The appropriate task type for query embedding
+    """
+    if task_type is None:
+        return None
+    return GEMINI_QUERY_TASK_MAP.get(task_type, task_type)
+
 
 class ChromaDBClient:
     """Wrapper for ChromaDB operations with filtering support."""
@@ -85,6 +106,11 @@ class ChromaDBClient:
                     # Retrieve provider-specific params from metadata
                     task = metadata.get("embedding_task")  # QWEN: query instruction
                     task_type = metadata.get("embedding_task_type")  # Gemini: optimization type
+
+                    # For Gemini, map document task type to query task type when searching
+                    # e.g., RETRIEVAL_DOCUMENT -> RETRIEVAL_QUERY
+                    if for_query and provider == EmbeddingProvider.GEMINI:
+                        task_type = _map_gemini_task_type_for_query(task_type)
 
                     config = EmbeddingModelConfig(
                         provider=provider,

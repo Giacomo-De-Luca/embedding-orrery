@@ -182,7 +182,41 @@
   display: none !important;
 }
 
+/* Table column resizer - visible handle on right edge of headers */
+.table-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  z-index: 10;
+}
 
+/* Visible indicator line */
+.table-resizer::after {
+  content: '';
+  position: absolute;
+  top: 25%;
+  right: 3px;
+  width: 2px;
+  height: 50%;
+  border-radius: 1px;
+  background: var(--muted-foreground);
+  opacity: 0.3;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.table-resizer:hover::after {
+  opacity: 0.8;
+}
+
+.table-resizer.isResizing::after {
+  background: var(--primary);
+  opacity: 1;
+}
 
 /* The Partial Border */
 .frosted-tooltip::before {
