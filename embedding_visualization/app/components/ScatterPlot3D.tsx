@@ -32,6 +32,8 @@ interface ScatterPlot3DProps {
   className?: string;
   showOnlyHighlighted?: boolean;
   showLabels?: boolean;
+  /** Categories to gray out (muted) in the visualization */
+  mutedCategories?: string[];
 }
 
 // --- Animation Helpers ---
@@ -92,6 +94,7 @@ export function ScatterPlot3D({
   className,
   showOnlyHighlighted = false,
   showLabels = false,
+  mutedCategories = [],
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -373,6 +376,7 @@ export function ScatterPlot3D({
         });
 
         Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
+          const isMuted = mutedCategories.includes(cat);
           traces.push({
             x: catPoints.map(p => p.x),
             y: catPoints.map(p => p.y),
@@ -383,8 +387,8 @@ export function ScatterPlot3D({
             marker: {
               sizemode: 'diameter',
               size: dimSize,
-              color: colorMap[cat] || '#7f7f7f',
-              opacity: dimOpacity,
+              color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+              opacity: isMuted ? 0.2 : dimOpacity,  // Even more muted when category is toggled off
             },
             text: catPoints.map(formatHoverText),
             hoverinfo: 'none',
@@ -484,7 +488,8 @@ export function ScatterPlot3D({
   }, [
     allX, allY, allZ, allText, allCustomData,
     points, highlightedIndices, markerStyle, highlightScale, showOnlyHighlighted,
-    colorBy, isDark, categoryValues, colorMap, numericData, plotlyColorScale, categoryField
+    colorBy, isDark, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
+    mutedCategories
   ]);
 
   // Selected point traces and layout/config remain similar...

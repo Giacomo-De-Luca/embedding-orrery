@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback } from 'react';
 import {
   ResizableHandle,
   ResizablePanel,
@@ -16,6 +16,7 @@ import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, Highli
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
+import { useCategoryData } from '../../lib/hooks/useCategoryData';
 
 export type ActivePanel = 'controls' | 'search' | null;
 
@@ -69,22 +70,18 @@ export function DashboardPanel({
   const is2D = state.mode === '2d';
   const colorByField = state.colorByField;
 
-  // Compute category values from the points when colorByField is set
-  const categoryValues = useMemo(() => {
-    if (!colorByField) return [];
+  // Compute category values and counts from points
+  const points = is2D ? points2d : points3d;
+  const { categoryValues, categoryCounts } = useCategoryData(points, colorByField);
 
-    const uniqueValues = new Set<string>();
-    const points = is2D ? points2d : points3d;
-
-    for (const point of points) {
-      const value = point.metadata?.[colorByField];
-      if (value !== null && value !== undefined && value !== '') {
-        uniqueValues.add(String(value));
-      }
-    }
-
-    return Array.from(uniqueValues).sort();
-  }, [colorByField, is2D, points2d, points3d]);
+  // Toggle handler for muting/unmuting categories
+  const handleCategoryToggle = useCallback((category: string) => {
+    const muted = state.mutedCategories ?? [];
+    const newMuted = muted.includes(category)
+      ? muted.filter(c => c !== category)
+      : [...muted, category];
+    onStateChange({ mutedCategories: newMuted });
+  }, [state.mutedCategories, onStateChange]);
 
   const showLegend = colorByField && categoryValues.length > 0;
   const showResultsTable = semanticSearchResults && semanticSearchResults.length > 0;
@@ -105,6 +102,7 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
+      mutedCategories={state.mutedCategories}
     />
   ) : (
     <ScatterPlot3D
@@ -119,6 +117,7 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
+      mutedCategories={state.mutedCategories}
     />
   );
 
@@ -134,24 +133,29 @@ export function DashboardPanel({
       </div>
 
       {/* 2. LAYER: Legend Overlay (Z-10) */}
-      {showLegend && colorByField && (
-        <div className="absolute inset-10 top-40 z-10 pointer-events-none">
+      {showLegend && (
+        <div className="absolute top-30 right-4 z-10 pointer-events-none">
+
+          {/* Horizontal Spacer *
+        <div className="absolute right-10 bottom-0 left-0 top-40 z-10 pointer-events-none">
           <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-            {/* Horizontal Spacer */}
             <ResizablePanel defaultSize={80} minSize={50} className="bg-transparent" />
 
             <ResizableHandle className="bg-transparent hover:bg-border/30 w-2 pointer-events-auto" />
 
-            <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none">
-              <ScrollArea className="overflow-y-auto p-4">
-                <Legend
-                  categoryField={colorByField}
-                  categoryValues={categoryValues}
-                />
-              </ScrollArea>
-
+            <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none"> */}
+          <ScrollArea className="overflow-y-auto pointer-events-auto">
+            <Legend
+              categoryField={colorByField}
+              categoryValues={categoryValues}
+              categoryCounts={categoryCounts}
+              mutedCategories={state.mutedCategories}
+              onCategoryToggle={handleCategoryToggle}
+            />
+          </ScrollArea>
+          {/* Horizontal Spacer 
             </ResizablePanel>
-          </ResizablePanelGroup>
+          </ResizablePanelGroup> */}
         </div>
       )}
 

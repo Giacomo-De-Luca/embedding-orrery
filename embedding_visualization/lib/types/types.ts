@@ -106,6 +106,7 @@ export interface VisualizationState {
   showOnlyHighlighted?: boolean;  // When true, only show highlighted/selected points
   showLabels?: boolean;  // When true, show text labels on highlighted points
   showContours?: boolean; // When true, show density cluster contours
+  mutedCategories?: string[];  // Categories to gray out in visualization (toggled via legend)
 }
 
 /**

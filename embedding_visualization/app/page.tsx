@@ -128,8 +128,13 @@ export default function Home() {
   // Reset state when collection changes
   useEffect(() => {
     resetSearch();
-    setVisualizationState(prev => ({ ...prev, colorByField: null }));
+    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [] }));
   }, [selectedCollection, resetSearch]);
+
+  // Reset muted categories when colorByField changes (categories are now different)
+  useEffect(() => {
+    setVisualizationState(prev => ({ ...prev, mutedCategories: [] }));
+  }, [visualizationState.colorByField]);
 
   // Auto-select first search result when semantic search completes
   // Only for text searches - point clicks already set selectedPoint in the handler

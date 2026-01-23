@@ -68,6 +68,7 @@ npm start
 - **Frosted Glass Tooltips**: Custom tooltip with warm gold tint
 - **Constellation Lines**: Connect selected point to similar items
 - **Resizable Panels**: DashboardPanel with plot, legend, and results table
+- **Interactive Legend**: Click categories to mute/unmute, shows point counts per category
 - **Show Only Highlighted**: Toggle to hide non-matching points
 - **Show Labels**: Display text labels above highlighted points
 - **Dark Mode**: next-themes with seamless switching
@@ -118,7 +119,7 @@ embedding_visualization/
 - `ScatterPlot3D`: 3D Plotly with spherical camera interpolation
 - `EmbeddingSidebar`: Floating sidebar with controls + selected point info
 - `VisualizationControls`: Projection, dimensions, color scale controls
-- `Legend`: Dynamic category color legend
+- `Legend`: Dynamic category legend with point counts and click-to-toggle muting
 - `SimilarItemsTable`: Sortable table of semantic search results
 - `TextSearchResultsList`: Scrollable list of text matches
 - `FrostedTooltip`: Custom frosted glass tooltip
@@ -142,6 +143,7 @@ embedding_visualization/
 - `useAppSearch`: Unified search orchestration
 - `useSemanticSearch`: GraphQL semantic search (by query or ID)
 - `useHighlightedIndices`: Combine text + semantic highlights
+- `useCategoryData`: Compute category values and counts for Legend
 
 **Utilities**:
 - `useContainerDimensions`: ResizeObserver-based sizing
@@ -171,7 +173,7 @@ DashboardPanel → render plots + sidebar + tables
 **Core Types** (lib/types/types.ts):
 - `EmbeddingData`: metadata, ids, documents, itemMetadata, projections, displayConfig
 - `Point2D/Point3D`: x, y, z, id, label, document, category, index, metadata
-- `VisualizationState`: method, mode, colorByField, colorScaleType, searchQuery, etc.
+- `VisualizationState`: method, mode, colorByField, colorScaleType, searchQuery, mutedCategories, etc.
 - `DisplayConfig`: labelField, categoryField, categoryValues, categoryName
 - `SemanticSearchResult`: id, label, document, category, similarity, distance
 - `HighlightMap`: Map<index, similarity>

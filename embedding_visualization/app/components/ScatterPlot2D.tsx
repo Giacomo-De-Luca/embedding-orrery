@@ -38,6 +38,8 @@ interface ScatterPlot2DProps {
   showOnlyHighlighted?: boolean;
   /** When true, show text labels on highlighted points */
   showLabels?: boolean;
+  /** Categories to gray out (muted) in the visualization */
+  mutedCategories?: string[];
 }
 
 /**
@@ -63,6 +65,7 @@ export function ScatterPlot2D({
   className,
   showOnlyHighlighted = false,
   showLabels = false,
+  mutedCategories = [],
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -205,6 +208,7 @@ export function ScatterPlot2D({
           });
 
           Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
+            const isMuted = mutedCategories.includes(cat);
             traces.push({
               x: catPoints.map(p => p.x),
               y: catPoints.map(p => p.y),
@@ -213,8 +217,8 @@ export function ScatterPlot2D({
               name: getCategoryLabel(categoryField, cat),
               marker: {
                 size: markerStyle.size,
-                color: colorMap[cat] || '#7f7f7f',
-                opacity: dimOpacity,
+                color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                opacity: isMuted ? 0.2 : dimOpacity,  // Even more muted when category is toggled off
               },
               text: catPoints.map(formatHoverText),
               hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -467,21 +471,24 @@ export function ScatterPlot2D({
         pointsByCategory[cat].push(point);
       });
 
-      traces = Object.entries(pointsByCategory).map(([cat, catPoints]) => ({
-        x: catPoints.map(p => p.x),
-        y: catPoints.map(p => p.y),
-        mode: 'markers' as const,
-        type: 'scattergl' as const,
-        name: getCategoryLabel(categoryField, cat),
-        marker: {
-          size: markerStyle.size,
-          color: colorMap[cat] || '#7f7f7f',
-          opacity: markerStyle.opacity,
-        },
-        text: catPoints.map(formatHoverText),
-        hovertemplate: '<b>%{text}</b><extra></extra>',
-        customdata: catPoints as any,
-      } satisfies PlotlyData));
+      traces = Object.entries(pointsByCategory).map(([cat, catPoints]) => {
+        const isMuted = mutedCategories.includes(cat);
+        return {
+          x: catPoints.map(p => p.x),
+          y: catPoints.map(p => p.y),
+          mode: 'markers' as const,
+          type: 'scattergl' as const,
+          name: getCategoryLabel(categoryField, cat),
+          marker: {
+            size: markerStyle.size,
+            color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+            opacity: isMuted ? 0.4 : markerStyle.opacity,
+          },
+          text: catPoints.map(formatHoverText),
+          hovertemplate: '<b>%{text}</b><extra></extra>',
+          customdata: catPoints as any,
+        } satisfies PlotlyData;
+      });
     } else {
       traces = [{
         x: points.map(p => p.x),
@@ -557,7 +564,7 @@ export function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels]);
+  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
