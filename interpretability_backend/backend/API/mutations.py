@@ -88,7 +88,9 @@ class Mutation:
                 model_name=input.embedding_model.model_name,
                 ollama_url=input.embedding_model.ollama_url,
                 task=input.embedding_model.task,  # QWEN: query instruction
-                task_type=input.embedding_model.task_type  # Gemini: optimization type
+                task_type=input.embedding_model.task_type,  # Gemini: optimization type
+                prompt=input.embedding_model.prompt,  # SentenceTransformers: direct prompt
+                prompt_name=input.embedding_model.prompt_name  # SentenceTransformers: predefined prompt
             )
 
         config = EmbeddingConfig(
@@ -170,7 +172,9 @@ class Mutation:
                 model_name=input.embedding_model.model_name,
                 ollama_url=input.embedding_model.ollama_url,
                 task=input.embedding_model.task,  # QWEN: query instruction
-                task_type=input.embedding_model.task_type  # Gemini: optimization type
+                task_type=input.embedding_model.task_type,  # Gemini: optimization type
+                prompt=input.embedding_model.prompt,  # SentenceTransformers: direct prompt
+                prompt_name=input.embedding_model.prompt_name  # SentenceTransformers: predefined prompt
             )
 
         config = LocalFileEmbeddingConfig(

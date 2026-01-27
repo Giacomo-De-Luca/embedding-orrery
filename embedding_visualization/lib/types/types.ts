@@ -34,6 +34,9 @@ export interface EmbeddingMetadata {
   source_split?: string;
   embedded_columns?: string;
   has_projections?: boolean;
+  // Prompt info (for models like Gemma Embedding)
+  embedding_prompt?: string | null;
+  embedding_prompt_name?: string | null;
 }
 
 export interface ProjectionData {

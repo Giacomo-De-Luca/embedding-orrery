@@ -1,6 +1,6 @@
 
 import { scaleSequential, scaleDiverging } from 'd3-scale';
-import { interpolateViridis } from 'd3-scale-chromatic';
+import { interpolateViridis, interpolateSinebow, interpolateCividis, interpolateCubehelixDefault } from 'd3-scale-chromatic';
 import { interpolateRgb } from 'd3-interpolate';
 import { color } from 'd3-color';
 
@@ -49,7 +49,7 @@ function interpolateBlueGold(t: number): string {
 export function getSequentialScale(domain: [number, number] = [0, 1]): (v: number) => string {
   const key = `seq_${domain[0]}_${domain[1]}`;
   if (!sequentialScaleCache.has(key)) {
-    sequentialScaleCache.set(key, scaleSequential(interpolateViridis).domain(domain));
+    sequentialScaleCache.set(key, scaleSequential(interpolateSinebow).domain(domain));
   }
   return sequentialScaleCache.get(key)!;
 }
@@ -62,7 +62,7 @@ export function getSequentialScale(domain: [number, number] = [0, 1]): (v: numbe
 export function getDivergingScale(domain: [number, number, number] = [-1, 0, 1]): (v: number) => string {
   const key = `div_${domain[0]}_${domain[1]}_${domain[2]}`;
   if (!divergingScaleCache.has(key)) {
-    divergingScaleCache.set(key, scaleDiverging(interpolateBlueGold).domain(domain));
+    divergingScaleCache.set(key, scaleSequential(interpolateCubehelixDefault).domain(domain));
   }
   return divergingScaleCache.get(key)!;
 }

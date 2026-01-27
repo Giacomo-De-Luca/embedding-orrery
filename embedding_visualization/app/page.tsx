@@ -41,6 +41,9 @@ export default function Home() {
     distanceMetric: 'COSINE',
   });
 
+  // Query prompt name for semantic search (null=none, 'auto'=auto-detect, or explicit value)
+  const [queryPromptName, setQueryPromptName] = useState<string | null>(null);
+
   // Panel state for dual sidebars (controls vs search)
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
 
@@ -83,7 +86,9 @@ export default function Home() {
   } = useAppSearch(
     selectedCollection,
     visualizationState.colorByField ?? null,
-    visualizationState.distanceMetric ?? 'COSINE'
+    visualizationState.distanceMetric ?? 'COSINE',
+    queryPromptName,
+    data?.metadata?.embedding_prompt_name
   );
 
   // Update visualization state
@@ -128,6 +133,7 @@ export default function Home() {
   // Reset state when collection changes
   useEffect(() => {
     resetSearch();
+    setQueryPromptName(null);
     setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [] }));
   }, [selectedCollection, resetSearch]);
 
@@ -212,6 +218,8 @@ export default function Home() {
                   textSearchResults={textSearchResults}
                   onTextResultClick={handlePointClick}
                   activePanel={activePanel}
+                  queryPromptName={queryPromptName}
+                  onQueryPromptNameChange={setQueryPromptName}
                 />
               {/*<AppFooter
                     timestamp={data.metadata.timestamp}

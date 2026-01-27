@@ -23,6 +23,7 @@ import { ArrowUpDown } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import type { SemanticSearchResult } from '../../lib/types/types';
 import { getCategoryLabel, getCategoryDisplayName } from '../../lib/utils/categoryColors';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface SimilarItemsTableProps {
   results: SemanticSearchResult[] | null;
@@ -91,9 +92,15 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 80,
         maxSize: 150,
         cell: ({ row }) => (
+          <ScrollArea
+          style={{ height: 100 }}
+          className="rounded-md"
+        >
           <div className="font-mono text-xs whitespace-nowrap overflow-x-auto">
             {row.getValue('id')}
           </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
         ),
       },
       // Label column - shows friendly name (word/title/name)
@@ -104,9 +111,15 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 100,
         maxSize: 250,
         cell: ({ row }) => (
+        <ScrollArea
+          style={{ height: 100 }}
+          className="rounded-md"
+        >
           <div className="font-medium whitespace-nowrap overflow-x-auto">
             {row.getValue('label')}
           </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
         ),
       },
       // Similarity column with progress bar
@@ -329,5 +342,3 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
   );
 }
 
-// Re-export with old name for backwards compatibility
-export { SimilarItemsTable as SimilarWordsTable };

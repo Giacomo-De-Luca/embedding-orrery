@@ -101,8 +101,12 @@ export function ScatterPlot2D({
     const validValues = values.filter((v): v is number => v !== null);
     if (validValues.length === 0) return null;
 
-    const min = Math.min(...validValues);
-    const max = Math.max(...validValues);
+    let min = Infinity;
+    let max = -Infinity;
+    for (const v of validValues) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
     if (min === max) return null;
 
     return {

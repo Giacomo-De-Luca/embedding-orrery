@@ -1,3 +1,46 @@
 {
-  "jobs": {}
+  "jobs": {
+    "lacan_sentences_gemini_document_1000": {
+      "collection_name": "lacan_sentences_gemini_document_1000",
+      "status": "interrupted",
+      "job_type": "local_file",
+      "items_embedded": 0,
+      "total_expected": 153772,
+      "batches_completed": 0,
+      "total_batches": 154,
+      "config": {
+        "file_path": "/Users/jack/EmbeddingVisualisation/interpretability_backend/resources/uploads/lacan_sentences.tsv",
+        "collection_name": "lacan_sentences_gemini_document_1000",
+        "data_type": "text",
+        "columns": [
+          "text"
+        ],
+        "text_template": "{text}",
+        "image_column": null,
+        "vector_column": null,
+        "id_column": "chunk_id",
+        "metadata_columns": [
+          "date",
+          "year",
+          "title",
+          "source",
+          "section",
+          "metadata"
+        ],
+        "n_rows": null,
+        "sample_n": null,
+        "sample_seed": 42,
+        "batch_size": 1000,
+        "embedding_model": {
+          "provider": "gemini",
+          "model_name": "gemini-embedding-001",
+          "ollama_url": null,
+          "task": null,
+          "task_type": "RETRIEVAL_DOCUMENT"
+        }
+      },
+      "started_at": "2026-01-26T12:55:38.526218",
+      "error": "RetryError[<Future at 0x173cef830 state=finished raised ClientError>]"
+    }
+  }
 }

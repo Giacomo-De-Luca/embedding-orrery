@@ -90,10 +90,13 @@ def create_embedding_function(
         return len(test_embedding[0])
 
     if provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
-        # Local sentence-transformers model
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+        # Local sentence-transformers model with optional prompt support
+        from .specific_functions.embed_sentence_transformer import SentenceTransformerEmbeddingFunction
+        ef = SentenceTransformerEmbeddingFunction(
             model_name=model_name,
-            device=device
+            device=device,
+            prompt=config.prompt,
+            prompt_name=config.prompt_name
         )
         dim = get_dimension(ef)  # Use helper instead of test embedding
         return ef, dim

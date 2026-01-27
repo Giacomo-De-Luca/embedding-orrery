@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
+} from '@/lib/ui-primitives/dialog';
 import { Button } from '@/lib/ui-primitives/button';
 import { Label } from '@/lib/ui-primitives/label';
 import { RadioGroup, RadioGroupItem } from '@/lib/ui-primitives/radio-group';
@@ -54,7 +54,7 @@ function ColorScalePreview({ type, baseColor = '#1f77b4' }: { type: ColorScaleTy
 
   return (
     <div
-      className="h-4 w-full rounded-sm"
+      className="h-2 w-full rounded-sm"
       style={{
         background: `linear-gradient(to right, ${colors.join(', ')})`,
       }}

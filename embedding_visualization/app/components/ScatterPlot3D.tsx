@@ -9,6 +9,8 @@ import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergi
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
+import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, getZoomMultiplier, formatHoverText } from '../utils/rendeding';
+
 
 // Factory pattern: use pre-bundled plotly.js-dist-min to avoid glslify bundler issues
 const Plot = dynamic(async () => {
@@ -32,60 +34,7 @@ interface ScatterPlot3DProps {
   className?: string;
   showOnlyHighlighted?: boolean;
   showLabels?: boolean;
-  /** Categories to gray out (muted) in the visualization */
   mutedCategories?: string[];
-}
-
-// --- Animation Helpers ---
-const easeInOutCubic = (t: number): number => {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-};
-
-const lerp = (start: number, end: number, t: number) => {
-  return start + (end - start) * t;
-};
-
-function cartesianToSpherical(x: number, y: number, z: number) {
-  const r = Math.sqrt(x * x + y * y + z * z);
-  const theta = Math.atan2(y, x);
-  const phi = Math.acos(z / (r || 1));
-  return { r, theta, phi };
-}
-
-function sphericalToCartesian(r: number, theta: number, phi: number) {
-  return {
-    x: r * Math.sin(phi) * Math.cos(theta),
-    y: r * Math.sin(phi) * Math.sin(theta),
-    z: r * Math.cos(phi),
-  };
-}
-
-const getZoomLevel = (
-  eye: { x: number; y: number; z: number },
-  center: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }
-): number => {
-  const dx = eye.x - center.x;
-  const dy = eye.y - center.y;
-  const dz = eye.z - center.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-};
-
-const getZoomMultiplier = (
-  eye: { x: number; y: number; z: number },
-  center: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 },
-  defaultDistance: number = Math.sqrt(0.9**2 * 3) // ~1.56 for your defaults
-): number => {
-  const distance = getZoomLevel(eye, center);
-  return defaultDistance / distance;
-};
-
-
-
-function formatHoverText(point: Point3D): string {
-  const label = point.label || point.id;
-  const doc = point.document || '';
-  const truncatedDoc = doc.length > 100 ? doc.substring(0, 100) + '...' : doc;
-  return `${label}<br>${truncatedDoc}`;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -124,6 +73,7 @@ export function ScatterPlot3D({
   const theme = resolvedTheme ?? 'light';
   const isDark = theme === 'dark';
 
+
   // Theme colors
   const axisColor = isDark ? '#e2e8f0' : '#0f172a';
   const gridColor = isDark ? '#334155' : '#e5e7eb';
@@ -146,9 +96,8 @@ export function ScatterPlot3D({
     return { minX, maxX, minY, maxY, minZ, maxZ };
   }, [points]);
 
-  const defaultEye = { x: 0.9, y: 0.9, z: 0.9 };
+  //const defaultEye = { x: 0.9, y: 0.9, z: 0.9 };
   const defaultCenter = { x: 0, y: 0, z: 0 };
-  const currentCameraRef = useRef({ eye: defaultEye, center: defaultCenter });
   const animationFrameRef = useRef<number | undefined>(undefined);
   const isAnimatingRef = useRef(false);
   const lastClickTimeRef = useRef<number>(0);
@@ -157,11 +106,46 @@ export function ScatterPlot3D({
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
   const plotlyLibRef = useRef<any>(null);
 
+
+  const defaultEye = useMemo(() => {
+    const count = points.length;
+    if (count === 0) return { x: 2.5, y: 2.5, z: 2.5 };
+
+    // INVERSE Logarithmic scaling:
+    // Fewer points (<100) -> Start Far Away (e.g., 2.0)
+    // Many points (>10k) -> Start Very Close (e.g., 0.6)
+    
+    const startDistance = 2.5; // Maximum distance (for sparse data)
+    const zoomInRate = 0.4;    // How fast to zoom in per power of 10
+    
+    // Formula: MaxDist - (Rate * log10(count))
+    // Example: 
+    // 10 pts   (Log 1) -> 2.5 - 0.4 = 2.1 (Far)
+    // 1000 pts (Log 3) -> 2.5 - 1.2 = 1.3 (Medium)
+    // 100k pts (Log 5) -> 2.5 - 2.0 = 0.5 (Close)
+    const calculatedZoom = startDistance - (zoomInRate * Math.log10(count));
+
+    // Clamp: Never go closer than 0.1 (inside the points) or further than 2.5
+    const zoom = Math.min(Math.max(calculatedZoom, 0.1), 2.5);
+
+    return { x: zoom, y: zoom, z: zoom };
+  }, [points.length]);
+
+  const currentCameraRef = useRef({ eye: defaultEye, center: defaultCenter });
+
+
+
+
   useEffect(() => {
     import('plotly.js-dist-min').then((lib) => {
       plotlyLibRef.current = lib.default;
     });
   }, []);
+
+  const currentZoomMultiplier = useRef(getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center));
+
+
+
 
   // --- Camera Animation Effect (Unchanged logic) ---
   useEffect(() => {
@@ -569,11 +553,17 @@ export function ScatterPlot3D({
     width, height, aspectmode: 'data', autosize: true, uirevision: 'true', hovermode: 'closest', showlegend: false,
     paper_bgcolor: paperBg, font: { color: axisColor },
     scene: {
+      camera: {
+        eye: defaultEye,
+        center: defaultCenter,
+        up: { x: 0, y: 0, z: 1 }
+      },
       xaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false },
       yaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false },
       zaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false },
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
+
   }), [axisColor, gridColor, height, paperBg, sceneBg, width]);
 
   const config: Partial<Config> = { displayModeBar: true, displaylogo: false, responsive: true };
@@ -592,8 +582,10 @@ export function ScatterPlot3D({
     const now = Date.now();
     console.log('Plot click event at', now);
     // log camera for debugging
+    currentZoomMultiplier.current =  getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center);
+
     console.log('Current camera:', currentCameraRef.current.eye);
-    console.log('Zoom level:', getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center));
+    console.log('Zoom level:', currentZoomMultiplier.current);
 
     // Check drag
     if (now - mouseDownTimeRef.current > 500) return;

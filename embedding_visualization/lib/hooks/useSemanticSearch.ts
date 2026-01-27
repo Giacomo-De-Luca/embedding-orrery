@@ -30,7 +30,8 @@ export function useSemanticSearch(collectionName: string | null) {
     async (
       query: string,
       nResults: number = 10,
-      similarityMeasure: DistanceMetric = 'COSINE'
+      similarityMeasure: DistanceMetric = 'COSINE',
+      queryPromptName?: string | null
     ): Promise<SemanticSearchResult[] | null> => {
       if (!collectionName) {
         console.warn('Cannot search: no collection selected');
@@ -38,7 +39,7 @@ export function useSemanticSearch(collectionName: string | null) {
       }
 
       try {
-        console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure})`);
+        console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPromptName ? `, prompt: ${queryPromptName}` : ''})`);
 
         const result = await searchSimilar({
           variables: {
@@ -46,6 +47,7 @@ export function useSemanticSearch(collectionName: string | null) {
             query,
             nResults,
             similarityMeasure,
+            queryPromptName: queryPromptName || undefined,
           },
         });
 

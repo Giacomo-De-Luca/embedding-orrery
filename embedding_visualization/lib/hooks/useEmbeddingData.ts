@@ -60,6 +60,10 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
                     sourceSplit
                     sourceFile
                     hasProjections
+                    embeddingProvider
+                    embeddingModel
+                    embeddingPrompt
+                    embeddingPromptName
                   }
                 }
               }
@@ -131,6 +135,10 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
             source_split: collectionData.metadata.sourceSplit,
             source_file: collectionData.metadata.sourceFile,
             has_projections: collectionData.metadata.hasProjections,
+            embedding_provider: collectionData.metadata.embeddingProvider,
+            embedding_model: collectionData.metadata.embeddingModel,
+            embedding_prompt: collectionData.metadata.embeddingPrompt,
+            embedding_prompt_name: collectionData.metadata.embeddingPromptName,
           },
         };
 

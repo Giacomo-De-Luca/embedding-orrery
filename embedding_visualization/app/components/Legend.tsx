@@ -109,11 +109,11 @@ export function Legend({
 
   return (
     <Card
-      className={`w-fit ${className ?? ''}`}
+      className={`w-fit gap-2 ${className ?? ''}`}
       variant="outline"
     >
       <CardHeader className="">
-        <CardTitle className="font-mono">{getCategoryDisplayName(categoryField ?? 'pos')}</CardTitle>
+        <CardTitle className="font-mono text-md">{getCategoryDisplayName(categoryField ?? 'pos')}</CardTitle>
       </CardHeader>
 
 

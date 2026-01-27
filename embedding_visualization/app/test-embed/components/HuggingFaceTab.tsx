@@ -44,7 +44,7 @@ interface HuggingFaceTabProps {
     portion?: { strategy: PortionStrategy; n?: number; start?: number; end?: number; seed?: number };
     computeProjections?: boolean;
     batchSize?: number;
-    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType };
+    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType; prompt?: string; promptName?: string };
     resume?: boolean;
   }) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
@@ -119,6 +119,9 @@ export function HuggingFaceTab({
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
   const [qwenTask, setQwenTask] = useState('Given a web search query, retrieve relevant passages that answer the query');
   const [geminiTaskType, setGeminiTaskType] = useState<GeminiTaskType>('SEMANTIC_SIMILARITY');
+  // SentenceTransformers prompt support (for models like Gemma Embedding)
+  const [promptName, setPromptName] = useState<string | null>(null);
+  const [customPrompt, setCustomPrompt] = useState('');
 
   // Reset columns when dataset changes
   useEffect(() => {
@@ -208,6 +211,8 @@ export function HuggingFaceTab({
               ollamaUrl: embeddingProvider === 'OLLAMA' ? ollamaUrl : undefined,
               task: embeddingProvider === 'QWEN' ? qwenTask : undefined,
               taskType: embeddingProvider === 'GEMINI' ? geminiTaskType : undefined,
+              promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
+              prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
             },
           });
 
@@ -235,6 +240,8 @@ export function HuggingFaceTab({
             ollamaUrl: embeddingProvider === 'OLLAMA' ? ollamaUrl : undefined,
             task: embeddingProvider === 'QWEN' ? qwenTask : undefined,
             taskType: embeddingProvider === 'GEMINI' ? geminiTaskType : undefined,
+            promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
+            prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
           },
         });
       }
@@ -263,6 +270,8 @@ export function HuggingFaceTab({
           ollamaUrl: embeddingProvider === 'OLLAMA' ? ollamaUrl : undefined,
           task: embeddingProvider === 'QWEN' ? qwenTask : undefined,
           taskType: embeddingProvider === 'GEMINI' ? geminiTaskType : undefined,
+          promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
+          prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
         },
       });
     }
@@ -298,6 +307,8 @@ export function HuggingFaceTab({
       ollamaUrl: storedModel.ollama_url as string | undefined,
       task: storedModel.task as string | undefined,
       taskType: storedModel.task_type as GeminiTaskType | undefined,
+      prompt: storedModel.prompt as string | undefined,
+      promptName: storedModel.prompt_name as string | undefined,
     } : undefined;
 
     await embedHFDataset({
@@ -563,6 +574,41 @@ export function HuggingFaceTab({
                     Optimizes embeddings for the selected task type
                   </p>
                 </div>
+              )}
+              {embeddingProvider === 'SENTENCE_TRANSFORMERS' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="prompt-name">Prompt Name</Label>
+                    <Select
+                      value={promptName ?? 'none'}
+                      onValueChange={(v) => setPromptName(v === 'none' ? null : v)}
+                    >
+                      <SelectTrigger id="prompt-name">
+                        <SelectValue placeholder="None" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="Retrieval-document">Retrieval-document (RAG storage)</SelectItem>
+                        <SelectItem value="Retrieval-query">Retrieval-query (RAG search)</SelectItem>
+                        <SelectItem value="STS">STS (Sentence similarity)</SelectItem>
+                        <SelectItem value="Classification">Classification</SelectItem>
+                        <SelectItem value="Clustering">Clustering</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Task-specific prompt for models like Gemma Embedding
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="custom-prompt">Custom Prompt (Advanced)</Label>
+                    <Input
+                      id="custom-prompt"
+                      value={customPrompt}
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      placeholder="Leave empty to use prompt name"
+                    />
+                  </div>
+                </>
               )}
             </div>
 

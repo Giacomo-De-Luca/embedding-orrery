@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Search } from 'lucide-react';
+import { ChevronDown, Settings2 } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -10,6 +10,19 @@ import {
 } from '@/lib/ui-primitives/sidebar';
 import { Label } from '@/lib/ui-primitives/label';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
+import { Button } from '@/lib/ui-primitives/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/lib/ui-primitives/collapsible';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/lib/ui-primitives/select';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import type { Point2D, Point3D } from '../../lib/types/types';
@@ -28,6 +41,9 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   selectedPointId?: string | null;
   onResultClick?: (point: Point2D | Point3D) => void;
   categoryField?: string | null;
+  // Query prompt configuration
+  queryPromptName?: string | null;
+  onQueryPromptNameChange?: (value: string | null) => void;
 }
 
 export function SearchSidebar({
@@ -42,6 +58,8 @@ export function SearchSidebar({
   selectedPointId,
   onResultClick,
   categoryField,
+  queryPromptName,
+  onQueryPromptNameChange,
   className,
   ...props
 }: SearchSidebarProps) {
@@ -118,6 +136,42 @@ export function SearchSidebar({
               Show labels
             </Label>
           </div>
+
+          {/* Advanced Search Options */}
+          <Collapsible>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="w-full justify-between px-0 h-8">
+                <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Settings2 className="h-4 w-4" />
+                  Advanced
+                </span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <Label htmlFor="query-prompt-name" className="text-sm">Query Prompt Name</Label>
+                <Select
+                  value={queryPromptName ?? 'none'}
+                  onValueChange={(v) => onQueryPromptNameChange?.(v === 'none' ? null : v)}
+                >
+                  <SelectTrigger id="query-prompt-name" className="h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="auto">Auto-detect from collection</SelectItem>
+                    <SelectItem value="Retrieval-query">Retrieval-query</SelectItem>
+                    <SelectItem value="Retrieval-document">Retrieval-document</SelectItem>
+                    <SelectItem value="STS">STS</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Task-specific prompt for models like Gemma Embedding
+                </p>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
 
           {/* Search Results */}
           {showResults && (

@@ -94,7 +94,7 @@ class EmbeddingModelInput:
     Model names are free-form strings - any valid model for the provider works.
 
     Examples:
-    - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-small-en-v1.5"
+    - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "google/gemma-embedding-001"
     - OpenAI: "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
     - Cohere: "embed-english-v3.0", "embed-multilingual-v3.0"
     - Ollama: "nomic-embed-text", "mxbai-embed-large"
@@ -108,6 +108,9 @@ class EmbeddingModelInput:
     ollama_url: Optional[str] = None  # Ollama: server URL (default: http://localhost:11434)
     task: Optional[str] = None  # QWEN: Query instruction prefix (used at query time only)
     task_type: Optional[str] = None  # Gemini: Embedding optimization (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
+    # SentenceTransformers: Prompt support for models like EmbeddingGemma
+    prompt: Optional[str] = None  # Direct prompt string (e.g., "task: search result | query: ")
+    prompt_name: Optional[str] = None  # Predefined prompt name (e.g., "Retrieval-query", "Retrieval-document", "STS")
 
 
 @strawberry.input
@@ -250,6 +253,9 @@ class CollectionMetadata:
     source_file: Optional[str] = None  # Local file path
     embedded_columns: Optional[str] = None
     has_projections: Optional[bool] = None
+    # Prompt info (for models like Gemma Embedding)
+    embedding_prompt: Optional[str] = None
+    embedding_prompt_name: Optional[str] = None
 
 
 @strawberry.type

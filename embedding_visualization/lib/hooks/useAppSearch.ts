@@ -3,10 +3,29 @@ import { Point2D, Point3D, SemanticSearchResult, DistanceMetric } from '../types
 import { useSemanticSearch } from './useSemanticSearch';
 import { transformSearchResults } from '../utils/data-transform';
 
+/**
+ * Map document-time prompt names to query-time equivalents.
+ * For example, if documents were embedded with "Retrieval-document",
+ * queries should use "Retrieval-query".
+ */
+const DOCUMENT_TO_QUERY_PROMPT_MAP: Record<string, string> = {
+  'Retrieval-document': 'Retrieval-query',
+};
+
+/**
+ * Get the appropriate query prompt name based on document prompt name.
+ */
+export function getQueryPromptName(documentPromptName: string | null | undefined): string | null {
+  if (!documentPromptName) return null;
+  return DOCUMENT_TO_QUERY_PROMPT_MAP[documentPromptName] || documentPromptName;
+}
+
 export function useAppSearch(
   selectedCollection: string | null,
   colorByField: string | null,
-  distanceMetric: DistanceMetric = 'COSINE'
+  distanceMetric: DistanceMetric = 'COSINE',
+  queryPromptName?: string | null,  // null=none, 'auto'=auto-detect, or explicit value
+  embeddingPromptName?: string | null  // From collection metadata, for auto-detect
 ) {
   const [selectedPoint, setSelectedPoint] = useState<Point2D | Point3D | null>(null);
   const [semanticSearchResults, setSemanticSearchResults] = useState<SemanticSearchResult[] | null>(null);
@@ -16,16 +35,24 @@ export function useAppSearch(
   const { findSimilarByQuery, findSimilarById, loading } = useSemanticSearch(selectedCollection);
 
   const handleSemanticSearch = useCallback(async (query: string) => {
-    console.log('Search triggered:', query, 'metric:', distanceMetric);
+    // Resolve effective prompt name
+    let effectivePromptName: string | null = null;
+    if (queryPromptName === 'auto' && embeddingPromptName) {
+      effectivePromptName = getQueryPromptName(embeddingPromptName);
+    } else if (queryPromptName && queryPromptName !== 'auto') {
+      effectivePromptName = queryPromptName;
+    }
+
+    console.log('Search triggered:', query, 'metric:', distanceMetric, effectivePromptName ? `prompt: ${effectivePromptName}` : '');
     setSearchType('text');
     try {
-      const results = await findSimilarByQuery(query, 20, distanceMetric);
+      const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(query);
     } catch (error) {
       console.error('Search error:', error);
     }
-  }, [findSimilarByQuery, colorByField, distanceMetric]);
+  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName]);
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);

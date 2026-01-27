@@ -52,12 +52,14 @@ export const SEMANTIC_SEARCH = gql`
     $query: String!
     $nResults: Int = 10
     $similarityMeasure: SimilarityMeasure = COSINE
+    $queryPromptName: String
   ) {
     semanticSearch(
       collectionName: $collectionName
       query: $query
       nResults: $nResults
       similarityMeasure: $similarityMeasure
+      queryPromptName: $queryPromptName
     ) {
       id
       document

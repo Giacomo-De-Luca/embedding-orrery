@@ -229,6 +229,8 @@ def embed_huggingface_dataset(
                 "embedding_dim": embedding_dim,
                 "embedding_task": model_config.task,
                 "embedding_task_type": model_config.task_type,
+                "embedding_prompt": model_config.prompt,
+                "embedding_prompt_name": model_config.prompt_name,
                 "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
             }
 
