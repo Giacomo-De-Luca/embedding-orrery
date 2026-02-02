@@ -206,6 +206,10 @@ export function VisualizationControls({
                 onColorScaleTypeChange={(type) => onStateChange({ colorScaleType: type })}
                 monochromeColor={state.monochromeColor}
                 onMonochromeColorChange={(color) => onStateChange({ monochromeColor: color })}
+                sequentialScaleName={state.sequentialScaleName}
+                onSequentialScaleNameChange={(name) => onStateChange({ sequentialScaleName: name })}
+                divergingScaleName={state.divergingScaleName}
+                onDivergingScaleNameChange={(name) => onStateChange({ divergingScaleName: name })}
               />
             )}
           </div>

@@ -13,30 +13,70 @@ import { Button } from '@/lib/ui-primitives/button';
 import { Label } from '@/lib/ui-primitives/label';
 import { RadioGroup, RadioGroupItem } from '@/lib/ui-primitives/radio-group';
 import type { ColorScaleType } from '@/lib/types/types';
-import { getSequentialScale, getDivergingScale, getMonochromeScale, generateCategoryColors } from '@/lib/utils/categoryColors';
+import { getSequentialScale, getDivergingScale, getMonochromeScale, generateCategoryColors, type SequentialScaleName, type DivergingScaleName } from '@/lib/utils/categoryColors';
+
+// Human-readable labels for scale names
+const SEQUENTIAL_SCALE_LABELS: Record<SequentialScaleName, string> = {
+  sinebow: 'Sinebow',
+  viridis: 'Viridis',
+  cividis: 'Cividis',
+  turbo: 'Turbo',
+  plasma: 'Plasma',
+  inferno: 'Inferno',
+  magma: 'Magma',
+};
+
+const DIVERGING_SCALE_LABELS: Record<DivergingScaleName, string> = {
+  blueGold: 'Blue-Purple-Gold',
+  rdBu: 'Red-Blue',
+  spectral: 'Spectral',
+  piYG: 'Pink-Yellow-Green',
+  puOr: 'Purple-Orange',
+  brBG: 'Brown-Blue-Green',
+};
+
+// Get all scale names as arrays for iteration
+const SEQUENTIAL_SCALE_NAMES = Object.keys(SEQUENTIAL_SCALE_LABELS) as SequentialScaleName[];
+const DIVERGING_SCALE_NAMES = Object.keys(DIVERGING_SCALE_LABELS) as DivergingScaleName[];
 
 interface ColorScaleSelectorProps {
   colorScaleType: ColorScaleType;
   onColorScaleTypeChange: (type: ColorScaleType) => void;
   monochromeColor?: string;
   onMonochromeColorChange?: (color: string) => void;
+  sequentialScaleName?: SequentialScaleName;
+  onSequentialScaleNameChange?: (name: SequentialScaleName) => void;
+  divergingScaleName?: DivergingScaleName;
+  onDivergingScaleNameChange?: (name: DivergingScaleName) => void;
 }
 
-function ColorScalePreview({ type, baseColor = '#1f77b4' }: { type: ColorScaleType; baseColor?: string }) {
+interface ColorScalePreviewProps {
+  type: ColorScaleType;
+  baseColor?: string;
+  sequentialScaleName?: SequentialScaleName;
+  divergingScaleName?: DivergingScaleName;
+}
+
+function ColorScalePreview({
+  type,
+  baseColor = '#1f77b4',
+  sequentialScaleName = 'sinebow',
+  divergingScaleName = 'blueGold',
+}: ColorScalePreviewProps) {
   const colors = useMemo(() => {
     if (type === 'categorical') {
       return generateCategoryColors(10);
     } else if (type === 'sequential') {
-      const scale = getSequentialScale([0, 1]);
+      const scale = getSequentialScale([0, 1], sequentialScaleName);
       return Array.from({ length: 10 }, (_, i) => scale(i / 9));
     } else if (type === 'monochrome') {
       const scale = getMonochromeScale(baseColor, [0, 1]);
       return Array.from({ length: 10 }, (_, i) => scale(i / 9));
     } else {
-      const scale = getDivergingScale([-1, 0, 1]);
+      const scale = getDivergingScale([-1, 0, 1], divergingScaleName);
       return Array.from({ length: 10 }, (_, i) => scale(-1 + (i * 2) / 9));
     }
-  }, [type, baseColor]);
+  }, [type, baseColor, sequentialScaleName, divergingScaleName]);
 
   if (type === 'categorical') {
     return (
@@ -67,6 +107,10 @@ export function ColorScaleSelector({
   onColorScaleTypeChange,
   monochromeColor = '#1f77b4',
   onMonochromeColorChange,
+  sequentialScaleName = 'sinebow',
+  onSequentialScaleNameChange,
+  divergingScaleName = 'blueGold',
+  onDivergingScaleNameChange,
 }: ColorScaleSelectorProps) {
   const [open, setOpen] = useState(false);
   const [localMonochromeColor, setLocalMonochromeColor] = useState(monochromeColor);
@@ -86,6 +130,18 @@ export function ColorScaleSelector({
     setLocalMonochromeColor(color);
     if (onMonochromeColorChange) {
       onMonochromeColorChange(color);
+    }
+  };
+
+  const handleSequentialScaleChange = (name: SequentialScaleName) => {
+    if (onSequentialScaleNameChange) {
+      onSequentialScaleNameChange(name);
+    }
+  };
+
+  const handleDivergingScaleChange = (name: DivergingScaleName) => {
+    if (onDivergingScaleNameChange) {
+      onDivergingScaleNameChange(name);
     }
   };
 
@@ -131,30 +187,70 @@ export function ColorScaleSelector({
               <div className="flex items-center space-x-3">
                 <RadioGroupItem value="sequential" id="sequential" />
                 <Label htmlFor="sequential" className="font-medium">
-                  Sequential (Viridis)
+                  Sequential
                 </Label>
               </div>
               <p className="text-muted-foreground ml-6 text-sm">
                 Continuous scale for numeric values (low → high)
               </p>
               <div className="ml-6">
-                <ColorScalePreview type="sequential" />
+                <ColorScalePreview type="sequential" sequentialScaleName={sequentialScaleName} />
               </div>
+              {colorScaleType === 'sequential' && (
+                <div className="ml-6 mt-2 space-y-2">
+                  {SEQUENTIAL_SCALE_NAMES.map((name) => (
+                    <div
+                      key={name}
+                      className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
+                        sequentialScaleName === name
+                          ? 'bg-accent'
+                          : 'hover:bg-accent/50'
+                      }`}
+                      onClick={() => handleSequentialScaleChange(name)}
+                    >
+                      <div className="w-24 h-2 rounded-sm overflow-hidden">
+                        <ColorScalePreview type="sequential" sequentialScaleName={name} />
+                      </div>
+                      <span className="text-sm">{SEQUENTIAL_SCALE_LABELS[name]}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center space-x-3">
                 <RadioGroupItem value="diverging" id="diverging" />
                 <Label htmlFor="diverging" className="font-medium">
-                  Diverging (Blue-Gold)
+                  Diverging
                 </Label>
               </div>
               <p className="text-muted-foreground ml-6 text-sm">
                 Centered scale for values with a midpoint
               </p>
               <div className="ml-6">
-                <ColorScalePreview type="diverging" />
+                <ColorScalePreview type="diverging" divergingScaleName={divergingScaleName} />
               </div>
+              {colorScaleType === 'diverging' && (
+                <div className="ml-6 mt-2 space-y-2">
+                  {DIVERGING_SCALE_NAMES.map((name) => (
+                    <div
+                      key={name}
+                      className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
+                        divergingScaleName === name
+                          ? 'bg-accent'
+                          : 'hover:bg-accent/50'
+                      }`}
+                      onClick={() => handleDivergingScaleChange(name)}
+                    >
+                      <div className="w-24 h-2 rounded-sm overflow-hidden">
+                        <ColorScalePreview type="diverging" divergingScaleName={name} />
+                      </div>
+                      <span className="text-sm">{DIVERGING_SCALE_LABELS[name]}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">

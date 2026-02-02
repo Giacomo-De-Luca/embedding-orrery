@@ -5,8 +5,6 @@ import numpy as np
 import logging
 import pandas as pd
 from hdbscan import HDBSCAN
-
-from typing import List
 from sklearn.feature_extraction.text import TfidfTransformer, CountVectorizer
 from sklearn.preprocessing import normalize
 from sklearn.utils import check_array
@@ -35,11 +33,7 @@ class ClassTfidfTransformer(TfidfTransformer):
                         `log(1+((avg_nr_samples - df + 0.5) / (df+0.5)))`
         reduce_frequent_words: Takes the square root of the bag-of-words after normalizing the matrix.
                                Helps to reduce the impact of words that appear too frequently.
-        seed_words: Specific words that will have their idf value increased by
-                    the value of `seed_multiplier`.
-                    NOTE: This will only increase the value of words that have an exact match.
-        seed_multiplier: The value with which the idf values of the words in `seed_words`
-                         are multiplied.
+
 
     Examples:
     ```python
@@ -51,19 +45,20 @@ class ClassTfidfTransformer(TfidfTransformer):
         self,
         bm25_weighting: bool = False,
         reduce_frequent_words: bool = False,
-        seed_words: List[str] | None = None,
-        seed_multiplier: float = 2,
         use_idf: bool = True,
 
     ):
         self.bm25_weighting = bm25_weighting
         self.reduce_frequent_words = reduce_frequent_words
-        self.seed_words = seed_words
-        self.seed_multiplier = seed_multiplier
         self.use_idf = use_idf
         super(ClassTfidfTransformer, self).__init__()
 
-    def fit(self, X: sp.csr_matrix, y = None, multiplier: np.ndarray = np.array([])):
+    def fit(
+            self, 
+            X: sp.csr_matrix, 
+            y = None, 
+            multiplier: Union[np.ndarray, None] = None
+            ):
         """Learn the idf vector (global term weights).
 
         Arguments:
@@ -132,14 +127,14 @@ class GenerateTopics:
     def __init__(
         self, 
         documents: List[str],
-        reduced_embeddings: np.ndarray = np.array([]),
+        #reduced_embeddings: np.ndarray = np.array([]),
         min_topic_size: int = 10,
         n_gram_range: Tuple[int, int] = (1, 1),
         language: Union[str, None] = None,
 
         ):
         self.documents = documents
-        self.embeddings = reduced_embeddings
+        #self.embeddings = reduced_embeddings
         self.min_topic_size = min_topic_size
         self.hdbscan_model = HDBSCAN(
                 min_cluster_size=self.min_topic_size,

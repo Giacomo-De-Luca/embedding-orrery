@@ -1,10 +1,17 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import {
   buildCategoryColorMap,
   getCategoryLabel,
   getCategoryDisplayName,
+  getSequentialScale,
+  getDivergingScale,
+  getMonochromeScale,
+  generateGradientCSS,
+  type SequentialScaleName,
+  type DivergingScaleName,
 } from '../../lib/utils/categoryColors';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
@@ -18,6 +25,9 @@ interface LegendProps {
   onCategoryToggle?: (category: string) => void;
   colorScaleType?: 'categorical' | 'sequential' | 'diverging' | 'monochrome';
   numericRange?: { min: number; max: number };
+  sequentialScaleName?: SequentialScaleName;
+  divergingScaleName?: DivergingScaleName;
+  monochromeColor?: string;
 }
 
 /**
@@ -53,27 +63,29 @@ export function Legend({
   onCategoryToggle,
   colorScaleType = 'categorical',
   numericRange,
+  sequentialScaleName = 'sinebow',
+  divergingScaleName = 'blueGold',
+  monochromeColor = '#1f77b4',
 }: LegendProps) {
   // Check if this is a continuous scale (sequential, diverging, or monochrome)
   const isContinuous = colorScaleType === 'sequential' || colorScaleType === 'diverging' || colorScaleType === 'monochrome';
 
-  // Gradient definitions for continuous scales (matching scatter plot colors)
-  const viridisGradient = 'linear-gradient(to right, #440154, #482878, #3e4a89, #31688e, #26828e, #1f9e89, #35b779, #6ece58, #b5de2b, #fde725)';
-  const rdBuGradient = 'linear-gradient(to right, #67001f, #b2182b, #d6604d, #f4a582, #fddbc7, #f7f7f7, #d1e5f0, #92c5de, #4393c3, #2166ac, #053061)';
-  const monochromeGradient = 'linear-gradient(to right, rgba(31, 119, 180, 0.1), rgba(31, 119, 180, 1))';
+  // Generate gradient dynamically from the actual scale function
+  const gradient = useMemo(() => {
+    if (colorScaleType === 'sequential') {
+      return generateGradientCSS(getSequentialScale([0, 1], sequentialScaleName));
+    } else if (colorScaleType === 'diverging') {
+      return generateGradientCSS(getDivergingScale([0, 0.5, 1], divergingScaleName));
+    } else if (colorScaleType === 'monochrome') {
+      return generateGradientCSS(getMonochromeScale(monochromeColor, [0, 1]));
+    }
+    return '';
+  }, [colorScaleType, sequentialScaleName, divergingScaleName, monochromeColor]);
 
   // For continuous scales, render a gradient bar
   if (isContinuous && numericRange) {
     const { min, max } = numericRange;
     const center = (min + max) / 2;
-    let gradient = viridisGradient;
-    if (colorScaleType === 'sequential') {
-      gradient = viridisGradient;
-    } else if (colorScaleType === 'diverging') {
-      gradient = rdBuGradient;
-    } else if (colorScaleType === 'monochrome') {
-      gradient = monochromeGradient;
-    }
 
     return (
       <Card

@@ -96,12 +96,17 @@ export type DistanceMetric = 'COSINE' | 'L2' | 'IP';
  */
 export type ColorScaleType = 'categorical' | 'sequential' | 'diverging' | 'monochrome';
 
+// Re-export scale name types for convenience
+export type { SequentialScaleName, DivergingScaleName } from '../utils/categoryColors';
+
 export interface VisualizationState {
   method: ProjectionMethod;
   mode: DimensionMode;
   selectedDimensions?: number[];
   colorByField?: string | null;  // Field name to color by (used for both categorical AND numeric)
   colorScaleType?: ColorScaleType;  // Type of color scale (auto-detected, can be overridden)
+  sequentialScaleName?: import('../utils/categoryColors').SequentialScaleName;  // Scale name for sequential coloring
+  divergingScaleName?: import('../utils/categoryColors').DivergingScaleName;  // Scale name for diverging coloring
   monochromeColor?: string;  // Base color for monochrome scale (default: #1f77b4)
   searchQuery?: string;
   distanceMetric?: DistanceMetric;  // Distance metric for semantic search

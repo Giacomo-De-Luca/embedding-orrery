@@ -133,6 +133,8 @@ export function DashboardPanel({
       categoryValues={categoryValues}
       colorScaleType={state.colorScaleType}
       monochromeColor={state.monochromeColor}
+      sequentialScaleName={state.sequentialScaleName}
+      divergingScaleName={state.divergingScaleName}
       highlightedIndices={highlightedIndices}
       selectedPoint={selectedPoint as Point2D | null}
       onPointClick={onPointClick}
@@ -148,6 +150,8 @@ export function DashboardPanel({
       categoryValues={categoryValues}
       colorScaleType={state.colorScaleType}
       monochromeColor={state.monochromeColor}
+      sequentialScaleName={state.sequentialScaleName}
+      divergingScaleName={state.divergingScaleName}
       highlightedIndices={highlightedIndices}
       selectedPoint={selectedPoint as Point3D | null}
       onPointClick={onPointClick}
@@ -189,6 +193,9 @@ export function DashboardPanel({
               onCategoryToggle={handleCategoryToggle}
               colorScaleType={state.colorScaleType}
               numericRange={numericRange}
+              sequentialScaleName={state.sequentialScaleName}
+              divergingScaleName={state.divergingScaleName}
+              monochromeColor={state.monochromeColor}
             />
           </ScrollArea>
           {/* Horizontal Spacer 

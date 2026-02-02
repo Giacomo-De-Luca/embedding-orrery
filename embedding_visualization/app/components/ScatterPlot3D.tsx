@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, ColorScaleType } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale } from '../../lib/utils/categoryColors';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -28,6 +28,8 @@ interface ScatterPlot3DProps {
   categoryValues?: string[];
   colorScaleType?: ColorScaleType;
   monochromeColor?: string;
+  sequentialScaleName?: SequentialScaleName;
+  divergingScaleName?: DivergingScaleName;
   highlightedIndices?: HighlightMap;
   selectedPoint?: Point3D | null;
   onPointClick?: (point: Point3D) => void;
@@ -58,6 +60,8 @@ export function ScatterPlot3D({
   categoryValues = [],
   colorScaleType = 'categorical',
   monochromeColor = '#1f77b4',
+  sequentialScaleName = 'sinebow',
+  divergingScaleName = 'blueGold',
   highlightedIndices,
   selectedPoint,
   onPointClick,
@@ -300,9 +304,9 @@ export function ScatterPlot3D({
     if (colorScaleType === 'monochrome') {
       scaleFunc = getMonochromeScale(monochromeColor, [0, 1]);
     } else if (colorScaleType === 'diverging') {
-      scaleFunc = getDivergingScale([0, 0.5, 1]);
+      scaleFunc = getDivergingScale([0, 0.5, 1], divergingScaleName);
     } else {
-      scaleFunc = getSequentialScale([0, 1]);
+      scaleFunc = getSequentialScale([0, 1], sequentialScaleName);
     }
 
     // Sample the function to create a gradient definition
@@ -311,7 +315,7 @@ export function ScatterPlot3D({
       const t = i / steps;
       return [t, scaleFunc(t)]; // [0.1, '#ff0000']
     });
-  }, [colorScaleType, monochromeColor]);
+  }, [colorScaleType, monochromeColor, sequentialScaleName, divergingScaleName]);
 
   const markerStyle = useMemo(() => calculateMarkerStyle(points.length), [points.length]);
   const highlightScale = useMemo(() => calculateHighlightScale(points.length), [points.length]);

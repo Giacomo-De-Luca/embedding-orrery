@@ -1,6 +1,21 @@
 
 import { scaleSequential, scaleDiverging } from 'd3-scale';
-import { interpolateViridis, interpolateSinebow, interpolateCividis, interpolateCubehelixDefault } from 'd3-scale-chromatic';
+import {
+  // Sequential
+  interpolateSinebow,
+  interpolateViridis,
+  interpolateCividis,
+  interpolateTurbo,
+  interpolatePlasma,
+  interpolateInferno,
+  interpolateMagma,
+  // Diverging
+  interpolateRdBu,
+  interpolateSpectral,
+  interpolatePiYG,
+  interpolatePuOr,
+  interpolateBrBG,
+} from 'd3-scale-chromatic';
 import { interpolateRgb } from 'd3-interpolate';
 import { color } from 'd3-color';
 
@@ -12,6 +27,7 @@ import { color } from 'd3-color';
  * - Preset palettes for known category types (e.g., WordNet POS)
  * - Dynamic color generation for arbitrary categories
  * - Color utility functions
+ * - Sequential and diverging color scales with multiple interpolator options
  */
 
 export interface CategoryColorPreset {
@@ -19,6 +35,11 @@ export interface CategoryColorPreset {
   colors: Record<string, string>;
   labels?: Record<string, string>;
 }
+
+// ============ Scale Name Types ============
+
+export type SequentialScaleName = 'sinebow' | 'viridis' | 'cividis' | 'turbo' | 'plasma' | 'inferno' | 'magma';
+export type DivergingScaleName = 'blueGold' | 'rdBu' | 'spectral' | 'piYG' | 'puOr' | 'brBG';
 
 // ============ Sequential & Diverging Generators ============
 
@@ -28,41 +49,71 @@ const divergingScaleCache = new Map<string, (v: number) => string>();
 const monochromeScaleCache = new Map<string, (v: number) => string>();
 
 /**
- * Custom blue-gold interpolator (Tableau-style diverging).
- * Deep blue (#1f4e79) → White (#f5f5f5) → Gold (#d4a017)
+ * Custom blue-purple-gold interpolator (saturated center, no white).
+ * Deep blue (#1f4e79) → Purple (#8B5CF6) → Gold (#d4a017)
+ * Better visibility than white center on all backgrounds.
  */
 function interpolateBlueGold(t: number): string {
   if (t < 0.5) {
-    // Blue to white (t: 0 → 0.5 maps to 0 → 1)
-    return interpolateRgb('#1f4e79', '#f5f5f5')(t * 2);
+    // Blue to purple (t: 0 → 0.5 maps to 0 → 1)
+    return interpolateRgb('#1f4e79', '#8B5CF6')(t * 2);
   } else {
-    // White to gold (t: 0.5 → 1 maps to 0 → 1)
-    return interpolateRgb('#f5f5f5', '#d4a017')((t - 0.5) * 2);
+    // Purple to gold (t: 0.5 → 1 maps to 0 → 1)
+    return interpolateRgb('#8B5CF6', '#d4a017')((t - 0.5) * 2);
   }
 }
 
+// ============ Interpolator Maps ============
+
+const SEQUENTIAL_INTERPOLATORS: Record<SequentialScaleName, (t: number) => string> = {
+  sinebow: interpolateSinebow,
+  viridis: interpolateViridis,
+  cividis: interpolateCividis,
+  turbo: interpolateTurbo,
+  plasma: interpolatePlasma,
+  inferno: interpolateInferno,
+  magma: interpolateMagma,
+};
+
+const DIVERGING_INTERPOLATORS: Record<DivergingScaleName, (t: number) => string> = {
+  blueGold: interpolateBlueGold,
+  rdBu: interpolateRdBu,
+  spectral: interpolateSpectral,
+  piYG: interpolatePiYG,
+  puOr: interpolatePuOr,
+  brBG: interpolateBrBG,
+};
+
 /**
  * Creates a sequential scale (e.g., for probability, density).
- * Maps [min, max] -> Color (Viridis)
- * Cached by domain for performance.
+ * Maps [min, max] -> Color using the specified interpolator.
+ * Cached by domain + scale name for performance.
  */
-export function getSequentialScale(domain: [number, number] = [0, 1]): (v: number) => string {
-  const key = `seq_${domain[0]}_${domain[1]}`;
+export function getSequentialScale(
+  domain: [number, number] = [0, 1],
+  scaleName: SequentialScaleName = 'sinebow'
+): (v: number) => string {
+  const key = `seq_${domain[0]}_${domain[1]}_${scaleName}`;
   if (!sequentialScaleCache.has(key)) {
-    sequentialScaleCache.set(key, scaleSequential(interpolateSinebow).domain(domain));
+    const interpolator = SEQUENTIAL_INTERPOLATORS[scaleName];
+    sequentialScaleCache.set(key, scaleSequential(interpolator).domain(domain));
   }
   return sequentialScaleCache.get(key)!;
 }
 
 /**
  * Creates a diverging scale (e.g., for sentiment, correlation).
- * Maps [min, mid, max] -> Blue → White → Gold (Tableau-style)
- * Cached by domain for performance.
+ * Maps [min, mid, max] -> Color using the specified interpolator.
+ * Cached by domain + scale name for performance.
  */
-export function getDivergingScale(domain: [number, number, number] = [-1, 0, 1]): (v: number) => string {
-  const key = `div_${domain[0]}_${domain[1]}_${domain[2]}`;
+export function getDivergingScale(
+  domain: [number, number, number] = [-1, 0, 1],
+  scaleName: DivergingScaleName = 'blueGold'
+): (v: number) => string {
+  const key = `div_${domain[0]}_${domain[1]}_${domain[2]}_${scaleName}`;
   if (!divergingScaleCache.has(key)) {
-    divergingScaleCache.set(key, scaleSequential(interpolateCubehelixDefault).domain(domain));
+    const interpolator = DIVERGING_INTERPOLATORS[scaleName];
+    divergingScaleCache.set(key, scaleDiverging(interpolator).domain(domain));
   }
   return divergingScaleCache.get(key)!;
 }
@@ -99,6 +150,18 @@ export function clearScaleCaches(): void {
   sequentialScaleCache.clear();
   divergingScaleCache.clear();
   monochromeScaleCache.clear();
+}
+
+/**
+ * Generate a CSS linear-gradient string from a scale function.
+ * Useful for rendering scale previews in Legend or ColorScaleSelector.
+ */
+export function generateGradientCSS(
+  scaleFunc: (t: number) => string,
+  steps: number = 10
+): string {
+  const colors = Array.from({ length: steps }, (_, i) => scaleFunc(i / (steps - 1)));
+  return `linear-gradient(to right, ${colors.join(', ')})`;
 }
 
 

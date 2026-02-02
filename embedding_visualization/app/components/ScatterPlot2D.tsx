@@ -12,7 +12,7 @@ import type {
   PlotHoverEvent,
 } from 'plotly.js';
 import type { Point2D, HighlightMap, ColorScaleType } from '../../lib/types/types';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale } from '../../lib/utils/categoryColors';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -29,6 +29,8 @@ interface ScatterPlot2DProps {
   categoryValues?: string[];
   colorScaleType?: ColorScaleType;
   monochromeColor?: string;
+  sequentialScaleName?: SequentialScaleName;
+  divergingScaleName?: DivergingScaleName;
   highlightedIndices?: HighlightMap;
   selectedPoint?: Point2D | null;
   onPointClick?: (point: Point2D) => void;
@@ -59,6 +61,8 @@ export function ScatterPlot2D({
   categoryValues = [],
   colorScaleType = 'categorical',
   monochromeColor = '#1f77b4',
+  sequentialScaleName = 'sinebow',
+  divergingScaleName = 'blueGold',
   highlightedIndices,
   selectedPoint,
   onPointClick,
@@ -125,9 +129,9 @@ export function ScatterPlot2D({
     if (colorScaleType === 'monochrome') {
       scaleFunc = getMonochromeScale(monochromeColor, [0, 1]);
     } else if (colorScaleType === 'diverging') {
-      scaleFunc = getDivergingScale([0, 0.5, 1]);
+      scaleFunc = getDivergingScale([0, 0.5, 1], divergingScaleName);
     } else {
-      scaleFunc = getSequentialScale([0, 1]);
+      scaleFunc = getSequentialScale([0, 1], sequentialScaleName);
     }
 
     // Sample the scale to create Plotly gradient definition
@@ -136,7 +140,7 @@ export function ScatterPlot2D({
       const t = i / steps;
       return [t, scaleFunc(t)] as [number, string];
     });
-  }, [colorScaleType, monochromeColor]);
+  }, [colorScaleType, monochromeColor, sequentialScaleName, divergingScaleName]);
 
   // Calculate dynamic marker style based on point count
   const markerStyle = useMemo(() => {
