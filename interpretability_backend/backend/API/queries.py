@@ -249,7 +249,7 @@ class Query:
                 topic_summary_str = collection_info.get("metadata", {}).get("topic_summary")
 
                 if topic_summary_str:
-                    topic_summary = json.loads(topic_summary_str)
+                    topic_summary = topic_summary_str if isinstance(topic_summary_str, list) else json.loads(topic_summary_str)
                     # Convert to TopicInfo objects
                     topics = []
                     for topic_data in topic_summary:

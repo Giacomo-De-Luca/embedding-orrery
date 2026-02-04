@@ -297,9 +297,25 @@ export function buildCategoryColorMap(
   const preset = categoryField ? CATEGORY_PRESETS[categoryField.toLowerCase()] : null;
 
   if (preset) {
-    // Use preset colors, fall back to gray for unknown values
+    // Separate values into those with preset colors and those without
+    const valuesWithoutPreset: string[] = [];
+
     for (const value of values) {
-      colorMap[value] = preset.colors[value] ?? preset.colors['unknown'] ?? '#7f7f7f';
+      if (preset.colors[value]) {
+        // Use preset color if available
+        colorMap[value] = preset.colors[value];
+      } else {
+        // Queue for dynamic color generation
+        valuesWithoutPreset.push(value);
+      }
+    }
+
+    // Generate dynamic colors for values not in preset
+    if (valuesWithoutPreset.length > 0) {
+      const dynamicColors = generateCategoryColors(valuesWithoutPreset.length);
+      for (let i = 0; i < valuesWithoutPreset.length; i++) {
+        colorMap[valuesWithoutPreset[i]] = dynamicColors[i];
+      }
     }
   } else {
     // Generate colors dynamically
