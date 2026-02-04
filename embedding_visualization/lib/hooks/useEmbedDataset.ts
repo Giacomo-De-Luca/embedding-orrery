@@ -19,8 +19,10 @@ import {
   type EmbedLocalFileInput,
   type EmbedDatasetResult,
   type UpdateCollectionMetadataResult,
+  type TopicConfigInput,
+  type ExtractTopicsResult,
 } from '../graphql/mutations';
-import { GET_COLLECTIONS } from '../graphql/queries';
+import { GET_COLLECTIONS, EXTRACT_TOPICS } from '../graphql/queries';
 
 // ========== Hook Return Types ==========
 
@@ -65,6 +67,11 @@ export interface UseEmbedDatasetReturn {
 
   // Last embed result
   lastEmbedResult: EmbedDatasetResult | null;
+
+  // Topic extraction
+  extractTopics: (collectionName: string, config?: TopicConfigInput) => Promise<ExtractTopicsResult | null>;
+  topicsLoading: boolean;
+  lastTopicsResult: ExtractTopicsResult | null;
 
   // Active job tracking for progress display
   activeJobCollectionName: string | null;
@@ -127,6 +134,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const [updateMetadataMutation] = useMutation<
     { updateCollectionMetadata: UpdateCollectionMetadataResult }
   >(UPDATE_COLLECTION_METADATA);
+
+  const [extractTopicsMutation, { loading: topicsLoading }] = useMutation<
+    { extractTopics: ExtractTopicsResult }
+  >(EXTRACT_TOPICS);
+
+  const [lastTopicsResult, setLastTopicsResult] = useState<ExtractTopicsResult | null>(null);
 
   // ========== HuggingFace Operations ==========
 
@@ -349,6 +362,45 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     }
   }, [embedLocalMutation]);
 
+  // ========== Topic Extraction ==========
+
+  const extractTopics = useCallback(async (
+    collectionName: string,
+    config?: TopicConfigInput
+  ): Promise<ExtractTopicsResult | null> => {
+    setError(null);
+    setLastTopicsResult(null);
+
+    try {
+      const { data, errors } = await extractTopicsMutation({
+        variables: { collectionName, config: config || null },
+        context: {
+          fetchOptions: {
+            timeout: 600000 // 10 minutes — topic extraction with LLM can be slow
+          }
+        }
+      });
+
+      if (errors && errors.length > 0) {
+        setError(errors.map(e => e.message).join(', '));
+        return null;
+      }
+
+      const result = data?.extractTopics || null;
+
+      if (result?.error) {
+        setError(result.error);
+      }
+
+      setLastTopicsResult(result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to extract topics';
+      setError(message);
+      return null;
+    }
+  }, [extractTopicsMutation]);
+
   // ========== Collection Operations ==========
 
   const deleteCollection = useCallback(async (collectionName: string): Promise<boolean> => {
@@ -427,6 +479,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     fetchLocalFileInfo,
     fetchLocalFilePreview,
     embedLocalFile,
+
+    // Topic extraction
+    extractTopics,
+    topicsLoading,
+    lastTopicsResult,
 
     // Collection operations
     deleteCollection,

@@ -2,21 +2,22 @@
 Topic extraction service for clustering embeddings and generating labels.
 
 Orchestrates HDBSCAN clustering on projection coordinates and c-TF-IDF
-keyword extraction. Optionally generates human-readable labels via OpenAI.
+keyword extraction. Optionally generates human-readable labels via LLM
+(Gemini default, OpenAI supported).
 """
 
 import time
 import json
 import logging
-import os
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 
 import chromadb
 from chromadb.config import Settings
 
 from ..topic_extraction.cluster_and_label import GenerateTopics
+from ..topic_extraction.llm_labeling import generate_llm_labels
 from ..embedding_functions.config import DB_PATH
 from .progress_emitter import emit_progress
 
@@ -30,7 +31,8 @@ class TopicExtractionConfig:
     min_topic_size: int = 10
     n_keywords: int = 10
     use_llm_labels: bool = False
-    llm_model: str = "gpt-4o-mini"
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3-flash-preview"
     projection_type: str = "umap_2d"  # pca_2d, pca_3d, umap_2d, umap_3d
     language: Optional[str] = "english"  # Stop words language for CountVectorizer
 
@@ -192,10 +194,11 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 message="Generating LLM labels..."
             )
 
-            llm_labels = _generate_llm_labels(
+            llm_labels = generate_llm_labels(
                 topics_data=topics_data,
                 documents_df=documents_df,
-                config=config
+                llm_provider=config.llm_provider,
+                llm_model=config.llm_model
             )
 
             # Update labels with LLM-generated ones
@@ -352,81 +355,3 @@ def _update_collection_topic_metadata(
     logger.info("Updated collection metadata with topic summary")
 
 
-def _generate_llm_labels(
-    topics_data: Dict[int, List[Tuple[str, float]]],
-    documents_df,
-    config: TopicExtractionConfig
-) -> Dict[int, str]:
-    """Generate human-readable topic labels using OpenAI.
-
-    Args:
-        topics_data: Dict of topic_id -> list of (word, score) tuples
-        documents_df: DataFrame with Document_ID, Document, Topic columns
-        config: Topic extraction configuration
-
-    Returns:
-        Dict of topic_id -> label string
-    """
-    try:
-        import openai
-        from ..topic_extraction._representation_utils import retry_with_exponential_backoff
-    except ImportError:
-        logger.warning("openai package not installed, skipping LLM labeling")
-        return {}
-
-    api_key = os.environ.get("CHROMA_OPENAI_API_KEY")
-    if not api_key:
-        logger.warning("CHROMA_OPENAI_API_KEY not set, skipping LLM labeling")
-        return {}
-
-    client = openai.OpenAI(api_key=api_key)
-    labels = {}
-
-    # Process each topic (excluding noise cluster -1)
-    for topic_id, keywords in topics_data.items():
-        if topic_id == -1:
-            continue
-
-        # Get representative documents for this topic
-        topic_docs = documents_df[documents_df["Topic"] == topic_id]["Document"].tolist()
-        representative_docs = topic_docs[:4]  # Take first 4 as representative
-
-        # Build prompt
-        keyword_str = ", ".join([w for w, _ in keywords[:10]])
-        docs_str = "\n".join([f"- {doc[:200]}" for doc in representative_docs])
-
-        prompt = f"""You will extract a short topic label from given documents and keywords.
-
-Sample texts from this topic:
-{docs_str}
-
-Keywords: {keyword_str}
-
-Based on the information above, extract a short topic label (five words at most) in the following format:
-topic: <topic_label>"""
-
-        try:
-            response = client.chat.completions.create(
-                model=config.llm_model,
-                messages=[
-                    {"role": "system", "content": "You are an assistant that extracts high-level topics from texts."},
-                    {"role": "user", "content": prompt},
-                ],
-                stop="\n",
-                temperature=0.1,
-            )
-
-            if response and hasattr(response.choices[0].message, "content"):
-                label = response.choices[0].message.content.strip()
-                label = label.replace("topic: ", "").replace("Topic: ", "")
-                labels[topic_id] = label
-                logger.info(f"Topic {topic_id}: {label}")
-            else:
-                logger.warning(f"No label returned for topic {topic_id}")
-
-        except openai.RateLimitError:
-            logger.warning(f"Rate limited on topic {topic_id}, using keyword label")
-        except Exception as e:
-            logger.warning(f"LLM labeling failed for topic {topic_id}: {e}")
-
-    return labels

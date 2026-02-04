@@ -208,7 +208,8 @@ export function ScatterPlot2D({
           // MODE: CATEGORICAL - preserve category colors with dimming
           const pointsByCategory: Record<string, Point2D[]> = {};
           unhighlightedPoints.forEach(point => {
-            const cat = point.category || 'unknown';
+            const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+            const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
             if (!pointsByCategory[cat]) {
               pointsByCategory[cat] = [];
             }
@@ -466,7 +467,8 @@ export function ScatterPlot2D({
     } else if (colorBy === 'category' && categoryValues.length > 0) {
       const pointsByCategory: Record<string, Point2D[]> = {};
       points.forEach(point => {
-        const cat = point.category || 'unknown';
+        const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+        const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
         if (!pointsByCategory[cat]) {
           pointsByCategory[cat] = [];
         }

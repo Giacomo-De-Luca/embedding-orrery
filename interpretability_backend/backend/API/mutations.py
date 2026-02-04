@@ -144,7 +144,7 @@ class Mutation:
         topics_extracted = False
         if input.extract_topics and projections_computed and result.error is None:
             topic_config = input.topic_config or {}
-            topics_extracted = await self._extract_topics_for_collection(
+            topics_extracted = await _extract_topics_for_collection(
                 input.collection_name,
                 topic_config
             )
@@ -242,7 +242,7 @@ class Mutation:
         topics_extracted = False
         if input.extract_topics and projections_computed and result.error is None:
             topic_config = input.topic_config or {}
-            topics_extracted = await self._extract_topics_for_collection(
+            topics_extracted = await _extract_topics_for_collection(
                 input.collection_name,
                 topic_config
             )
@@ -337,14 +337,16 @@ class Mutation:
         Returns:
             Result with topic information
         """
-        # Build config from input
+        # Build config from input — unpack nested TopicConfigInput
+        tc = input.config
         config = TopicExtractionConfig(
             collection_name=input.collection_name,
-            min_topic_size=input.min_topic_size,
-            n_keywords=input.n_keywords,
-            use_llm_labels=input.use_llm_labels,
-            llm_model=input.llm_model,
-            projection_type=input.projection_type
+            min_topic_size=tc.min_topic_size if tc else 10,
+            n_keywords=tc.n_keywords if tc else 10,
+            use_llm_labels=tc.use_llm_labels if tc else False,
+            llm_provider=tc.llm_provider if tc else 'gemini',
+            llm_model=tc.llm_model if tc else 'gemini-3-flash-preview',
+            projection_type=tc.projection_type if tc else 'umap_2d'
         )
 
         # Run topic extraction in background thread
@@ -370,44 +372,47 @@ class Mutation:
             error=result.error
         )
 
-    async def _extract_topics_for_collection(
-        self,
-        collection_name: str,
-        topic_config_input
-    ) -> bool:
-        """Helper to extract topics for a collection (used by embedding mutations).
 
-        Args:
-            collection_name: Name of collection
-            topic_config_input: TopicConfigInput or dict with config
 
-        Returns:
-            True if topics were extracted successfully
-        """
-        try:
-            # Handle both TopicConfigInput and dict
-            if hasattr(topic_config_input, '__dict__'):
-                tc = topic_config_input
-                config = TopicExtractionConfig(
-                    collection_name=collection_name,
-                    min_topic_size=getattr(tc, 'min_topic_size', 10),
-                    n_keywords=getattr(tc, 'n_keywords', 10),
-                    use_llm_labels=getattr(tc, 'use_llm_labels', False),
-                    llm_model=getattr(tc, 'llm_model', 'gpt-4o-mini'),
-                    projection_type=getattr(tc, 'projection_type', 'umap_2d')
-                )
-            else:
-                config = TopicExtractionConfig(
-                    collection_name=collection_name,
-                    min_topic_size=topic_config_input.get('min_topic_size', 10),
-                    n_keywords=topic_config_input.get('n_keywords', 10),
-                    use_llm_labels=topic_config_input.get('use_llm_labels', False),
-                    llm_model=topic_config_input.get('llm_model', 'gpt-4o-mini'),
-                    projection_type=topic_config_input.get('projection_type', 'umap_2d')
-                )
+async def _extract_topics_for_collection(
+    collection_name: str,
+    topic_config_input
+) -> bool:
+    """Helper to extract topics for a collection (used by embedding mutations).
 
-            result = await asyncio.to_thread(do_extract_topics, config)
-            return result.error is None
-        except Exception as e:
-            print(f"Topic extraction failed: {e}")
-            return False
+    Args:
+        collection_name: Name of collection
+        topic_config_input: TopicConfigInput or dict with config
+
+    Returns:
+        True if topics were extracted successfully
+    """
+    try:
+        # Handle both TopicConfigInput and dict
+        if hasattr(topic_config_input, '__dict__'):
+            tc = topic_config_input
+            config = TopicExtractionConfig(
+                collection_name=collection_name,
+                min_topic_size=getattr(tc, 'min_topic_size', 10),
+                n_keywords=getattr(tc, 'n_keywords', 10),
+                use_llm_labels=getattr(tc, 'use_llm_labels', False),
+                llm_provider=getattr(tc, 'llm_provider', 'gemini'),
+                llm_model=getattr(tc, 'llm_model', 'gemini-3-flash-preview'),
+                projection_type=getattr(tc, 'projection_type', 'umap_2d')
+            )
+        else:
+            config = TopicExtractionConfig(
+                collection_name=collection_name,
+                min_topic_size=topic_config_input.get('min_topic_size', 10),
+                n_keywords=topic_config_input.get('n_keywords', 10),
+                use_llm_labels=topic_config_input.get('use_llm_labels', False),
+                llm_provider=topic_config_input.get('llm_provider', 'gemini'),
+                llm_model=topic_config_input.get('llm_model', 'gemini-3-flash-preview'),
+                projection_type=topic_config_input.get('projection_type', 'umap_2d')
+            )
+
+        result = await asyncio.to_thread(do_extract_topics, config)
+        return result.error is None
+    except Exception as e:
+        print(f"Topic extraction failed: {e}")
+        return False

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { AppHeader } from './components/AppHeader';
 import { AppFooter } from './components/AppFooter';
 import { DashboardPanel, type ActivePanel } from './components/DashboardPanel';
@@ -16,19 +17,35 @@ import type { VisualizationState, HighlightMap } from '../lib/types/types';
 
 export default function Home() {
   const { collections, loading: collectionsLoading, error: collectionsError } = useCollections();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const collectionFromUrl = searchParams.get('collection');
 
   // Default to the first available collection
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
 
-  // Auto-select first collection when collections load
+  // Select collection from URL param, or auto-select first collection
   useEffect(() => {
     if (collections && !selectedCollection) {
-      const firstCollection = Object.keys(collections)[0];
-      if (firstCollection) {
-        setSelectedCollection(firstCollection);
+      if (collectionFromUrl && collections[collectionFromUrl]) {
+        setSelectedCollection(collectionFromUrl);
+      } else {
+        const firstCollection = Object.keys(collections)[0];
+        if (firstCollection) {
+          setSelectedCollection(firstCollection);
+        }
       }
     }
-  }, [collections, selectedCollection]);
+  }, [collections, selectedCollection, collectionFromUrl]);
+
+  // Sync URL when collection changes
+  useEffect(() => {
+    if (selectedCollection) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('collection', selectedCollection);
+      router.replace(`?${params.toString()}`, { scroll: false });
+    }
+  }, [selectedCollection, searchParams, router]);
 
   const { data, loading, error, colorFieldOptions } = useEmbeddingData(selectedCollection);
 

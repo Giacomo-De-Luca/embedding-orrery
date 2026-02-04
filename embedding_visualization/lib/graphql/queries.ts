@@ -164,8 +164,8 @@ export const EMBEDDING_PROGRESS_SUBSCRIPTION = gql`
  * Mutation to extract topics from an existing collection
  */
 export const EXTRACT_TOPICS = gql`
-  mutation ExtractTopics($input: ExtractTopicsInput!) {
-    extractTopics(input: $input) {
+  mutation ExtractTopics($collectionName: String!, $config: TopicConfigInput) {
+    extractTopics(input: { collectionName: $collectionName, config: $config }) {
       collectionName
       numTopics
       numNoisePoints

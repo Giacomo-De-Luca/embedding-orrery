@@ -61,6 +61,9 @@ export default function TestEmbedPage() {
     clearError,
     lastEmbedResult,
     activeJobCollectionName,
+    extractTopics,
+    topicsLoading,
+    lastTopicsResult,
   } = useEmbedDataset();
 
   // Transform collections data for the manager tab
@@ -148,6 +151,11 @@ export default function TestEmbedPage() {
           refreshCollections={handleRefreshCollections}
           deleteCollection={deleteCollection}
           updateCollectionMetadata={updateCollectionMetadata}
+          extractTopics={extractTopics}
+          topicsLoading={topicsLoading}
+          lastTopicsResult={lastTopicsResult}
+          error={error}
+          clearError={clearError}
         />
       )}
     </div>

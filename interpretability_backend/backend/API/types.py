@@ -132,23 +132,20 @@ class TopicInfo:
 
 @strawberry.input
 class TopicConfigInput:
-    """Optional topic extraction configuration for embedding mutations."""
+    """Topic extraction configuration (shared by standalone and embedded mutations)."""
     min_topic_size: int = 10
     n_keywords: int = 10
     use_llm_labels: bool = False
-    llm_model: str = "gpt-4o-mini"
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3-flash-preview"
     projection_type: str = "umap_2d"
 
 
 @strawberry.input
 class ExtractTopicsInput:
-    """Input for topic extraction from an existing collection."""
+    """Input for standalone topic extraction from an existing collection."""
     collection_name: str
-    min_topic_size: int = 10
-    n_keywords: int = 10
-    use_llm_labels: bool = False
-    llm_model: str = "gpt-4o-mini"
-    projection_type: str = "umap_2d"
+    config: Optional[TopicConfigInput] = None
 
 
 @strawberry.type

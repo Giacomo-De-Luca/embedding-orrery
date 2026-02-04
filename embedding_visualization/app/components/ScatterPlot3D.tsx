@@ -170,10 +170,12 @@ export function ScatterPlot3D({
     // Small datasets (100 pts): ~0.32
     // Medium datasets (10k pts): ~0.08
     // Large datasets (100k+ pts): ~0.05 (very close)
-    const baseTargetR = 0.4;
-    const zoomRate = 0.08; // How much to zoom in per power of 10
-    const calculatedTargetR = baseTargetR - (zoomRate * Math.log10(Math.max(pointCount, 1)));
-    const targetR = Math.min(Math.max(calculatedTargetR, 0.05), 0.5);
+    //const baseTargetR = 0.4;
+    //const zoomRate = 0.08; // How much to zoom in per power of 10
+    //const calculatedTargetR = baseTargetR - (zoomRate * Math.log10(Math.max(pointCount, 1)));
+    //const targetR = Math.min(Math.max(calculatedTargetR, 0.05), 0.5);
+
+    const targetR = 0.15
 
     const targetPhi = 1.3;
     const duration = 2000;
@@ -194,7 +196,12 @@ export function ScatterPlot3D({
           startEye = { ...currentCameraRef.current.eye };
           startCenter = { ...currentCameraRef.current.center };
         }
-        startSpherical = cartesianToSpherical(startEye.x, startEye.y, startEye.z);
+        // Convert eye position RELATIVE to center (not absolute from origin)
+        startSpherical = cartesianToSpherical(
+          startEye.x - startCenter.x,
+          startEye.y - startCenter.y,
+          startEye.z - startCenter.z
+        );
         targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
         startTime = currentTime;
         initialized = true;
@@ -213,7 +220,16 @@ export function ScatterPlot3D({
       const curR = lerp(startSpherical.r, targetSpherical.r, ease);
       const curTheta = lerp(startSpherical.theta, targetSpherical.theta, ease);
       const curPhi = lerp(startSpherical.phi, targetSpherical.phi, ease);
-      const newEye = sphericalToCartesian(curR, curTheta, curPhi);
+
+      // Convert spherical to cartesian (gives position relative to center)
+      const relativeEye = sphericalToCartesian(curR, curTheta, curPhi);
+
+      // Add the interpolated center to get absolute eye position
+      const newEye = {
+        x: relativeEye.x + newCenter.x,
+        y: relativeEye.y + newCenter.y,
+        z: relativeEye.z + newCenter.z,
+      };
 
       currentCameraRef.current = { eye: newEye, center: newCenter };
       const currentScene = graphDivRef.current._fullLayout?.scene?._scene;
@@ -378,7 +394,8 @@ export function ScatterPlot3D({
         // --- MODE: CATEGORICAL (Standard) ---
         const pointsByCategory: Record<string, Point3D[]> = {};
         points.forEach(point => {
-          const cat = point.category || 'unknown';
+          const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+          const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
           if (!pointsByCategory[cat]) pointsByCategory[cat] = [];
           pointsByCategory[cat].push(point);
         });

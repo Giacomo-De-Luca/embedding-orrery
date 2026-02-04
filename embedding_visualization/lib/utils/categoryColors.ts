@@ -230,11 +230,28 @@ export const POS_PRESET: CategoryColorPreset = {
 };
 
 /**
+ * Topic clustering colors.
+ * Gray for unclustered/noise points (HDBSCAN label -1).
+ */
+export const TOPIC_PRESET: CategoryColorPreset = {
+  name: 'Topic',
+  colors: {
+    '-1': '#7f7f7f', // Gray for noise/unclustered
+  },
+  labels: {
+    '-1': 'Unclustered',
+  },
+};
+
+/**
  * All known presets, keyed by category field name.
  */
 export const CATEGORY_PRESETS: Record<string, CategoryColorPreset> = {
   pos: POS_PRESET,
   part_of_speech: POS_PRESET,
+  topic: TOPIC_PRESET,
+  topic_id: TOPIC_PRESET,
+  topic_label: TOPIC_PRESET,
 };
 
 // ============ Dynamic color generation ============

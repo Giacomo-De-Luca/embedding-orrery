@@ -14,9 +14,11 @@ import {
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbeddingProvider, PortionStrategy, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob } from '@/lib/graphql/mutations';
+import type { EmbeddingProvider, PortionStrategy, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput } from '@/lib/graphql/mutations';
+import { Checkbox } from '@/lib/ui-primitives/checkbox';
 
 import { SplitSelector } from './SplitSelector';
+import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicConfigState } from './TopicConfigForm';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
@@ -46,6 +48,8 @@ interface HuggingFaceTabProps {
     batchSize?: number;
     embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType; prompt?: string; promptName?: string };
     resume?: boolean;
+    extractTopics?: boolean;
+    topicConfig?: TopicConfigInput;
   }) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
   datasetInfo: HFDatasetInfo | null;
@@ -122,6 +126,10 @@ export function HuggingFaceTab({
   // SentenceTransformers prompt support (for models like Gemma Embedding)
   const [promptName, setPromptName] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
+
+  // Topic extraction
+  const [enableTopics, setEnableTopics] = useState(false);
+  const [topicConfig, setTopicConfig] = useState<TopicConfigState>(DEFAULT_TOPIC_CONFIG);
 
   // Reset columns when dataset changes
   useEffect(() => {
@@ -214,6 +222,8 @@ export function HuggingFaceTab({
               promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
               prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
             },
+            extractTopics: enableTopics || undefined,
+            topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
           });
 
           if (result?.error) {
@@ -243,6 +253,8 @@ export function HuggingFaceTab({
             promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
             prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
           },
+          extractTopics: enableTopics || undefined,
+          topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
         });
       }
     } else {
@@ -273,6 +285,8 @@ export function HuggingFaceTab({
           promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
           prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
         },
+        extractTopics: enableTopics || undefined,
+        topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
       });
     }
 
@@ -612,6 +626,24 @@ export function HuggingFaceTab({
               )}
             </div>
 
+            {/* Topic Extraction Toggle */}
+            <Separator />
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="hf-enable-topics"
+                  checked={enableTopics}
+                  onCheckedChange={(checked) => setEnableTopics(checked === true)}
+                />
+                <Label htmlFor="hf-enable-topics" className="cursor-pointer">Extract topics after embedding</Label>
+              </div>
+              {enableTopics && (
+                <TopicConfigForm value={topicConfig} onChange={setTopicConfig} />
+              )}
+            </div>
+
+            <Separator />
+
             {/* Embed Button */}
             {isDataLoaded && (
               <Button
@@ -627,8 +659,6 @@ export function HuggingFaceTab({
           </CardContent>
         </Card>
       )}
-
-
 
       {/* Embed Result */}
       {lastEmbedResult && (

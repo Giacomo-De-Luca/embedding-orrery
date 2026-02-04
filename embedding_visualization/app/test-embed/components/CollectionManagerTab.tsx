@@ -21,10 +21,11 @@ import {
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
 import { Trash2, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import type { UpdateCollectionMetadataResult } from '@/lib/graphql/mutations';
+import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult } from '@/lib/graphql/mutations';
 import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 import { InlineEditableField, SelectOption } from './InlineEditableField';
 import { AddFieldForm } from './AddFieldForm';
+import { TopicExtractionCard } from './TopicExtractionCard';
 
 export interface CollectionInfo {
   name: string;
@@ -54,6 +55,11 @@ interface CollectionManagerTabProps {
     metadata: Record<string, unknown>
   ) => Promise<UpdateCollectionMetadataResult | null>;
   onCollectionDeleted?: () => void;
+  extractTopics: (collectionName: string, config?: TopicConfigInput) => Promise<ExtractTopicsResult | null>;
+  topicsLoading: boolean;
+  lastTopicsResult: ExtractTopicsResult | null;
+  error: string | null;
+  clearError: () => void;
 }
 
 // Read-only fields that cannot be edited (computed/system)
@@ -89,6 +95,11 @@ export function CollectionManagerTab({
   deleteCollection,
   updateCollectionMetadata,
   onCollectionDeleted,
+  extractTopics,
+  topicsLoading,
+  lastTopicsResult,
+  error,
+  clearError,
 }: CollectionManagerTabProps) {
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -323,7 +334,7 @@ export function CollectionManagerTab({
       {selectedCollectionInfo && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Data Preview</CardTitle>
+            <CardTitle>Data Preview</CardTitle>
             <CardDescription>First 5 rows from the collection</CardDescription>
           </CardHeader>
           <CardContent>
@@ -557,11 +568,26 @@ export function CollectionManagerTab({
         </Collapsible>
       )}
 
+      {/* Topic Extraction */}
+      {selectedCollectionInfo && !!metadata.has_projections && (
+        <TopicExtractionCard
+          collectionName={selectedCollectionInfo.name}
+          hasTopics={!!metadata.has_topics}
+          topicCount={metadata.topic_count as number | null}
+          extractTopics={extractTopics}
+          topicsLoading={topicsLoading}
+          lastTopicsResult={lastTopicsResult}
+          error={error}
+          clearError={clearError}
+          onTopicsExtracted={refreshCollections}
+        />
+      )}
+
       {/* Quick Links */}
       {selectedCollectionInfo && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Quick Actions</CardTitle>
+            <CardTitle>Quick Actions</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
@@ -571,6 +597,14 @@ export function CollectionManagerTab({
               >
                 View in 3D Visualization
               </a>
+              {!!metadata.has_topics && (
+                <a
+                  href={`/?collection=${encodeURIComponent(selectedCollectionInfo.name)}&colorBy=topic_label`}
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-4"
+                >
+                  View by Topics
+                </a>
+              )}
             </div>
           </CardContent>
         </Card>

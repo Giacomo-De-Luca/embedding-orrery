@@ -14,9 +14,11 @@ import {
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob } from '@/lib/graphql/mutations';
+import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput } from '@/lib/graphql/mutations';
+import { Checkbox } from '@/lib/ui-primitives/checkbox';
 
 import { FileUploadZone } from './FileUploadZone';
+import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicConfigState } from './TopicConfigForm';
 import { DataTypeSelector } from './DataTypeSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
@@ -45,6 +47,8 @@ interface LocalFileTabProps {
     batchSize?: number;
     embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType; prompt?: string; promptName?: string };
     resume?: boolean;
+    extractTopics?: boolean;
+    topicConfig?: TopicConfigInput;
   }) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
   localFileInfo: LocalFileInfo | null;
@@ -119,6 +123,10 @@ export function LocalFileTab({
   // SentenceTransformers prompt support (for models like Gemma Embedding)
   const [promptName, setPromptName] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
+
+  // Topic extraction
+  const [enableTopics, setEnableTopics] = useState(false);
+  const [topicConfig, setTopicConfig] = useState<TopicConfigState>(DEFAULT_TOPIC_CONFIG);
 
   // Reset columns when file changes
   useEffect(() => {
@@ -199,6 +207,8 @@ export function LocalFileTab({
         promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
         prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
       } : undefined,
+      extractTopics: enableTopics || undefined,
+      topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
     });
 
     await refreshCollections();
@@ -517,6 +527,26 @@ export function LocalFileTab({
                 </>
               )}
             </div>
+
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Topic Extraction */}
+      {isDataLoaded && (
+        <Card>
+          <CardContent className="pt-6 space-y-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="local-enable-topics"
+                checked={enableTopics}
+                onCheckedChange={(checked) => setEnableTopics(checked === true)}
+              />
+              <Label htmlFor="local-enable-topics" className="cursor-pointer">Extract topics after embedding</Label>
+            </div>
+            {enableTopics && (
+              <TopicConfigForm value={topicConfig} onChange={setTopicConfig} />
+            )}
           </CardContent>
         </Card>
       )}
