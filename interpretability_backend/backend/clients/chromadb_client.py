@@ -374,6 +374,10 @@ class ChromaDBClient:
                 "has_projections": collection_metadata.get("has_projections", False),
                 # Prompt info (for models like Gemma Embedding)
                 "embedding_prompt": collection_metadata.get("embedding_prompt"),
+                # Topic extraction metadata
+                "has_topics": collection_metadata.get("has_topics", False),
+                "topic_count": collection_metadata.get("topic_count"),
+                "topics_extracted_at": collection_metadata.get("topics_extracted_at"),
             }
         }
 

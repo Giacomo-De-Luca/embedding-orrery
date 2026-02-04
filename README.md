@@ -46,6 +46,7 @@ The backend service powered by FastAPI, Strawberry GraphQL, and ChromaDB.
 - ChromaDB vector database integration
 - Embed HuggingFace datasets or local files (CSV, JSON, Parquet)
 - Multi-provider support (SentenceTransformers, OpenAI, Cohere, etc.)
+- **Topic extraction & clustering** - HDBSCAN clustering with c-TF-IDF keywords and optional LLM labeling
 - **Real-time progress tracking** - WebSocket subscriptions for live embedding progress
 - **Resumable jobs** - interrupted embeddings can be resumed from where they left off
 - **Status messages** - detailed stage updates (sorting, loading model, computing projections)
@@ -126,6 +127,11 @@ Embedding Models:
 └── Vectors: Pre-computed
     ↓
 ChromaDB Vector Database (interpretability_backend/resources/vector_db)
+    ↓
+Topic Extraction (optional):
+├── HDBSCAN clustering on projections
+├── c-TF-IDF keyword extraction
+└── OpenAI LLM labeling (optional)
     ↓
 GraphQL API (FastAPI + Strawberry)
     ↓
@@ -261,6 +267,78 @@ DashboardPanel (render plots + sidebar + tables)
    - Semantic search: Gradient blue→gold based on actual similarity
    - Multi-layer glow: Outer/inner/core halos with calculateLuminosity
 
+## Topic Extraction & Clustering
+
+The system supports automatic topic discovery using HDBSCAN clustering, c-TF-IDF keyword extraction, and optional LLM-generated labels.
+
+### How It Works
+
+1. **Clustering**: Runs HDBSCAN on projection coordinates (UMAP 2D preferred)
+2. **Keywords**: Extracts top-N keywords per cluster using c-TF-IDF
+3. **Labels**: Optionally generates human-readable topic names via OpenAI
+4. **Storage**: Adds `topic_id` and `topic_label` to each item's metadata
+5. **Visualization**: Topics automatically appear as categorical fields in the frontend
+
+### Usage
+
+**Extract topics from existing collection:**
+```graphql
+mutation {
+  extractTopics(input: {
+    collectionName: "my_collection"
+    minTopicSize: 10
+    nKeywords: 10
+    useLlmLabels: false
+    projectionType: "umap_2d"
+  }) {
+    numTopics
+    numNoisePoints
+    topics {
+      topicId
+      label
+      keywords { word score }
+      count
+    }
+  }
+}
+```
+
+**Auto-extract during embedding:**
+```graphql
+mutation {
+  embedHuggingfaceDataset(input: {
+    datasetId: "squad"
+    collectionName: "squad_with_topics"
+    columns: ["question"]
+    computeProjections: true
+    extractTopics: true
+    topicConfig: {
+      minTopicSize: 15
+      useLlmLabels: true
+    }
+  }) {
+    totalEmbedded
+    projectionsComputed
+  }
+}
+```
+
+### Configuration
+
+- `minTopicSize`: Minimum points per cluster (default: 10)
+- `nKeywords`: Keywords per topic (default: 10)
+- `useLlmLabels`: Generate LLM labels (default: false, requires `CHROMA_OPENAI_API_KEY`)
+- `llmModel`: OpenAI model (default: "gpt-4o-mini")
+- `projectionType`: Projection to cluster on (default: "umap_2d")
+
+### Frontend Integration
+
+Once topics are extracted:
+- `topic_id` and `topic_label` appear in the "Color By" dropdown
+- Legend shows topic names and point counts
+- Click legend entries to toggle topic visibility
+- Noise cluster (-1) displayed as "Unclustered" in gray
+
 ## API Reference
 
 ### GraphQL API
@@ -280,6 +358,14 @@ query {
 # Embed a dataset
 mutation {
   embedHuggingfaceDataset(...) { ... }
+}
+
+# Extract topics
+mutation {
+  extractTopics(input: {
+    collectionName: "my_collection"
+    minTopicSize: 10
+  }) { ... }
 }
 ```
 

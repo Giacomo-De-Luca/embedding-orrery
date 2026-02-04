@@ -112,6 +112,56 @@ class EmbeddingModelInput:
     prompt: Optional[str] = None  # Single field - can be predefined name (e.g., "Retrieval-query") or custom string
 
 
+# ========== Topic Extraction Types ==========
+
+@strawberry.type
+class TopicKeyword:
+    """Keyword extracted for a topic with its c-TF-IDF score."""
+    word: str
+    score: float
+
+
+@strawberry.type
+class TopicInfo:
+    """Information about an extracted topic."""
+    topic_id: int
+    keywords: List[TopicKeyword]
+    label: Optional[str]
+    count: int
+
+
+@strawberry.input
+class TopicConfigInput:
+    """Optional topic extraction configuration for embedding mutations."""
+    min_topic_size: int = 10
+    n_keywords: int = 10
+    use_llm_labels: bool = False
+    llm_model: str = "gpt-4o-mini"
+    projection_type: str = "umap_2d"
+
+
+@strawberry.input
+class ExtractTopicsInput:
+    """Input for topic extraction from an existing collection."""
+    collection_name: str
+    min_topic_size: int = 10
+    n_keywords: int = 10
+    use_llm_labels: bool = False
+    llm_model: str = "gpt-4o-mini"
+    projection_type: str = "umap_2d"
+
+
+@strawberry.type
+class ExtractTopicsResult:
+    """Result of topic extraction."""
+    collection_name: str
+    num_topics: int
+    num_noise_points: int
+    topics: List[TopicInfo]
+    duration_seconds: float
+    error: Optional[str] = None
+
+
 @strawberry.input
 class EmbedDatasetInput:
     """Input for embedding a HuggingFace dataset."""
@@ -130,6 +180,9 @@ class EmbedDatasetInput:
     embedding_model: Optional[EmbeddingModelInput] = None
     # Resume an interrupted job instead of starting fresh
     resume: bool = False
+    # Topic extraction after embedding
+    extract_topics: bool = False
+    topic_config: Optional[TopicConfigInput] = None
 
 
 @strawberry.type
@@ -200,6 +253,9 @@ class EmbedLocalFileInput:
     embedding_model: Optional[EmbeddingModelInput] = None
     # Resume an interrupted job instead of starting fresh
     resume: bool = False
+    # Topic extraction after embedding
+    extract_topics: bool = False
+    topic_config: Optional[TopicConfigInput] = None
 
 
 # ========== Search & Filter Types ==========
@@ -254,6 +310,11 @@ class CollectionMetadata:
     has_projections: Optional[bool] = None
     # Prompt info (for models like Gemma Embedding)
     embedding_prompt: Optional[str] = None  # Single field - can be predefined name or custom string
+    # Topic extraction metadata
+    has_topics: Optional[bool] = None
+    topic_count: Optional[int] = None
+    topics_extracted_at: Optional[str] = None
+    topics: Optional[List[TopicInfo]] = None  # Topic summary with keywords
 
 
 @strawberry.type

@@ -110,10 +110,11 @@ export function ScatterPlot3D({
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
   const plotlyLibRef = useRef<any>(null);
 
+  // Calculate point count once for all zoom calculations
+  const pointCount = points.length;
 
   const defaultEye = useMemo(() => {
-    const count = points.length;
-    if (count === 0) return { x: 2.5, y: 2.5, z: 2.5 };
+    if (pointCount === 0) return { x: 2.5, y: 2.5, z: 2.5 };
 
     // INVERSE Logarithmic scaling:
     // Fewer points (<100) -> Start Far Away (e.g., 2.0)
@@ -123,17 +124,17 @@ export function ScatterPlot3D({
     const zoomInRate = 0.4;    // How fast to zoom in per power of 10
     
     // Formula: MaxDist - (Rate * log10(count))
-    // Example: 
+    // Example:
     // 10 pts   (Log 1) -> 2.5 - 0.4 = 2.1 (Far)
     // 1000 pts (Log 3) -> 2.5 - 1.2 = 1.3 (Medium)
     // 100k pts (Log 5) -> 2.5 - 2.0 = 0.5 (Close)
-    const calculatedZoom = startDistance - (zoomInRate * Math.log10(count));
+    const calculatedZoom = startDistance - (zoomInRate * Math.log10(pointCount));
 
     // Clamp: Never go closer than 0.1 (inside the points) or further than 2.5
     const zoom = Math.min(Math.max(calculatedZoom, 0.1), 2.5);
 
     return { x: zoom, y: zoom, z: zoom };
-  }, [points.length]);
+  }, [pointCount]);
 
   const currentCameraRef = useRef({ eye: defaultEye, center: defaultCenter });
 
@@ -165,7 +166,15 @@ export function ScatterPlot3D({
     const targetCenterY = (selectedPoint.y - dataCenterY) / maxRange;
     const targetCenterZ = (selectedPoint.z - dataCenterZ) / maxRange;
 
-    const targetR = 0.4;
+    // Adaptive target radius based on dataset size (similar to defaultEye calculation)
+    // Small datasets (100 pts): ~0.32
+    // Medium datasets (10k pts): ~0.08
+    // Large datasets (100k+ pts): ~0.05 (very close)
+    const baseTargetR = 0.4;
+    const zoomRate = 0.08; // How much to zoom in per power of 10
+    const calculatedTargetR = baseTargetR - (zoomRate * Math.log10(Math.max(pointCount, 1)));
+    const targetR = Math.min(Math.max(calculatedTargetR, 0.05), 0.5);
+
     const targetPhi = 1.3;
     const duration = 2000;
 
@@ -473,12 +482,16 @@ export function ScatterPlot3D({
         });
 
         // 3. Core
+        // Only make highlights clickable when base traces aren't shown (prevents duplicate clicks)
         traces.push({
           x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
           marker: {
             sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors[0], width: 1 }
           },
-          text: coreTexts, hoverinfo: 'none', customdata: coreCustomData as any, showlegend: false
+          text: coreTexts,
+          hoverinfo: 'none',
+          customdata: showOnlyHighlighted ? (coreCustomData as any) : undefined,
+          showlegend: false
         });
       }
     }
@@ -573,6 +586,7 @@ export function ScatterPlot3D({
   const config: Partial<Config> = { displayModeBar: true, displaylogo: false, responsive: true };
 
   const mouseDownTimeRef = useRef<number>(0);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -584,24 +598,20 @@ export function ScatterPlot3D({
   const handleClick = useCallback((event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) return;
     const now = Date.now();
-    console.log('Plot click event at', now);
-    // log camera for debugging
-    currentZoomMultiplier.current =  getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center);
 
-    console.log('Current camera:', currentCameraRef.current.eye);
-    console.log('Zoom level:', currentZoomMultiplier.current);
-
-    // Check drag
+    // Check drag - ignore clicks that were part of a drag gesture
     if (now - mouseDownTimeRef.current > 500) return;
-
-    // Prevent double-firing (coalesce multiple events including re-render ghosts)
-    if (now - lastClickTimeRef.current < 600) return;
-    lastClickTimeRef.current = now;
 
     const point = event.points[0];
     if (!point.customdata || typeof point.customdata !== 'object') return;
 
-    onPointClick(point.customdata as unknown as Point3D);
+    const clickedPoint = point.customdata as unknown as Point3D;
+
+    // Log camera for debugging
+    currentZoomMultiplier.current = getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center);
+    console.log('Point clicked:', clickedPoint.id, 'Camera:', currentCameraRef.current.eye, 'Zoom:', currentZoomMultiplier.current);
+
+    onPointClick(clickedPoint);
   }, [onPointClick]);
 
   useEffect(() => {

@@ -159,3 +159,45 @@ export const EMBEDDING_PROGRESS_SUBSCRIPTION = gql`
     }
   }
 `;
+
+/**
+ * Mutation to extract topics from an existing collection
+ */
+export const EXTRACT_TOPICS = gql`
+  mutation ExtractTopics($input: ExtractTopicsInput!) {
+    extractTopics(input: $input) {
+      collectionName
+      numTopics
+      numNoisePoints
+      topics {
+        topicId
+        keywords {
+          word
+          score
+        }
+        label
+        count
+      }
+      durationSeconds
+      error
+    }
+  }
+`;
+
+/**
+ * Subscription to receive real-time progress updates for topic extraction
+ */
+export const TOPIC_EXTRACTION_PROGRESS_SUBSCRIPTION = gql`
+  subscription TopicExtractionProgress($jobId: String!) {
+    embeddingProgress(jobId: $jobId) {
+      jobId
+      status
+      itemsProcessed
+      totalItems
+      currentBatch
+      totalBatches
+      error
+      message
+    }
+  }
+`;

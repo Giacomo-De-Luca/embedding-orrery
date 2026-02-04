@@ -12,8 +12,12 @@ from .types import (
     EmbedDatasetResult,
     EmbedLocalFileInput,
     EmbeddingProviderEnum,
+    ExtractTopicsInput,
+    ExtractTopicsResult,
     JSON,
     PortionStrategyEnum,
+    TopicInfo,
+    TopicKeyword,
     UpdateCollectionMetadataResult,
 )
 
@@ -32,6 +36,10 @@ from ..clients.huggingface_client import PortionConfig, PortionStrategy
 from .chromadb_instance import get_chromadb_client
 from ..services.progress_emitter import emit_progress_sync
 from ..services.job_state import get_job_state_service, JobStatus
+from ..services.topic_extraction_service import (
+    extract_topics as do_extract_topics,
+    TopicExtractionConfig,
+)
 
 
 # Mapping from GraphQL enums to internal enums
@@ -131,10 +139,18 @@ class Mutation:
             projections_computed = await asyncio.to_thread(
                 compute_projections_for_collection, input.collection_name
             )
-        
+
+        # Extract topics if requested and projections succeeded
+        topics_extracted = False
+        if input.extract_topics and projections_computed and result.error is None:
+            topic_config = input.topic_config or {}
+            topics_extracted = await self._extract_topics_for_collection(
+                input.collection_name,
+                topic_config
+            )
+
         # Mark job as complete
         job_state.complete_job(config.collection_name)
-
 
         # Emit final completion status
         emit_progress_sync(
@@ -222,6 +238,15 @@ class Mutation:
                 compute_projections_for_collection, input.collection_name
             )
 
+        # Extract topics if requested and projections succeeded
+        topics_extracted = False
+        if input.extract_topics and projections_computed and result.error is None:
+            topic_config = input.topic_config or {}
+            topics_extracted = await self._extract_topics_for_collection(
+                input.collection_name,
+                topic_config
+            )
+
         # Emit final completion status
         emit_progress_sync(
             job_id=input.collection_name,
@@ -295,3 +320,94 @@ class Mutation:
                 metadata={},
                 error=str(e)
             )
+
+    @strawberry.mutation
+    async def extract_topics(self, input: ExtractTopicsInput, info=None) -> ExtractTopicsResult:
+        """Extract topic clusters from an existing collection.
+
+        Uses HDBSCAN clustering on projection coordinates (UMAP preferred) and
+        c-TF-IDF for keyword extraction. Optionally generates human-readable
+        labels using an LLM.
+
+        Topic data is stored in item metadata as 'topic_id' and 'topic_label'.
+
+        Args:
+            input: Configuration for topic extraction
+
+        Returns:
+            Result with topic information
+        """
+        # Build config from input
+        config = TopicExtractionConfig(
+            collection_name=input.collection_name,
+            min_topic_size=input.min_topic_size,
+            n_keywords=input.n_keywords,
+            use_llm_labels=input.use_llm_labels,
+            llm_model=input.llm_model,
+            projection_type=input.projection_type
+        )
+
+        # Run topic extraction in background thread
+        result = await asyncio.to_thread(do_extract_topics, config)
+
+        # Convert result to GraphQL types
+        topics = [
+            TopicInfo(
+                topic_id=topic.topic_id,
+                keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
+                label=topic.label,
+                count=topic.count
+            )
+            for topic in result.topics
+        ]
+
+        return ExtractTopicsResult(
+            collection_name=result.collection_name,
+            num_topics=result.num_topics,
+            num_noise_points=result.num_noise_points,
+            topics=topics,
+            duration_seconds=result.duration_seconds,
+            error=result.error
+        )
+
+    async def _extract_topics_for_collection(
+        self,
+        collection_name: str,
+        topic_config_input
+    ) -> bool:
+        """Helper to extract topics for a collection (used by embedding mutations).
+
+        Args:
+            collection_name: Name of collection
+            topic_config_input: TopicConfigInput or dict with config
+
+        Returns:
+            True if topics were extracted successfully
+        """
+        try:
+            # Handle both TopicConfigInput and dict
+            if hasattr(topic_config_input, '__dict__'):
+                tc = topic_config_input
+                config = TopicExtractionConfig(
+                    collection_name=collection_name,
+                    min_topic_size=getattr(tc, 'min_topic_size', 10),
+                    n_keywords=getattr(tc, 'n_keywords', 10),
+                    use_llm_labels=getattr(tc, 'use_llm_labels', False),
+                    llm_model=getattr(tc, 'llm_model', 'gpt-4o-mini'),
+                    projection_type=getattr(tc, 'projection_type', 'umap_2d')
+                )
+            else:
+                config = TopicExtractionConfig(
+                    collection_name=collection_name,
+                    min_topic_size=topic_config_input.get('min_topic_size', 10),
+                    n_keywords=topic_config_input.get('n_keywords', 10),
+                    use_llm_labels=topic_config_input.get('use_llm_labels', False),
+                    llm_model=topic_config_input.get('llm_model', 'gpt-4o-mini'),
+                    projection_type=topic_config_input.get('projection_type', 'umap_2d')
+                )
+
+            result = await asyncio.to_thread(do_extract_topics, config)
+            return result.error is None
+        except Exception as e:
+            print(f"Topic extraction failed: {e}")
+            return False
