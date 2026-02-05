@@ -193,7 +193,7 @@ export function VisualizationControls({
                     {option.displayName}
                     <span className="ml-1 text-muted-foreground text-xs">
                       ({option.uniqueCount === Infinity
-                        ? '>100 values'
+                        ? option.valueType === 'string' ? '>100 categories' : 'numeric'
                         : option.recommendedScale === 'sequential'
                           ? 'numeric'
                           : `${option.uniqueCount} values`})
