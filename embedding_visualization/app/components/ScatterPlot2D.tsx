@@ -42,6 +42,8 @@ interface ScatterPlot2DProps {
   showLabels?: boolean;
   /** Categories to gray out (muted) in the visualization */
   mutedCategories?: string[];
+  /** Extra metadata fields to show in hover tooltip */
+  tooltipFields?: string[];
 }
 
 /**
@@ -70,6 +72,7 @@ export function ScatterPlot2D({
   showOnlyHighlighted = false,
   showLabels = false,
   mutedCategories = [],
+  tooltipFields,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -653,6 +656,8 @@ export function ScatterPlot2D({
           label: point.label || point.id,
           document: point.document,
           visible: true,
+          metadata: point.metadata,
+          tooltipFields,
         });
       }
     }

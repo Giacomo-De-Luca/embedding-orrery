@@ -5,6 +5,7 @@ import { Input } from './input';
 import { cn } from '@/lib/utils/utils';
 
 const PREDEFINED_PROMPTS = [
+  { value: 'auto', label: 'Auto-detect from collection' },
   { value: 'Retrieval-query', label: 'Retrieval-query (RAG search)' },
   { value: 'Retrieval-document', label: 'Retrieval-document (RAG storage)' },
   { value: 'STS', label: 'STS (Sentence similarity)' },

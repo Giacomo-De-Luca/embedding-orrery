@@ -37,6 +37,8 @@ interface ScatterPlot3DProps {
   showOnlyHighlighted?: boolean;
   showLabels?: boolean;
   mutedCategories?: string[];
+  /** Extra metadata fields to show in hover tooltip */
+  tooltipFields?: string[];
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -69,6 +71,7 @@ export function ScatterPlot3D({
   showOnlyHighlighted = false,
   showLabels = false,
   mutedCategories = [],
+  tooltipFields,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -663,6 +666,8 @@ export function ScatterPlot3D({
             label: point.label || point.id,
             document: point.document,
             visible: true,
+            metadata: point.metadata,
+            tooltipFields,
           });
         }
       }
@@ -678,7 +683,7 @@ export function ScatterPlot3D({
         graphDiv.removeListener('plotly_unhover', handlePlotlyUnhover);
       }
     };
-  }, [plotReady]);
+  }, [plotReady, tooltipFields]);
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>

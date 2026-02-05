@@ -114,6 +114,7 @@ export interface VisualizationState {
   showLabels?: boolean;  // When true, show text labels on highlighted points
   showContours?: boolean; // When true, show density cluster contours
   mutedCategories?: string[];  // Categories to gray out in visualization (toggled via legend)
+  tooltipFields?: string[];  // Extra metadata fields to display in hover tooltip
 }
 
 /**

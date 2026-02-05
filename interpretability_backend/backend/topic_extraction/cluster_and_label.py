@@ -122,10 +122,10 @@ class ClassTfidfTransformer(TfidfTransformer):
         return X
 
 
-class GenerateTopics: 
+class GenerateTopics:
 
     def __init__(
-        self, 
+        self,
         documents: List[str],
         #reduced_embeddings: np.ndarray = np.array([]),
         min_topic_size: int = 10,
@@ -145,6 +145,10 @@ class GenerateTopics:
         self.docs_id = range(len(self.documents))
         self.n_gram_range = n_gram_range
         self.language = language
+
+        # Store c-TF-IDF matrix and words for topic reduction
+        self.ctfidf_matrix: Union[sp.csr_matrix, None] = None
+        self.ctfidf_words: Union[np.ndarray, None] = None
         
         
     def generate_clusters(self, reduced_embeddings: np.ndarray) -> pd.DataFrame:
@@ -190,6 +194,10 @@ class GenerateTopics:
         ctfidf = ClassTfidfTransformer()
         ctfidf_matrix = ctfidf.fit_transform(X)
 
+        # Store for topic reduction
+        self.ctfidf_matrix = ctfidf_matrix
+        self.ctfidf_words = words
+
         # D. Extract Top N Words per Topic
         topics_data = {}
         # Iterate over each topic row in the c-TF-IDF matrix
@@ -206,3 +214,13 @@ class GenerateTopics:
         logger.info("Topics - Completed \u2713")
         return topics_data
     
+
+    @property
+    def c_tf_idf_matrix(self) -> sp.csr_matrix:
+        """Get the c-TF-IDF matrix for topic reduction."""
+        return self.ctfidf_matrix
+
+    @property
+    def words(self) -> np.ndarray:
+        """Get the feature names (words) from CountVectorizer."""
+        return self.ctfidf_words

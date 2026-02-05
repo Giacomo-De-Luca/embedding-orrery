@@ -8,11 +8,15 @@ import {
   type ColorFieldOption,
 } from '../utils/fieldAnalysis';
 
+/** Fields that are auto-enabled in tooltips when present in the collection */
+const SMART_TOOLTIP_FIELDS = ['topic_label', 'year', 'date'];
+
 interface UseEmbeddingDataResult {
   data: EmbeddingData | null;
   loading: boolean;
   error: Error | null;
   colorFieldOptions: ColorFieldOption[];
+  defaultTooltipFields: string[];
 }
 
 export function useEmbeddingData(collectionName: string | null): UseEmbeddingDataResult {
@@ -20,6 +24,7 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [colorFieldOptions, setColorFieldOptions] = useState<ColorFieldOption[]>([]);
+  const [defaultTooltipFields, setDefaultTooltipFields] = useState<string[]>([]);
 
   useEffect(() => {
     if (!collectionName) {
@@ -104,6 +109,11 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
         );
         setColorFieldOptions(fieldOptions);
 
+        // Compute smart default tooltip fields
+        const availFields = collectionData.availableFields || [];
+        const smartDefaults = SMART_TOOLTIP_FIELDS.filter(f => availFields.includes(f));
+        setDefaultTooltipFields(smartDefaults);
+
         console.log('Loaded collection:', {
           ids: collectionData.ids?.length,
           documents: collectionData.documents?.length,
@@ -152,5 +162,5 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
     loadData();
   }, [collectionName]);
 
-  return { data, loading, error, colorFieldOptions };
+  return { data, loading, error, colorFieldOptions, defaultTooltipFields };
 }
