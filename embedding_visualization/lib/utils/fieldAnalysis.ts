@@ -254,9 +254,6 @@ export function analyzeColorFields(
     // Determine value type based on analysis
     const valueType: 'string' | 'numeric' | 'mixed' = analysis.isNumeric ? 'numeric' : 'string';
 
-    // Skip string fields with >100 unique values (not useful for visualization)
-    if (valueType === 'string' && analysis.uniqueCount === Infinity) continue;
-
     // Determine recommended scale
     let recommendedScale: 'categorical' | 'sequential';
     if (valueType === 'string') {
