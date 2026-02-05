@@ -47,7 +47,7 @@ export default function Home() {
     }
   }, [selectedCollection, searchParams, router]);
 
-  const { data, loading, error, colorFieldOptions } = useEmbeddingData(selectedCollection);
+  const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(selectedCollection);
 
   const [visualizationState, setVisualizationState] = useState<VisualizationState>({
     method: 'umap',
@@ -147,11 +147,24 @@ export default function Home() {
     selectedPoint?.index
   );
 
+  // Initialize tooltipFields with smart defaults when data loads
+  useEffect(() => {
+    if (defaultTooltipFields.length > 0) {
+      setVisualizationState(prev => {
+        // Only set if tooltipFields hasn't been initialized yet (don't override user selections)
+        if (prev.tooltipFields === undefined) {
+          return { ...prev, tooltipFields: defaultTooltipFields };
+        }
+        return prev;
+      });
+    }
+  }, [defaultTooltipFields]);
+
   // Reset state when collection changes
   useEffect(() => {
     resetSearch();
     setQueryPromptName(null);
-    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [] }));
+    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [], tooltipFields: undefined }));
   }, [selectedCollection, resetSearch]);
 
   // Reset muted categories when colorByField changes (categories are now different)
@@ -237,6 +250,7 @@ export default function Home() {
                   activePanel={activePanel}
                   queryPromptName={queryPromptName}
                   onQueryPromptNameChange={setQueryPromptName}
+                  availableFields={data.availableFields}
                 />
               {/*<AppFooter
                     timestamp={data.metadata.timestamp}

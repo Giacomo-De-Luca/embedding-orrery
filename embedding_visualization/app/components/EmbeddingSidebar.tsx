@@ -24,6 +24,7 @@ interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   };
   selectedPoint: Point2D | Point3D | null;
   colorFieldOptions?: ColorFieldOption[];
+  availableFields?: string[];
 }
 
 export function EmbeddingSidebar({
@@ -33,6 +34,7 @@ export function EmbeddingSidebar({
   metadata,
   selectedPoint,
   colorFieldOptions = [],
+  availableFields = [],
   ...props
 }: EmbeddingSidebarProps) {
   const { className, ...rest } = props;
@@ -60,6 +62,7 @@ export function EmbeddingSidebar({
             embeddingDim={embeddingDim}
             metadata={metadata}
             colorFieldOptions={colorFieldOptions}
+            availableFields={availableFields}
           />
 
           {selectedPoint && (

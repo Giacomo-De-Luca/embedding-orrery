@@ -131,6 +131,15 @@ class TopicInfo:
 
 
 @strawberry.input
+class TopicReductionInput:
+    """Configuration for topic reduction."""
+    enabled: bool = False
+    method: str = "auto"  # "auto" or "fixed_n"
+    n_topics: Optional[int] = None  # Required when method="fixed_n"
+    use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
+
+
+@strawberry.input
 class TopicConfigInput:
     """Topic extraction configuration (shared by standalone and embedded mutations)."""
     min_topic_size: int = 10
@@ -139,6 +148,9 @@ class TopicConfigInput:
     llm_provider: str = "gemini"
     llm_model: str = "gemini-3-flash-preview"
     projection_type: str = "umap_2d"
+
+    # Topic reduction config
+    reduction: Optional[TopicReductionInput] = None
 
 
 @strawberry.input
@@ -155,6 +167,36 @@ class ExtractTopicsResult:
     num_topics: int
     num_noise_points: int
     topics: List[TopicInfo]
+    duration_seconds: float
+    error: Optional[str] = None
+
+    # Reduction tracking
+    num_topics_before_reduction: Optional[int] = None
+    reduction_applied: bool = False
+
+
+@strawberry.input
+class ReduceTopicsInput:
+    """Input for standalone topic reduction mutation."""
+    collection_name: str
+    method: str = "auto"  # "auto" or "fixed_n"
+    n_topics: Optional[int] = None  # Required when method="fixed_n"
+    use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
+
+    # Re-labeling after reduction
+    regenerate_labels: bool = False
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3-flash-preview"
+
+
+@strawberry.type
+class ReduceTopicsResult:
+    """Result of standalone topic reduction."""
+    collection_name: str
+    num_topics_before: int
+    num_topics_after: int
+    topics: List[TopicInfo]
+    topic_mappings: JSON  # {old_id: new_id}
     duration_seconds: float
     error: Optional[str] = None
 

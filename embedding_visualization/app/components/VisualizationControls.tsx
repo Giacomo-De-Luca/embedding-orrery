@@ -6,6 +6,7 @@ import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { Separator } from '@/lib/ui-primitives/separator';
+import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
@@ -19,6 +20,7 @@ interface VisualizationControlsProps {
     pca_3d_variance?: number[];
   };
   colorFieldOptions?: ColorFieldOption[];
+  availableFields?: string[];
 }
 
 export function VisualizationControls({
@@ -27,6 +29,7 @@ export function VisualizationControls({
   embeddingDim,
   metadata,
   colorFieldOptions = [],
+  availableFields = [],
 }: VisualizationControlsProps) {
   // Handle field selection with auto-detection of scale type
   const handleFieldChange = (value: string) => {
@@ -238,7 +241,7 @@ export function VisualizationControls({
           </p>
         </div>
 
-        {/* Show Contours 
+        {/* Show Contours
         <div className="flex items-center space-x-2">
           <Checkbox
             id="show-contours"
@@ -253,6 +256,45 @@ export function VisualizationControls({
           </Label>
         </div>
         commented out at the moment until I manage to make the rust code work */}
+
+        {/* Tooltip Fields */}
+        {availableFields.length > 0 && (
+          <>
+            <Separator />
+            <div className="space-y-3">
+              <Label className="text-base">Tooltip Fields</Label>
+              <p className="text-xs text-muted-foreground">
+                Extra metadata shown on hover (label + document always shown)
+              </p>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {availableFields.map((field) => {
+                  const tooltipFields = state.tooltipFields ?? [];
+                  const isChecked = tooltipFields.includes(field);
+                  return (
+                    <div key={field} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`tooltip-field-${field}`}
+                        checked={isChecked}
+                        onCheckedChange={(checked) => {
+                          const newFields = checked
+                            ? [...tooltipFields, field]
+                            : tooltipFields.filter(f => f !== field);
+                          onStateChange({ tooltipFields: newFields });
+                        }}
+                      />
+                      <Label
+                        htmlFor={`tooltip-field-${field}`}
+                        className="font-normal cursor-pointer text-sm"
+                      >
+                        {field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                      </Label>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
     </div>
   );
 }

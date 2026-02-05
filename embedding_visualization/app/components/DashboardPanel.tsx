@@ -48,6 +48,8 @@ interface DashboardPanelProps {
   // Query prompt configuration
   queryPromptName?: string | null;
   onQueryPromptNameChange?: (value: string | null) => void;
+  // Tooltip configuration
+  availableFields?: string[];
 }
 
 export function DashboardPanel({
@@ -70,6 +72,7 @@ export function DashboardPanel({
   activePanel,
   queryPromptName,
   onQueryPromptNameChange,
+  availableFields = [],
 }: DashboardPanelProps) {
   const isExpanded = activePanel !== null;
   const is2D = state.mode === '2d';
@@ -141,6 +144,7 @@ export function DashboardPanel({
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
       mutedCategories={state.mutedCategories}
+      tooltipFields={state.tooltipFields}
     />
   ) : (
     <ScatterPlot3D
@@ -158,6 +162,7 @@ export function DashboardPanel({
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
       mutedCategories={state.mutedCategories}
+      tooltipFields={state.tooltipFields}
     />
   );
 
@@ -253,6 +258,7 @@ export function DashboardPanel({
           metadata={metadata}
           selectedPoint={selectedPoint || null}
           colorFieldOptions={colorFieldOptions}
+          availableFields={availableFields}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",

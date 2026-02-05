@@ -16,13 +16,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/lib/ui-primitives/select';
+import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import type { Point2D, Point3D } from '../../lib/types/types';
@@ -151,23 +145,15 @@ export function SearchSidebar({
             <CollapsibleContent className="space-y-4 pt-2">
               <div className="space-y-2">
                 <Label htmlFor="query-prompt-name" className="text-sm">Query Prompt Name</Label>
-                <Select
-                  value={queryPromptName ?? 'none'}
-                  onValueChange={(v) => onQueryPromptNameChange?.(v === 'none' ? null : v)}
-                >
-                  <SelectTrigger id="query-prompt-name" className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="auto">Auto-detect from collection</SelectItem>
-                    <SelectItem value="Retrieval-query">Retrieval-query</SelectItem>
-                    <SelectItem value="Retrieval-document">Retrieval-document</SelectItem>
-                    <SelectItem value="STS">STS</SelectItem>
-                  </SelectContent>
-                </Select>
+                <PromptCombobox
+                  id="query-prompt-name"
+                  value={queryPromptName ?? ''}
+                  onChange={(v) => onQueryPromptNameChange?.(v.trim() === '' ? null : v.trim())}
+                  placeholder="None (type or select a prompt)"
+                  className="h-8"
+                />
                 <p className="text-xs text-muted-foreground">
-                  Task-specific prompt for models like Gemma Embedding
+                  Task-specific prompt for models like Gemma Embedding. Type a custom prompt or select a preset.
                 </p>
               </div>
             </CollapsibleContent>

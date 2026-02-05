@@ -339,6 +339,19 @@ class Mutation:
         """
         # Build config from input — unpack nested TopicConfigInput
         tc = input.config
+
+        # Extract reduction config if present
+        reduce_topics = False
+        reduction_method = "auto"
+        nr_topics = None
+        use_ctfidf_for_reduction = True
+
+        if tc and tc.reduction and tc.reduction.enabled:
+            reduce_topics = True
+            reduction_method = tc.reduction.method
+            nr_topics = tc.reduction.n_topics
+            use_ctfidf_for_reduction = tc.reduction.use_ctfidf
+
         config = TopicExtractionConfig(
             collection_name=input.collection_name,
             min_topic_size=tc.min_topic_size if tc else 10,
@@ -346,7 +359,11 @@ class Mutation:
             use_llm_labels=tc.use_llm_labels if tc else False,
             llm_provider=tc.llm_provider if tc else 'gemini',
             llm_model=tc.llm_model if tc else 'gemini-3-flash-preview',
-            projection_type=tc.projection_type if tc else 'umap_2d'
+            projection_type=tc.projection_type if tc else 'umap_2d',
+            reduce_topics=reduce_topics,
+            reduction_method=reduction_method,
+            nr_topics=nr_topics,
+            use_ctfidf_for_reduction=use_ctfidf_for_reduction
         )
 
         # Run topic extraction in background thread
@@ -369,7 +386,9 @@ class Mutation:
             num_noise_points=result.num_noise_points,
             topics=topics,
             duration_seconds=result.duration_seconds,
-            error=result.error
+            error=result.error,
+            num_topics_before_reduction=result.num_topics_before_reduction,
+            reduction_applied=result.reduction_applied
         )
 
 
@@ -416,3 +435,53 @@ async def _extract_topics_for_collection(
     except Exception as e:
         print(f"Topic extraction failed: {e}")
         return False
+
+    @strawberry.mutation
+    async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:
+        """Reduce topics on an existing collection (standalone post-processing).
+
+        Args:
+            input: Configuration for topic reduction
+
+        Returns:
+            Result with reduced topics and mappings
+        """
+        from ..services.topic_extraction_service import reduce_existing_topics
+
+        def run_reduction():
+            return reduce_existing_topics(
+                collection_name=input.collection_name,
+                method=input.method,
+                n_topics=input.n_topics,
+                use_ctfidf=input.use_ctfidf,
+                regenerate_labels=input.regenerate_labels,
+                llm_provider=input.llm_provider,
+                llm_model=input.llm_model
+            )
+
+        # Run in background thread (same pattern as extract_topics)
+        result = await asyncio.to_thread(run_reduction)
+
+        # Convert to GraphQL types
+        topics = [
+            TopicInfo(
+                topic_id=topic.topic_id,
+                keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
+                label=topic.label,
+                count=topic.count
+            )
+            for topic in result.topics
+        ]
+
+        # Build topic mappings JSON (for now, return empty dict - could be extended later)
+        topic_mappings = {}
+
+        return ReduceTopicsResult(
+            collection_name=result.collection_name,
+            num_topics_before=result.num_topics_before_reduction or 0,
+            num_topics_after=result.num_topics,
+            topics=topics,
+            topic_mappings=topic_mappings,
+            duration_seconds=result.duration_seconds,
+            error=result.error
+        )
