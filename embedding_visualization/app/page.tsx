@@ -20,6 +20,8 @@ export default function Home() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const collectionFromUrl = searchParams.get('collection');
+  const colorByFromUrl = searchParams.get('colorBy');
+  const isInitialLoad = useRef(true);
 
   // Default to the first available collection
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
@@ -38,15 +40,6 @@ export default function Home() {
     }
   }, [collections, selectedCollection, collectionFromUrl]);
 
-  // Sync URL when collection changes
-  useEffect(() => {
-    if (selectedCollection) {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set('collection', selectedCollection);
-      router.replace(`?${params.toString()}`, { scroll: false });
-    }
-  }, [selectedCollection, searchParams, router]);
-
   const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(selectedCollection);
 
   const [visualizationState, setVisualizationState] = useState<VisualizationState>({
@@ -57,6 +50,20 @@ export default function Home() {
     selectedDimensions: [0, 1, 2],
     distanceMetric: 'COSINE',
   });
+
+  // Sync URL when collection or colorBy changes
+  useEffect(() => {
+    if (selectedCollection) {
+      const params = new URLSearchParams();
+      params.set('collection', selectedCollection);
+      if (visualizationState.colorByField) {
+        params.set('colorBy', visualizationState.colorByField);
+      } else {
+        params.delete('colorBy');
+      }
+      router.replace(`?${params.toString()}`, { scroll: false });
+    }
+  }, [selectedCollection, visualizationState.colorByField, router]);
 
   // Query prompt name for semantic search (null=none, 'auto'=auto-detect, or explicit value)
   const [queryPromptName, setQueryPromptName] = useState<string | null>(null);
@@ -160,16 +167,33 @@ export default function Home() {
     }
   }, [defaultTooltipFields]);
 
-  // Reset state when collection changes
+  // Reset state when collection changes (skip on initial URL-driven load so colorBy isn't cleared)
   useEffect(() => {
+    if (isInitialLoad.current) return;
     resetSearch();
     setQueryPromptName(null);
     setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [], tooltipFields: undefined }));
   }, [selectedCollection, resetSearch]);
 
-  // Reset muted categories when colorByField changes (categories are now different)
+  // Apply colorBy from URL once data loads, then mark initial load complete
   useEffect(() => {
-    setVisualizationState(prev => ({ ...prev, mutedCategories: [] }));
+    if (!isInitialLoad.current || colorFieldOptions.length === 0) return;
+    isInitialLoad.current = false;
+    if (colorByFromUrl) {
+      const fieldOption = colorFieldOptions.find(f => f.field === colorByFromUrl);
+      if (fieldOption) {
+        setVisualizationState(prev => ({
+          ...prev,
+          colorByField: colorByFromUrl,
+          colorScaleType: fieldOption.recommendedScale,
+        }));
+      }
+    }
+  }, [colorFieldOptions, colorByFromUrl]);
+
+  // Reset muted categories and hideUnclustered when colorByField changes (categories are now different)
+  useEffect(() => {
+    setVisualizationState(prev => ({ ...prev, mutedCategories: [], hideUnclustered: false }));
   }, [visualizationState.colorByField]);
 
   // Auto-select first search result when semantic search completes

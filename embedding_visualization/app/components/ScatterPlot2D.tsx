@@ -44,6 +44,8 @@ interface ScatterPlot2DProps {
   mutedCategories?: string[];
   /** Extra metadata fields to show in hover tooltip */
   tooltipFields?: string[];
+  /** When true, hide points with topic_id = -1 (unclustered/noise) */
+  hideUnclustered?: boolean;
 }
 
 /**
@@ -73,6 +75,7 @@ export function ScatterPlot2D({
   showLabels = false,
   mutedCategories = [],
   tooltipFields,
+  hideUnclustered = false,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -176,20 +179,29 @@ export function ScatterPlot2D({
     // If there are highlighted points, separate them into two traces
     if (highlightedIndices && highlightedIndices.size > 0) {
       const unhighlightedPoints = points.filter(p => !highlightedIndices.has(p.index));
+
+      // Apply hideUnclustered filter to background points
+      const filteredUnhighlightedPoints = hideUnclustered && categoryField
+        ? unhighlightedPoints.filter(p => {
+            const topicId = p.metadata?.[categoryField];
+            return topicId !== '-1' && topicId !== -1;
+          })
+        : unhighlightedPoints;
+
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
 
       // A. Background Points (dimmed) - skip if showOnlyHighlighted is true
       // Color priority: numericData > categorical > default gold
       // Preserve the user's color mode, just apply dim factor
-      if (unhighlightedPoints.length > 0 && !showOnlyHighlighted) {
+      if (filteredUnhighlightedPoints.length > 0 && !showOnlyHighlighted) {
         const dimOpacity = markerStyle.opacity * 0.3; // Consistent dim factor
 
         if (numericData && plotlyColorScale) {
           // MODE: NATIVE COLORSCALE (GPU ACCELERATED) - preserve colors with dimming
-          const unhighlightedNumericValues = unhighlightedPoints.map(p => numericData.cleanValues[p.index]);
+          const unhighlightedNumericValues = filteredUnhighlightedPoints.map(p => numericData.cleanValues[p.index]);
           traces.push({
-            x: unhighlightedPoints.map(p => p.x),
-            y: unhighlightedPoints.map(p => p.y),
+            x: filteredUnhighlightedPoints.map(p => p.x),
+            y: filteredUnhighlightedPoints.map(p => p.y),
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Context',
@@ -202,15 +214,15 @@ export function ScatterPlot2D({
               opacity: dimOpacity,
               showscale: false,
             },
-            text: unhighlightedPoints.map(formatHoverText),
+            text: filteredUnhighlightedPoints.map(formatHoverText),
             hovertemplate: '<b>%{text}</b><extra></extra>',
-            customdata: unhighlightedPoints as any,
+            customdata: filteredUnhighlightedPoints as any,
             showlegend: false,
           } satisfies PlotlyData);
         } else if (colorBy === 'category' && categoryValues.length > 0) {
           // MODE: CATEGORICAL - preserve category colors with dimming
           const pointsByCategory: Record<string, Point2D[]> = {};
-          unhighlightedPoints.forEach(point => {
+          filteredUnhighlightedPoints.forEach(point => {
             const raw = categoryField ? point.metadata?.[categoryField] : undefined;
             const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
             if (!pointsByCategory[cat]) {
@@ -241,8 +253,8 @@ export function ScatterPlot2D({
         } else {
           // MODE: NO COLORING - use gold fallback
           traces.push({
-            x: unhighlightedPoints.map(p => p.x),
-            y: unhighlightedPoints.map(p => p.y),
+            x: filteredUnhighlightedPoints.map(p => p.x),
+            y: filteredUnhighlightedPoints.map(p => p.y),
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Other items',
@@ -251,9 +263,9 @@ export function ScatterPlot2D({
               color: '#e5a819ff',
               opacity: dimOpacity,
             },
-            text: unhighlightedPoints.map(formatHoverText),
+            text: filteredUnhighlightedPoints.map(formatHoverText),
             hovertemplate: '<b>%{text}</b><extra></extra>',
-            customdata: unhighlightedPoints as any,
+            customdata: filteredUnhighlightedPoints as any,
             showlegend: false,
           } satisfies PlotlyData);
         }
@@ -446,30 +458,39 @@ export function ScatterPlot2D({
       }
     }
     // No highlighting - render normally
-    else if (numericData && plotlyColorScale) {
-      // MODE: NATIVE COLORSCALE (GPU ACCELERATED)
-      traces = [{
-        x: points.map(p => p.x),
-        y: points.map(p => p.y),
+    else {
+      // Apply hideUnclustered filter
+      const displayPoints = hideUnclustered && categoryField
+        ? points.filter(p => {
+            const topicId = p.metadata?.[categoryField];
+            return topicId !== '-1' && topicId !== -1;
+          })
+        : points;
+
+      if (numericData && plotlyColorScale) {
+        // MODE: NATIVE COLORSCALE (GPU ACCELERATED)
+        traces = [{
+          x: displayPoints.map(p => p.x),
+          y: displayPoints.map(p => p.y),
         mode: 'markers' as const,
         type: 'scattergl' as const,
         name: 'Data',
         marker: {
           size: markerStyle.size,
-          color: numericData.cleanValues,
+          color: displayPoints.map(p => numericData.cleanValues[p.index]),
           colorscale: plotlyColorScale as any,
           cmin: numericData.min,
           cmax: numericData.max,
           opacity: markerStyle.opacity,
           showscale: false, // Disabled - using custom Legend component instead
         },
-        text: points.map(formatHoverText),
+        text: displayPoints.map(formatHoverText),
         hovertemplate: '<b>%{text}</b><extra></extra>',
-        customdata: points as any,
+        customdata: displayPoints as any,
       } satisfies PlotlyData];
-    } else if (colorBy === 'category' && categoryValues.length > 0) {
-      const pointsByCategory: Record<string, Point2D[]> = {};
-      points.forEach(point => {
+      } else if (colorBy === 'category' && categoryValues.length > 0) {
+        const pointsByCategory: Record<string, Point2D[]> = {};
+        displayPoints.forEach(point => {
         const raw = categoryField ? point.metadata?.[categoryField] : undefined;
         const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
         if (!pointsByCategory[cat]) {
@@ -496,21 +517,22 @@ export function ScatterPlot2D({
           customdata: catPoints as any,
         } satisfies PlotlyData;
       });
-    } else {
-      traces = [{
-        x: points.map(p => p.x),
-        y: points.map(p => p.y),
-        mode: 'markers' as const,
-        type: 'scattergl' as const,
-        marker: {
-          size: markerStyle.size,
-          color: '#1f77b4',
-          opacity: markerStyle.opacity,
-        },
-        text: points.map(formatHoverText),
-        hovertemplate: '<b>%{text}</b><extra></extra>',
-        customdata: points as any,
-      } satisfies PlotlyData];
+      } else {
+        traces = [{
+          x: displayPoints.map(p => p.x),
+          y: displayPoints.map(p => p.y),
+          mode: 'markers' as const,
+          type: 'scattergl' as const,
+          marker: {
+            size: markerStyle.size,
+            color: '#1f77b4',
+            opacity: markerStyle.opacity,
+          },
+          text: displayPoints.map(formatHoverText),
+          hovertemplate: '<b>%{text}</b><extra></extra>',
+          customdata: displayPoints as any,
+        } satisfies PlotlyData];
+      }
     }
 
     // Add cluster traces

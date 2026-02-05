@@ -39,6 +39,8 @@ interface ScatterPlot3DProps {
   mutedCategories?: string[];
   /** Extra metadata fields to show in hover tooltip */
   tooltipFields?: string[];
+  /** When true, hide points with topic_id = -1 (unclustered/noise) */
+  hideUnclustered?: boolean;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -72,6 +74,7 @@ export function ScatterPlot3D({
   showLabels = false,
   mutedCategories = [],
   tooltipFields,
+  hideUnclustered = false,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -348,19 +351,25 @@ export function ScatterPlot3D({
   const markerStyle = useMemo(() => calculateMarkerStyle(points.length), [points.length]);
   const highlightScale = useMemo(() => calculateHighlightScale(points.length), [points.length]);
 
-  // Pre-calculate data arrays
-  const { allX, allY, allZ, allText, allCustomData } = useMemo(() => ({
-    allX: points.map(p => p.x),
-    allY: points.map(p => p.y),
-    allZ: points.map(p => p.z),
-    allText: points.map(formatHoverText),
-    allCustomData: points,
-  }), [points]);
-
   // --- OPTIMIZED TRACES ---
   const baseTraces = useMemo((): PlotlyData[] => {
     const traces: PlotlyData[] = [];
     const hasHighlights = highlightedIndices && highlightedIndices.size > 0;
+
+    // Apply hideUnclustered filter
+    const displayPoints = hideUnclustered && categoryField
+      ? points.filter(p => {
+          const topicId = p.metadata?.[categoryField];
+          return topicId !== '-1' && topicId !== -1;
+        })
+      : points;
+
+    // Compute data arrays from filtered points
+    const allX = displayPoints.map(p => p.x);
+    const allY = displayPoints.map(p => p.y);
+    const allZ = displayPoints.map(p => p.z);
+    const allText = displayPoints.map(formatHoverText);
+    const allCustomData = displayPoints;
 
     if (!showOnlyHighlighted) {
       const dimOpacity = hasHighlights ? markerStyle.opacity * 0.9 : markerStyle.opacity;
@@ -518,10 +527,9 @@ export function ScatterPlot3D({
 
     return traces;
   }, [
-    allX, allY, allZ, allText, allCustomData,
     points, highlightedIndices, markerStyle, highlightScale, showOnlyHighlighted,
     colorBy, isDark, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
-    mutedCategories
+    mutedCategories, hideUnclustered
   ]);
 
   // Selected point traces and layout/config remain similar...

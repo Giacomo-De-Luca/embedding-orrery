@@ -55,7 +55,6 @@ export function FrostedTooltip({ data }: FrostedTooltipProps) {
       }}
     >
       <div className="font-medium">{data.label}</div>
-      {truncatedDoc && <div className="text-sm mt-1">{truncatedDoc}</div>}
       {extraFields.length > 0 && (
         <div className="text-xs mt-1.5 space-y-0.5 opacity-80">
           {extraFields.map(field => (
@@ -66,6 +65,7 @@ export function FrostedTooltip({ data }: FrostedTooltipProps) {
           ))}
         </div>
       )}
+      {truncatedDoc && <div className="text-sm mt-1 opacity-70">{truncatedDoc}</div>}
     </div>
   );
 }

@@ -8,8 +8,20 @@ import {
   type ColorFieldOption,
 } from '../utils/fieldAnalysis';
 
-/** Fields that are auto-enabled in tooltips when present in the collection */
-const SMART_TOOLTIP_FIELDS = ['topic_label', 'year', 'date'];
+/** Compute smart default tooltip fields based on available collection fields.
+ *  - `topic_label` always included if present
+ *  - `date` included if present; `year` only if `date` is absent
+ */
+function computeSmartDefaults(availableFields: string[]): string[] {
+  const defaults: string[] = [];
+  if (availableFields.includes('topic_label')) defaults.push('topic_label');
+  if (availableFields.includes('date')) {
+    defaults.push('date');
+  } else if (availableFields.includes('year')) {
+    defaults.push('year');
+  }
+  return defaults;
+}
 
 interface UseEmbeddingDataResult {
   data: EmbeddingData | null;
@@ -111,7 +123,7 @@ export function useEmbeddingData(collectionName: string | null): UseEmbeddingDat
 
         // Compute smart default tooltip fields
         const availFields = collectionData.availableFields || [];
-        const smartDefaults = SMART_TOOLTIP_FIELDS.filter(f => availFields.includes(f));
+        const smartDefaults = computeSmartDefaults(availFields);
         setDefaultTooltipFields(smartDefaults);
 
         console.log('Loaded collection:', {

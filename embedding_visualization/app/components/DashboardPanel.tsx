@@ -14,7 +14,7 @@ import { EmbeddingSidebar } from './EmbeddingSidebar';
 import { SearchSidebar } from './SearchSidebar';
 import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
-import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 
@@ -145,6 +145,7 @@ export function DashboardPanel({
       showLabels={state.showLabels}
       mutedCategories={state.mutedCategories}
       tooltipFields={state.tooltipFields}
+      hideUnclustered={state.hideUnclustered}
     />
   ) : (
     <ScatterPlot3D
@@ -163,6 +164,7 @@ export function DashboardPanel({
       showLabels={state.showLabels}
       mutedCategories={state.mutedCategories}
       tooltipFields={state.tooltipFields}
+      hideUnclustered={state.hideUnclustered}
     />
   );
 
@@ -233,14 +235,13 @@ export function DashboardPanel({
             >
               <div className="h-full w-full px-2 pb-2">
                 {/* Added background/blur so text is readable over the plot points */}
-                <ScrollArea className="h-full overflow-y-auto border rounded-md shadow-lg">
+                <div className="h-full border rounded-md shadow-lg overflow-hidden">
                   <SimilarItemsTable
                     results={semanticSearchResults}
                     queryLabel={searchQueryLabel}
                     categoryField={colorByField}
                   />
-                  <ScrollBar orientation="vertical" />
-                </ScrollArea>
+                </div>
               </div>
             </ResizablePanel>
 

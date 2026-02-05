@@ -115,6 +115,7 @@ export interface VisualizationState {
   showContours?: boolean; // When true, show density cluster contours
   mutedCategories?: string[];  // Categories to gray out in visualization (toggled via legend)
   tooltipFields?: string[];  // Extra metadata fields to display in hover tooltip
+  hideUnclustered?: boolean;  // When true, hide points with topic_id = -1 (unclustered/noise)
 }
 
 /**

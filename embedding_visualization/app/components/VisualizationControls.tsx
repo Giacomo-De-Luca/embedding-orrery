@@ -7,6 +7,17 @@ import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
+import {
+  Combobox,
+  ComboboxChips,
+  ComboboxChip,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  useComboboxAnchor,
+} from '@/lib/ui-primitives/combobox';
 import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
@@ -216,6 +227,27 @@ export function VisualizationControls({
               />
             )}
           </div>
+
+          {/* Hide Unclustered Checkbox - only show for topic fields */}
+          {state.colorByField && (
+            state.colorByField === 'topic_id' ||
+            state.colorByField === 'topic_label' ||
+            state.colorByField === 'topic'
+          ) && (
+            <div className="flex items-center space-x-2 mt-2">
+              <Checkbox
+                id="hide-unclustered"
+                checked={state.hideUnclustered ?? false}
+                onCheckedChange={(checked) => onStateChange({ hideUnclustered: checked === true })}
+              />
+              <Label
+                htmlFor="hide-unclustered"
+                className="font-normal cursor-pointer text-sm"
+              >
+                Hide unclustered points
+              </Label>
+            </div>
+          )}
         </div>
 
         <Separator />
@@ -266,35 +298,61 @@ export function VisualizationControls({
               <p className="text-xs text-muted-foreground">
                 Extra metadata shown on hover (label + document always shown)
               </p>
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {availableFields.map((field) => {
-                  const tooltipFields = state.tooltipFields ?? [];
-                  const isChecked = tooltipFields.includes(field);
-                  return (
-                    <div key={field} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={`tooltip-field-${field}`}
-                        checked={isChecked}
-                        onCheckedChange={(checked) => {
-                          const newFields = checked
-                            ? [...tooltipFields, field]
-                            : tooltipFields.filter(f => f !== field);
-                          onStateChange({ tooltipFields: newFields });
-                        }}
-                      />
-                      <Label
-                        htmlFor={`tooltip-field-${field}`}
-                        className="font-normal cursor-pointer text-sm"
-                      >
-                        {field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                      </Label>
-                    </div>
-                  );
-                })}
-              </div>
+              <TooltipFieldsCombobox
+                availableFields={availableFields}
+                selectedFields={state.tooltipFields ?? []}
+                onChange={(fields) => onStateChange({ tooltipFields: fields })}
+              />
             </div>
           </>
         )}
     </div>
+  );
+}
+
+/** Convert snake_case field names to Title Case for display */
+function formatFieldLabel(field: string): string {
+  return field
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Multi-select combobox for choosing tooltip metadata fields */
+function TooltipFieldsCombobox({
+  availableFields,
+  selectedFields,
+  onChange,
+}: {
+  availableFields: string[];
+  selectedFields: string[];
+  onChange: (fields: string[]) => void;
+}) {
+  const chipsRef = useComboboxAnchor();
+
+  return (
+    <Combobox<string, true>
+      multiple
+      value={selectedFields}
+      onValueChange={(newValue) => onChange(newValue ?? [])}
+    >
+      <ComboboxChips ref={chipsRef} className="min-h-9">
+        {selectedFields.map((field) => (
+          <ComboboxChip key={field}>
+            {formatFieldLabel(field)}
+          </ComboboxChip>
+        ))}
+        <ComboboxChipsInput placeholder="Add fields..." />
+      </ComboboxChips>
+      <ComboboxContent anchor={chipsRef}>
+        <ComboboxList>
+          {availableFields.map((field) => (
+            <ComboboxItem key={field} value={field}>
+              {formatFieldLabel(field)}
+            </ComboboxItem>
+          ))}
+        </ComboboxList>
+        <ComboboxEmpty>No matching fields</ComboboxEmpty>
+      </ComboboxContent>
+    </Combobox>
   );
 }

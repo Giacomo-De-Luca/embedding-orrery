@@ -84,7 +84,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
 
   const columns: ColumnDef<SemanticSearchResult>[] = React.useMemo(() => {
     const cols: ColumnDef<SemanticSearchResult>[] = [
-      // ID column - shows actual item ID
+      // ID column
       {
         accessorKey: 'id',
         header: 'ID',
@@ -92,18 +92,12 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 80,
         maxSize: 150,
         cell: ({ row }) => (
-          <ScrollArea
-          style={{ height: 100 }}
-          className="rounded-md"
-        >
-          <div className="font-mono text-xs whitespace-nowrap overflow-x-auto">
+          <div className="font-mono text-xs truncate">
             {row.getValue('id')}
           </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
         ),
       },
-      // Label column - shows friendly name (word/title/name)
+      // Label column
       {
         accessorKey: 'label',
         header: 'Label',
@@ -111,15 +105,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 100,
         maxSize: 250,
         cell: ({ row }) => (
-        <ScrollArea
-          style={{ height: 100 }}
-          className="rounded-md"
-        >
-          <div className="font-medium whitespace-nowrap overflow-x-auto">
+          <div className="font-medium truncate">
             {row.getValue('label')}
           </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
         ),
       },
       // Similarity column with progress bar
@@ -255,10 +243,8 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
   }
 
   return (
-    <Card 
-      className="min-w-0 backdrop-blur-sm"
-      >
-      <CardHeader className="flex flex-row items-center gap-4">
+    <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm">
+      <CardHeader className="flex flex-row items-center gap-4 shrink-0">
         <CardTitle>Similar Items</CardTitle>
         {queryLabel && (
           <CardDescription className="ml-2">
@@ -266,80 +252,82 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
           </CardDescription>
         )}
       </CardHeader>
-      <CardContent>
-        <div className="rounded-md border overflow-x-auto">
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead
-                      key={header.id}
-                      className="relative"
-                      style={{
-                        width: header.getSize(),
-                        minWidth: header.column.columnDef.minSize,
-                        maxWidth: header.column.columnDef.maxSize,
-                      }}
-                    >
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
-                      {/* Resize handle */}
-                      <div
-                        onDoubleClick={() => header.column.resetSize()}
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        className={`table-resizer ${header.column.getIsResizing() ? 'isResizing' : ''}`}
-                      />
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows?.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() && 'selected'}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        className="align-top whitespace-normal"
+      <CardContent className="flex-1 min-h-0 px-0 pb-0">
+        <ScrollArea className="h-full">
+          <div className="rounded-md border mx-4 mb-4">
+            <Table style={{ width: table.getTotalSize() }}>
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id} className="sticky top-0 z-10 bg-background">
+                    {headerGroup.headers.map((header) => (
+                      <TableHead
+                        key={header.id}
+                        className="relative"
                         style={{
-                          width: cell.column.getSize(),
-                          minWidth: cell.column.columnDef.minSize,
-                          maxWidth: cell.column.columnDef.maxSize,
+                          width: header.getSize(),
+                          minWidth: header.column.columnDef.minSize,
+                          maxWidth: header.column.columnDef.maxSize,
                         }}
                       >
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </TableCell>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )}
+                        {/* Resize handle */}
+                        <div
+                          onDoubleClick={() => header.column.resetSize()}
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          className={`table-resizer ${header.column.getIsResizing() ? 'isResizing' : ''}`}
+                        />
+                      </TableHead>
                     ))}
                   </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell
-                    colSpan={columns.length}
-                    className="h-24 text-center"
-                  >
-                    No results.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows?.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      data-state={row.getIsSelected() && 'selected'}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell
+                          key={cell.id}
+                          className="align-top whitespace-normal"
+                          style={{
+                            width: cell.column.getSize(),
+                            minWidth: cell.column.columnDef.minSize,
+                            maxWidth: cell.column.columnDef.maxSize,
+                          }}
+                        >
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext()
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={columns.length}
+                      className="h-24 text-center"
+                    >
+                      No results.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
       </CardContent>
     </Card>
   );
 }
-
