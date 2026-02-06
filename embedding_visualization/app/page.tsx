@@ -22,6 +22,7 @@ export default function Home() {
   const collectionFromUrl = searchParams.get('collection');
   const colorByFromUrl = searchParams.get('colorBy');
   const isInitialLoad = useRef(true);
+  const initialColorByRef = useRef(colorByFromUrl);
 
   // Default to the first available collection
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
@@ -40,8 +41,6 @@ export default function Home() {
     }
   }, [collections, selectedCollection, collectionFromUrl]);
 
-  const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(selectedCollection);
-
   const [visualizationState, setVisualizationState] = useState<VisualizationState>({
     method: 'umap',
     mode: '3d',
@@ -51,17 +50,27 @@ export default function Home() {
     distanceMetric: 'COSINE',
   });
 
+  const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(
+    selectedCollection,
+    visualizationState.method,
+    visualizationState.mode,
+  );
+
   // Sync URL when collection or colorBy changes
   useEffect(() => {
-    if (selectedCollection) {
-      const params = new URLSearchParams();
-      params.set('collection', selectedCollection);
-      if (visualizationState.colorByField) {
-        params.set('colorBy', visualizationState.colorByField);
-      } else {
-        params.delete('colorBy');
-      }
-      router.replace(`?${params.toString()}`, { scroll: false });
+    if (!selectedCollection) return;
+    const params = new URLSearchParams();
+    params.set('collection', selectedCollection);
+    // During initial load, preserve colorBy from the original URL until state catches up
+    const colorBy = visualizationState.colorByField
+      ?? (isInitialLoad.current ? initialColorByRef.current : null);
+    if (colorBy) {
+      params.set('colorBy', colorBy);
+    }
+    const newSearch = `?${params.toString()}`;
+    // Only navigate if the URL actually changed
+    if (newSearch !== window.location.search) {
+      router.replace(newSearch, { scroll: false });
     }
   }, [selectedCollection, visualizationState.colorByField, router]);
 
@@ -79,6 +88,10 @@ export default function Home() {
     setActivePanel(prev => prev === 'search' ? null : 'search');
   }, []);
 
+  const toggleAnalytics = useCallback(() => {
+    setActivePanel(prev => prev === 'analytics' ? null : 'analytics');
+  }, []);
+
   // Keyboard shortcuts: ⌘B for controls, ⌘K for search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -88,12 +101,15 @@ export default function Home() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         toggleSearch();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+        e.preventDefault();
+        toggleAnalytics();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleControls, toggleSearch]);
+  }, [toggleControls, toggleSearch, toggleAnalytics]);
 
   // Use the new custom hook for search logic
   const {
@@ -179,17 +195,18 @@ export default function Home() {
   useEffect(() => {
     if (!isInitialLoad.current || colorFieldOptions.length === 0) return;
     isInitialLoad.current = false;
-    if (colorByFromUrl) {
-      const fieldOption = colorFieldOptions.find(f => f.field === colorByFromUrl);
+    const initialColorBy = initialColorByRef.current;
+    if (initialColorBy) {
+      const fieldOption = colorFieldOptions.find(f => f.field === initialColorBy);
       if (fieldOption) {
         setVisualizationState(prev => ({
           ...prev,
-          colorByField: colorByFromUrl,
+          colorByField: initialColorBy,
           colorScaleType: fieldOption.recommendedScale,
         }));
       }
     }
-  }, [colorFieldOptions, colorByFromUrl]);
+  }, [colorFieldOptions]);
 
   // Reset muted categories and hideUnclustered when colorByField changes (categories are now different)
   useEffect(() => {
@@ -227,6 +244,7 @@ export default function Home() {
               activePanel={activePanel}
               onToggleControls={toggleControls}
               onToggleSearch={toggleSearch}
+              onToggleAnalytics={toggleAnalytics}
             />
           </div>
         </div>

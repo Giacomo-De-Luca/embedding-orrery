@@ -1,6 +1,6 @@
 'use client';
 
-import { Moon, Sun, Search, Upload, Settings2 } from 'lucide-react';
+import { Moon, Sun, Search, Upload, Settings2, BarChart3 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState, KeyboardEvent } from 'react';
 import Link from 'next/link';
@@ -38,7 +38,7 @@ function ModeToggle() {
   );
 }
 
-type ActivePanel = 'controls' | 'search' | null;
+type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
 interface AppHeaderProps {
   collections: CollectionsManifest | null;
@@ -53,6 +53,7 @@ interface AppHeaderProps {
   activePanel?: ActivePanel;
   onToggleControls?: () => void;
   onToggleSearch?: () => void;
+  onToggleAnalytics?: () => void;
 }
 
 export function AppHeader({
@@ -68,6 +69,7 @@ export function AppHeader({
   activePanel,
   onToggleControls,
   onToggleSearch,
+  onToggleAnalytics,
 }: AppHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -110,6 +112,14 @@ export function AppHeader({
           aria-label="Toggle search panel"
         >
           <Search className="h-4 w-4" />
+        </Button>
+        <Button
+          variant={activePanel === 'analytics' ? 'circular' : 'circularghost'}
+          size="icon"
+          onClick={onToggleAnalytics}
+          aria-label="Toggle analytics panel"
+        >
+          <BarChart3 className="h-4 w-4" />
         </Button>
         <Separator orientation="vertical" className="mr-2 h-4" />
 

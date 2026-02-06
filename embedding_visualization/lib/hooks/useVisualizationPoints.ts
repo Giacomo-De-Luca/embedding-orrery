@@ -40,8 +40,8 @@ export function useVisualizationPoints(
     }
 
     const { ids, documents, itemMetadata, projections, displayConfig } = data;
-    let coords2d: number[][] = projections.pca_2d;
-    let coords3d: number[][] = projections.pca_3d;
+    let rawCoords2d = projections.pca_2d;
+    let rawCoords3d = projections.pca_3d;
 
     if (visualizationState.method === 'manual') {
       if (!manualWarningShown.current) {
@@ -51,12 +51,20 @@ export function useVisualizationPoints(
         manualWarningShown.current = true;
       }
     } else if (visualizationState.method === 'umap') {
-      coords2d = projections.umap_2d;
-      coords3d = projections.umap_3d;
+      rawCoords2d = projections.umap_2d;
+      rawCoords3d = projections.umap_3d;
     } else {
-      coords2d = projections.pca_2d;
-      coords3d = projections.pca_3d;
+      rawCoords2d = projections.pca_2d;
+      rawCoords3d = projections.pca_3d;
     }
+
+    // If the selected projection hasn't been loaded yet, return empty points
+    if (!rawCoords2d) {
+      return { points2d: [] as Point2D[], points3d: [] as Point3D[] };
+    }
+
+    const coords2d = rawCoords2d;
+    const coords3d = rawCoords3d ?? [];
 
     const mapped2d: Point2D[] = coords2d.map((coord, idx) => {
       const metadata = itemMetadata[idx] || {};

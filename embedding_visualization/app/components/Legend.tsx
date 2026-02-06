@@ -13,6 +13,7 @@ import {
   type SequentialScaleName,
   type DivergingScaleName,
 } from '../../lib/utils/categoryColors';
+import { isCrameriScale, crameriGradientCSS } from '../../lib/colorMaps/crameriScales';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
@@ -28,6 +29,7 @@ interface LegendProps {
   sequentialScaleName?: SequentialScaleName;
   divergingScaleName?: DivergingScaleName;
   monochromeColor?: string;
+  categoricalPalette?: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export function Legend({
   sequentialScaleName = 'sinebow',
   divergingScaleName = 'blueGold',
   monochromeColor = '#1f77b4',
+  categoricalPalette,
 }: LegendProps) {
   // Check if this is a continuous scale (sequential, diverging, or monochrome)
   const isContinuous = colorScaleType === 'sequential' || colorScaleType === 'diverging' || colorScaleType === 'monochrome';
@@ -73,8 +76,17 @@ export function Legend({
   // Generate gradient dynamically from the actual scale function
   const gradient = useMemo(() => {
     if (colorScaleType === 'sequential') {
+      // Try Crameri gradient first (from cache, returns null if not loaded)
+      if (isCrameriScale(sequentialScaleName)) {
+        const crameri = crameriGradientCSS(sequentialScaleName, 20);
+        if (crameri) return crameri;
+      }
       return generateGradientCSS(getSequentialScale([0, 1], sequentialScaleName));
     } else if (colorScaleType === 'diverging') {
+      if (isCrameriScale(divergingScaleName)) {
+        const crameri = crameriGradientCSS(divergingScaleName, 20);
+        if (crameri) return crameri;
+      }
       return generateGradientCSS(getDivergingScale([0, 0.5, 1], divergingScaleName));
     } else if (colorScaleType === 'monochrome') {
       return generateGradientCSS(getMonochromeScale(monochromeColor, [0, 1]));
@@ -117,18 +129,19 @@ export function Legend({
   const isPosLegend = !categoryField || categoryField === 'pos';
   const values = categoryValues || (isPosLegend ? ['n', 'v', 'a', 'r', 's', 'unknown'] : []);
 
-  const colorMap = buildCategoryColorMap(categoryField ?? 'pos', values);
+  const colorMap = buildCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette);
 
   return (
     <Card
       className={`w-fit gap-2 ${className ?? ''}`}
+      variant="outline"
     >
       <CardHeader className="">
         <CardTitle className="font-mono text-md">{getCategoryDisplayName(categoryField ?? 'pos')}</CardTitle>
       </CardHeader>
 
 
-      <ScrollArea className="overflow-y-auto pointer-events-auto">
+      <ScrollArea className="overflow-y-auto pointer-events-auto" style={{ maskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)', WebkitMaskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)' }}>
       <CardContent className="space-y-1 max-h-64">
         {values.map((value) => {
           const isMuted = mutedCategories.includes(value);
@@ -138,7 +151,7 @@ export function Legend({
           return (
             <div
               className={cn(
-                "flex items-center gap-12 py-1 px-2 -mx-2 rounded-md transition-all",
+                "flex items-center gap-2 py-1 px-3 -mx-2 rounded-md transition-all",
                 isClickable && "cursor-pointer hover:bg-accent/50",
                 isMuted && "opacity-40"
               )}
@@ -162,7 +175,7 @@ export function Legend({
               />
               <span
                 className={cn(
-                  "text-md flex-1 truncate",
+                  "text-sm flex-1 max-w-48 truncate",
                   isMuted && "line-through"
                 )}
               >

@@ -366,6 +366,13 @@ export interface JobProgress {
 
 // ========== Topic Extraction Types ==========
 
+export interface TopicReductionInput {
+  enabled: boolean;
+  method: string;       // "auto" or "fixed_n"
+  nTopics?: number;     // Required when method="fixed_n"
+  useCtfidf: boolean;   // true=c-TF-IDF (fast), false=semantic (better)
+}
+
 export interface TopicConfigInput {
   minTopicSize?: number;
   nKeywords?: number;
@@ -373,6 +380,7 @@ export interface TopicConfigInput {
   llmProvider?: string;
   llmModel?: string;
   projectionType?: string;
+  reduction?: TopicReductionInput;
 }
 
 export interface TopicKeyword {
@@ -392,6 +400,28 @@ export interface ExtractTopicsResult {
   numTopics: number;
   numNoisePoints: number;
   topics: TopicInfo[];
+  durationSeconds: number;
+  error: string | null;
+  numTopicsBeforeReduction: number | null;
+  reductionApplied: boolean;
+}
+
+export interface ReduceTopicsInput {
+  collectionName: string;
+  method: string;         // "auto" or "fixed_n"
+  nTopics?: number;       // Required when method="fixed_n"
+  useCtfidf: boolean;     // true=c-TF-IDF, false=semantic
+  regenerateLabels: boolean;
+  llmProvider: string;
+  llmModel: string;
+}
+
+export interface ReduceTopicsResult {
+  collectionName: string;
+  numTopicsBefore: number;
+  numTopicsAfter: number;
+  topics: TopicInfo[];
+  topicMappings: Record<string, number>;
   durationSeconds: number;
   error: string | null;
 }

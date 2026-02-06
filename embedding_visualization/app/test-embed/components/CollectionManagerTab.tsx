@@ -20,8 +20,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { Trash2, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult } from '@/lib/graphql/mutations';
+import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult } from '@/lib/graphql/mutations';
 import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 import { InlineEditableField, SelectOption } from './InlineEditableField';
 import { AddFieldForm } from './AddFieldForm';
@@ -60,6 +61,10 @@ interface CollectionManagerTabProps {
   lastTopicsResult: ExtractTopicsResult | null;
   error: string | null;
   clearError: () => void;
+  // Topic reduction
+  reduceTopics: (input: ReduceTopicsInput) => Promise<ReduceTopicsResult | null>;
+  reduceTopicsLoading: boolean;
+  lastReduceResult: ReduceTopicsResult | null;
 }
 
 // Read-only fields that cannot be edited (computed/system)
@@ -78,6 +83,113 @@ const CORE_FIELDS = new Set([
   'embedding_provider',
   'embedding_model',
 ]);
+
+// Fields that should show as collapsible (first line + expand chevron)
+const EXPANDABLE_FIELDS = new Set([
+  'field_analysis',
+  'topic_summary',
+]);
+
+/** Shows just the first line of a long value, with a chevron to expand/collapse the full content. */
+function ExpandableMetadataValue({
+  fieldKey,
+  value,
+  isSaving,
+  error,
+  showDeleteButton,
+  onSave,
+  onDelete,
+}: {
+  fieldKey: string;
+  value: unknown;
+  isSaving: boolean;
+  error?: string | null;
+  showDeleteButton?: boolean;
+  onSave: (key: string, value: unknown) => Promise<boolean>;
+  onDelete?: (key: string) => Promise<boolean>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const fullText = value === null || value === undefined
+    ? ''
+    : typeof value === 'object'
+      ? JSON.stringify(value, null, 2)
+      : String(value);
+
+  const firstLine = fullText.split('\n')[0] || fullText.slice(0, 80);
+  const isMultiline = fullText.includes('\n') || fullText.length > 80;
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onDelete) return;
+    setIsDeleting(true);
+    try {
+      await onDelete(fieldKey);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1 group">
+      <div className="flex items-center justify-between">
+        <label className="text-muted-foreground text-xs">{fieldKey}</label>
+        {showDeleteButton && onDelete && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={handleDelete}
+            disabled={isDeleting || isSaving}
+          >
+            {isDeleting ? (
+              <Spinner className="h-3 w-3" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+          </Button>
+        )}
+      </div>
+      {isSaving ? (
+        <div className="flex items-center gap-2 py-1.5 px-2 -mx-2">
+          <Spinner className="h-4 w-4" />
+        </div>
+      ) : (
+        <Collapsible open={expanded} onOpenChange={setExpanded}>
+          <CollapsibleTrigger asChild>
+            <button
+              className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded transition-colors hover:bg-muted/50 w-full text-left cursor-pointer"
+            >
+              {isMultiline && (
+                expanded
+                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+              )}
+              <span className="font-medium text-sm truncate">
+                {firstLine}
+                {!expanded && isMultiline && '...'}
+              </span>
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ScrollArea className="max-h-48 mt-1 rounded-md border bg-muted/30">
+              <pre className="text-xs p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
+                {fullText}
+              </pre>
+              <ScrollBar orientation="vertical" />
+            </ScrollArea>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+      {error && (
+        <p className="text-xs text-destructive animate-in fade-in slide-in-from-top-1">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // Provider options for the select dropdown
 const PROVIDER_OPTIONS: SelectOption[] = [
@@ -100,6 +212,9 @@ export function CollectionManagerTab({
   lastTopicsResult,
   error,
   clearError,
+  reduceTopics,
+  reduceTopicsLoading,
+  lastReduceResult,
 }: CollectionManagerTabProps) {
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -344,44 +459,47 @@ export function CollectionManagerTab({
                 <span>Loading preview...</span>
               </div>
             ) : previewItems.length > 0 ? (
-              <div className="overflow-x-auto border rounded-md">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted">
-                    <tr>
-                      {previewColumns.map((col) => (
-                        <th key={col} className="text-left p-2 font-medium whitespace-nowrap">
-                          {col}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewItems.map((item, i) => (
-                      <tr key={item.id || i} className="border-t">
-                        {previewColumns.map((col) => {
-                          let value: unknown;
-                          if (col === 'id') {
-                            value = item.id;
-                          } else if (col === 'document') {
-                            value = item.document;
-                          } else {
-                            value = item.metadata?.[col];
-                          }
-                          const displayValue = typeof value === 'object'
-                            ? JSON.stringify(value)?.slice(0, 100)
-                            : String(value ?? '').slice(0, 100);
-                          return (
-                            <td key={col} className="p-2 max-w-xs truncate">
-                              {displayValue}
-                              {String(value ?? '').length > 100 && '...'}
-                            </td>
-                          );
-                        })}
+              <ScrollArea className="border rounded-md">
+                <div className="w-max min-w-full">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted">
+                      <tr>
+                        {previewColumns.map((col) => (
+                          <th key={col} className="text-left p-2 font-medium whitespace-nowrap">
+                            {col}
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {previewItems.map((item, i) => (
+                        <tr key={item.id || i} className="border-t">
+                          {previewColumns.map((col) => {
+                            let value: unknown;
+                            if (col === 'id') {
+                              value = item.id;
+                            } else if (col === 'document') {
+                              value = item.document;
+                            } else {
+                              value = item.metadata?.[col];
+                            }
+                            const displayValue = typeof value === 'object'
+                              ? JSON.stringify(value)?.slice(0, 100)
+                              : String(value ?? '').slice(0, 100);
+                            return (
+                              <td key={col} className="p-2 max-w-xs truncate">
+                                {displayValue}
+                                {String(value ?? '').length > 100 && '...'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <ScrollBar orientation="horizontal" />
+              </ScrollArea>
             ) : (
               <p className="text-muted-foreground text-sm py-4">
                 No data available for preview.
@@ -427,141 +545,154 @@ export function CollectionManagerTab({
             </CardHeader>
             <CollapsibleContent>
               <CardContent className="space-y-4 pt-0">
-                {/* Delete Confirmation */}
-                {showDeleteConfirm && (
-                  <div className="p-4 border border-destructive rounded-md bg-destructive/5">
-                    <h4 className="font-semibold text-destructive mb-2">Delete Collection?</h4>
-                    <p className="text-sm mb-4">
-                      Are you sure you want to delete <strong>{selectedCollectionInfo.name}</strong>?
-                      This will permanently remove all {selectedCollectionInfo.numItems.toLocaleString()} embeddings.
-                      This action cannot be undone.
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowDeleteConfirm(false)}
-                        disabled={isDeleting}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={handleDelete}
-                        disabled={isDeleting}
-                      >
-                        {isDeleting ? <Spinner className="h-4 w-4 mr-2" /> : null}
-                        Yes, Delete Collection
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                    {/* Delete Confirmation */}
+                    {showDeleteConfirm && (
+                      <div className="p-4 border border-destructive rounded-md bg-destructive/5">
+                        <h4 className="font-semibold text-destructive mb-2">Delete Collection?</h4>
+                        <p className="text-sm mb-4">
+                          Are you sure you want to delete <strong>{selectedCollectionInfo.name}</strong>?
+                          This will permanently remove all {selectedCollectionInfo.numItems.toLocaleString()} embeddings.
+                          This action cannot be undone.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowDeleteConfirm(false)}
+                            disabled={isDeleting}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={handleDelete}
+                            disabled={isDeleting}
+                          >
+                            {isDeleting ? <Spinner className="h-4 w-4 mr-2" /> : null}
+                            Yes, Delete Collection
+                          </Button>
+                        </div>
+                      </div>
+                    )}
 
-                {deleteError && (
-                  <div className="text-destructive text-sm p-2 bg-destructive/10 rounded">
-                    {deleteError}
-                  </div>
-                )}
+                    {deleteError && (
+                      <div className="text-destructive text-sm p-2 bg-destructive/10 rounded">
+                        {deleteError}
+                      </div>
+                    )}
 
-                <Separator />
-
-                {/* Core Fields */}
-                <div className="space-y-4">
-                  {/* Read-only core fields */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-muted-foreground text-xs">Name</Label>
-                      <p className="font-medium py-1.5">{selectedCollectionInfo.name}</p>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground text-xs">Items</Label>
-                      <p className="font-medium py-1.5">{selectedCollectionInfo.numItems.toLocaleString()}</p>
-                    </div>
-                  </div>
-
-                  {/* Editable core fields */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <InlineEditableField
-                      fieldKey="embedding_provider"
-                      label="Embedding Provider"
-                      value={selectedCollectionInfo.embeddingProvider}
-                      type="select"
-                      selectOptions={PROVIDER_OPTIONS}
-                      isSaving={savingFields.has('embedding_provider')}
-                      error={fieldErrors['embedding_provider']}
-                      onSave={handleFieldSave}
-                    />
-
-                    <InlineEditableField
-                      fieldKey="embedding_model"
-                      label="Embedding Model"
-                      value={selectedCollectionInfo.embeddingModel}
-                      type="text"
-                      isSaving={savingFields.has('embedding_model')}
-                      error={fieldErrors['embedding_model']}
-                      onSave={handleFieldSave}
-                    />
-                  </div>
-                </div>
-
-                {/* Custom Metadata Fields */}
-                {customFields.length > 0 && (
-                  <>
                     <Separator />
-                    <div>
-                      <Label className="text-muted-foreground text-xs mb-3 block">Additional Metadata</Label>
-                      <div className="space-y-3">
-                        {customFields.map(([key, value]) => (
-                          <div key={key} className="group">
-                            <InlineEditableField
-                              fieldKey={key}
-                              label={key}
-                              value={value}
-                              type="text"
-                              isSaving={savingFields.has(key)}
-                              error={fieldErrors[key]}
-                              showDeleteButton
-                              onSave={handleFieldSave}
-                              onDelete={handleFieldDelete}
-                            />
+
+                    {/* Core Fields */}
+                    <div className="space-y-4">
+                      {/* Read-only core fields */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-muted-foreground text-xs">Name</Label>
+                          <p className="font-medium py-1.5">{selectedCollectionInfo.name}</p>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground text-xs">Items</Label>
+                          <p className="font-medium py-1.5">{selectedCollectionInfo.numItems.toLocaleString()}</p>
+                        </div>
+                      </div>
+
+                      {/* Editable core fields */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <InlineEditableField
+                          fieldKey="embedding_provider"
+                          label="Embedding Provider"
+                          value={selectedCollectionInfo.embeddingProvider}
+                          type="select"
+                          selectOptions={PROVIDER_OPTIONS}
+                          isSaving={savingFields.has('embedding_provider')}
+                          error={fieldErrors['embedding_provider']}
+                          onSave={handleFieldSave}
+                        />
+
+                        <InlineEditableField
+                          fieldKey="embedding_model"
+                          label="Embedding Model"
+                          value={selectedCollectionInfo.embeddingModel}
+                          type="text"
+                          isSaving={savingFields.has('embedding_model')}
+                          error={fieldErrors['embedding_model']}
+                          onSave={handleFieldSave}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Custom Metadata Fields */}
+                    {customFields.length > 0 && (
+                      <>
+                        <Separator />
+                        <div>
+                          <Label className="text-muted-foreground text-xs mb-3 block">Additional Metadata</Label>
+                          <div className="space-y-3">
+                            {customFields.map(([key, value]) => (
+                              EXPANDABLE_FIELDS.has(key) ? (
+                                <ExpandableMetadataValue
+                                  key={key}
+                                  fieldKey={key}
+                                  value={value}
+                                  isSaving={savingFields.has(key)}
+                                  error={fieldErrors[key]}
+                                  showDeleteButton
+                                  onSave={handleFieldSave}
+                                  onDelete={handleFieldDelete}
+                                />
+                              ) : (
+                                <div key={key} className="group">
+                                  <InlineEditableField
+                                    fieldKey={key}
+                                    label={key}
+                                    value={value}
+                                    type="text"
+                                    isSaving={savingFields.has(key)}
+                                    error={fieldErrors[key]}
+                                    showDeleteButton
+                                    onSave={handleFieldSave}
+                                    onDelete={handleFieldDelete}
+                                  />
+                                </div>
+                              )
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
+                        </div>
+                      </>
+                    )}
 
-                {/* Read-only System Fields */}
-                {readOnlyFields.length > 0 && (
-                  <>
+                    {/* Read-only System Fields */}
+                    {readOnlyFields.length > 0 && (
+                      <>
+                        <Separator />
+                        <div>
+                          <Label className="text-muted-foreground text-xs mb-3 block">System Fields (Read-only)</Label>
+                          <div className="space-y-3">
+                            {readOnlyFields.map(([key, value]) => (
+                              <InlineEditableField
+                                key={key}
+                                fieldKey={key}
+                                label={key}
+                                value={formatMetadataValue(value)}
+                                type="text"
+                                readOnly
+                                onSave={handleFieldSave}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Add Field Form */}
                     <Separator />
-                    <div>
-                      <Label className="text-muted-foreground text-xs mb-3 block">System Fields (Read-only)</Label>
-                      <div className="space-y-3">
-                        {readOnlyFields.map(([key, value]) => (
-                          <InlineEditableField
-                            key={key}
-                            fieldKey={key}
-                            label={key}
-                            value={formatMetadataValue(value)}
-                            type="text"
-                            readOnly
-                            onSave={handleFieldSave}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Add Field Form */}
-                <Separator />
-                <AddFieldForm
-                  existingKeys={existingMetadataKeys}
-                  onAdd={handleAddField}
-                  disabled={savingFields.size > 0}
-                />
+                    <AddFieldForm
+                      existingKeys={existingMetadataKeys}
+                      onAdd={handleAddField}
+                      disabled={savingFields.size > 0}
+                    />
               </CardContent>
             </CollapsibleContent>
           </Card>
@@ -580,6 +711,9 @@ export function CollectionManagerTab({
           error={error}
           clearError={clearError}
           onTopicsExtracted={refreshCollections}
+          reduceTopics={reduceTopics}
+          reduceTopicsLoading={reduceTopicsLoading}
+          lastReduceResult={lastReduceResult}
         />
       )}
 

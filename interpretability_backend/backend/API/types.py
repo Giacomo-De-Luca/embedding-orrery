@@ -354,6 +354,8 @@ class CollectionMetadata:
     topic_count: Optional[int] = None
     topics_extracted_at: Optional[str] = None
     topics: Optional[List[TopicInfo]] = None  # Topic summary with keywords
+    # Pre-computed field analysis (cached for fast frontend loading)
+    field_analysis: Optional[JSON] = None
 
 
 @strawberry.type
@@ -410,11 +412,11 @@ class ProjectionData:
     documents: List[str]
     item_metadata: List[JSON]  # Raw metadata per item - flexible schema
     available_fields: List[str]  # What metadata fields are available
-    # Projections
-    pca_2d: List[List[float]]
-    pca_3d: List[List[float]]
-    umap_2d: List[List[float]]
-    umap_3d: List[List[float]]
+    # Projections (Optional — only requested types are returned, others are null)
+    pca_2d: Optional[List[List[float]]] = None
+    pca_3d: Optional[List[List[float]]] = None
+    umap_2d: Optional[List[List[float]]] = None
+    umap_3d: Optional[List[List[float]]] = None
     # Collection-level metadata
     metadata: CollectionMetadata
 

@@ -33,6 +33,7 @@ class TopicReductionResult:
     documents_df: pd.DataFrame  # Updated with new topic assignments
     topics_data: Dict[int, List[Tuple[str, float]]]  # Re-extracted keywords
     topic_mappings: Dict[int, int]  # old_topic_id -> new_topic_id
+    topic_hierarchy: Dict[int, List[int]]  # new_topic_id -> [old_topic_ids that merged into it]
     num_topics_before: int
     num_topics_after: int
     reduction_method: str  # "fixed_n" or "auto"

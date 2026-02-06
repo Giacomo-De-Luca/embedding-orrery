@@ -64,6 +64,9 @@ export default function TestEmbedPage() {
     extractTopics,
     topicsLoading,
     lastTopicsResult,
+    reduceTopics,
+    reduceTopicsLoading,
+    lastReduceResult,
   } = useEmbedDataset();
 
   // Transform collections data for the manager tab
@@ -156,6 +159,9 @@ export default function TestEmbedPage() {
           lastTopicsResult={lastTopicsResult}
           error={error}
           clearError={clearError}
+          reduceTopics={reduceTopics}
+          reduceTopicsLoading={reduceTopicsLoading}
+          lastReduceResult={lastReduceResult}
         />
       )}
     </div>

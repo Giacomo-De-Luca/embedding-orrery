@@ -6,6 +6,7 @@ import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from
 import type { Point3D, HighlightMap, ColorScaleType } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -41,6 +42,8 @@ interface ScatterPlot3DProps {
   tooltipFields?: string[];
   /** When true, hide points with topic_id = -1 (unclustered/noise) */
   hideUnclustered?: boolean;
+  /** Crameri categorical palette name for category coloring */
+  categoricalPalette?: string;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -75,6 +78,7 @@ export function ScatterPlot3D({
   mutedCategories = [],
   tooltipFields,
   hideUnclustered = false,
+  categoricalPalette,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -289,8 +293,8 @@ export function ScatterPlot3D({
   }, []);
 
   const colorMap = useMemo(() => {
-    return buildCategoryColorMap(categoryField, categoryValues);
-  }, [categoryField, categoryValues]);
+    return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette);
+  }, [categoryField, categoryValues, categoricalPalette]);
 
   // --- 1. OPTIMIZED DATA EXTRACTION (Raw Numbers) ---
   const numericData = useMemo(() => {
@@ -330,6 +334,14 @@ export function ScatterPlot3D({
   const plotlyColorScale = useMemo(() => {
     if (colorScaleType === 'categorical') return undefined;
 
+    // For Crameri scales, use the pre-computed 256-step Plotly array directly
+    const scaleName = colorScaleType === 'diverging' ? divergingScaleName : sequentialScaleName;
+    if (scaleName && isCrameriScale(scaleName)) {
+      const crameriScale = getCrameriPlotlyScale(scaleName);
+      if (crameriScale) return crameriScale;
+      // Fall through to D3 sampling if not loaded yet
+    }
+
     // Request a normalized interpolator (0 to 1) from your utils
     let scaleFunc: (t: number) => string;
     if (colorScaleType === 'monochrome') {
@@ -357,10 +369,14 @@ export function ScatterPlot3D({
     const hasHighlights = highlightedIndices && highlightedIndices.size > 0;
 
     // Apply hideUnclustered filter
-    const displayPoints = hideUnclustered && categoryField
+    // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
+    const displayPoints = hideUnclustered
       ? points.filter(p => {
-          const topicId = p.metadata?.[categoryField];
-          return topicId !== '-1' && topicId !== -1;
+          const topicId = p.metadata?.['topic_id'];
+          if (topicId === '-1' || topicId === -1) return false;
+          const topicLabel = p.metadata?.['topic_label'];
+          if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+          return true;
         })
       : points;
 
@@ -405,7 +421,7 @@ export function ScatterPlot3D({
       } else if (colorBy === 'category' && categoryValues.length > 0) {
         // --- MODE: CATEGORICAL (Standard) ---
         const pointsByCategory: Record<string, Point3D[]> = {};
-        points.forEach(point => {
+        displayPoints.forEach(point => {
           const raw = categoryField ? point.metadata?.[categoryField] : undefined;
           const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
           if (!pointsByCategory[cat]) pointsByCategory[cat] = [];

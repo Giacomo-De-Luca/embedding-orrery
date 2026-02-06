@@ -13,6 +13,7 @@ import type {
 } from 'plotly.js';
 import type { Point2D, HighlightMap, ColorScaleType } from '../../lib/types/types';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -46,6 +47,8 @@ interface ScatterPlot2DProps {
   tooltipFields?: string[];
   /** When true, hide points with topic_id = -1 (unclustered/noise) */
   hideUnclustered?: boolean;
+  /** Crameri categorical palette name for category coloring */
+  categoricalPalette?: string;
 }
 
 /**
@@ -76,6 +79,7 @@ export function ScatterPlot2D({
   mutedCategories = [],
   tooltipFields,
   hideUnclustered = false,
+  categoricalPalette,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -91,8 +95,8 @@ export function ScatterPlot2D({
 
   // Build color map based on category values
   const colorMap = useMemo(() => {
-    return buildCategoryColorMap(categoryField, categoryValues);
-  }, [categoryField, categoryValues]);
+    return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette);
+  }, [categoryField, categoryValues, categoricalPalette]);
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
@@ -130,6 +134,14 @@ export function ScatterPlot2D({
   // Generate Plotly-compatible colorscale array
   const plotlyColorScale = useMemo(() => {
     if (colorScaleType === 'categorical') return undefined;
+
+    // For Crameri scales, use the pre-computed 256-step Plotly array directly
+    const scaleName = colorScaleType === 'diverging' ? divergingScaleName : sequentialScaleName;
+    if (scaleName && isCrameriScale(scaleName)) {
+      const crameriScale = getCrameriPlotlyScale(scaleName);
+      if (crameriScale) return crameriScale;
+      // Fall through to D3 sampling if not loaded yet
+    }
 
     let scaleFunc: (t: number) => string;
     if (colorScaleType === 'monochrome') {
@@ -181,10 +193,14 @@ export function ScatterPlot2D({
       const unhighlightedPoints = points.filter(p => !highlightedIndices.has(p.index));
 
       // Apply hideUnclustered filter to background points
-      const filteredUnhighlightedPoints = hideUnclustered && categoryField
+      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
+      const filteredUnhighlightedPoints = hideUnclustered
         ? unhighlightedPoints.filter(p => {
-            const topicId = p.metadata?.[categoryField];
-            return topicId !== '-1' && topicId !== -1;
+            const topicId = p.metadata?.['topic_id'];
+            if (topicId === '-1' || topicId === -1) return false;
+            const topicLabel = p.metadata?.['topic_label'];
+            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+            return true;
           })
         : unhighlightedPoints;
 
@@ -460,10 +476,14 @@ export function ScatterPlot2D({
     // No highlighting - render normally
     else {
       // Apply hideUnclustered filter
-      const displayPoints = hideUnclustered && categoryField
+      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
+      const displayPoints = hideUnclustered
         ? points.filter(p => {
-            const topicId = p.metadata?.[categoryField];
-            return topicId !== '-1' && topicId !== -1;
+            const topicId = p.metadata?.['topic_id'];
+            if (topicId === '-1' || topicId === -1) return false;
+            const topicLabel = p.metadata?.['topic_label'];
+            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+            return true;
           })
         : points;
 
@@ -593,7 +613,7 @@ export function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories]);
+  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({

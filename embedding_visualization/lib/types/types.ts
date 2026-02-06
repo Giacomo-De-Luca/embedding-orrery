@@ -39,10 +39,10 @@ export interface EmbeddingMetadata {
 }
 
 export interface ProjectionData {
-  pca_2d: number[][];
-  pca_3d: number[][];
-  umap_2d: number[][];
-  umap_3d: number[][];
+  pca_2d: number[][] | null;
+  pca_3d: number[][] | null;
+  umap_2d: number[][] | null;
+  umap_3d: number[][] | null;
 }
 
 /**
@@ -116,6 +116,7 @@ export interface VisualizationState {
   mutedCategories?: string[];  // Categories to gray out in visualization (toggled via legend)
   tooltipFields?: string[];  // Extra metadata fields to display in hover tooltip
   hideUnclustered?: boolean;  // When true, hide points with topic_id = -1 (unclustered/noise)
+  categoricalPalette?: string;  // Crameri categorical palette name (e.g., 'batlowS') for categorical coloring
 }
 
 /**

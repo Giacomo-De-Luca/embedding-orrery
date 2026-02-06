@@ -419,6 +419,9 @@ def _update_collection_topic_metadata(
         }),
         "topic_summary": json.dumps(topic_summary),
     })
+    # Invalidate cached field analysis — topic extraction adds/changes topic_id and
+    # topic_label fields, so the frontend must re-analyze field metadata on next load.
+    current_metadata.pop("field_analysis", None)
 
     # Add reduction info if applied
     if config.reduce_topics and num_topics_before_reduction is not None:

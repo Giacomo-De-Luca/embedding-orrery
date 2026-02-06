@@ -92,9 +92,12 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 80,
         maxSize: 150,
         cell: ({ row }) => (
-          <div className="font-mono text-xs truncate">
-            {row.getValue('id')}
-          </div>
+          <ScrollArea style={{ height: 100 }} className="rounded-md">
+            <div className="font-mono text-xs whitespace-nowrap overflow-x-auto">
+              {row.getValue('id')}
+            </div>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
         ),
       },
       // Label column
@@ -105,9 +108,12 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         minSize: 100,
         maxSize: 250,
         cell: ({ row }) => (
-          <div className="font-medium truncate">
-            {row.getValue('label')}
-          </div>
+          <ScrollArea style={{ height: 100 }} className="rounded-md">
+            <div className="font-medium whitespace-nowrap overflow-x-auto">
+              {row.getValue('label')}
+            </div>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
         ),
       },
       // Similarity column with progress bar
@@ -158,9 +164,14 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
         cell: ({ row }) => {
           const category = row.getValue('category') as string;
           return category ? (
-            <Badge variant="outline" className="uppercase whitespace-nowrap">
-              {getCategoryLabel(categoryField ?? null, category)}
-            </Badge>
+            <ScrollArea style={{ height: 100 }} className="rounded-md">
+              <div className="whitespace-nowrap overflow-x-auto">
+                <Badge variant="outline" className="uppercase whitespace-nowrap">
+                  {getCategoryLabel(categoryField ?? null, category)}
+                </Badge>
+              </div>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
           ) : null;
         },
       });
@@ -251,13 +262,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
           </CardDescription>
         )}
       </CardHeader>
-      <CardContent className="flex-1 min-h-0 px-0 pb-0">
-        <ScrollArea className="h-full">
-          <div className="rounded-md border mx-4 mb-4">
-            <Table style={{ width: table.getTotalSize() }}>
+      <CardContent className="flex-1 min-h-0">
+        <div className="h-full rounded-md border overflow-hidden">
+          <ScrollArea className="h-full">
+            <Table style={{ minWidth: table.getTotalSize() }}>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id} className="sticky top-0 z-10 bg-background">
+                  <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
                       <TableHead
                         key={header.id}
@@ -323,9 +334,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
                 )}
               </TableBody>
             </Table>
-          </div>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   );

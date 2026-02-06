@@ -16,6 +16,8 @@ from .types import (
     ExtractTopicsResult,
     JSON,
     PortionStrategyEnum,
+    ReduceTopicsInput,
+    ReduceTopicsResult,
     TopicInfo,
     TopicKeyword,
     UpdateCollectionMetadataResult,
@@ -391,6 +393,55 @@ class Mutation:
             reduction_applied=result.reduction_applied
         )
 
+    @strawberry.mutation
+    async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:
+        """Reduce topics on an existing collection (standalone post-processing).
+
+        Args:
+            input: Configuration for topic reduction
+
+        Returns:
+            Result with reduced topics and mappings
+        """
+        from ..services.topic_extraction_service import reduce_existing_topics
+
+        def run_reduction():
+            return reduce_existing_topics(
+                collection_name=input.collection_name,
+                method=input.method,
+                n_topics=input.n_topics,
+                use_ctfidf=input.use_ctfidf,
+                regenerate_labels=input.regenerate_labels,
+                llm_provider=input.llm_provider,
+                llm_model=input.llm_model
+            )
+
+        # Run in background thread (same pattern as extract_topics)
+        result = await asyncio.to_thread(run_reduction)
+
+        # Convert to GraphQL types
+        topics = [
+            TopicInfo(
+                topic_id=topic.topic_id,
+                keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
+                label=topic.label,
+                count=topic.count
+            )
+            for topic in result.topics
+        ]
+
+        # Build topic mappings JSON
+        topic_mappings = {}
+
+        return ReduceTopicsResult(
+            collection_name=result.collection_name,
+            num_topics_before=result.num_topics_before_reduction or 0,
+            num_topics_after=result.num_topics,
+            topics=topics,
+            topic_mappings=topic_mappings,
+            duration_seconds=result.duration_seconds,
+            error=result.error
+        )
 
 
 async def _extract_topics_for_collection(
@@ -435,53 +486,3 @@ async def _extract_topics_for_collection(
     except Exception as e:
         print(f"Topic extraction failed: {e}")
         return False
-
-    @strawberry.mutation
-    async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:
-        """Reduce topics on an existing collection (standalone post-processing).
-
-        Args:
-            input: Configuration for topic reduction
-
-        Returns:
-            Result with reduced topics and mappings
-        """
-        from ..services.topic_extraction_service import reduce_existing_topics
-
-        def run_reduction():
-            return reduce_existing_topics(
-                collection_name=input.collection_name,
-                method=input.method,
-                n_topics=input.n_topics,
-                use_ctfidf=input.use_ctfidf,
-                regenerate_labels=input.regenerate_labels,
-                llm_provider=input.llm_provider,
-                llm_model=input.llm_model
-            )
-
-        # Run in background thread (same pattern as extract_topics)
-        result = await asyncio.to_thread(run_reduction)
-
-        # Convert to GraphQL types
-        topics = [
-            TopicInfo(
-                topic_id=topic.topic_id,
-                keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
-                label=topic.label,
-                count=topic.count
-            )
-            for topic in result.topics
-        ]
-
-        # Build topic mappings JSON (for now, return empty dict - could be extended later)
-        topic_mappings = {}
-
-        return ReduceTopicsResult(
-            collection_name=result.collection_name,
-            num_topics_before=result.num_topics_before_reduction or 0,
-            num_topics_after=result.num_topics,
-            topics=topics,
-            topic_mappings=topic_mappings,
-            duration_seconds=result.duration_seconds,
-            error=result.error
-        )

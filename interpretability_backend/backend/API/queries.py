@@ -223,11 +223,18 @@ class Query:
         )
 
     @strawberry.field
-    def collection(self, name: str, info) -> Optional[ProjectionData]:
+    def collection(
+        self,
+        name: str,
+        info,
+        projection_types: Optional[List[str]] = None,
+    ) -> Optional[ProjectionData]:
         """Get complete projection data for a collection.
 
         Args:
             name: Collection name
+            projection_types: Which projections to load (e.g. ["umap_2d", "umap_3d"]).
+                            None means all four. Non-requested projections return null.
 
         Returns:
             Projection data with PCA/UMAP projections from ChromaDB metadata.
@@ -237,8 +244,8 @@ class Query:
 
         client = get_chromadb_client()
 
-        # Load projection data directly from ChromaDB metadata
-        projection_data = client.get_projection_data(name)
+        # Load projection data — only parse requested projection types
+        projection_data = client.get_projection_data(name, projection_types=projection_types)
 
         # Parse topic summary if present
         metadata = projection_data["metadata"].copy()
