@@ -18,6 +18,8 @@ import {
 } from 'd3-scale-chromatic';
 import { interpolateRgb } from 'd3-interpolate';
 import { color } from 'd3-color';
+import { makeCrameriInterpolator, getCrameriColors } from '../colorMaps/crameriScales';
+import { CATEGORY_PALETTES, DEFAULT_PALETTE_KEY, getPaletteColors } from './categoryPalettes';
 
 
 /**
@@ -38,8 +40,17 @@ export interface CategoryColorPreset {
 
 // ============ Scale Name Types ============
 
-export type SequentialScaleName = 'sinebow' | 'viridis' | 'cividis' | 'turbo' | 'plasma' | 'inferno' | 'magma';
-export type DivergingScaleName = 'blueGold' | 'rdBu' | 'spectral' | 'piYG' | 'puOr' | 'brBG';
+/** D3 built-in sequential scale names */
+export type D3SequentialScaleName = 'sinebow' | 'viridis' | 'cividis' | 'turbo' | 'plasma' | 'inferno' | 'magma';
+
+/** D3 built-in diverging scale names */
+export type D3DivergingScaleName = 'blueGold' | 'rdBu' | 'spectral' | 'piYG' | 'puOr' | 'brBG';
+
+/** Union of all sequential scale names (D3 + Crameri) */
+export type SequentialScaleName = D3SequentialScaleName | (string & {});
+
+/** Union of all diverging scale names (D3 + Crameri) */
+export type DivergingScaleName = D3DivergingScaleName | (string & {});
 
 // ============ Sequential & Diverging Generators ============
 
@@ -65,7 +76,7 @@ function interpolateBlueGold(t: number): string {
 
 // ============ Interpolator Maps ============
 
-const SEQUENTIAL_INTERPOLATORS: Record<SequentialScaleName, (t: number) => string> = {
+const SEQUENTIAL_INTERPOLATORS: Record<D3SequentialScaleName, (t: number) => string> = {
   sinebow: interpolateSinebow,
   viridis: interpolateViridis,
   cividis: interpolateCividis,
@@ -75,7 +86,7 @@ const SEQUENTIAL_INTERPOLATORS: Record<SequentialScaleName, (t: number) => strin
   magma: interpolateMagma,
 };
 
-const DIVERGING_INTERPOLATORS: Record<DivergingScaleName, (t: number) => string> = {
+const DIVERGING_INTERPOLATORS: Record<D3DivergingScaleName, (t: number) => string> = {
   blueGold: interpolateBlueGold,
   rdBu: interpolateRdBu,
   spectral: interpolateSpectral,
@@ -84,9 +95,16 @@ const DIVERGING_INTERPOLATORS: Record<DivergingScaleName, (t: number) => string>
   brBG: interpolateBrBG,
 };
 
+/** D3 sequential scale names for UI iteration */
+export const D3_SEQUENTIAL_NAMES = Object.keys(SEQUENTIAL_INTERPOLATORS) as D3SequentialScaleName[];
+
+/** D3 diverging scale names for UI iteration */
+export const D3_DIVERGING_NAMES = Object.keys(DIVERGING_INTERPOLATORS) as D3DivergingScaleName[];
+
 /**
  * Creates a sequential scale (e.g., for probability, density).
  * Maps [min, max] -> Color using the specified interpolator.
+ * Supports both D3 built-in scales and Crameri scales (from cache).
  * Cached by domain + scale name for performance.
  */
 export function getSequentialScale(
@@ -95,8 +113,19 @@ export function getSequentialScale(
 ): (v: number) => string {
   const key = `seq_${domain[0]}_${domain[1]}_${scaleName}`;
   if (!sequentialScaleCache.has(key)) {
-    const interpolator = SEQUENTIAL_INTERPOLATORS[scaleName];
-    sequentialScaleCache.set(key, scaleSequential(interpolator).domain(domain));
+    const d3Interpolator = SEQUENTIAL_INTERPOLATORS[scaleName as D3SequentialScaleName];
+    if (d3Interpolator) {
+      sequentialScaleCache.set(key, scaleSequential(d3Interpolator).domain(domain));
+    } else {
+      // Try Crameri interpolator from cache
+      const crameriInterp = makeCrameriInterpolator(scaleName);
+      if (crameriInterp) {
+        sequentialScaleCache.set(key, scaleSequential(crameriInterp).domain(domain));
+      } else {
+        // Fallback to viridis if Crameri not loaded yet
+        sequentialScaleCache.set(key, scaleSequential(interpolateViridis).domain(domain));
+      }
+    }
   }
   return sequentialScaleCache.get(key)!;
 }
@@ -104,6 +133,7 @@ export function getSequentialScale(
 /**
  * Creates a diverging scale (e.g., for sentiment, correlation).
  * Maps [min, mid, max] -> Color using the specified interpolator.
+ * Supports both D3 built-in scales and Crameri scales (from cache).
  * Cached by domain + scale name for performance.
  */
 export function getDivergingScale(
@@ -112,8 +142,19 @@ export function getDivergingScale(
 ): (v: number) => string {
   const key = `div_${domain[0]}_${domain[1]}_${domain[2]}_${scaleName}`;
   if (!divergingScaleCache.has(key)) {
-    const interpolator = DIVERGING_INTERPOLATORS[scaleName];
-    divergingScaleCache.set(key, scaleDiverging(interpolator).domain(domain));
+    const d3Interpolator = DIVERGING_INTERPOLATORS[scaleName as D3DivergingScaleName];
+    if (d3Interpolator) {
+      divergingScaleCache.set(key, scaleDiverging(d3Interpolator).domain(domain));
+    } else {
+      // Try Crameri interpolator from cache
+      const crameriInterp = makeCrameriInterpolator(scaleName);
+      if (crameriInterp) {
+        divergingScaleCache.set(key, scaleDiverging(crameriInterp).domain(domain));
+      } else {
+        // Fallback to blueGold if Crameri not loaded yet
+        divergingScaleCache.set(key, scaleDiverging(interpolateBlueGold).domain(domain));
+      }
+    }
   }
   return divergingScaleCache.get(key)!;
 }
@@ -165,43 +206,10 @@ export function generateGradientCSS(
 }
 
 
-// ============ D3-style category palettes ============
+// Re-export palette registry for convenience
+export { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, DEFAULT_PALETTE_KEY, getPaletteColors } from './categoryPalettes';
+export type { CategoricalPalette } from './categoryPalettes';
 
-const category10 = [
-  '#1f77b4',
-  '#ff7f0e',
-  '#2ca02c',
-  '#d62728',
-  '#9467bd',
-  '#8c564b',
-  '#e377c2',
-  '#7f7f7f',
-  '#bcbd22',
-  '#17becf',
-];
-
-const category20 = [
-  '#1f77b4',
-  '#aec7e8',
-  '#ff7f0e',
-  '#ffbb78',
-  '#2ca02c',
-  '#98df8a',
-  '#d62728',
-  '#ff9896',
-  '#9467bd',
-  '#c5b0d5',
-  '#8c564b',
-  '#c49c94',
-  '#e377c2',
-  '#f7b6d2',
-  '#7f7f7f',
-  '#c7c7c7',
-  '#bcbd22',
-  '#dbdb8d',
-  '#17becf',
-  '#9edae5',
-];
 
 // ============ Preset palettes for known category types ============
 
@@ -258,23 +266,32 @@ export const CATEGORY_PRESETS: Record<string, CategoryColorPreset> = {
 
 /**
  * Generate colors for a given number of categories.
- * Uses D3-style category palettes.
+ * Uses D3-style category palettes by default, or a Crameri categorical palette
+ * (100 distinct colors) if a palette name is provided.
  */
-export function generateCategoryColors(count: number): string[] {
-  if (count < 1) {
-    count = 1;
+export function generateCategoryColors(count: number, palette?: string): string[] {
+  if (count < 1) count = 1;
+
+  // Resolve color array: built-in registry first, then Crameri, then default
+  let colors: readonly string[] | null = null;
+
+  if (palette) {
+    colors = getPaletteColors(palette) ?? getCrameriColors(palette) ?? null;
   }
-  if (count <= category10.length) {
-    return category10.slice(0, count);
-  } else if (count <= category20.length) {
-    return category20.slice(0, count);
-  } else {
-    const colors: string[] = [];
-    for (let i = 0; i < count; i++) {
-      colors[i] = category20[i % category20.length];
-    }
-    return colors;
+
+  if (!colors) {
+    colors = CATEGORY_PALETTES[DEFAULT_PALETTE_KEY].colors;
   }
+
+  if (count <= colors.length) {
+    return colors.slice(0, count) as string[];
+  }
+
+  const result: string[] = [];
+  for (let i = 0; i < count; i++) {
+    result[i] = colors[i % colors.length] as string;
+  }
+  return result;
 }
 
 /**
@@ -285,11 +302,13 @@ export function generateCategoryColors(count: number): string[] {
  *
  * @param categoryField - The name of the category field (e.g., "pos", "topic")
  * @param values - Array of unique category values
+ * @param palette - Optional Crameri categorical palette name (e.g., "batlowS")
  * @returns Object mapping category values to colors
  */
 export function buildCategoryColorMap(
   categoryField: string | null,
-  values: string[]
+  values: string[],
+  palette?: string,
 ): Record<string, string> {
   const colorMap: Record<string, string> = {};
 
@@ -312,14 +331,14 @@ export function buildCategoryColorMap(
 
     // Generate dynamic colors for values not in preset
     if (valuesWithoutPreset.length > 0) {
-      const dynamicColors = generateCategoryColors(valuesWithoutPreset.length);
+      const dynamicColors = generateCategoryColors(valuesWithoutPreset.length, palette);
       for (let i = 0; i < valuesWithoutPreset.length; i++) {
         colorMap[valuesWithoutPreset[i]] = dynamicColors[i];
       }
     }
   } else {
     // Generate colors dynamically
-    const colors = generateCategoryColors(values.length);
+    const colors = generateCategoryColors(values.length, palette);
     for (let i = 0; i < values.length; i++) {
       colorMap[values[i]] = colors[i];
     }

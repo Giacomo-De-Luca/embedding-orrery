@@ -11,8 +11,9 @@ import type {
   PlotMouseEvent,
   PlotHoverEvent,
 } from 'plotly.js';
-import type { Point2D, HighlightMap, ColorScaleType } from '../../lib/types/types';
+import type { Point2D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
@@ -46,6 +47,10 @@ interface ScatterPlot2DProps {
   tooltipFields?: string[];
   /** When true, hide points with topic_id = -1 (unclustered/noise) */
   hideUnclustered?: boolean;
+  /** Crameri categorical palette name for category coloring */
+  categoricalPalette?: string;
+  /** Nested topic/subtopic color map for hierarchical coloring */
+  nestedColorMap?: NestedColorMap | null;
 }
 
 /**
@@ -76,6 +81,8 @@ export function ScatterPlot2D({
   mutedCategories = [],
   tooltipFields,
   hideUnclustered = false,
+  categoricalPalette,
+  nestedColorMap,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -91,8 +98,8 @@ export function ScatterPlot2D({
 
   // Build color map based on category values
   const colorMap = useMemo(() => {
-    return buildCategoryColorMap(categoryField, categoryValues);
-  }, [categoryField, categoryValues]);
+    return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette);
+  }, [categoryField, categoryValues, categoricalPalette]);
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
@@ -130,6 +137,14 @@ export function ScatterPlot2D({
   // Generate Plotly-compatible colorscale array
   const plotlyColorScale = useMemo(() => {
     if (colorScaleType === 'categorical') return undefined;
+
+    // For Crameri scales, use the pre-computed 256-step Plotly array directly
+    const scaleName = colorScaleType === 'diverging' ? divergingScaleName : sequentialScaleName;
+    if (scaleName && isCrameriScale(scaleName)) {
+      const crameriScale = getCrameriPlotlyScale(scaleName);
+      if (crameriScale) return crameriScale;
+      // Fall through to D3 sampling if not loaded yet
+    }
 
     let scaleFunc: (t: number) => string;
     if (colorScaleType === 'monochrome') {
@@ -181,10 +196,14 @@ export function ScatterPlot2D({
       const unhighlightedPoints = points.filter(p => !highlightedIndices.has(p.index));
 
       // Apply hideUnclustered filter to background points
-      const filteredUnhighlightedPoints = hideUnclustered && categoryField
+      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
+      const filteredUnhighlightedPoints = hideUnclustered
         ? unhighlightedPoints.filter(p => {
-            const topicId = p.metadata?.[categoryField];
-            return topicId !== '-1' && topicId !== -1;
+            const topicId = p.metadata?.['topic_id'];
+            if (topicId === '-1' || topicId === -1) return false;
+            const topicLabel = p.metadata?.['topic_label'];
+            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+            return true;
           })
         : unhighlightedPoints;
 
@@ -221,35 +240,67 @@ export function ScatterPlot2D({
           } satisfies PlotlyData);
         } else if (colorBy === 'category' && categoryValues.length > 0) {
           // MODE: CATEGORICAL - preserve category colors with dimming
-          const pointsByCategory: Record<string, Point2D[]> = {};
-          filteredUnhighlightedPoints.forEach(point => {
-            const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-            const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
-            if (!pointsByCategory[cat]) {
-              pointsByCategory[cat] = [];
-            }
-            pointsByCategory[cat].push(point);
-          });
+          if (nestedColorMap) {
+            // NESTED: group by subtopic_label, color from nestedColorMap
+            const pointsBySub: Record<string, Point2D[]> = {};
+            filteredUnhighlightedPoints.forEach(point => {
+              const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+              if (!pointsBySub[sub]) pointsBySub[sub] = [];
+              pointsBySub[sub].push(point);
+            });
 
-          Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
-            const isMuted = mutedCategories.includes(cat);
-            traces.push({
-              x: catPoints.map(p => p.x),
-              y: catPoints.map(p => p.y),
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              name: getCategoryLabel(categoryField, cat),
-              marker: {
-                size: markerStyle.size,
-                color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                opacity: isMuted ? 0.2 : dimOpacity,  // Even more muted when category is toggled off
-              },
-              text: catPoints.map(formatHoverText),
-              hovertemplate: '<b>%{text}</b><extra></extra>',
-              customdata: catPoints as any,
-              showlegend: false,
-            } satisfies PlotlyData);
-          });
+            Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
+              // Check if subtopic or its parent topic is muted
+              const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+              const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
+              traces.push({
+                x: subPoints.map(p => p.x),
+                y: subPoints.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: sub,
+                marker: {
+                  size: markerStyle.size,
+                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                  opacity: isMuted ? 0.2 : dimOpacity,
+                },
+                text: subPoints.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: subPoints as any,
+                showlegend: false,
+              } satisfies PlotlyData);
+            });
+          } else {
+            const pointsByCategory: Record<string, Point2D[]> = {};
+            filteredUnhighlightedPoints.forEach(point => {
+              const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+              const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+              if (!pointsByCategory[cat]) {
+                pointsByCategory[cat] = [];
+              }
+              pointsByCategory[cat].push(point);
+            });
+
+            Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
+              const isMuted = mutedCategories.includes(cat);
+              traces.push({
+                x: catPoints.map(p => p.x),
+                y: catPoints.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: getCategoryLabel(categoryField, cat),
+                marker: {
+                  size: markerStyle.size,
+                  color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                  opacity: isMuted ? 0.2 : dimOpacity,  // Even more muted when category is toggled off
+                },
+                text: catPoints.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: catPoints as any,
+                showlegend: false,
+              } satisfies PlotlyData);
+            });
+          }
         } else {
           // MODE: NO COLORING - use gold fallback
           traces.push({
@@ -460,10 +511,14 @@ export function ScatterPlot2D({
     // No highlighting - render normally
     else {
       // Apply hideUnclustered filter
-      const displayPoints = hideUnclustered && categoryField
+      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
+      const displayPoints = hideUnclustered
         ? points.filter(p => {
-            const topicId = p.metadata?.[categoryField];
-            return topicId !== '-1' && topicId !== -1;
+            const topicId = p.metadata?.['topic_id'];
+            if (topicId === '-1' || topicId === -1) return false;
+            const topicLabel = p.metadata?.['topic_label'];
+            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+            return true;
           })
         : points;
 
@@ -489,34 +544,64 @@ export function ScatterPlot2D({
         customdata: displayPoints as any,
       } satisfies PlotlyData];
       } else if (colorBy === 'category' && categoryValues.length > 0) {
-        const pointsByCategory: Record<string, Point2D[]> = {};
-        displayPoints.forEach(point => {
-        const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-        const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
-        if (!pointsByCategory[cat]) {
-          pointsByCategory[cat] = [];
-        }
-        pointsByCategory[cat].push(point);
-      });
+        if (nestedColorMap) {
+          // NESTED: group by subtopic_label
+          const pointsBySub: Record<string, Point2D[]> = {};
+          displayPoints.forEach(point => {
+            const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+            if (!pointsBySub[sub]) pointsBySub[sub] = [];
+            pointsBySub[sub].push(point);
+          });
 
-      traces = Object.entries(pointsByCategory).map(([cat, catPoints]) => {
-        const isMuted = mutedCategories.includes(cat);
-        return {
-          x: catPoints.map(p => p.x),
-          y: catPoints.map(p => p.y),
-          mode: 'markers' as const,
-          type: 'scattergl' as const,
-          name: getCategoryLabel(categoryField, cat),
-          marker: {
-            size: markerStyle.size,
-            color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-            opacity: isMuted ? 0.4 : markerStyle.opacity,
-          },
-          text: catPoints.map(formatHoverText),
-          hovertemplate: '<b>%{text}</b><extra></extra>',
-          customdata: catPoints as any,
-        } satisfies PlotlyData;
-      });
+          traces = Object.entries(pointsBySub).map(([sub, subPoints]) => {
+            const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+            const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
+            return {
+              x: subPoints.map(p => p.x),
+              y: subPoints.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              name: sub,
+              marker: {
+                size: markerStyle.size,
+                color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                opacity: isMuted ? 0.4 : markerStyle.opacity,
+              },
+              text: subPoints.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: subPoints as any,
+            } satisfies PlotlyData;
+          });
+        } else {
+          const pointsByCategory: Record<string, Point2D[]> = {};
+          displayPoints.forEach(point => {
+            const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+            const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+            if (!pointsByCategory[cat]) {
+              pointsByCategory[cat] = [];
+            }
+            pointsByCategory[cat].push(point);
+          });
+
+          traces = Object.entries(pointsByCategory).map(([cat, catPoints]) => {
+            const isMuted = mutedCategories.includes(cat);
+            return {
+              x: catPoints.map(p => p.x),
+              y: catPoints.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              name: getCategoryLabel(categoryField, cat),
+              marker: {
+                size: markerStyle.size,
+                color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                opacity: isMuted ? 0.4 : markerStyle.opacity,
+              },
+              text: catPoints.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: catPoints as any,
+            } satisfies PlotlyData;
+          });
+        }
       } else {
         traces = [{
           x: displayPoints.map(p => p.x),
@@ -593,7 +678,7 @@ export function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories]);
+  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({

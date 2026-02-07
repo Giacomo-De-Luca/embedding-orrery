@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { useLazyQuery } from '@apollo/client/react';
 import { SEMANTIC_SEARCH, SEMANTIC_SEARCH_BY_ID } from '../graphql/queries';
-import type { SemanticSearchResult, DistanceMetric } from '../types/types';
+import type { SemanticSearchResult, DistanceMetric, FilterInput } from '../types/types';
 
 interface SemanticSearchData {
   semanticSearch: SemanticSearchResult[];
@@ -31,7 +31,8 @@ export function useSemanticSearch(collectionName: string | null) {
       query: string,
       nResults: number = 10,
       similarityMeasure: DistanceMetric = 'COSINE',
-      queryPrompt?: string | null
+      queryPrompt?: string | null,
+      filters?: FilterInput[]
     ): Promise<SemanticSearchResult[] | null> => {
       if (!collectionName) {
         console.warn('Cannot search: no collection selected');
@@ -39,7 +40,7 @@ export function useSemanticSearch(collectionName: string | null) {
       }
 
       try {
-        console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPrompt ? `, prompt: ${queryPrompt}` : ''})`);
+        console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPrompt ? `, prompt: ${queryPrompt}` : ''}${filters?.length ? `, filters: ${filters.length}` : ''})`);
 
         const result = await searchSimilar({
           variables: {
@@ -48,6 +49,7 @@ export function useSemanticSearch(collectionName: string | null) {
             nResults,
             similarityMeasure,
             queryPrompt: queryPrompt || undefined,
+            filters: filters?.length ? filters : undefined,
           },
         });
 
@@ -73,7 +75,8 @@ export function useSemanticSearch(collectionName: string | null) {
     async (
       itemId: string,
       nResults: number = 10,
-      similarityMeasure: DistanceMetric = 'COSINE'
+      similarityMeasure: DistanceMetric = 'COSINE',
+      filters?: FilterInput[]
     ): Promise<SemanticSearchResult[] | null> => {
       if (!collectionName) {
         console.warn('Cannot search: no collection selected');
@@ -81,7 +84,7 @@ export function useSemanticSearch(collectionName: string | null) {
       }
 
       try {
-        console.log(`Searching for items similar to: "${itemId}" (by ID, metric: ${similarityMeasure})`);
+        console.log(`Searching for items similar to: "${itemId}" (by ID, metric: ${similarityMeasure}${filters?.length ? `, filters: ${filters.length}` : ''})`);
 
         const result = await searchSimilarById({
           variables: {
@@ -89,6 +92,7 @@ export function useSemanticSearch(collectionName: string | null) {
             itemId,
             nResults,
             similarityMeasure,
+            filters: filters?.length ? filters : undefined,
           },
         });
 

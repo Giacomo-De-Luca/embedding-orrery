@@ -12,13 +12,16 @@ import { Legend } from './Legend';
 import { SimilarItemsTable } from './SimilarItemsTable';
 import { EmbeddingSidebar } from './EmbeddingSidebar';
 import { SearchSidebar } from './SearchSidebar';
-import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap } from '../../lib/types/types';
+import { AnalyticsSidebar } from './AnalyticsSidebar';
+import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap, TopicInfo } from '../../lib/types/types';
+import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
+import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 
-export type ActivePanel = 'controls' | 'search' | null;
+export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
 interface DashboardPanelProps {
   state: VisualizationState;
@@ -50,6 +53,22 @@ interface DashboardPanelProps {
   onQueryPromptNameChange?: (value: string | null) => void;
   // Tooltip configuration
   availableFields?: string[];
+  // Topic search props (threaded to SearchSidebar)
+  topics?: TopicInfo[];
+  topicSearchMode?: TopicSearchMode;
+  onTopicSearchModeChange?: (mode: TopicSearchMode) => void;
+  topicDirectQuery?: string;
+  onTopicDirectQueryChange?: (q: string) => void;
+  topicFilteredTopics?: TopicInfo[];
+  topicSemanticQuery?: string;
+  onTopicSemanticQueryChange?: (q: string) => void;
+  onTopicSemanticSearch?: () => void;
+  topicSemanticResults?: TopicSearchResult[];
+  topicSemanticLoading?: boolean;
+  selectedTopicIds?: Set<number>;
+  onToggleTopic?: (id: number) => void;
+  onSelectAllTopics?: () => void;
+  onClearAllTopics?: () => void;
 }
 
 export function DashboardPanel({
@@ -73,6 +92,22 @@ export function DashboardPanel({
   queryPromptName,
   onQueryPromptNameChange,
   availableFields = [],
+  // Topic search props
+  topics,
+  topicSearchMode,
+  onTopicSearchModeChange,
+  topicDirectQuery,
+  onTopicDirectQueryChange,
+  topicFilteredTopics,
+  topicSemanticQuery,
+  onTopicSemanticQueryChange,
+  onTopicSemanticSearch,
+  topicSemanticResults,
+  topicSemanticLoading,
+  selectedTopicIds,
+  onToggleTopic,
+  onSelectAllTopics,
+  onClearAllTopics,
 }: DashboardPanelProps) {
   const isExpanded = activePanel !== null;
   const is2D = state.mode === '2d';
@@ -81,6 +116,11 @@ export function DashboardPanel({
   // Compute category values and counts from points
   const points = is2D ? points2d : points3d;
   const { categoryValues, categoryCounts } = useCategoryData(points, colorByField);
+
+  // Nested topic/subtopic color mapping
+  const { available: nestedColorAvailable, nestedColorMap } = useNestedCategoryData(
+    points, colorByField, state.nestedColorMode, state.categoricalPalette
+  );
 
   // Check if we're using a continuous scale
   const isContinuousScale = state.colorScaleType === 'sequential' || state.colorScaleType === 'diverging' || state.colorScaleType === 'monochrome';
@@ -109,14 +149,66 @@ export function DashboardPanel({
     return undefined;
   }, [isContinuousScale, colorByField, points]);
 
-  // Toggle handler for muting/unmuting categories
-  const handleCategoryToggle = useCallback((category: string) => {
+  // Select-only handler: click isolates a category, shift+click toggles multi-select
+  const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {
     const muted = state.mutedCategories ?? [];
-    const newMuted = muted.includes(category)
-      ? muted.filter(c => c !== category)
-      : [...muted, category];
-    onStateChange({ mutedCategories: newMuted });
-  }, [state.mutedCategories, onStateChange]);
+    const subtopics = nestedColorMap?.hierarchy?.[category];
+
+    // In nested mode, allCategories must include both topics and subtopics
+    const allCategories = nestedColorMap
+      ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
+      : categoryValues;
+
+    if (shiftKey) {
+      // Shift+click: toggle individual category (add/remove from muted)
+      if (subtopics && subtopics.length > 0) {
+        const allRelated = [category, ...subtopics];
+        const isCurrentlyMuted = muted.includes(category);
+        if (isCurrentlyMuted) {
+          onStateChange({ mutedCategories: muted.filter(c => !allRelated.includes(c)) });
+        } else {
+          onStateChange({ mutedCategories: [...new Set([...muted, ...allRelated])] });
+        }
+      } else {
+        const newMuted = muted.includes(category)
+          ? muted.filter(c => c !== category)
+          : [...muted, category];
+        onStateChange({ mutedCategories: newMuted });
+      }
+    } else {
+      // Normal click: select only this category (mute all others)
+      // Determine what should stay unmuted
+      let keepUnmuted: Set<string>;
+      if (subtopics && subtopics.length > 0) {
+        // Clicked a topic header: keep topic + all its subtopics
+        keepUnmuted = new Set([category, ...subtopics]);
+      } else if (nestedColorMap) {
+        // Clicked a subtopic: keep it + its parent topic (so subtopics stay visible in legend)
+        const parentTopic = Object.entries(nestedColorMap.hierarchy)
+          .find(([, subs]) => subs.includes(category))?.[0];
+        keepUnmuted = parentTopic
+          ? new Set([category, parentTopic])
+          : new Set([category]);
+      } else {
+        keepUnmuted = new Set([category]);
+      }
+
+      // If already isolated on this exact selection, toggle back to show all
+      const selected = allCategories.filter(c => !muted.includes(c));
+      const isAlreadyIsolated = selected.length > 0 && selected.every(c => keepUnmuted.has(c));
+
+      if (isAlreadyIsolated) {
+        onStateChange({ mutedCategories: [] });
+      } else {
+        onStateChange({ mutedCategories: allCategories.filter(c => !keepUnmuted.has(c)) });
+      }
+    }
+  }, [state.mutedCategories, onStateChange, nestedColorMap, categoryValues]);
+
+  // Double-click reset: show all categories
+  const handleCategoryReset = useCallback(() => {
+    onStateChange({ mutedCategories: [] });
+  }, [onStateChange]);
 
   // Show legend for categorical scales with values, or continuous scales with numeric range
   const showLegend = colorByField && (
@@ -146,6 +238,8 @@ export function DashboardPanel({
       mutedCategories={state.mutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
+      categoricalPalette={state.categoricalPalette}
+      nestedColorMap={nestedColorMap}
     />
   ) : (
     <ScatterPlot3D
@@ -165,6 +259,8 @@ export function DashboardPanel({
       mutedCategories={state.mutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
+      categoricalPalette={state.categoricalPalette}
+      nestedColorMap={nestedColorMap}
     />
   );
 
@@ -198,11 +294,14 @@ export function DashboardPanel({
               categoryCounts={categoryCounts}
               mutedCategories={state.mutedCategories}
               onCategoryToggle={handleCategoryToggle}
+              onCategoryReset={handleCategoryReset}
               colorScaleType={state.colorScaleType}
               numericRange={numericRange}
               sequentialScaleName={state.sequentialScaleName}
               divergingScaleName={state.divergingScaleName}
               monochromeColor={state.monochromeColor}
+              categoricalPalette={state.categoricalPalette}
+              nestedColorMap={nestedColorMap}
             />
           </ScrollArea>
           {/* Horizontal Spacer 
@@ -260,6 +359,7 @@ export function DashboardPanel({
           selectedPoint={selectedPoint || null}
           colorFieldOptions={colorFieldOptions}
           availableFields={availableFields}
+          nestedColorAvailable={nestedColorAvailable}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
@@ -282,10 +382,41 @@ export function DashboardPanel({
           categoryField={colorByField}
           queryPromptName={queryPromptName}
           onQueryPromptNameChange={onQueryPromptNameChange}
+          topics={topics}
+          topicSearchMode={topicSearchMode}
+          onTopicSearchModeChange={onTopicSearchModeChange}
+          topicDirectQuery={topicDirectQuery}
+          onTopicDirectQueryChange={onTopicDirectQueryChange}
+          topicFilteredTopics={topicFilteredTopics}
+          topicSemanticQuery={topicSemanticQuery}
+          onTopicSemanticQueryChange={onTopicSemanticQueryChange}
+          onTopicSemanticSearch={onTopicSemanticSearch}
+          topicSemanticResults={topicSemanticResults}
+          topicSemanticLoading={topicSemanticLoading}
+          selectedTopicIds={selectedTopicIds}
+          onToggleTopic={onToggleTopic}
+          onSelectAllTopics={onSelectAllTopics}
+          onClearAllTopics={onClearAllTopics}
+          categoricalPalette={state.categoricalPalette}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
             activePanel === 'search' ? "left-4" : "-left-[400px] opacity-0"
+          )}
+        />
+
+        {/* Analytics Sidebar */}
+        <AnalyticsSidebar
+          points={points}
+          colorByField={colorByField}
+          categoryValues={categoryValues}
+          categoryCounts={categoryCounts}
+          availableFields={availableFields}
+          categoricalPalette={state.categoricalPalette}
+          variant="floating"
+          className={cn(
+            "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
+            activePanel === 'analytics' ? "left-4" : "-left-[400px] opacity-0"
           )}
         />
       </div>

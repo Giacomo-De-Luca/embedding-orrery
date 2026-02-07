@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { EmbeddingData, SemanticSearchResult, HighlightMap } from '../types/types';
 
 /**
- * Combines highlighted indices from text search and semantic search results.
+ * Combines highlighted indices from text search, semantic search, and topic selection.
  *
  * Returns a Map where:
  * - Keys: point indices to highlight
@@ -10,12 +10,14 @@ import type { EmbeddingData, SemanticSearchResult, HighlightMap } from '../types
  *   - Selected point: 1.0 (it's the center of semantic search)
  *   - Text search matches: 1.0 (perfect match)
  *   - Semantic search results: actual similarity score
+ *   - Topic-selected points: 1.0 (membership match)
  */
 export function useHighlightedIndices(
   textSearchHighlights: Set<number> | undefined,
   semanticSearchResults: SemanticSearchResult[] | null,
   data: EmbeddingData | null,
-  selectedPointIndex?: number
+  selectedPointIndex?: number,
+  topicHighlightMap?: HighlightMap
 ): HighlightMap | undefined {
   return useMemo(() => {
     const highlightMap = new Map<number, number>();
@@ -53,7 +55,17 @@ export function useHighlightedIndices(
       });
     }
 
+    // Merge topic highlights (max-similarity logic)
+    if (topicHighlightMap && topicHighlightMap.size > 0) {
+      topicHighlightMap.forEach((score, index) => {
+        const current = highlightMap.get(index);
+        if (current === undefined || score > current) {
+          highlightMap.set(index, score);
+        }
+      });
+    }
+
     // Return undefined if empty for backward compatibility
     return highlightMap.size > 0 ? highlightMap : undefined;
-  }, [semanticSearchResults, textSearchHighlights, data, selectedPointIndex]);
+  }, [semanticSearchResults, textSearchHighlights, data, selectedPointIndex, topicHighlightMap]);
 }

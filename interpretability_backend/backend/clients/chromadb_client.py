@@ -268,7 +268,11 @@ class ChromaDBClient:
 
         return results
 
-    def get_projection_data(self, collection_name: str) -> Dict[str, Any]:
+    def get_projection_data(
+        self,
+        collection_name: str,
+        projection_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Get full projection data for visualization.
 
         This retrieves all items with projections (PCA/UMAP 2D and 3D) from ChromaDB metadata.
@@ -279,14 +283,19 @@ class ChromaDBClient:
         - documents: embedded text content
         - item_metadata: raw metadata per item (flexible schema)
         - available_fields: list of metadata field names
-        - Projections: PCA and UMAP coordinates
+        - Projections: PCA and UMAP coordinates (only requested types are parsed)
 
         Args:
             collection_name: Name of the collection
+            projection_types: Which projections to parse (e.g. ["umap_2d", "umap_3d"]).
+                            None means all four. Non-requested projections return None.
 
         Returns:
             Dictionary with projection data and metadata
         """
+        ALL_PROJECTION_TYPES = ("pca_2d", "pca_3d", "umap_2d", "umap_3d")
+        requested = set(projection_types) if projection_types else set(ALL_PROJECTION_TYPES)
+
         # Read-only operation - no embedding function needed
         collection = self.get_collection(collection_name, load_embedding_function=False)
 
@@ -302,36 +311,29 @@ class ChromaDBClient:
         # Track available fields across all items
         available_fields = set()
 
-        # Extract data
+        # Extract data — only parse requested projections
         item_metadata = []
-        pca_2d = []
-        pca_3d = []
-        umap_2d = []
-        umap_3d = []
+        projections = {pt: [] for pt in requested}
 
         for metadata in raw_metadatas:
             # Track available fields (excluding projection fields)
             for key in metadata.keys():
-                if key not in ('pca_2d', 'pca_3d', 'umap_2d', 'umap_3d'):
+                if key not in ALL_PROJECTION_TYPES:
                     available_fields.add(key)
 
             # Store raw metadata (excluding projection coordinates)
             clean_metadata = {k: v for k, v in metadata.items()
-                             if k not in ('pca_2d', 'pca_3d', 'umap_2d', 'umap_3d')}
+                             if k not in ALL_PROJECTION_TYPES}
             item_metadata.append(clean_metadata)
 
-            # Extract projection coordinates from metadata (stored as JSON strings)
+            # Extract only requested projection coordinates from metadata
             try:
-                pca_2d.append(json.loads(metadata.get("pca_2d", "[0, 0]")))
-                pca_3d.append(json.loads(metadata.get("pca_3d", "[0, 0, 0]")))
-                umap_2d.append(json.loads(metadata.get("umap_2d", "[0, 0]")))
-                umap_3d.append(json.loads(metadata.get("umap_3d", "[0, 0, 0]")))
+                for pt in requested:
+                    default = "[0, 0, 0]" if "3d" in pt else "[0, 0]"
+                    projections[pt].append(json.loads(metadata.get(pt, default)))
             except (json.JSONDecodeError, TypeError):
-                # Fallback to defaults if parsing fails
-                pca_2d.append([0, 0])
-                pca_3d.append([0, 0, 0])
-                umap_2d.append([0, 0])
-                umap_3d.append([0, 0, 0])
+                for pt in requested:
+                    projections[pt].append([0, 0, 0] if "3d" in pt else [0, 0])
 
         # Get collection metadata
         collection_metadata = collection.metadata or {}
@@ -347,16 +349,25 @@ class ChromaDBClient:
         except (json.JSONDecodeError, TypeError):
             pass
 
+        # Parse field_analysis from collection metadata if present
+        field_analysis = None
+        field_analysis_str = collection_metadata.get("field_analysis")
+        if field_analysis_str:
+            try:
+                field_analysis = json.loads(field_analysis_str)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         return {
             "ids": ids,
             "documents": documents,
             "item_metadata": item_metadata,
             "available_fields": sorted(list(available_fields)),
-            # Projections
-            "pca_2d": pca_2d,
-            "pca_3d": pca_3d,
-            "umap_2d": umap_2d,
-            "umap_3d": umap_3d,
+            # Projections — None for non-requested types
+            "pca_2d": projections.get("pca_2d"),
+            "pca_3d": projections.get("pca_3d"),
+            "umap_2d": projections.get("umap_2d"),
+            "umap_3d": projections.get("umap_3d"),
             # Collection-level metadata
             "metadata": {
                 "total_items": len(ids),
@@ -378,6 +389,8 @@ class ChromaDBClient:
                 "has_topics": collection_metadata.get("has_topics", False),
                 "topic_count": collection_metadata.get("topic_count"),
                 "topics_extracted_at": collection_metadata.get("topics_extracted_at"),
+                # Pre-computed field analysis (if available)
+                "field_analysis": field_analysis,
             }
         }
 

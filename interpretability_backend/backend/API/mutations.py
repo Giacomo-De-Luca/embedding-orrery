@@ -16,6 +16,8 @@ from .types import (
     ExtractTopicsResult,
     JSON,
     PortionStrategyEnum,
+    ReduceTopicsInput,
+    ReduceTopicsResult,
     TopicInfo,
     TopicKeyword,
     UpdateCollectionMetadataResult,
@@ -375,7 +377,8 @@ class Mutation:
                 topic_id=topic.topic_id,
                 keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
                 label=topic.label,
-                count=topic.count
+                count=topic.count,
+                subtopics=topic.subtopics
             )
             for topic in result.topics
         ]
@@ -390,51 +393,6 @@ class Mutation:
             num_topics_before_reduction=result.num_topics_before_reduction,
             reduction_applied=result.reduction_applied
         )
-
-
-
-async def _extract_topics_for_collection(
-    collection_name: str,
-    topic_config_input
-) -> bool:
-    """Helper to extract topics for a collection (used by embedding mutations).
-
-    Args:
-        collection_name: Name of collection
-        topic_config_input: TopicConfigInput or dict with config
-
-    Returns:
-        True if topics were extracted successfully
-    """
-    try:
-        # Handle both TopicConfigInput and dict
-        if hasattr(topic_config_input, '__dict__'):
-            tc = topic_config_input
-            config = TopicExtractionConfig(
-                collection_name=collection_name,
-                min_topic_size=getattr(tc, 'min_topic_size', 10),
-                n_keywords=getattr(tc, 'n_keywords', 10),
-                use_llm_labels=getattr(tc, 'use_llm_labels', False),
-                llm_provider=getattr(tc, 'llm_provider', 'gemini'),
-                llm_model=getattr(tc, 'llm_model', 'gemini-3-flash-preview'),
-                projection_type=getattr(tc, 'projection_type', 'umap_2d')
-            )
-        else:
-            config = TopicExtractionConfig(
-                collection_name=collection_name,
-                min_topic_size=topic_config_input.get('min_topic_size', 10),
-                n_keywords=topic_config_input.get('n_keywords', 10),
-                use_llm_labels=topic_config_input.get('use_llm_labels', False),
-                llm_provider=topic_config_input.get('llm_provider', 'gemini'),
-                llm_model=topic_config_input.get('llm_model', 'gemini-3-flash-preview'),
-                projection_type=topic_config_input.get('projection_type', 'umap_2d')
-            )
-
-        result = await asyncio.to_thread(do_extract_topics, config)
-        return result.error is None
-    except Exception as e:
-        print(f"Topic extraction failed: {e}")
-        return False
 
     @strawberry.mutation
     async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:
@@ -468,13 +426,14 @@ async def _extract_topics_for_collection(
                 topic_id=topic.topic_id,
                 keywords=[TopicKeyword(word=w, score=s) for w, s in topic.keywords],
                 label=topic.label,
-                count=topic.count
+                count=topic.count,
+                subtopics=topic.subtopics
             )
             for topic in result.topics
         ]
 
-        # Build topic mappings JSON (for now, return empty dict - could be extended later)
-        topic_mappings = {}
+        # Build topic mappings JSON from reduction result
+        topic_mappings = {str(k): v for k, v in (result.topic_mappings or {}).items()}
 
         return ReduceTopicsResult(
             collection_name=result.collection_name,
@@ -485,3 +444,82 @@ async def _extract_topics_for_collection(
             duration_seconds=result.duration_seconds,
             error=result.error
         )
+
+
+async def _extract_topics_for_collection(
+    collection_name: str,
+    topic_config_input
+) -> bool:
+    """Helper to extract topics for a collection (used by embedding mutations).
+
+    Args:
+        collection_name: Name of collection
+        topic_config_input: TopicConfigInput or dict with config
+
+    Returns:
+        True if topics were extracted successfully
+    """
+    try:
+        # Handle both TopicConfigInput and dict
+        if hasattr(topic_config_input, '__dict__'):
+            tc = topic_config_input
+
+            # Extract reduction config if present
+            reduce_topics = False
+            reduction_method = "auto"
+            nr_topics = None
+            use_ctfidf_for_reduction = True
+
+            reduction = getattr(tc, 'reduction', None)
+            if reduction and getattr(reduction, 'enabled', False):
+                reduce_topics = True
+                reduction_method = getattr(reduction, 'method', 'auto')
+                nr_topics = getattr(reduction, 'n_topics', None)
+                use_ctfidf_for_reduction = getattr(reduction, 'use_ctfidf', True)
+
+            config = TopicExtractionConfig(
+                collection_name=collection_name,
+                min_topic_size=getattr(tc, 'min_topic_size', 10),
+                n_keywords=getattr(tc, 'n_keywords', 10),
+                use_llm_labels=getattr(tc, 'use_llm_labels', False),
+                llm_provider=getattr(tc, 'llm_provider', 'gemini'),
+                llm_model=getattr(tc, 'llm_model', 'gemini-3-flash-preview'),
+                projection_type=getattr(tc, 'projection_type', 'umap_2d'),
+                reduce_topics=reduce_topics,
+                reduction_method=reduction_method,
+                nr_topics=nr_topics,
+                use_ctfidf_for_reduction=use_ctfidf_for_reduction
+            )
+        else:
+            # Extract reduction config from dict
+            reduce_topics = False
+            reduction_method = "auto"
+            nr_topics = None
+            use_ctfidf_for_reduction = True
+
+            reduction = topic_config_input.get('reduction', None)
+            if reduction and reduction.get('enabled', False):
+                reduce_topics = True
+                reduction_method = reduction.get('method', 'auto')
+                nr_topics = reduction.get('n_topics', None)
+                use_ctfidf_for_reduction = reduction.get('use_ctfidf', True)
+
+            config = TopicExtractionConfig(
+                collection_name=collection_name,
+                min_topic_size=topic_config_input.get('min_topic_size', 10),
+                n_keywords=topic_config_input.get('n_keywords', 10),
+                use_llm_labels=topic_config_input.get('use_llm_labels', False),
+                llm_provider=topic_config_input.get('llm_provider', 'gemini'),
+                llm_model=topic_config_input.get('llm_model', 'gemini-3-flash-preview'),
+                projection_type=topic_config_input.get('projection_type', 'umap_2d'),
+                reduce_topics=reduce_topics,
+                reduction_method=reduction_method,
+                nr_topics=nr_topics,
+                use_ctfidf_for_reduction=use_ctfidf_for_reduction
+            )
+
+        result = await asyncio.to_thread(do_extract_topics, config)
+        return result.error is None
+    except Exception as e:
+        print(f"Topic extraction failed: {e}")
+        return False

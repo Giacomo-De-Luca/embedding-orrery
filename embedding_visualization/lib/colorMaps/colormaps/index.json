@@ -1,0 +1,242 @@
+{
+  "acton": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "actonS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "bam": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "bamO": {
+    "type": "cyclic",
+    "numColors": 256
+  },
+  "bamako": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "bamakoS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "batlow": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "batlowK": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "batlowKS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "batlowS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "batlowW": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "batlowWS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "berlin": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "bilbao": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "bilbaoS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "broc": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "brocO": {
+    "type": "cyclic",
+    "numColors": 256
+  },
+  "buda": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "budaS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "bukavu": {
+    "type": "multi-sequential",
+    "numColors": 256
+  },
+  "cork": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "corkO": {
+    "type": "cyclic",
+    "numColors": 256
+  },
+  "davos": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "davosS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "devon": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "devonS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "fes": {
+    "type": "multi-sequential",
+    "numColors": 256
+  },
+  "glasgow": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "glasgowS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "grayC": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "grayCS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "hawaii": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "hawaiiS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "imola": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "imolaS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "lajolla": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "lajollaS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "lapaz": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "lapazS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "lipari": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "lipariS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "lisbon": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "managua": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "navia": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "naviaS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "nuuk": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "nuukS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "oleron": {
+    "type": "multi-sequential",
+    "numColors": 256
+  },
+  "oslo": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "osloS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "roma": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "romaO": {
+    "type": "cyclic",
+    "numColors": 256
+  },
+  "tofino": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "tokyo": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "tokyoS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "turku": {
+    "type": "sequential",
+    "numColors": 256
+  },
+  "turkuS": {
+    "type": "categorical",
+    "numColors": 100
+  },
+  "vanimo": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "vik": {
+    "type": "diverging",
+    "numColors": 256
+  },
+  "vikO": {
+    "type": "cyclic",
+    "numColors": 256
+  }
+}

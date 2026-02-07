@@ -21,6 +21,8 @@ import {
 import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
+import { isCrameriScale, loadCrameriColormap } from '../../lib/colorMaps/crameriScales';
+import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
 
 interface VisualizationControlsProps {
   state: VisualizationState;
@@ -32,6 +34,7 @@ interface VisualizationControlsProps {
   };
   colorFieldOptions?: ColorFieldOption[];
   availableFields?: string[];
+  nestedColorAvailable?: boolean;
 }
 
 export function VisualizationControls({
@@ -41,6 +44,7 @@ export function VisualizationControls({
   metadata,
   colorFieldOptions = [],
   availableFields = [],
+  nestedColorAvailable,
 }: VisualizationControlsProps) {
   // Handle field selection with auto-detection of scale type
   const handleFieldChange = (value: string) => {
@@ -221,19 +225,29 @@ export function VisualizationControls({
                 monochromeColor={state.monochromeColor}
                 onMonochromeColorChange={(color) => onStateChange({ monochromeColor: color })}
                 sequentialScaleName={state.sequentialScaleName}
-                onSequentialScaleNameChange={(name) => onStateChange({ sequentialScaleName: name })}
+                onSequentialScaleNameChange={(name) => {
+                  // Preload Crameri data so scatter plots can use it
+                  if (isCrameriScale(name)) loadCrameriColormap(name);
+                  onStateChange({ sequentialScaleName: name });
+                }}
                 divergingScaleName={state.divergingScaleName}
-                onDivergingScaleNameChange={(name) => onStateChange({ divergingScaleName: name })}
+                onDivergingScaleNameChange={(name) => {
+                  if (isCrameriScale(name)) loadCrameriColormap(name);
+                  onStateChange({ divergingScaleName: name });
+                }}
+                categoricalPalette={state.categoricalPalette}
+                onCategoricalPaletteChange={(palette) => {
+                  if (palette && isCrameriScale(palette)) loadCrameriColormap(palette);
+                  onStateChange({ categoricalPalette: palette });
+                }}
               />
             )}
           </div>
 
-          {/* Hide Unclustered Checkbox - only show for topic fields */}
-          {state.colorByField && (
-            state.colorByField === 'topic_id' ||
-            state.colorByField === 'topic_label' ||
-            state.colorByField === 'topic'
-          ) && (
+          {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
+          {state.colorByField &&
+            CATEGORY_PRESETS[state.colorByField.toLowerCase()]?.labels &&
+            Object.values(CATEGORY_PRESETS[state.colorByField.toLowerCase()].labels!).includes('Unclustered') && (
             <div className="flex items-center space-x-2 mt-2">
               <Checkbox
                 id="hide-unclustered"
@@ -245,6 +259,23 @@ export function VisualizationControls({
                 className="font-normal cursor-pointer text-sm"
               >
                 Hide unclustered points
+              </Label>
+            </div>
+          )}
+
+          {/* Nested subtopic coloring - only when topic_label is selected and subtopics exist */}
+          {nestedColorAvailable && state.colorByField === 'topic_label' && (
+            <div className="flex items-center space-x-2 mt-2">
+              <Checkbox
+                id="nested-color-mode"
+                checked={state.nestedColorMode ?? false}
+                onCheckedChange={(checked) => onStateChange({ nestedColorMode: checked === true })}
+              />
+              <Label
+                htmlFor="nested-color-mode"
+                className="font-normal cursor-pointer text-sm"
+              >
+                Color by subtopics
               </Label>
             </div>
           )}

@@ -50,6 +50,7 @@ class TopicInfoResult:
     keywords: List[Tuple[str, float]]
     label: Optional[str]
     count: int
+    subtopics: Optional[List[str]] = None
 
 
 @dataclass
@@ -65,6 +66,7 @@ class TopicExtractionResult:
     # Reduction tracking
     num_topics_before_reduction: Optional[int] = None
     reduction_applied: bool = False
+    topic_mappings: Optional[Dict[int, int]] = None
 
 
 def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
@@ -174,6 +176,9 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         # Step 3.5: Topic Reduction (optional)
         num_topics_before_reduction = None
+        reduction_result = None
+        pre_reduction_labels = {}  # topic_id -> label (before reduction)
+        pre_reduction_assignments = {}  # item_id -> original topic_id
         if config.reduce_topics:
             emit_progress(
                 job_id=job_id, status="running",
@@ -185,6 +190,19 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
             # Store pre-reduction count
             num_topics_before_reduction = num_topics
+
+            # Capture pre-reduction labels (top-3-keyword labels) and assignments
+            for tid, kws in topics_data.items():
+                if tid == -1:
+                    pre_reduction_labels[tid] = "Unclustered"
+                else:
+                    top_words = [w for w, _ in kws[:3]]
+                    pre_reduction_labels[tid] = " | ".join(top_words)
+
+            for _, row in documents_df.iterrows():
+                doc_idx = int(row["Document_ID"])
+                item_id = ids[doc_idx]
+                pre_reduction_assignments[item_id] = int(row["Topic"])
 
             # Initialize reducer
             from ..topic_extraction.topic_reducer import TopicReducer
@@ -205,18 +223,18 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 if config.nr_topics >= num_topics + 1:  # +1 for noise
                     logger.info(f"Target ({config.nr_topics}) >= extracted ({num_topics}), skipping reduction")
                 else:
-                    result = reducer.reduce_to_n_topics(
+                    reduction_result = reducer.reduce_to_n_topics(
                         n_topics=config.nr_topics,
                         use_ctfidf=config.use_ctfidf_for_reduction
                     )
-                    documents_df = result.documents_df
-                    topics_data = result.topics_data
-                    logger.info(f"Reduced from {result.num_topics_before} to {result.num_topics_after} topics")
+                    documents_df = reduction_result.documents_df
+                    topics_data = reduction_result.topics_data
+                    logger.info(f"Reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics")
             elif config.reduction_method == "auto":
-                result = reducer.auto_reduce_topics(use_ctfidf=config.use_ctfidf_for_reduction)
-                documents_df = result.documents_df
-                topics_data = result.topics_data
-                logger.info(f"Auto-reduced from {result.num_topics_before} to {result.num_topics_after} topics")
+                reduction_result = reducer.auto_reduce_topics(use_ctfidf=config.use_ctfidf_for_reduction)
+                documents_df = reduction_result.documents_df
+                topics_data = reduction_result.topics_data
+                logger.info(f"Auto-reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics")
             else:
                 raise ValueError(f"Invalid reduction_method: {config.reduction_method}")
 
@@ -225,6 +243,12 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             num_noise = topic_counts.get(-1, 0)
             num_topics = len([t for t in topic_counts.keys() if t != -1])
             logger.info(f"After reduction: {num_topics} topics, {num_noise} noise points")
+
+        # Build labeled hierarchy: reduced_label -> [subtopic_labels]
+        labeled_hierarchy = {}
+        if reduction_result and reduction_result.topic_hierarchy:
+            # We'll populate this after building topic_labels below
+            pass
 
         # Build topic info list
         topic_labels: Dict[int, str] = {}
@@ -271,6 +295,22 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                     topic_info.label = llm_labels[topic_info.topic_id]
                     topic_labels[topic_info.topic_id] = llm_labels[topic_info.topic_id]
 
+        # Build subtopic info after labels are finalized
+        if reduction_result and reduction_result.topic_hierarchy:
+            for new_id, old_ids in reduction_result.topic_hierarchy.items():
+                new_label = topic_labels.get(new_id, f"Topic {new_id}")
+                subtopic_label_list = [
+                    pre_reduction_labels.get(old_id, f"Topic {old_id}")
+                    for old_id in old_ids
+                ]
+                labeled_hierarchy[new_label] = subtopic_label_list
+
+                # Attach subtopics to the corresponding TopicInfoResult
+                for info in topic_infos:
+                    if info.topic_id == new_id:
+                        info.subtopics = subtopic_label_list
+                        break
+
         # Step 5: Update ChromaDB metadata
         emit_progress(
             job_id=job_id, status="running",
@@ -293,7 +333,9 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             ids=ids,
             raw_metadatas=raw_metadatas,
             topic_assignments=topic_assignments,
-            topic_labels=topic_labels
+            topic_labels=topic_labels,
+            subtopic_assignments=pre_reduction_assignments if reduction_result else None,
+            subtopic_labels=pre_reduction_labels if reduction_result else None
         )
 
         # Update collection-level metadata
@@ -301,7 +343,8 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             collection=collection,
             topic_infos=topic_infos,
             config=config,
-            num_topics_before_reduction=num_topics_before_reduction
+            num_topics_before_reduction=num_topics_before_reduction,
+            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None
         )
 
         duration = time.time() - start_time
@@ -323,7 +366,8 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             topics=topic_infos,
             duration_seconds=duration,
             num_topics_before_reduction=num_topics_before_reduction,
-            reduction_applied=config.reduce_topics
+            reduction_applied=config.reduce_topics,
+            topic_mappings=reduction_result.topic_mappings if reduction_result else None
         )
 
     except Exception as e:
@@ -354,7 +398,9 @@ def _batch_update_topic_metadata(
     raw_metadatas: List[dict],
     topic_assignments: Dict[str, int],
     topic_labels: Dict[int, str],
-    batch_size: int = 1000
+    batch_size: int = 1000,
+    subtopic_assignments: Optional[Dict[str, int]] = None,
+    subtopic_labels: Optional[Dict[int, str]] = None
 ) -> None:
     """Update item metadata with topic_id and topic_label in batches.
 
@@ -365,6 +411,8 @@ def _batch_update_topic_metadata(
         topic_assignments: Mapping of item ID -> topic_id
         topic_labels: Mapping of topic_id -> label
         batch_size: Items per batch
+        subtopic_assignments: Mapping of item ID -> original topic_id (pre-reduction)
+        subtopic_labels: Mapping of original topic_id -> label (pre-reduction)
     """
     for i in range(0, len(ids), batch_size):
         batch_ids = ids[i:i + batch_size]
@@ -375,6 +423,13 @@ def _batch_update_topic_metadata(
             topic_id = topic_assignments.get(item_id, -1)
             meta["topic_id"] = str(topic_id)
             meta["topic_label"] = topic_labels.get(topic_id, "Unclustered")
+
+            # Store pre-reduction topic as subtopic if reduction was applied
+            if subtopic_assignments is not None and subtopic_labels is not None:
+                subtopic_id = subtopic_assignments.get(item_id, -1)
+                meta["subtopic_id"] = str(subtopic_id)
+                meta["subtopic_label"] = subtopic_labels.get(subtopic_id, "Unclustered")
+
             batch_metadatas.append(meta)
 
         collection.update(ids=batch_ids, metadatas=batch_metadatas)
@@ -386,7 +441,8 @@ def _update_collection_topic_metadata(
     collection,
     topic_infos: List[TopicInfoResult],
     config: TopicExtractionConfig,
-    num_topics_before_reduction: Optional[int] = None
+    num_topics_before_reduction: Optional[int] = None,
+    topic_hierarchy: Optional[Dict[str, List[str]]] = None
 ) -> None:
     """Update collection-level metadata with topic summary.
 
@@ -395,16 +451,20 @@ def _update_collection_topic_metadata(
         topic_infos: List of topic information
         config: Topic extraction configuration
         num_topics_before_reduction: Number of topics before reduction (if applied)
+        topic_hierarchy: Mapping of reduced topic label -> list of original subtopic labels
     """
     # Build topic summary for collection metadata
     topic_summary = []
     for info in topic_infos:
-        topic_summary.append({
+        entry = {
             "topic_id": info.topic_id,
             "label": info.label,
             "count": info.count,
             "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:5]]
-        })
+        }
+        if info.subtopics:
+            entry["subtopics"] = info.subtopics
+        topic_summary.append(entry)
 
     current_metadata = collection.metadata or {}
     current_metadata.update({
@@ -419,6 +479,9 @@ def _update_collection_topic_metadata(
         }),
         "topic_summary": json.dumps(topic_summary),
     })
+    # Invalidate cached field analysis — topic extraction adds/changes topic_id and
+    # topic_label fields, so the frontend must re-analyze field metadata on next load.
+    current_metadata.pop("field_analysis", None)
 
     # Add reduction info if applied
     if config.reduce_topics and num_topics_before_reduction is not None:
@@ -428,6 +491,10 @@ def _update_collection_topic_metadata(
             "reduction_method": config.reduction_method,
             "reduction_target": config.nr_topics,
         })
+
+    # Store topic hierarchy if provided
+    if topic_hierarchy:
+        current_metadata["topic_hierarchy"] = json.dumps(topic_hierarchy)
 
     collection.modify(metadata=current_metadata)
     logger.info("Updated collection metadata with topic summary")
@@ -570,6 +637,16 @@ def reduce_existing_topics(
         num_topics_before = len([t for t in topics_data.keys() if t != -1])
         logger.info(f"Running reduction: method={method}, use_ctfidf={use_ctfidf}")
 
+        # Capture pre-reduction labels and assignments from existing metadata
+        pre_reduction_labels: Dict[int, str] = {}
+        pre_reduction_assignments: Dict[str, int] = {}
+
+        for idx, (item_id, meta) in enumerate(zip(ids, raw_metadatas)):
+            orig_topic_id = int(meta.get("topic_id", -1))
+            pre_reduction_assignments[item_id] = orig_topic_id
+            if orig_topic_id not in pre_reduction_labels:
+                pre_reduction_labels[orig_topic_id] = meta.get("topic_label", "Unclustered")
+
         from ..topic_extraction.topic_reducer import TopicReducer
         reducer = TopicReducer(
             documents_df=documents_df,
@@ -639,6 +716,23 @@ def reduce_existing_topics(
                     topic_info.label = llm_labels[topic_info.topic_id]
                     topic_labels[topic_info.topic_id] = llm_labels[topic_info.topic_id]
 
+        # Build subtopic hierarchy from reduction result
+        labeled_hierarchy = {}
+        if result.topic_hierarchy:
+            for new_id, old_ids in result.topic_hierarchy.items():
+                new_label = topic_labels.get(new_id, f"Topic {new_id}")
+                subtopic_label_list = [
+                    pre_reduction_labels.get(old_id, f"Topic {old_id}")
+                    for old_id in old_ids
+                ]
+                labeled_hierarchy[new_label] = subtopic_label_list
+
+                # Attach subtopics to the corresponding TopicInfoResult
+                for info in topic_infos:
+                    if info.topic_id == new_id:
+                        info.subtopics = subtopic_label_list
+                        break
+
         # Step 8: Update metadata
         emit_progress(
             job_id=job_id, status="running",
@@ -660,7 +754,9 @@ def reduce_existing_topics(
             ids=ids,
             raw_metadatas=raw_metadatas,
             topic_assignments=topic_assignments,
-            topic_labels=topic_labels
+            topic_labels=topic_labels,
+            subtopic_assignments=pre_reduction_assignments,
+            subtopic_labels=pre_reduction_labels
         )
 
         # Update collection metadata (with reduction info)
@@ -676,7 +772,8 @@ def reduce_existing_topics(
             collection=collection,
             topic_infos=topic_infos,
             config=topic_config,
-            num_topics_before_reduction=num_topics_before
+            num_topics_before_reduction=num_topics_before,
+            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None
         )
 
         duration = time.time() - start_time
@@ -698,7 +795,8 @@ def reduce_existing_topics(
             topics=topic_infos,
             duration_seconds=duration,
             num_topics_before_reduction=num_topics_before,
-            reduction_applied=True
+            reduction_applied=True,
+            topic_mappings=result.topic_mappings
         )
 
     except Exception as e:

@@ -18,26 +18,35 @@ export const GET_COLLECTIONS = gql`
 `;
 
 /**
- * Query to get complete collection data with projections
+ * Query to get complete collection data with projections.
+ * Supports selective projection loading — only requested types are parsed by the backend.
+ * Non-requested projections return null.
  */
-export const GET_COLLECTION = gql`
-  query GetCollection($name: String!) {
-    collection(name: $name) {
-      words
-      definitions
-      pos
+export const GET_COLLECTION_DATA = gql`
+  query GetCollectionData($name: String!, $projectionTypes: [String!]) {
+    collection(name: $name, projectionTypes: $projectionTypes) {
+      ids
+      documents
+      itemMetadata
+      availableFields
       pca2d
       pca3d
       umap2d
       umap3d
       metadata {
-        totalWords
+        totalItems
         embeddingDim
-        embeddingProvider
-        embeddingModel
         timestamp
         pca2dVariance
         pca3dVariance
+        sourceDataset
+        sourceSplit
+        sourceFile
+        hasProjections
+        embeddingProvider
+        embeddingModel
+        embeddingPrompt
+        fieldAnalysis
       }
     }
   }
@@ -53,6 +62,7 @@ export const SEMANTIC_SEARCH = gql`
     $nResults: Int = 10
     $similarityMeasure: SimilarityMeasure = COSINE
     $queryPrompt: String
+    $filters: [FilterInput!]
   ) {
     semanticSearch(
       collectionName: $collectionName
@@ -60,6 +70,7 @@ export const SEMANTIC_SEARCH = gql`
       nResults: $nResults
       similarityMeasure: $similarityMeasure
       queryPrompt: $queryPrompt
+      filters: $filters
     ) {
       id
       document
@@ -79,12 +90,14 @@ export const SEMANTIC_SEARCH_BY_ID = gql`
     $itemId: String!
     $nResults: Int = 10
     $similarityMeasure: SimilarityMeasure = COSINE
+    $filters: [FilterInput!]
   ) {
     semanticSearchById(
       collectionName: $collectionName
       itemId: $itemId
       nResults: $nResults
       similarityMeasure: $similarityMeasure
+      filters: $filters
     ) {
       id
       document
@@ -169,6 +182,8 @@ export const EXTRACT_TOPICS = gql`
       collectionName
       numTopics
       numNoisePoints
+      numTopicsBeforeReduction
+      reductionApplied
       topics {
         topicId
         keywords {
@@ -177,7 +192,34 @@ export const EXTRACT_TOPICS = gql`
         }
         label
         count
+        subtopics
       }
+      durationSeconds
+      error
+    }
+  }
+`;
+
+/**
+ * Mutation to reduce (merge) topics on an existing collection
+ */
+export const REDUCE_TOPICS = gql`
+  mutation ReduceTopics($input: ReduceTopicsInput!) {
+    reduceTopics(input: $input) {
+      collectionName
+      numTopicsBefore
+      numTopicsAfter
+      topics {
+        topicId
+        keywords {
+          word
+          score
+        }
+        label
+        count
+        subtopics
+      }
+      topicMappings
       durationSeconds
       error
     }

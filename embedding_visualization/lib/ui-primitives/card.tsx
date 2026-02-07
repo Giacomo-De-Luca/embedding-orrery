@@ -15,7 +15,7 @@ const cardVariant = cva(
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
-          "border-white/20 border hover:border-accent",
+          "border-white/20 border hover:border-accent dark:bg-transparent",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost:
@@ -25,6 +25,7 @@ const cardVariant = cva(
         circularghost:
           "hover:bg-accent backdrop-blur-md border-glass hover:text-accent-foreground rounded-full aspect-square dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
+        noBg: "bg-transparent dark:bg-transparent shadow-none"
 
       },
     },

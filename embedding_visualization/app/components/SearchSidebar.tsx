@@ -19,7 +19,9 @@ import {
 import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
-import type { Point2D, Point3D } from '../../lib/types/types';
+import { TopicSearchSection } from './TopicSearchSection';
+import type { Point2D, Point3D, TopicInfo } from '../../lib/types/types';
+import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
 
@@ -38,6 +40,23 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   // Query prompt configuration
   queryPromptName?: string | null;
   onQueryPromptNameChange?: (value: string | null) => void;
+  // Topic search props
+  topics?: TopicInfo[];
+  topicSearchMode?: TopicSearchMode;
+  onTopicSearchModeChange?: (mode: TopicSearchMode) => void;
+  topicDirectQuery?: string;
+  onTopicDirectQueryChange?: (q: string) => void;
+  topicFilteredTopics?: TopicInfo[];
+  topicSemanticQuery?: string;
+  onTopicSemanticQueryChange?: (q: string) => void;
+  onTopicSemanticSearch?: () => void;
+  topicSemanticResults?: TopicSearchResult[];
+  topicSemanticLoading?: boolean;
+  selectedTopicIds?: Set<number>;
+  onToggleTopic?: (id: number) => void;
+  onSelectAllTopics?: () => void;
+  onClearAllTopics?: () => void;
+  categoricalPalette?: string;
 }
 
 export function SearchSidebar({
@@ -54,6 +73,23 @@ export function SearchSidebar({
   categoryField,
   queryPromptName,
   onQueryPromptNameChange,
+  // Topic search props
+  topics,
+  topicSearchMode,
+  onTopicSearchModeChange,
+  topicDirectQuery,
+  onTopicDirectQueryChange,
+  topicFilteredTopics,
+  topicSemanticQuery,
+  onTopicSemanticQueryChange,
+  onTopicSemanticSearch,
+  topicSemanticResults,
+  topicSemanticLoading,
+  selectedTopicIds,
+  onToggleTopic,
+  onSelectAllTopics,
+  onClearAllTopics,
+  categoricalPalette,
   className,
   ...props
 }: SearchSidebarProps) {
@@ -167,6 +203,28 @@ export function SearchSidebar({
               onResultClick={onResultClick}
               categoryField={categoryField}
               maxHeight={400}
+            />
+          )}
+
+          {/* Topic Search */}
+          {topics && topics.length > 0 && topicSearchMode !== undefined && onTopicSearchModeChange && (
+            <TopicSearchSection
+              topics={topics}
+              mode={topicSearchMode}
+              onModeChange={onTopicSearchModeChange}
+              directQuery={topicDirectQuery ?? ''}
+              onDirectQueryChange={onTopicDirectQueryChange ?? (() => {})}
+              filteredTopics={topicFilteredTopics ?? topics}
+              semanticQuery={topicSemanticQuery ?? ''}
+              onSemanticQueryChange={onTopicSemanticQueryChange ?? (() => {})}
+              onSemanticSearch={onTopicSemanticSearch ?? (() => {})}
+              semanticResults={topicSemanticResults ?? []}
+              semanticLoading={topicSemanticLoading ?? false}
+              selectedTopicIds={selectedTopicIds ?? new Set()}
+              onToggleTopic={onToggleTopic ?? (() => {})}
+              onSelectAll={onSelectAllTopics ?? (() => {})}
+              onClearAll={onClearAllTopics ?? (() => {})}
+              categoricalPalette={categoricalPalette}
             />
           )}
         </div>

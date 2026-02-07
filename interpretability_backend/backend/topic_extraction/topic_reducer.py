@@ -33,6 +33,7 @@ class TopicReductionResult:
     documents_df: pd.DataFrame  # Updated with new topic assignments
     topics_data: Dict[int, List[Tuple[str, float]]]  # Re-extracted keywords
     topic_mappings: Dict[int, int]  # old_topic_id -> new_topic_id
+    topic_hierarchy: Dict[int, List[int]]  # new_topic_id -> [old_topic_ids that merged into it]
     num_topics_before: int
     num_topics_after: int
     reduction_method: str  # "fixed_n" or "auto"
@@ -192,6 +193,7 @@ class TopicReducer:
                 documents_df=self.documents_df,
                 topics_data=self.topics_data,
                 topic_mappings={t: t for t in unique_topics},
+                topic_hierarchy={},
                 num_topics_before=num_topics_before,
                 num_topics_after=num_topics_before,
                 reduction_method="fixed_n"
@@ -237,6 +239,12 @@ class TopicReducer:
         # Merge topics and re-extract keywords
         documents_df, topics_data = self._merge_topics(new_topics, mapped_topics)
 
+        # Build hierarchy: new_topic_id -> [old_topic_ids that merged into it]
+        topic_hierarchy = defaultdict(list)
+        for old_id, new_id in mapped_topics.items():
+            if old_id != -1:
+                topic_hierarchy[new_id].append(old_id)
+
         num_topics_after = len([t for t in topics_data.keys() if t != -1])
 
         logger.info(f"Reduced from {num_topics_before} to {num_topics_after} topics")
@@ -245,6 +253,7 @@ class TopicReducer:
             documents_df=documents_df,
             topics_data=topics_data,
             topic_mappings=mapped_topics,
+            topic_hierarchy=dict(topic_hierarchy),
             num_topics_before=num_topics_before,
             num_topics_after=num_topics_after,
             reduction_method="fixed_n"
@@ -287,6 +296,7 @@ class TopicReducer:
                 documents_df=self.documents_df,
                 topics_data=self.topics_data,
                 topic_mappings={t: t for t in unique_topics},
+                topic_hierarchy={},
                 num_topics_before=num_topics_before,
                 num_topics_after=num_topics_before,
                 reduction_method="auto"
@@ -334,6 +344,12 @@ class TopicReducer:
         # Merge topics and re-extract keywords
         documents_df, topics_data = self._merge_topics(new_topics, mapped_topics)
 
+        # Build hierarchy: new_topic_id -> [old_topic_ids that merged into it]
+        topic_hierarchy = defaultdict(list)
+        for old_id, new_id in mapped_topics.items():
+            if old_id != -1:
+                topic_hierarchy[new_id].append(old_id)
+
         num_topics_after = len([t for t in topics_data.keys() if t != -1])
 
         logger.info(f"Auto-reduced from {num_topics_before} to {num_topics_after} topics")
@@ -342,6 +358,7 @@ class TopicReducer:
             documents_df=documents_df,
             topics_data=topics_data,
             topic_mappings=mapped_topics,
+            topic_hierarchy=dict(topic_hierarchy),
             num_topics_before=num_topics_before,
             num_topics_after=num_topics_after,
             reduction_method="auto"

@@ -22,6 +22,11 @@ export interface TopicConfigState {
   useLlmLabels: boolean;
   llmProvider: string;
   llmModel: string;
+  // Reduction
+  enableReduction: boolean;
+  reductionMethod: string;       // "auto" or "fixed_n"
+  reductionNTopics: number;
+  reductionUseCtfidf: boolean;
 }
 
 export const DEFAULT_TOPIC_CONFIG: TopicConfigState = {
@@ -31,6 +36,10 @@ export const DEFAULT_TOPIC_CONFIG: TopicConfigState = {
   useLlmLabels: false,
   llmProvider: 'gemini',
   llmModel: 'gemini-3-flash-preview',
+  enableReduction: false,
+  reductionMethod: 'fixed_n',
+  reductionNTopics: 10,
+  reductionUseCtfidf: true,
 };
 
 /** Convert TopicConfigState to the GraphQL input shape. */
@@ -44,6 +53,14 @@ export function toTopicConfigInput(state: TopicConfigState): TopicConfigInput {
   if (state.useLlmLabels) {
     config.llmProvider = state.llmProvider;
     config.llmModel = state.llmModel;
+  }
+  if (state.enableReduction) {
+    config.reduction = {
+      enabled: true,
+      method: state.reductionMethod,
+      nTopics: state.reductionMethod === 'fixed_n' ? state.reductionNTopics : undefined,
+      useCtfidf: state.reductionUseCtfidf,
+    };
   }
   return config;
 }
@@ -147,6 +164,74 @@ export function TopicConfigForm({ value, onChange }: TopicConfigFormProps) {
             <p className="text-xs text-muted-foreground">
               Requires {value.llmProvider === 'openai' ? 'CHROMA_OPENAI_API_KEY' : 'GEMINI_API_KEY'} environment variable on the backend.
             </p>
+          </div>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* Topic Reduction */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="enable-reduction"
+            checked={value.enableReduction}
+            onCheckedChange={(checked) => update({ enableReduction: checked === true })}
+          />
+          <Label htmlFor="enable-reduction" className="cursor-pointer">
+            Reduce topics after extraction
+          </Label>
+        </div>
+
+        {value.enableReduction && (
+          <div className="space-y-3 pl-6">
+            <div className="space-y-2">
+              <Label>Reduction Method</Label>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={value.reductionMethod}
+                onValueChange={(v) => { if (v) update({ reductionMethod: v }); }}
+              >
+                <ToggleGroupItem value="fixed_n" className="text-xs">Fixed N</ToggleGroupItem>
+                <ToggleGroupItem value="auto" className="text-xs">Auto</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+
+            {value.reductionMethod === 'fixed_n' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="reduction-n-topics">Target Topics</Label>
+                  <span className="text-sm text-muted-foreground">{value.reductionNTopics}</span>
+                </div>
+                <Slider
+                  id="reduction-n-topics"
+                  min={2}
+                  max={50}
+                  step={1}
+                  value={[value.reductionNTopics]}
+                  onValueChange={([v]) => update({ reductionNTopics: v })}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Similarity Method</Label>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={value.reductionUseCtfidf ? 'ctfidf' : 'semantic'}
+                onValueChange={(v) => {
+                  if (v) update({ reductionUseCtfidf: v === 'ctfidf' });
+                }}
+              >
+                <ToggleGroupItem value="ctfidf" className="text-xs">c-TF-IDF</ToggleGroupItem>
+                <ToggleGroupItem value="semantic" className="text-xs">Semantic</ToggleGroupItem>
+              </ToggleGroup>
+              <p className="text-xs text-muted-foreground">
+                c-TF-IDF is fast. Semantic uses embeddings for better quality but is slower.
+              </p>
+            </div>
           </div>
         )}
       </div>

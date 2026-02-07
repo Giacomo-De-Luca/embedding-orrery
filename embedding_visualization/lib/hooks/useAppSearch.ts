@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Point2D, Point3D, SemanticSearchResult, DistanceMetric } from '../types/types';
+import { Point2D, Point3D, SemanticSearchResult, DistanceMetric, FilterInput } from '../types/types';
 import { useSemanticSearch } from './useSemanticSearch';
 import { transformSearchResults } from '../utils/data-transform';
 
@@ -25,7 +25,8 @@ export function useAppSearch(
   colorByField: string | null,
   distanceMetric: DistanceMetric = 'COSINE',
   queryPromptName?: string | null,  // null=none, 'auto'=auto-detect, or explicit value
-  embeddingPromptName?: string | null  // From collection metadata, for auto-detect
+  embeddingPromptName?: string | null,  // From collection metadata, for auto-detect
+  topicFilters?: FilterInput[]  // Optional topic filters to scope semantic search
 ) {
   const [selectedPoint, setSelectedPoint] = useState<Point2D | Point3D | null>(null);
   const [semanticSearchResults, setSemanticSearchResults] = useState<SemanticSearchResult[] | null>(null);
@@ -46,19 +47,19 @@ export function useAppSearch(
     console.log('Search triggered:', query, 'metric:', distanceMetric, effectivePromptName ? `prompt: ${effectivePromptName}` : '');
     setSearchType('text');
     try {
-      const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName);
+      const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, topicFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(query);
     } catch (error) {
       console.error('Search error:', error);
     }
-  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName]);
+  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, topicFilters]);
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);
     setSearchType('point');
     try {
-      const results = await findSimilarById(point.id, 20, distanceMetric);
+      const results = await findSimilarById(point.id, 20, distanceMetric, topicFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(point.label || point.id);
       // Set selected point AFTER semantic search completes
@@ -67,7 +68,7 @@ export function useAppSearch(
     } catch (error) {
       console.error('Point click search error:', error);
     }
-  }, [findSimilarById, colorByField, distanceMetric]);
+  }, [findSimilarById, colorByField, distanceMetric, topicFilters]);
 
   // Reset state when collection changes
   const resetSearch = useCallback(() => {

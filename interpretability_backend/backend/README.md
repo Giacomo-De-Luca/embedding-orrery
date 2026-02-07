@@ -1,61 +1,161 @@
 # Embedding Visualization Backend
 
-GraphQL API for exploring word embeddings with ChromaDB.
+GraphQL API backend for embedding, searching, and visualizing vector embeddings with ChromaDB.
 
 ## Features
 
-- **GraphQL API** with Strawberry and FastAPI
-- **Semantic Search** with multiple similarity measures (cosine, L2, inner product)
-- **Advanced Filtering** using ChromaDB's where clauses
-- **Flexible Queries** for embeddings, metadata, and projections
-- **CORS enabled** for local frontend development
+- **GraphQL API** with Strawberry and FastAPI (queries, mutations, subscriptions)
+- **Multi-provider embedding** - SentenceTransformers, OpenAI, Cohere, Ollama, Gemini, BGE, QWEN, HuggingFace API
+- **Data sources** - HuggingFace datasets, local files (parquet, JSON, CSV, TSV), pre-computed vectors, images
+- **Semantic search** with multiple similarity measures (cosine, L2, inner product)
+- **Topic extraction** - HDBSCAN clustering + c-TF-IDF keywords + optional LLM labels (Gemini/OpenAI)
+- **Topic reduction** - Merge similar topics via AgglomerativeClustering or auto-HDBSCAN
+- **Projection computation** - PCA and UMAP (2D/3D) stored in ChromaDB metadata
+- **Real-time progress** via WebSocket subscriptions
+- **Resumable jobs** with persistent JSON state tracking
+- **File upload** endpoint for local file embedding
+- **CORS enabled** for frontend development
 
-## Installation
+## Quick Start
 
-```bash
-# Install dependencies
-uv sync
-
-# Or with pip
-pip install -e .
-```
-
-## Running the Server
-
-### Option 1: Direct Python
 ```bash
 # From project root
-uv run uvicorn interpretability.backend.main:app --reload --port 8000
+./start_backend.sh
 
-# Or
-cd interpretability
-uv run python -m backend.main
+# Or manually
+uv run uvicorn interpretability_backend.backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Option 2: Docker Compose
-```bash
-# From project root
-docker-compose up backend
+- API: http://localhost:8000
+- GraphQL Playground: http://localhost:8000/graphql
+- Health check: http://localhost:8000/health
+
+## Architecture
+
+```
+interpretability_backend/
+├── backend/
+│   ├── main.py                          # FastAPI app, CORS, GraphQL + WS router, upload router
+│   ├── schema.py                        # Re-exports from API/ for backward compatibility
+│   │
+│   ├── API/                             # GraphQL layer
+│   │   ├── __init__.py                  # Strawberry schema (Query + Mutation + Subscription)
+│   │   ├── types.py                     # All GraphQL types, inputs, enums, scalars
+│   │   ├── queries.py                   # Query resolvers (collections, search, datasets, files)
+│   │   ├── mutations.py                 # Mutation resolvers (embed, delete, topics, metadata)
+│   │   ├── subscriptions.py             # WebSocket subscription (embeddingProgress)
+│   │   ├── chromadb_instance.py         # Lazy singleton ChromaDBClient
+│   │   └── upload.py                    # REST file upload endpoint (POST /upload)
+│   │
+│   ├── clients/                         # Data source clients
+│   │   ├── chromadb_client.py           # ChromaDB wrapper (search, projections, metadata)
+│   │   ├── huggingface_client.py        # HF dataset info, preview, portion loading
+│   │   └── local_data_client.py         # Local file info, preview, loading (parquet/JSON/CSV/TSV)
+│   │
+│   ├── embedding_functions/             # Embedding infrastructure
+│   │   ├── config.py                    # Constants, enums (DataType, EmbeddingProvider), dataclasses
+│   │   ├── create_embedding_function.py # Factory: provider → embedding function + dimension
+│   │   ├── embed_huggingface.py         # HuggingFace dataset → ChromaDB (with resume)
+│   │   ├── embed_local_file.py          # Local file → ChromaDB (text/image/vector, with resume)
+│   │   ├── embed_images.py              # Image embedding via ViT (google/vit-base-patch16-384)
+│   │   ├── embed_vectors.py             # Pre-computed vector ingestion
+│   │   └── specific_functions/          # Provider-specific embedding implementations
+│   │       ├── embed_sentence_transformer.py  # Fork of ChromaDB's ST EF with prompt support
+│   │       ├── embed_gemini.py                # Google Gemini embedding with task_type
+│   │       ├── embed_qwen.py                  # QWEN3-Embedding with query instruction
+│   │       ├── embed_bge.py                   # BGE-M3 with FlagEmbedding
+│   │       └── embed_transformers.py          # Template/reference (unused)
+│   │
+│   ├── services/                        # Business logic services
+│   │   ├── topic_extraction_service.py  # Topic extraction + reduction orchestration
+│   │   ├── progress_emitter.py          # In-memory event bus for WebSocket progress
+│   │   └── job_state.py                 # JSON-based persistent job state (resume capability)
+│   │
+│   ├── topic_extraction/                # Topic extraction algorithms
+│   │   ├── cluster_and_label.py         # GenerateTopics: HDBSCAN + ClassTfidfTransformer
+│   │   ├── topic_reducer.py             # TopicReducer: AgglomerativeClustering / auto-HDBSCAN
+│   │   ├── llm_labeling.py             # LLM label generation (Gemini/OpenAI with tenacity)
+│   │   ├── extract_topics.py            # BERTopic reference code (not used directly)
+│   │   └── _representation_utils.py     # BERTopic reference utilities
+│   │
+│   └── utils/                           # Shared utilities
+│       ├── compute_projections.py       # PCA/UMAP computation + ChromaDB metadata storage
+│       ├── text_processing.py           # format_text_for_embedding, extract_metadata
+│       ├── batch_utils.py               # sort_items_by_length (efficient batching)
+│       ├── id_utils.py                  # IDDeduplicator (handles duplicate IDs)
+│       ├── provider_list.py             # Single source of truth for EmbeddingProviderEnum
+│       ├── logger.py                    # star_map logger setup (file + console)
+│       └── known_dimensions.json        # Cached model→dimension mapping
+│
+├── resources/
+│   ├── vector_db/                       # ChromaDB persistent storage
+│   ├── uploads/                         # Uploaded files for embedding
+│   └── job_state.json                   # Persistent job state
+│
+├── interpretability_experiments/        # Research notebooks and scripts
+│   ├── WordNet/                         # WordNet embedding pipeline
+│   └── Lacan/                           # Lacan text analysis experiments
+│
+├── unit_tests/                          # Unit tests
+│   ├── test_similarity_calculations.py
+│   ├── test_local_data_client.py
+│   └── test_topic_extraction.py
+│
+└── tests/                               # Integration tests
+    └── topic_extraction/
+        └── test_topic_reducer.py
 ```
 
-The server will start at `http://localhost:8000`
+## GraphQL API
 
-## GraphQL Playground
+### Queries
 
-Visit `http://localhost:8000/graphql` in your browser to access the interactive GraphQL playground.
+| Query | Description |
+|-------|-------------|
+| `collections` | List all collections with metadata and counts |
+| `collection(name)` | Get full projection data for visualization (ids, documents, metadata, PCA/UMAP) |
+| `embeddings(collectionName, ...)` | Get items with optional filtering and embedding vectors |
+| `semanticSearch(collectionName, query, ...)` | Text-based semantic search |
+| `semanticSearchById(collectionName, itemId, ...)` | Find similar items by existing embedding |
+| `embeddingJobs(status?)` | List embedding jobs (running/interrupted/completed) |
+| `huggingfaceDatasetInfo(datasetId)` | Get HF dataset configs, splits, features |
+| `huggingfaceDatasetPreview(datasetId, ...)` | Preview rows from HF dataset |
+| `localFileInfo(filePath)` | Get local file info (columns, rows, size) |
+| `localFilePreview(filePath, ...)` | Preview rows from local file |
 
-## API Endpoints
+### Mutations
 
-### REST Endpoints
-- `GET /` - API info
-- `GET /health` - Health check
+| Mutation | Description |
+|----------|-------------|
+| `embedHuggingfaceDataset(input)` | Embed HF dataset → ChromaDB (+ projections + topics) |
+| `embedLocalFile(input)` | Embed local file → ChromaDB (text/image/vector) |
+| `deleteCollection(collectionName)` | Delete a collection |
+| `updateCollectionMetadata(collectionName, metadata)` | Update collection metadata |
+| `extractTopics(input)` | HDBSCAN clustering + c-TF-IDF + optional LLM labels |
+| `reduceTopics(input)` | Merge similar topics (standalone post-processing) |
 
-### GraphQL Endpoint
-- `POST /graphql` - GraphQL queries and mutations
+### Subscriptions
+
+| Subscription | Description |
+|-------------|-------------|
+| `embeddingProgress(jobId)` | Real-time WebSocket progress updates |
+
+## Embedding Providers
+
+| Provider | Default Model | Local? | API Key Env Var |
+|----------|---------------|--------|-----------------|
+| `SENTENCE_TRANSFORMERS` | `all-MiniLM-L6-v2` | Yes | None |
+| `OPENAI` | `text-embedding-3-small` | No | `CHROMA_OPENAI_API_KEY` |
+| `COHERE` | `embed-english-v3.0` | No | `CHROMA_COHERE_API_KEY` |
+| `OLLAMA` | `nomic-embed-text` | Yes | None |
+| `HUGGINGFACE_API` | `sentence-transformers/all-MiniLM-L6-v2` | No | `CHROMA_HUGGINGFACE_API_KEY` |
+| `GEMINI` | `gemini-embedding-001` | No | `GEMINI_API_KEY` |
+| `BGE` | `BAAI/bge-m3` | Yes | None |
+| `QWEN` | `Qwen/Qwen3-Embedding-0.6B` | Yes | None |
 
 ## Example Queries
 
-### 1. List All Collections
+### List Collections
 ```graphql
 query {
   collections {
@@ -66,123 +166,145 @@ query {
 }
 ```
 
-### 2. Get Full Collection Data
-```graphql
-query {
-  collection(name: "wordnet_definitions") {
-    words
-    definitions
-    pos
-    pca_2d
-    pca_3d
-    umap_2d
-    umap_3d
-    metadata {
-      total_words
-      embedding_dim
-      timestamp
-      pca_2d_variance
-      pca_3d_variance
-    }
-  }
-}
-```
-
-### 3. Get Embeddings with Filtering
-```graphql
-query {
-  embeddings(
-    collectionName: "wordnet_definitions"
-    limit: 10
-    filters: [
-      { field: "pos", operator: EQ, value: "n" }
-    ]
-    includeEmbeddings: true
-  ) {
-    id
-    word
-    definition
-    pos
-    embedding
-  }
-}
-```
-
-### 4. Semantic Search
+### Semantic Search
 ```graphql
 query {
   semanticSearch(
-    collectionName: "wordnet_definitions"
-    query: "small furry animal"
+    collectionName: "my_collection"
+    query: "machine learning algorithms"
     nResults: 10
     similarityMeasure: COSINE
-    filters: [
-      { field: "pos", operator: EQ, value: "n" }
-    ]
   ) {
     id
-    word
-    definition
-    pos
+    document
+    metadata
     distance
     similarity
   }
 }
 ```
 
-### 5. Search with Query Embedding
+### Embed HuggingFace Dataset
 ```graphql
-query {
-  semanticSearch(
-    collectionName: "wordnet_definitions"
-    queryEmbedding: [0.1, 0.2, 0.3, ...]  # 384-dim vector
-    nResults: 10
-    similarityMeasure: L2
-  ) {
-    word
-    similarity
+mutation {
+  embedHuggingfaceDataset(input: {
+    datasetId: "squad"
+    collectionName: "squad_questions"
+    columns: ["question"]
+    portion: { strategy: FIRST_N, n: 1000 }
+    computeProjections: true
+    extractTopics: true
+    topicConfig: {
+      minTopicSize: 15
+      useLlmLabels: true
+      llmProvider: "gemini"
+      llmModel: "gemini-3-flash-preview"
+    }
+  }) {
+    totalEmbedded
+    embeddingDim
+    projectionsComputed
+    embeddingProvider
+    embeddingModel
+  }
+}
+```
+
+### Extract Topics (Standalone)
+```graphql
+mutation {
+  extractTopics(input: {
+    collectionName: "my_collection"
+    config: {
+      minTopicSize: 10
+      nKeywords: 10
+      useLlmLabels: true
+      reduction: {
+        enabled: true
+        method: "fixed_n"
+        nTopics: 5
+      }
+    }
+  }) {
+    numTopics
+    numNoisePoints
+    topics { topicId label keywords { word score } count }
+  }
+}
+```
+
+### Embed Local File
+```graphql
+mutation {
+  embedLocalFile(input: {
+    filePath: "/path/to/data.parquet"
+    collectionName: "my_data"
+    dataType: TEXT
+    columns: ["title", "content"]
+    computeProjections: true
+  }) {
+    totalEmbedded
+    embeddingDim
+    projectionsComputed
   }
 }
 ```
 
 ## Filter Operators
 
-Available filter operators:
-- `EQ` - Equals ($eq)
-- `NE` - Not equals ($ne)
-- `GT` - Greater than ($gt)
-- `GTE` - Greater than or equal ($gte)
-- `LT` - Less than ($lt)
-- `LTE` - Less than or equal ($lte)
-- `IN` - In array ($in)
-- `NIN` - Not in array ($nin)
+| Operator | Description | ChromaDB |
+|----------|-------------|----------|
+| `EQ` | Equals | `$eq` |
+| `NE` | Not equals | `$ne` |
+| `GT` | Greater than | `$gt` |
+| `GTE` | Greater than or equal | `$gte` |
+| `LT` | Less than | `$lt` |
+| `LTE` | Less than or equal | `$lte` |
+| `IN` | In array | `$in` |
+| `NIN` | Not in array | `$nin` |
 
 ## Similarity Measures
 
-- `COSINE` - Cosine similarity (default)
-- `L2` - Euclidean distance
-- `IP` - Inner product
+| Measure | Description |
+|---------|-------------|
+| `COSINE` | Cosine similarity (default). Distance [0,2] → similarity [-1,1] |
+| `L2` | Euclidean distance → similarity via 1/(1+d) |
+| `IP` | Inner product (negated distance) |
 
-## Architecture
+## Environment Variables
 
-```
-interpretability/backend/
-├── main.py              # FastAPI app with GraphQL endpoint
-├── schema.py            # Strawberry GraphQL schema
-├── chromadb_client.py   # ChromaDB wrapper with filtering
-└── README.md            # This file
-```
-
-## Development
-
-The server runs with auto-reload enabled during development. Any changes to Python files will automatically restart the server.
+| Variable | Required For | Description |
+|----------|-------------|-------------|
+| `CHROMA_OPENAI_API_KEY` | OpenAI embedding + LLM labeling | OpenAI API key |
+| `CHROMA_COHERE_API_KEY` | Cohere embedding | Cohere API key |
+| `CHROMA_HUGGINGFACE_API_KEY` | HuggingFace API embedding | HF inference API key |
+| `GEMINI_API_KEY` | Gemini embedding + LLM labeling | Google Gemini API key |
+| `HUGGINGFACE_API_KEY` | Gated model access | HF login for private models |
 
 ## CORS Configuration
 
-The backend allows requests from:
-- http://localhost:3000
-- http://localhost:3001
-- http://127.0.0.1:3000
-- http://127.0.0.1:3001
+Allowed origins (edit in `main.py`):
+- `http://localhost:3000`
+- `http://localhost:3001`
+- `http://127.0.0.1:3000`
+- `http://127.0.0.1:3001`
 
-To add more origins, edit `main.py`.
+## Development
+
+The server runs with `--reload` enabled during development. Changes to Python files will automatically restart the server.
+
+### Running Tests
+
+```bash
+# Unit tests
+uv run pytest interpretability_backend/unit_tests/
+
+# Integration tests
+uv run pytest interpretability_backend/tests/
+```
+
+### Logging
+
+The backend uses the `star_map` logger hierarchy with file output to `star_map.log` and console error output. Key loggers:
+- `star_map.topic_extraction` - Topic extraction and reduction
+- `star_map.llm_labeling` - LLM label generation

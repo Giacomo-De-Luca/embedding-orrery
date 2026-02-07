@@ -14,6 +14,7 @@ import {
   POS_PRESET,
   CATEGORY_PRESETS,
 } from '../categoryColors';
+import { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, getPaletteColors } from '../categoryPalettes';
 
 describe('generateCategoryColors', () => {
   it('should return correct number of colors for small counts', () => {
@@ -22,18 +23,23 @@ describe('generateCategoryColors', () => {
     expect(generateCategoryColors(10)).toHaveLength(10);
   });
 
-  it('should use category10 palette for <= 10 categories', () => {
+  it('should use cosmicGalaxy palette by default', () => {
     const colors = generateCategoryColors(5);
-    // First color should be the D3 category10 blue
-    expect(colors[0]).toBe('#1f77b4');
+    // First color should be cosmicGalaxy deep nebula teal
+    expect(colors[0]).toBe('#0b7285');
   });
 
-  it('should use category20 palette for 11-20 categories', () => {
+  it('should use cosmicGalaxy palette for 11-20 categories', () => {
     const colors = generateCategoryColors(15);
     expect(colors).toHaveLength(15);
-    // Should include both primary and secondary colors
-    expect(colors).toContain('#1f77b4'); // Primary blue
-    expect(colors).toContain('#aec7e8'); // Light blue (from category20)
+    expect(colors[0]).toBe('#0b7285'); // deep nebula teal
+    expect(colors[2]).toBe('#d4a017'); // stellar gold
+  });
+
+  it('should use explicit palette when specified', () => {
+    const colors = generateCategoryColors(5, 'category10');
+    expect(colors[0]).toBe('#1f77b4'); // D3 category10 blue
+    expect(colors).toHaveLength(5);
   });
 
   it('should cycle colors for > 20 categories', () => {
@@ -66,12 +72,14 @@ describe('buildCategoryColorMap', () => {
       expect(colorMap['a']).toBe('#2ca02c'); // adjective - green
     });
 
-    it('should use gray for unknown POS values', () => {
+    it('should use preset color for known values and dynamic for unknown', () => {
       const colorMap = buildCategoryColorMap('pos', ['n', 'x', 'unknown']);
 
       expect(colorMap['n']).toBe('#1f77b4'); // Known - blue
-      expect(colorMap['x']).toBe('#7f7f7f'); // Unknown - gray
-      expect(colorMap['unknown']).toBe('#7f7f7f'); // Explicit unknown - gray
+      expect(colorMap['unknown']).toBe('#7f7f7f'); // Explicit unknown - gray (in preset)
+      // 'x' is not in the POS preset, so it gets a dynamically generated color
+      expect(colorMap['x']).toBeDefined();
+      expect(colorMap['x']).not.toBe(colorMap['n']);
     });
 
     it('should be case-insensitive for field name', () => {
@@ -220,5 +228,36 @@ describe('color validity', () => {
     for (const color of Object.values(POS_PRESET.colors)) {
       expect(color).toMatch(hexColorRegex);
     }
+  });
+
+  it('should have valid hex colors in all built-in palettes', () => {
+    const hexColorRegex = /^#[0-9a-fA-F]{6}$/;
+
+    for (const name of BUILTIN_PALETTE_NAMES) {
+      const colors = getPaletteColors(name);
+      expect(colors).toBeDefined();
+      for (const c of colors!) {
+        expect(c).toMatch(hexColorRegex);
+      }
+    }
+  });
+});
+
+describe('categoryPalettes registry', () => {
+  it('should include all three built-in palettes', () => {
+    expect(BUILTIN_PALETTE_NAMES).toContain('cosmicGalaxy');
+    expect(BUILTIN_PALETTE_NAMES).toContain('category10');
+    expect(BUILTIN_PALETTE_NAMES).toContain('category20');
+  });
+
+  it('should return colors via getPaletteColors', () => {
+    const colors = getPaletteColors('cosmicGalaxy');
+    expect(colors).toBeDefined();
+    expect(colors!.length).toBe(20);
+    expect(colors![0]).toBe('#0b7285');
+  });
+
+  it('should return undefined for unknown palette names', () => {
+    expect(getPaletteColors('nonexistent')).toBeUndefined();
   });
 });

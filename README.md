@@ -74,13 +74,15 @@ Modern Next.js 15 web application for 2D/3D visualization, clustering, and seman
 - Plotly.js for WebGL-accelerated 2D/3D visualizations
 - Apollo Client 4 for GraphQL queries
 - Tailwind CSS 4 with OKLch color system
-- Shadcn UI (30+ Radix UI components)
+- Shadcn UI (34 Radix UI components)
 - WASM-based density clustering
 
 **Architecture:**
-- **95+ TypeScript files** with modular component and hook-based design
-- **21 React components** for UI (plots, controls, tables, tooltips, etc.)
-- **13 custom hooks** for data loading, search, visualization, and responsive sizing
+- **100+ TypeScript files** with modular component and hook-based design
+- **22 React components** for UI (plots, controls, tables, tooltips, etc.)
+- **17 test-embed components** for dataset embedding interface
+- **14 custom hooks** for data loading, search, visualization, and responsive sizing
+- **34 Shadcn UI primitives** for accessible component library
 - **Type-safe GraphQL** queries and mutations with Apollo Client
 - **Flexible metadata support** - adapts to any collection schema
 
@@ -96,7 +98,8 @@ Modern Next.js 15 web application for 2D/3D visualization, clustering, and seman
 **Key Features:**
 - **Generic visualization** - works with any embedding collection stored in ChromaDB
 - **Auto-detection** - intelligently detects label and category fields from metadata
-- **Dynamic coloring** - categorical, sequential, and diverging color scales with presets
+- **Dynamic coloring** - categorical, sequential, diverging, and monochrome color scales with presets
+- **Crameri scientific colormaps** - 60+ perceptually-uniform scales (lazy-loaded)
 - **Unified search** - text filtering with auto-select + semantic search + results display
 - **Live progress modal** - real-time embedding progress with status messages via WebSocket
 - **Resume interrupted jobs** - panel showing interrupted jobs with one-click resume
@@ -131,7 +134,8 @@ ChromaDB Vector Database (interpretability_backend/resources/vector_db)
 Topic Extraction (optional):
 ├── HDBSCAN clustering on projections
 ├── c-TF-IDF keyword extraction
-└── OpenAI LLM labeling (optional)
+├── LLM labeling (Gemini/OpenAI)
+└── Topic reduction (AgglomerativeClustering/auto-HDBSCAN)
     ↓
 GraphQL API (FastAPI + Strawberry)
     ↓
@@ -152,9 +156,10 @@ Web UI (Next.js)
 - Plotly.js + react-plotly.js (WebGL rendering)
 - Apollo Client 4 (GraphQL)
 - Tailwind CSS 4 with OKLch color system
-- Shadcn UI (30+ Radix UI primitives)
+- Shadcn UI (34 Radix UI primitives)
 - @tanstack/react-table (sortable tables)
 - d3-scale + d3-scale-chromatic (color scales)
+- Crameri scientific colormaps (60+ perceptually-uniform scales, lazy-loaded)
 - WebAssembly (WASM-based density clustering)
 - react-resizable-panels (resizable layout)
 - next-themes (dark mode)
@@ -165,7 +170,7 @@ Web UI (Next.js)
 
 The frontend is built with a modular architecture separating concerns into components, hooks, and utilities.
 
-**Key Components** (21 in `app/components/`):
+**Key Components** (22 in `app/components/`):
 - **DashboardPanel**: Main layout orchestrator with resizable panels (plot, legend, results table)
 - **ScatterPlot2D**: 2D Plotly visualization with WebGL, density clustering, aspect ratio preservation
 - **ScatterPlot3D**: 3D Plotly with smooth spherical camera interpolation and cubic easing
@@ -177,27 +182,43 @@ The frontend is built with a modular architecture separating concerns into compo
 - **TextSearchResultsList**: Scrollable list of text search matches in sidebar
 - **SelectedPointCard**: Displays selected point details with metadata
 - **FrostedTooltip**: Custom frosted glass tooltip with warm gold tint for hover interactions
-- **ColorScaleSelector**: UI for selecting color scale type (categorical/sequential/diverging)
+- **ColorScaleSelector**: UI for selecting color scale type (categorical/sequential/diverging/monochrome)
+- **SearchSidebar**: Search interface sidebar panel
+- **DebouncedSearchInput**: Search input with debounce for performance
 
-**Test-Embed Components** (8 in `app/test-embed/components/`):
-- **DatasetEmbeddingForm**: HuggingFace dataset selection and embedding configuration
-- **LocalFileEmbeddingForm**: Local file upload and embedding configuration
-- **CollectionManager**: View, edit, and delete existing collections
-- **EmbeddingModelSelector**: Select provider and model for embedding
+**Test-Embed Components** (17 in `app/test-embed/components/`):
+- **HuggingFaceTab**: Complete HuggingFace dataset embedding UI
+- **LocalFileTab**: Local file embedding UI
+- **CollectionManagerTab**: Collection management with edit/delete
+- **TopicExtractionCard**: UI for extracting topics from existing collections
+- **TopicConfigForm**: Configuration form for topic extraction parameters
+- **EmbeddingProgressModal**: Modal overlay with real-time embedding progress
+- **EmbeddingProgressCard**: Card showing embedding progress status
+- **JobsPanel**: Lists interrupted jobs with resume capability
+- **DataSourceTabs**: Tab selector with icons
+- **FileUploadZone**: Drag-drop file upload
+- **DataTypeSelector**: TEXT/IMAGE/VECTOR selection
+- **ColumnSelector**: Column selection + text template
+- **PortionSelector**: Row range/sample selection
+- **SplitSelector**: HF split selector
+- **DatasetInfoDisplay**: Preview data display
+- **InlineEditableField**: Inline editable metadata fields with save/cancel
+- **AddFieldForm**: Form for adding custom metadata fields to collections
 
-### Custom Hooks
+### Custom Hooks (14)
 
 **Data & Loading** (5 hooks):
 - `useEmbeddingData`: Loads collection from GraphQL, auto-detects display fields, computes category options
 - `useCollections`: Loads available collections, transforms GraphQL response to manifest
 - `useVisualizationPoints`: Transforms raw data to visualization points, handles projections (PCA/UMAP/manual)
 - `useDensityClustering`: WASM clustering module (~500ms for 150k points)
-- `useEmbedDataset`: GraphQL mutations for embedding datasets (used in /test-embed)
+- `useEmbedDataset`: GraphQL mutations for embedding, topic extraction, topic reduction (used in /test-embed)
 
-**Search & Interaction** (3 hooks):
+**Search & Interaction** (4 hooks):
 - `useAppSearch`: Unified search orchestration (text queries + point clicks → semantic search)
 - `useSemanticSearch`: GraphQL semantic search (findSimilarByQuery + findSimilarById) with distance metrics
 - `useHighlightedIndices`: Combines text + semantic search highlights into HighlightMap with similarity scores
+- `useCategoryData`: Computes categoryValues and categoryCounts from points for Legend display
 
 **Utilities** (5 hooks):
 - `useContainerDimensions`: Responsive sizing via ResizeObserver, returns width/height on resize
@@ -229,7 +250,7 @@ DashboardPanel (render plots + sidebar + tables)
 **Core Data Types** (`lib/types/types.ts`):
 - `EmbeddingData`: Main container with metadata, ids, documents, itemMetadata, projections, displayConfig
 - `Point2D/Point3D`: Visualization points with x, y, z, id, label, document, category, index, metadata
-- `VisualizationState`: method, mode, selectedDimensions, colorByField, colorScaleType, searchQuery, distanceMetric, etc.
+- `VisualizationState`: method, mode, selectedDimensions, colorByField, colorScaleType, sequentialScaleName, divergingScaleName, monochromeColor, searchQuery, distanceMetric, showOnlyHighlighted, showLabels, showContours, mutedCategories, tooltipFields, hideUnclustered, categoricalPalette
 - `DisplayConfig`: labelField, categoryField, categoryValues, categoryName (auto-detected or user-specified)
 - `SemanticSearchResult`: id, label, document, category, similarity, distance, metadata
 - `HighlightMap`: Map<index, similarity> combining text and semantic search highlights
@@ -239,9 +260,11 @@ DashboardPanel (render plots + sidebar + tables)
 - **OKLch Color System**: Perceptually-uniform colors for consistent dark/light themes
 - **Frosted Glass**: Custom `.frosted-tooltip` class with warm gold tint and backdrop-filter blur
 - **Dynamic Colors**:
-  - Categorical: Presets for known types (POS) + D3 20-color palette for unknowns
-  - Sequential: Viridis scale (0→1) for continuous data
-  - Diverging: RdBu scale (-1→0→1) for bipolar data
+  - Categorical: Presets for known types (POS) + D3 20-color palette or Crameri categorical palettes
+  - Sequential: 7 D3 scales (Viridis, Plasma, Turbo, etc.) + 24 Crameri scientific scales
+  - Diverging: 6 D3 scales (BlueGold, RdBu, Spectral, etc.) + 10 Crameri diverging scales
+  - Monochrome: Single-color opacity gradient (10%→100%)
+  - **Crameri Scientific Colormaps**: 60+ perceptually-uniform scales, lazy-loaded on demand
 - **Responsive**: ResizeObserver + Plotly responsive layout
 - **Z-Index Layers**: Plot (0) → Legend (10) → Results Table (20) → Sidebar (40)
 
@@ -275,9 +298,10 @@ The system supports automatic topic discovery using HDBSCAN clustering, c-TF-IDF
 
 1. **Clustering**: Runs HDBSCAN on projection coordinates (UMAP 2D preferred)
 2. **Keywords**: Extracts top-N keywords per cluster using c-TF-IDF
-3. **Labels**: Optionally generates human-readable topic names via OpenAI
-4. **Storage**: Adds `topic_id` and `topic_label` to each item's metadata
-5. **Visualization**: Topics automatically appear as categorical fields in the frontend
+3. **Labels**: Optionally generates human-readable topic names via Gemini or OpenAI
+4. **Reduction**: Optionally merge similar topics (AgglomerativeClustering or auto-HDBSCAN)
+5. **Storage**: Adds `topic_id` and `topic_label` to each item's metadata
+6. **Visualization**: Topics automatically appear as categorical fields in the frontend
 
 ### Usage
 
@@ -286,19 +310,17 @@ The system supports automatic topic discovery using HDBSCAN clustering, c-TF-IDF
 mutation {
   extractTopics(input: {
     collectionName: "my_collection"
-    minTopicSize: 10
-    nKeywords: 10
-    useLlmLabels: false
-    projectionType: "umap_2d"
+    config: {
+      minTopicSize: 10
+      nKeywords: 10
+      useLlmLabels: true
+      llmProvider: "gemini"
+      llmModel: "gemini-3-flash-preview"
+    }
   }) {
     numTopics
     numNoisePoints
-    topics {
-      topicId
-      label
-      keywords { word score }
-      count
-    }
+    topics { topicId label keywords { word score } count }
   }
 }
 ```
@@ -315,6 +337,7 @@ mutation {
     topicConfig: {
       minTopicSize: 15
       useLlmLabels: true
+      reduction: { enabled: true, method: "fixed_n", nTopics: 10 }
     }
   }) {
     totalEmbedded
@@ -323,13 +346,36 @@ mutation {
 }
 ```
 
+**Reduce topics on existing collection:**
+```graphql
+mutation {
+  reduceTopics(input: {
+    collectionName: "my_collection"
+    method: "auto"
+    useCtfidf: false
+    regenerateLabels: true
+    llmProvider: "gemini"
+  }) {
+    numTopicsBefore
+    numTopicsAfter
+    topics { topicId label keywords { word score } count }
+    topicMappings
+  }
+}
+```
+
 ### Configuration
 
 - `minTopicSize`: Minimum points per cluster (default: 10)
 - `nKeywords`: Keywords per topic (default: 10)
-- `useLlmLabels`: Generate LLM labels (default: false, requires `CHROMA_OPENAI_API_KEY`)
-- `llmModel`: OpenAI model (default: "gpt-4o-mini")
+- `useLlmLabels`: Generate LLM labels (default: false, requires `GEMINI_API_KEY` or `CHROMA_OPENAI_API_KEY`)
+- `llmProvider`: LLM provider for labeling (default: "gemini", also "openai")
+- `llmModel`: Model for labeling (default: "gemini-3-flash-preview")
 - `projectionType`: Projection to cluster on (default: "umap_2d")
+- `reduction.enabled`: Enable topic reduction (default: false)
+- `reduction.method`: "fixed_n" (AgglomerativeClustering) or "auto" (HDBSCAN)
+- `reduction.nTopics`: Target topic count (required for "fixed_n")
+- `reduction.useCtfidf`: Use c-TF-IDF (fast) or semantic embeddings (better quality)
 
 ### Frontend Integration
 

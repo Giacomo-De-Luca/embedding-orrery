@@ -21,8 +21,10 @@ import {
   type UpdateCollectionMetadataResult,
   type TopicConfigInput,
   type ExtractTopicsResult,
+  type ReduceTopicsInput,
+  type ReduceTopicsResult,
 } from '../graphql/mutations';
-import { GET_COLLECTIONS, EXTRACT_TOPICS } from '../graphql/queries';
+import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS } from '../graphql/queries';
 
 // ========== Hook Return Types ==========
 
@@ -72,6 +74,11 @@ export interface UseEmbedDatasetReturn {
   extractTopics: (collectionName: string, config?: TopicConfigInput) => Promise<ExtractTopicsResult | null>;
   topicsLoading: boolean;
   lastTopicsResult: ExtractTopicsResult | null;
+
+  // Topic reduction
+  reduceTopics: (input: ReduceTopicsInput) => Promise<ReduceTopicsResult | null>;
+  reduceTopicsLoading: boolean;
+  lastReduceResult: ReduceTopicsResult | null;
 
   // Active job tracking for progress display
   activeJobCollectionName: string | null;
@@ -140,6 +147,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   >(EXTRACT_TOPICS);
 
   const [lastTopicsResult, setLastTopicsResult] = useState<ExtractTopicsResult | null>(null);
+
+  const [reduceTopicsMutation, { loading: reduceTopicsLoading }] = useMutation<
+    { reduceTopics: ReduceTopicsResult }
+  >(REDUCE_TOPICS);
+
+  const [lastReduceResult, setLastReduceResult] = useState<ReduceTopicsResult | null>(null);
 
   // ========== HuggingFace Operations ==========
 
@@ -401,6 +414,44 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     }
   }, [extractTopicsMutation]);
 
+  // ========== Topic Reduction ==========
+
+  const reduceTopics = useCallback(async (
+    input: ReduceTopicsInput
+  ): Promise<ReduceTopicsResult | null> => {
+    setError(null);
+    setLastReduceResult(null);
+
+    try {
+      const { data, errors } = await reduceTopicsMutation({
+        variables: { input },
+        context: {
+          fetchOptions: {
+            timeout: 600000 // 10 minutes
+          }
+        }
+      });
+
+      if (errors && errors.length > 0) {
+        setError(errors.map(e => e.message).join(', '));
+        return null;
+      }
+
+      const result = data?.reduceTopics || null;
+
+      if (result?.error) {
+        setError(result.error);
+      }
+
+      setLastReduceResult(result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to reduce topics';
+      setError(message);
+      return null;
+    }
+  }, [reduceTopicsMutation]);
+
   // ========== Collection Operations ==========
 
   const deleteCollection = useCallback(async (collectionName: string): Promise<boolean> => {
@@ -484,6 +535,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     extractTopics,
     topicsLoading,
     lastTopicsResult,
+
+    // Topic reduction
+    reduceTopics,
+    reduceTopicsLoading,
+    lastReduceResult,
 
     // Collection operations
     deleteCollection,
