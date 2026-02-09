@@ -124,6 +124,54 @@ export function DashboardPanel({
     points, colorByField, state.nestedColorMode, state.categoricalPalette
   );
 
+  // Topic-mode detection: when coloring by topic_label, selectedTopicIds drives everything
+  const isTopicColorField = colorByField === 'topic_label';
+
+  // Maps between topic labels and topic IDs for legend ↔ topic selection sync
+  const topicLabelToIdMap = useMemo(() => {
+    if (!isTopicColorField || !topics?.length) return null;
+    const map = new Map<string, number>();
+    for (const t of topics) {
+      if (t.label) map.set(t.label, t.topicId);
+    }
+    return map;
+  }, [isTopicColorField, topics]);
+
+  const topicIdToLabelMap = useMemo(() => {
+    if (!isTopicColorField || !topics?.length) return null;
+    const map = new Map<number, string>();
+    for (const t of topics) {
+      if (t.label) map.set(t.topicId, t.label);
+    }
+    return map;
+  }, [isTopicColorField, topics]);
+
+  // Derive effective muted categories: in topic mode, derive from selectedTopicIds (no state writes)
+  const effectiveMutedCategories = useMemo(() => {
+    if (!isTopicColorField || !selectedTopicIds || selectedTopicIds.size === 0 || !topicIdToLabelMap) {
+      return state.mutedCategories ?? [];
+    }
+    // Compute the set of labels that should NOT be muted (selected topics + their subtopics)
+    const unmuted = new Set<string>();
+    for (const id of selectedTopicIds) {
+      const label = topicIdToLabelMap.get(id);
+      if (label) {
+        unmuted.add(label);
+        // In nested mode, include subtopics of selected topics
+        if (nestedColorMap?.hierarchy?.[label]) {
+          for (const sub of nestedColorMap.hierarchy[label]) {
+            unmuted.add(sub);
+          }
+        }
+      }
+    }
+    // All categories not in unmuted set are muted
+    const allCategories = nestedColorMap
+      ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
+      : categoryValues;
+    return allCategories.filter(c => !unmuted.has(c));
+  }, [isTopicColorField, selectedTopicIds, topicIdToLabelMap, state.mutedCategories, nestedColorMap, categoryValues]);
+
   // Check if we're using a continuous scale
   const isContinuousScale = state.colorScaleType === 'sequential' || state.colorScaleType === 'diverging' || state.colorScaleType === 'monochrome';
 
@@ -153,6 +201,22 @@ export function DashboardPanel({
 
   // Select-only handler: click isolates a category, shift+click toggles multi-select
   const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {
+    // In topic color mode, delegate to selectedTopicIds (always multi-select toggle;
+    // shiftKey distinction is not applicable — topics always use toggle behavior)
+    if (isTopicColorField && topicLabelToIdMap && onToggleTopic) {
+      // Look up topic ID from the category label
+      let topicId = topicLabelToIdMap.get(category);
+      // If not found directly, it might be a subtopic — find parent topic
+      if (topicId === undefined && nestedColorMap) {
+        const parentLabel = Object.entries(nestedColorMap.hierarchy)
+          .find(([, subs]) => subs.includes(category))?.[0];
+        if (parentLabel) topicId = topicLabelToIdMap.get(parentLabel);
+      }
+      if (topicId !== undefined) onToggleTopic(topicId);
+      return;
+    }
+
+    // Non-topic mode: existing mutedCategories behavior
     const muted = state.mutedCategories ?? [];
     const subtopics = nestedColorMap?.hierarchy?.[category];
 
@@ -205,12 +269,16 @@ export function DashboardPanel({
         onStateChange({ mutedCategories: allCategories.filter(c => !keepUnmuted.has(c)) });
       }
     }
-  }, [state.mutedCategories, onStateChange, nestedColorMap, categoryValues]);
+  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, nestedColorMap, state.mutedCategories, onStateChange, categoryValues]);
 
   // Double-click reset: show all categories
   const handleCategoryReset = useCallback(() => {
-    onStateChange({ mutedCategories: [] });
-  }, [onStateChange]);
+    if (isTopicColorField && onClearAllTopics) {
+      onClearAllTopics();
+    } else {
+      onStateChange({ mutedCategories: [] });
+    }
+  }, [isTopicColorField, onClearAllTopics, onStateChange]);
 
   // Show legend for categorical scales with values, or continuous scales with numeric range
   const showLegend = colorByField && (
@@ -245,7 +313,7 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
-      mutedCategories={state.mutedCategories}
+      mutedCategories={effectiveMutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
       categoricalPalette={state.categoricalPalette}
@@ -266,13 +334,15 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
-      mutedCategories={state.mutedCategories}
+      mutedCategories={effectiveMutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
       categoricalPalette={state.categoricalPalette}
       nestedColorMap={nestedColorMap}
       nebulaMode={state.nebulaMode}
       showClusterLabels={state.showClusterLabels}
+      onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
+      topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
     />
   );
 
@@ -304,7 +374,7 @@ export function DashboardPanel({
               categoryField={colorByField}
               categoryValues={categoryValues}
               categoryCounts={categoryCounts}
-              mutedCategories={state.mutedCategories}
+              mutedCategories={effectiveMutedCategories}
               onCategoryToggle={handleCategoryToggle}
               onCategoryReset={handleCategoryReset}
               colorScaleType={state.colorScaleType}

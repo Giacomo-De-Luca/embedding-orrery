@@ -98,6 +98,7 @@ export function computeDensityGrid(
   cluster: ClusterData,
   gridSize: number = 20,
   paddingFactor: number = 1.5,
+  bandwidthScale: number = 1.0,
 ): DensityGrid {
   const { points, centroid, std } = cluster;
 
@@ -107,9 +108,9 @@ export function computeDensityGrid(
     ? points.filter((_, i) => i % Math.ceil(points.length / maxKdePoints) === 0)
     : points;
 
-  // Silverman's bandwidth per axis
+  // Silverman's bandwidth per axis, scaled for smoother clouds
   const n = samplePoints.length;
-  const factor = Math.pow(n, -1 / 7); // Silverman's for 3D: n^(-1/(d+4))
+  const factor = Math.pow(n, -1 / 7) * bandwidthScale; // Silverman's for 3D: n^(-1/(d+4))
   const hx = std.x * factor;
   const hy = std.y * factor;
   const hz = std.z * factor;

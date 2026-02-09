@@ -57,6 +57,10 @@ interface ScatterPlot3DProps {
   nebulaMode?: 'off' | 'volume' | 'webgl' | 'bloom';
   /** Show topic/subtopic names at cluster centroids */
   showClusterLabels?: boolean;
+  /** Callback when a cluster label is clicked (topic selection) */
+  onClusterLabelClick?: (topicId: number) => void;
+  /** Map from topic label string to topic ID (for cluster label click handling) */
+  topicLabelToIdMap?: Map<string, number> | null;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -95,6 +99,8 @@ export function ScatterPlot3D({
   nestedColorMap,
   nebulaMode = 'off',
   showClusterLabels = false,
+  onClusterLabelClick,
+  topicLabelToIdMap,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
@@ -170,6 +176,7 @@ export function ScatterPlot3D({
   }, [defaultEye]);
 
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
+  const clusterLabelHitBoxesRef = useRef<{ box: BoundingBox; label: string; topicId: number }[]>([]);
   const labelRenderDataRef = useRef<{
     points: { x: number; y: number; z: number; label: string; index: number }[];
     similarities: Map<number, number>;
@@ -820,6 +827,7 @@ export function ScatterPlot3D({
     const grid = new CollisionGrid(gridBound, Math.max(cssW / 25, 1), Math.max(cssH / 50, 1));
 
     // --- Pass 1: Cluster labels (highest priority — inserted first) ---
+    const hitBoxes: { box: BoundingBox; label: string; topicId: number }[] = [];
     if (hasClusterData) {
       const clusterFontSize = 13;
       const clusterFontStr = `bold ${clusterFontSize}px Geist Mono, monospace`;
@@ -845,6 +853,12 @@ export function ScatterPlot3D({
         };
         if (!grid.insert(realBox)) continue;
 
+        // Store hit box for click detection
+        const topicId = topicLabelToIdMap?.get(cl.label);
+        if (topicId !== undefined) {
+          hitBoxes.push({ box: realBox, label: cl.label, topicId });
+        }
+
         // Draw cluster label with stroke outline for contrast
         ctx.globalAlpha = 1.0;
         ctx.font = clusterFontStr;
@@ -857,6 +871,7 @@ export function ScatterPlot3D({
         ctx.fillText(cl.label, sx, sy);
       }
     }
+    clusterLabelHitBoxesRef.current = hitBoxes;
 
     // --- Pass 2: Point labels (existing behavior) ---
     if (hasPointData) {
@@ -922,7 +937,7 @@ export function ScatterPlot3D({
     }
 
     ctx.globalAlpha = 1.0;
-  }, [width, height, isDark, showClusterLabels, clusterDataMap]);
+  }, [width, height, isDark, showClusterLabels, clusterDataMap, topicLabelToIdMap]);
 
   // rAF-based camera polling: detect camera changes during 3D rotation/zoom/pan
   // (onRelayout does NOT fire during 3D mouse interaction)
@@ -993,52 +1008,40 @@ export function ScatterPlot3D({
 
     const traces: PlotlyData[] = [];
 
+    // Three layers per cluster: outer (wide, faint), middle, inner (dense, opaque)
+    const layers = [
+      { bandwidthScale: 4.0, padding: 4.0, opacity: 0.06, isoMinFrac: 0.01 }, // outer halo
+      { bandwidthScale: 2.5, padding: 3.0, opacity: 0.12, isoMinFrac: 0.03 }, // middle
+      { bandwidthScale: 1.5, padding: 2.5, opacity: 0.22, isoMinFrac: 0.05 }, // inner core
+    ];
+
     for (const [, cluster] of clusterDataMap) {
       if (cluster.points.length < 10) continue;
 
-      const grid = computeDensityGrid(cluster, 18, 2.5);
-      if (grid.maxValue === 0) continue;
-
       const color = cluster.color;
-      const isoMin = grid.maxValue * 0.03;
 
-      // Outer halo — very low threshold, low opacity, large coverage
-      traces.push({
-        type: 'isosurface' as any,
-        x: grid.x,
-        y: grid.y,
-        z: grid.z,
-        value: grid.value,
-        isomin: isoMin,
-        isomax: grid.maxValue * 0.4,
-        surface: { count: 2, fill: 0.8 },
-        caps: { x: { show: false }, y: { show: false }, z: { show: false } },
-        colorscale: [[0, color], [1, color]] as any,
-        showscale: false,
-        opacity: 0.08,
-        hoverinfo: 'skip',
-        showlegend: false,
-        lighting: { ambient: 1, diffuse: 0, specular: 0, roughness: 1 },
-      } as any);
+      for (const layer of layers) {
+        const grid = computeDensityGrid(cluster, 20, layer.padding, layer.bandwidthScale);
+        if (grid.maxValue === 0) continue;
 
-      // Inner core — higher threshold, more visible
-      traces.push({
-        type: 'isosurface' as any,
-        x: grid.x,
-        y: grid.y,
-        z: grid.z,
-        value: grid.value,
-        isomin: grid.maxValue * 0.25,
-        isomax: grid.maxValue,
-        surface: { count: 3, fill: 0.9 },
-        caps: { x: { show: false }, y: { show: false }, z: { show: false } },
-        colorscale: [[0, color], [1, color]] as any,
-        showscale: false,
-        opacity: 0.15,
-        hoverinfo: 'skip',
-        showlegend: false,
-        lighting: { ambient: 1, diffuse: 0, specular: 0, roughness: 1 },
-      } as any);
+        traces.push({
+          type: 'isosurface' as any,
+          x: grid.x,
+          y: grid.y,
+          z: grid.z,
+          value: grid.value,
+          isomin: grid.maxValue * layer.isoMinFrac,
+          isomax: grid.maxValue,
+          surface: { count: 1, fill: 1.0 },
+          caps: { x: { show: false }, y: { show: false }, z: { show: false } },
+          colorscale: [[0, color], [1, color]] as any,
+          showscale: false,
+          opacity: layer.opacity,
+          hoverinfo: 'skip',
+          showlegend: false,
+          lighting: { ambient: 1, diffuse: 0, specular: 0, roughness: 1 },
+        } as any);
+      }
     }
 
     return traces;
@@ -1127,6 +1130,7 @@ export function ScatterPlot3D({
 
   const config: Partial<Config> = { displayModeBar: true, displaylogo: false, responsive: true };
 
+  const CLICK_DRAG_THRESHOLD_MS = 400;
   const mouseDownTimeRef = useRef<number>(0);
 
   useEffect(() => {
@@ -1142,7 +1146,7 @@ export function ScatterPlot3D({
     const now = Date.now();
 
     // Check drag - ignore clicks that were part of a drag gesture
-    if (now - mouseDownTimeRef.current > 500) return;
+    if (now - mouseDownTimeRef.current > CLICK_DRAG_THRESHOLD_MS) return;
 
     const point = event.points[0];
     if (!point.customdata || typeof point.customdata !== 'object') return;
@@ -1367,8 +1371,57 @@ export function ScatterPlot3D({
     };
   }, [nebulaMode, plotReady, clusterDataMap]);
 
+  // Click capture on container: detect cluster label clicks before Plotly gets the event
+  const handleContainerClickCapture = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onClusterLabelClick || clusterLabelHitBoxesRef.current.length === 0) return;
+    // Filter out drags
+    if (Date.now() - mouseDownTimeRef.current > CLICK_DRAG_THRESHOLD_MS) return;
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    for (const { box, topicId } of clusterLabelHitBoxesRef.current) {
+      if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
+        onClusterLabelClick(topicId);
+        e.stopPropagation();
+        return;
+      }
+    }
+  }, [onClusterLabelClick]);
+
+  // Mouse move for cursor feedback on cluster labels
+  const handleContainerMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onClusterLabelClick || clusterLabelHitBoxesRef.current.length === 0) {
+      if (containerRef.current) containerRef.current.style.cursor = '';
+      return;
+    }
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    let overLabel = false;
+    for (const { box } of clusterLabelHitBoxesRef.current) {
+      if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
+        overLabel = true;
+        break;
+      }
+    }
+    if (containerRef.current) {
+      containerRef.current.style.cursor = overLabel ? 'pointer' : '';
+    }
+  }, [onClusterLabelClick]);
+
   return (
-    <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
+    <div
+      ref={containerRef}
+      className={className ?? 'h-full w-full'}
+      style={{ position: 'relative' }}
+      onClickCapture={handleContainerClickCapture}
+      onMouseMove={handleContainerMouseMove}
+    >
       <Plot
         data={plotData}
         layout={layout}
