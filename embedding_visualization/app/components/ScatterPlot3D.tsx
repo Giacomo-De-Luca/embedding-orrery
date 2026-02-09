@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
@@ -828,6 +828,17 @@ export function ScatterPlot3D({
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
 
+      // Camera distance → opacity: closer = more opaque, farther = more transparent
+      const camEye = currentCameraRef.current.eye;
+      const camCenter = currentCameraRef.current.center;
+      const camDist = Math.sqrt(
+        (camEye.x - camCenter.x) ** 2 +
+        (camEye.y - camCenter.y) ** 2 +
+        (camEye.z - camCenter.z) ** 2
+      );
+      // Map: close (≤0.3) → 1.0, far (≥2.0) → 0.15
+      const clusterOpacity = Math.max(0.15, Math.min(1.0, 1.0 - (camDist - 0.3) * 0.5));
+
       for (const cl of clusterData!.labels) {
         const screen = projectToScreen(cl.x, cl.y, cl.z, mvp, vpW, vpH);
         if (!screen) continue;
@@ -847,14 +858,14 @@ export function ScatterPlot3D({
         if (!grid.insert(realBox)) continue;
 
         // Draw cluster label with stroke outline for contrast
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = clusterOpacity;
         ctx.font = clusterFontStr;
         ctx.textAlign = 'center';
         ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 4;
         ctx.lineJoin = 'round';
         ctx.strokeText(cl.label, sx, sy);
-        ctx.fillStyle = cl.color;
+        ctx.fillStyle = desaturateHex(cl.color, 0.3, isDark);
         ctx.fillText(cl.label, sx, sy);
       }
     }

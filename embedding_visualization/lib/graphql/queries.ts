@@ -227,6 +227,23 @@ export const REDUCE_TOPICS = gql`
 `;
 
 /**
+ * Mutation to generate LLM labels for existing topics
+ */
+export const GENERATE_LLM_LABELS = gql`
+  mutation GenerateLlmLabels($input: GenerateLlmLabelsInput!) {
+    generateLlmLabels(input: $input) {
+      collectionName
+      topicsLabeled
+      subtopicsLabeled
+      totalTopics
+      totalSubtopics
+      durationSeconds
+      error
+    }
+  }
+`;
+
+/**
  * Subscription to receive real-time progress updates for topic extraction
  */
 export const TOPIC_EXTRACTION_PROGRESS_SUBSCRIPTION = gql`

@@ -417,3 +417,21 @@ export interface ReduceTopicsResult {
   durationSeconds: number;
   error: string | null;
 }
+
+export interface GenerateLlmLabelsInput {
+  collectionName: string;
+  llmProvider: string;
+  llmModel: string;
+  labelScope: string;  // "both" | "topics_only" | "subtopics_only"
+  resume: boolean;
+}
+
+export interface GenerateLlmLabelsResult {
+  collectionName: string;
+  topicsLabeled: number;
+  subtopicsLabeled: number;
+  totalTopics: number;
+  totalSubtopics: number;
+  durationSeconds: number;
+  error: string | null;
+}

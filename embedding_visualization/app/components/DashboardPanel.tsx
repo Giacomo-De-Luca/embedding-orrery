@@ -13,15 +13,15 @@ import { SimilarItemsTable } from './SimilarItemsTable';
 import { EmbeddingSidebar } from './EmbeddingSidebar';
 import { SearchSidebar } from './SearchSidebar';
 import { AnalyticsSidebar } from './AnalyticsSidebar';
-import { Table2 } from 'lucide-react';
+import { Table2, Palette } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap, TopicInfo } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
-import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
+import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
@@ -295,6 +295,29 @@ export function DashboardPanel({
     if (showResultsTable) setResultsCollapsed(false);
   }, [showResultsTable]);
 
+  // Collapse/expand state for the legend
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const {
+    height: legendHeight,
+    handleRef: legendDragRef,
+    isDragging: legendDragging,
+    reset: resetLegendHeight,
+  } = useVerticalResize({
+    initialHeight: 256,
+    minHeight: 60,
+    maxHeight: 600,
+    onCollapse: () => setLegendCollapsed(true),
+  });
+
+  const legendDragHandle = (
+    <div
+      ref={legendDragRef}
+      className="h-3 w-full cursor-ns-resize flex items-center justify-center group pointer-events-auto"
+    >
+      <div className="h-0.5 w-8 rounded-full bg-border group-hover:bg-foreground/30 transition-colors" />
+    </div>
+  );
+
   // Convert colorByField to the 'category' | 'none' format expected by scatter plots
   const colorBy = colorByField ? 'category' : 'none';
 
@@ -358,37 +381,42 @@ export function DashboardPanel({
       </div>
 
       {/* 2. LAYER: Legend Overlay (Z-10) */}
-      {showLegend && (
-        <div className="absolute top-30 right-4 z-10 pointer-events-none">
+      {showLegend && !legendCollapsed && (
+        <div className={cn(
+          "absolute top-30 right-4 z-10 pointer-events-none",
+          legendDragging && "select-none"
+        )}>
+          <Legend
+            categoryField={colorByField}
+            categoryValues={categoryValues}
+            categoryCounts={categoryCounts}
+            mutedCategories={effectiveMutedCategories}
+            onCategoryToggle={handleCategoryToggle}
+            onCategoryReset={handleCategoryReset}
+            colorScaleType={state.colorScaleType}
+            numericRange={numericRange}
+            sequentialScaleName={state.sequentialScaleName}
+            divergingScaleName={state.divergingScaleName}
+            monochromeColor={state.monochromeColor}
+            categoricalPalette={state.categoricalPalette}
+            nestedColorMap={nestedColorMap}
+            maxHeight={legendHeight}
+            dragHandle={legendDragHandle}
+          />
+        </div>
+      )}
 
-          {/* Horizontal Spacer *
-        <div className="absolute right-10 bottom-0 left-0 top-40 z-10 pointer-events-none">
-          <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-            <ResizablePanel defaultSize={80} minSize={50} className="bg-transparent" />
-
-            <ResizableHandle className="bg-transparent hover:bg-border/30 w-2 pointer-events-auto" />
-
-            <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none"> */}
-          <ScrollArea className="overflow-y-auto pointer-events-auto">
-            <Legend
-              categoryField={colorByField}
-              categoryValues={categoryValues}
-              categoryCounts={categoryCounts}
-              mutedCategories={effectiveMutedCategories}
-              onCategoryToggle={handleCategoryToggle}
-              onCategoryReset={handleCategoryReset}
-              colorScaleType={state.colorScaleType}
-              numericRange={numericRange}
-              sequentialScaleName={state.sequentialScaleName}
-              divergingScaleName={state.divergingScaleName}
-              monochromeColor={state.monochromeColor}
-              categoricalPalette={state.categoricalPalette}
-              nestedColorMap={nestedColorMap}
-            />
-          </ScrollArea>
-          {/* Horizontal Spacer 
-            </ResizablePanel>
-          </ResizablePanelGroup> */}
+      {/* 2b. LAYER: Collapsed Legend Pill (Z-10) */}
+      {showLegend && legendCollapsed && (
+        <div className="absolute top-30 right-4 z-10">
+          <Button
+            variant="circularghost"
+            size="icon"
+            onClick={() => { resetLegendHeight(); setLegendCollapsed(false); }}
+            aria-label="Show legend"
+          >
+            <Palette className="h-4 w-4" />
+          </Button>
         </div>
       )}
 
