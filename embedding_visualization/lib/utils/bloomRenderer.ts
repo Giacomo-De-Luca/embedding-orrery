@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { ClusterData } from './clusterGeometry';
 
 export class BloomRenderer {
@@ -25,7 +26,7 @@ export class BloomRenderer {
     // Own WebGL2 context on the overlay canvas (no sharing with Plotly)
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false });
     this.renderer.setClearColor(0x000000, 1); // Opaque black — invisible with screen blend
-    this.renderer.setPixelRatio(1); // We manage physical pixels directly
+    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
 
     this.scene = new THREE.Scene();
 
@@ -36,8 +37,11 @@ export class BloomRenderer {
     this.group.matrixAutoUpdate = false;
     this.scene.add(this.group);
 
-    const w = canvas.width || 1;
-    const h = canvas.height || 1;
+    // Use CSS pixel dimensions (not canvas.width which is physical pixels).
+    // Three.js handles DPR multiplication internally via setPixelRatio above.
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round((canvas.width || 1) / dpr);
+    const h = Math.round((canvas.height || 1) / dpr);
     this.lastW = w;
     this.lastH = h;
     this.renderer.setSize(w, h, false);
@@ -49,11 +53,14 @@ export class BloomRenderer {
 
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(w, h),
-      1.5,  // strength
-      0.4,  // radius
-      0.1,  // threshold
+      1.2,  // strength
+      0.6,  // radius (wider for softer halo)
+      0.05, // threshold (low — let even dim spheres bloom)
     );
     this.composer.addPass(bloomPass);
+
+    // Three.js 0.181+ requires OutputPass as final pass for correct color space
+    this.composer.addPass(new OutputPass());
   }
 
   /** Replace bloom sources with spheres at each cluster centroid. */
@@ -74,11 +81,11 @@ export class BloomRenderer {
       const avgStd = (cluster.std.x + cluster.std.y + cluster.std.z) / 3;
       const color = new THREE.Color(cluster.color);
 
-      // Inner bright sphere (strong bloom source)
+      // Inner bright sphere (strong bloom source, overbright for stronger bloom pickup)
       const inner = new THREE.Mesh(
         new THREE.SphereGeometry(avgStd * 0.5, 16, 16),
         new THREE.MeshBasicMaterial({
-          color,
+          color: color.clone().multiplyScalar(1.5),
           transparent: true,
           opacity: 0.7,
           depthWrite: false,
@@ -102,23 +109,22 @@ export class BloomRenderer {
     }
   }
 
+  /** Resize the renderer. Width/height are CSS pixels — Three.js handles DPR internally. */
+  resize(width: number, height: number): void {
+    if (width > 0 && height > 0 && (width !== this.lastW || height !== this.lastH)) {
+      this.renderer.setSize(width, height, false);
+      this.composer.setSize(width, height);
+      this.lastW = width;
+      this.lastH = height;
+    }
+  }
+
   /**
    * Render bloom. Called from glplot.onrender after Plotly has drawn.
    * The overlay canvas uses mix-blend-mode: screen so black = invisible,
    * bright bloom = additive glow on top of Plotly's output.
    */
   render(projection: Float32Array, view: Float32Array, model: Float32Array): void {
-    // Resize if Plotly's canvas changed (keep overlay in sync)
-    const canvas = this.renderer.domElement;
-    const w = canvas.width;
-    const h = canvas.height;
-    if (w > 0 && h > 0 && (w !== this.lastW || h !== this.lastH)) {
-      this.renderer.setSize(w, h, false);
-      this.composer.setSize(w, h);
-      this.lastW = w;
-      this.lastH = h;
-    }
-
     // Sync camera matrices from Plotly's glplot
     this.camera.projectionMatrix.fromArray(projection);
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();

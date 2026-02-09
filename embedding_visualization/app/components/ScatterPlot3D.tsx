@@ -170,6 +170,7 @@ export function ScatterPlot3D({
   }, [defaultEye]);
 
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
+  const bloomCanvasRef = useRef<HTMLCanvasElement>(null);
   const labelRenderDataRef = useRef<{
     points: { x: number; y: number; z: number; label: string; index: number }[];
     similarities: Map<number, number>;
@@ -1313,7 +1314,7 @@ export function ScatterPlot3D({
     };
   }, [nebulaMode, plotReady, clusterDataMap]);
 
-  // --- NEBULA PLAN C: Three.js bloom (shared WebGL2 context) ---
+  // --- NEBULA PLAN C: Three.js bloom (separate overlay canvas) ---
   const bloomRendererRef = useRef<BloomRenderer | null>(null);
 
   useEffect(() => {
@@ -1325,25 +1326,25 @@ export function ScatterPlot3D({
       return;
     }
 
+    const canvas = bloomCanvasRef.current;
+    if (!canvas) return;
+
     const sceneLayout = (graphDivRef.current._fullLayout?.scene) as any;
     const glplot = sceneLayout?._scene?.glplot;
     if (!glplot) return;
 
-    const gl = glplot.gl;
-    const canvas = gl?.canvas as HTMLCanvasElement | undefined;
-    if (!gl || !canvas) return;
+    // Size overlay canvas backing store
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
 
-    // Verify WebGL2 (monkey-patch should have upgraded it)
-    if (!(gl instanceof WebGL2RenderingContext)) {
-      console.warn('[Bloom] WebGL2 required but not available — skipping bloom');
-      return;
-    }
-
-    const bloom = new BloomRenderer(gl, canvas);
+    // Create BloomRenderer on the overlay canvas (NOT Plotly's GL)
+    const bloom = new BloomRenderer(canvas);
     bloomRendererRef.current = bloom;
+    bloom.resize(width, height);
     bloom.updateClusters(clusterDataMap);
 
-    // Hook into glplot's render loop (same pattern as WebGL nebula)
+    // Hook into glplot's render loop for camera sync
     const originalOnRender = glplot.onrender;
 
     glplot.onrender = () => {
@@ -1365,7 +1366,17 @@ export function ScatterPlot3D({
       bloom.dispose();
       bloomRendererRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height handled by separate resize effect below
   }, [nebulaMode, plotReady, clusterDataMap]);
+
+  // Resize bloom overlay without full teardown
+  useEffect(() => {
+    if (nebulaMode !== 'bloom' || !bloomRendererRef.current || !bloomCanvasRef.current) return;
+    const dpr = window.devicePixelRatio || 1;
+    bloomCanvasRef.current.width = Math.round(width * dpr);
+    bloomCanvasRef.current.height = Math.round(height * dpr);
+    bloomRendererRef.current.resize(width, height);
+  }, [nebulaMode, width, height]);
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
@@ -1380,6 +1391,21 @@ export function ScatterPlot3D({
         }}
         onRelayout={handleRelayout}
       />
+      {nebulaMode === 'bloom' && (
+        <canvas
+          ref={bloomCanvasRef}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: `${width}px`,
+            height: `${height}px`,
+            pointerEvents: 'none',
+            zIndex: 5,
+            mixBlendMode: 'screen',
+          }}
+        />
+      )}
       {hasAnyLabels && (
         <canvas
           ref={labelCanvasRef}
