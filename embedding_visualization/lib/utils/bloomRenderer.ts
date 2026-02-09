@@ -26,7 +26,9 @@ export class BloomRenderer {
     // Own WebGL2 context on the overlay canvas (no sharing with Plotly)
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false });
     this.renderer.setClearColor(0x000000, 1); // Opaque black — invisible with screen blend
-    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+    // pixelRatio=1: Plotly's GL viewport uses CSS pixels (not backing-store pixels),
+    // so the bloom renderer must match to keep positions aligned.
+    this.renderer.setPixelRatio(1);
 
     this.scene = new THREE.Scene();
 
@@ -37,11 +39,8 @@ export class BloomRenderer {
     this.group.matrixAutoUpdate = false;
     this.scene.add(this.group);
 
-    // Use CSS pixel dimensions (not canvas.width which is physical pixels).
-    // Three.js handles DPR multiplication internally via setPixelRatio above.
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.round((canvas.width || 1) / dpr);
-    const h = Math.round((canvas.height || 1) / dpr);
+    const w = canvas.width || 1;
+    const h = canvas.height || 1;
     this.lastW = w;
     this.lastH = h;
     this.renderer.setSize(w, h, false);
@@ -53,9 +52,9 @@ export class BloomRenderer {
 
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(w, h),
-      1.2,  // strength
-      0.6,  // radius (wider for softer halo)
-      0.05, // threshold (low — let even dim spheres bloom)
+      2.0,  // strength (high — compensates for low-opacity sources)
+      0.8,  // radius (wide for soft diffuse halo)
+      0.0,  // threshold (zero — bloom everything)
     );
     this.composer.addPass(bloomPass);
 
@@ -79,28 +78,30 @@ export class BloomRenderer {
       if (cluster.points.length < 10) continue;
 
       const avgStd = (cluster.std.x + cluster.std.y + cluster.std.z) / 3;
+      // Sublinear scaling (sqrt) so large clusters don't overwhelm, capped at 0.15
+      const radius = Math.min(Math.sqrt(avgStd) * 0.3, 0.15);
       const color = new THREE.Color(cluster.color);
 
-      // Inner bright sphere (strong bloom source, overbright for stronger bloom pickup)
+      // Inner bloom seed — near-invisible, bloom pass amplifies into halo
       const inner = new THREE.Mesh(
-        new THREE.SphereGeometry(avgStd * 0.5, 16, 16),
+        new THREE.SphereGeometry(radius, 16, 16),
         new THREE.MeshBasicMaterial({
-          color: color.clone().multiplyScalar(1.5),
+          color: color.clone().multiplyScalar(2.0),
           transparent: true,
-          opacity: 0.7,
+          opacity: 0.12,
           depthWrite: false,
         }),
       );
       inner.position.set(cluster.centroid.x, cluster.centroid.y, cluster.centroid.z);
       this.group.add(inner);
 
-      // Outer dim sphere (soft halo)
+      // Outer bloom seed — wider, even dimmer
       const outer = new THREE.Mesh(
-        new THREE.SphereGeometry(avgStd * 1.2, 16, 16),
+        new THREE.SphereGeometry(radius * 2.5, 16, 16),
         new THREE.MeshBasicMaterial({
           color,
           transparent: true,
-          opacity: 0.3,
+          opacity: 0.06,
           depthWrite: false,
         }),
       );

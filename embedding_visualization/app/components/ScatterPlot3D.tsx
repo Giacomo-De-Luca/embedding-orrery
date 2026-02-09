@@ -1266,7 +1266,7 @@ export function ScatterPlot3D({
       // Extract matrices
       const projection = cameraParams.projection || cameraParams._projection;
       const view = cameraParams.view || cameraParams._view;
-      const model = glplot.model || GL_IDENTITY_MATRIX;
+      const model = glplot.model || (boundsRef.current ? buildDataToSceneMatrix(boundsRef.current) : GL_IDENTITY_MATRIX);
 
       if (!projection || !view) return;
 
@@ -1333,15 +1333,41 @@ export function ScatterPlot3D({
     const glplot = sceneLayout?._scene?.glplot;
     if (!glplot) return;
 
-    // Size overlay canvas backing store
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+    // Match bloom canvas to Plotly's GL canvas position/size.
+    // The projection matrix maps to the GL canvas viewport, not the full container.
+    const glCanvas = (glplot.gl?.canvas as HTMLCanvasElement) ?? null;
+    const containerEl = containerRef.current;
+    if (!glCanvas || !containerEl) return;
+
+    const syncCanvasLayout = () => {
+      const containerRect = containerEl.getBoundingClientRect();
+      const glRect = glCanvas.getBoundingClientRect();
+      const cssW = glRect.width;
+      const cssH = glRect.height;
+      const offsetX = glRect.left - containerRect.left;
+      const offsetY = glRect.top - containerRect.top;
+
+      canvas.style.left = `${offsetX}px`;
+      canvas.style.top = `${offsetY}px`;
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+
+      // Use CSS pixels for backing store — Plotly's GL viewport uses CSS pixels,
+      // and bloomRenderer uses pixelRatio=1 to match.
+      canvas.width = Math.round(cssW);
+      canvas.height = Math.round(cssH);
+
+      if (bloomRendererRef.current) {
+        bloomRendererRef.current.resize(cssW, cssH);
+      }
+    };
+
+    syncCanvasLayout();
 
     // Create BloomRenderer on the overlay canvas (NOT Plotly's GL)
     const bloom = new BloomRenderer(canvas);
     bloomRendererRef.current = bloom;
-    bloom.resize(width, height);
+    bloom.resize(canvas.clientWidth, canvas.clientHeight);
     bloom.updateClusters(clusterDataMap);
 
     // Hook into glplot's render loop for camera sync
@@ -1350,12 +1376,15 @@ export function ScatterPlot3D({
     glplot.onrender = () => {
       if (originalOnRender) originalOnRender();
 
+      // Re-sync layout each frame (handles resize/reflow)
+      syncCanvasLayout();
+
       const cameraParams = glplot.cameraParams || glplot.camera;
       if (!cameraParams) return;
 
       const projection = cameraParams.projection || cameraParams._projection;
       const view = cameraParams.view || cameraParams._view;
-      const model = glplot.model || GL_IDENTITY_MATRIX;
+      const model = glplot.model || (boundsRef.current ? buildDataToSceneMatrix(boundsRef.current) : GL_IDENTITY_MATRIX);
       if (!projection || !view) return;
 
       bloom.render(projection, view, model);
@@ -1369,13 +1398,13 @@ export function ScatterPlot3D({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height handled by separate resize effect below
   }, [nebulaMode, plotReady, clusterDataMap]);
 
-  // Resize bloom overlay without full teardown
+  // Resize bloom overlay without full teardown — syncCanvasLayout in the render loop
+  // handles the actual GL canvas matching, but we trigger a re-render on container resize
+  // to ensure the bloom renderer updates if the effect hasn't re-created.
   useEffect(() => {
     if (nebulaMode !== 'bloom' || !bloomRendererRef.current || !bloomCanvasRef.current) return;
-    const dpr = window.devicePixelRatio || 1;
-    bloomCanvasRef.current.width = Math.round(width * dpr);
-    bloomCanvasRef.current.height = Math.round(height * dpr);
-    bloomRendererRef.current.resize(width, height);
+    // The per-frame syncCanvasLayout in glplot.onrender will pick up the new size
+    // on the next render frame, so nothing else needed here.
   }, [nebulaMode, width, height]);
 
   return (
@@ -1398,8 +1427,6 @@ export function ScatterPlot3D({
             position: 'absolute',
             left: 0,
             top: 0,
-            width: `${width}px`,
-            height: `${height}px`,
             pointerEvents: 'none',
             zIndex: 5,
             mixBlendMode: 'screen',
