@@ -13,7 +13,7 @@ import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, getZoomMultiplier, formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, computeDensityGrid, sampleNebulaParticles, hexToRgbNormalized, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { NebulaRenderer } from '../../lib/utils/nebulaRenderer';
-import { BloomRenderer } from '../../lib/utils/bloomRenderer';
+import { NebulaSpritesRenderer } from '../../lib/utils/nebulaSpritesRenderer';
 import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 
@@ -1314,14 +1314,14 @@ export function ScatterPlot3D({
     };
   }, [nebulaMode, plotReady, clusterDataMap]);
 
-  // --- NEBULA PLAN C: Three.js bloom (separate overlay canvas) ---
-  const bloomRendererRef = useRef<BloomRenderer | null>(null);
+  // --- NEBULA PLAN C: Sprite clouds (separate overlay canvas) ---
+  const spritesRendererRef = useRef<NebulaSpritesRenderer | null>(null);
 
   useEffect(() => {
     if (nebulaMode !== 'bloom' || !plotReady || !graphDivRef.current || clusterDataMap.size === 0) {
-      if (bloomRendererRef.current) {
-        bloomRendererRef.current.dispose();
-        bloomRendererRef.current = null;
+      if (spritesRendererRef.current) {
+        spritesRendererRef.current.dispose();
+        spritesRendererRef.current = null;
       }
       return;
     }
@@ -1333,8 +1333,7 @@ export function ScatterPlot3D({
     const glplot = sceneLayout?._scene?.glplot;
     if (!glplot) return;
 
-    // Match bloom canvas to Plotly's GL canvas position/size.
-    // The projection matrix maps to the GL canvas viewport, not the full container.
+    // Match overlay canvas to Plotly's GL canvas position/size.
     const glCanvas = (glplot.gl?.canvas as HTMLCanvasElement) ?? null;
     const containerEl = containerRef.current;
     if (!glCanvas || !containerEl) return;
@@ -1352,23 +1351,20 @@ export function ScatterPlot3D({
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
 
-      // Use CSS pixels for backing store — Plotly's GL viewport uses CSS pixels,
-      // and bloomRenderer uses pixelRatio=1 to match.
       canvas.width = Math.round(cssW);
       canvas.height = Math.round(cssH);
 
-      if (bloomRendererRef.current) {
-        bloomRendererRef.current.resize(cssW, cssH);
+      if (spritesRendererRef.current) {
+        spritesRendererRef.current.resize(cssW, cssH);
       }
     };
 
     syncCanvasLayout();
 
-    // Create BloomRenderer on the overlay canvas (NOT Plotly's GL)
-    const bloom = new BloomRenderer(canvas);
-    bloomRendererRef.current = bloom;
-    bloom.resize(canvas.clientWidth, canvas.clientHeight);
-    bloom.updateClusters(clusterDataMap);
+    const sprites = new NebulaSpritesRenderer(canvas);
+    spritesRendererRef.current = sprites;
+    sprites.resize(canvas.clientWidth, canvas.clientHeight);
+    sprites.updateClusters(clusterDataMap);
 
     // Hook into glplot's render loop for camera sync
     const originalOnRender = glplot.onrender;
@@ -1376,7 +1372,6 @@ export function ScatterPlot3D({
     glplot.onrender = () => {
       if (originalOnRender) originalOnRender();
 
-      // Re-sync layout each frame (handles resize/reflow)
       syncCanvasLayout();
 
       const cameraParams = glplot.cameraParams || glplot.camera;
@@ -1387,25 +1382,16 @@ export function ScatterPlot3D({
       const model = glplot.model || (boundsRef.current ? buildDataToSceneMatrix(boundsRef.current) : GL_IDENTITY_MATRIX);
       if (!projection || !view) return;
 
-      bloom.render(projection, view, model);
+      sprites.render(projection, view, model);
     };
 
     return () => {
       if (glplot) glplot.onrender = originalOnRender || null;
-      bloom.dispose();
-      bloomRendererRef.current = null;
+      sprites.dispose();
+      spritesRendererRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height handled by separate resize effect below
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nebulaMode, plotReady, clusterDataMap]);
-
-  // Resize bloom overlay without full teardown — syncCanvasLayout in the render loop
-  // handles the actual GL canvas matching, but we trigger a re-render on container resize
-  // to ensure the bloom renderer updates if the effect hasn't re-created.
-  useEffect(() => {
-    if (nebulaMode !== 'bloom' || !bloomRendererRef.current || !bloomCanvasRef.current) return;
-    // The per-frame syncCanvasLayout in glplot.onrender will pick up the new size
-    // on the next render frame, so nothing else needed here.
-  }, [nebulaMode, width, height]);
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
