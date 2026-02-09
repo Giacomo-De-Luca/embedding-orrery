@@ -13,7 +13,7 @@ import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, getZoomMultiplier, formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, computeDensityGrid, sampleNebulaParticles, hexToRgbNormalized, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { NebulaRenderer } from '../../lib/utils/nebulaRenderer';
-import { NebulaSpritesRenderer } from '../../lib/utils/nebulaSpritesRenderer';
+import { HazeRenderer } from '../../lib/utils/hazeRenderer';
 import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 
@@ -1314,14 +1314,14 @@ export function ScatterPlot3D({
     };
   }, [nebulaMode, plotReady, clusterDataMap]);
 
-  // --- NEBULA PLAN C: Sprite clouds (separate overlay canvas) ---
-  const spritesRendererRef = useRef<NebulaSpritesRenderer | null>(null);
+  // --- NEBULA PLAN C: Haze sprites (separate overlay canvas) ---
+  const hazeRendererRef = useRef<HazeRenderer | null>(null);
 
   useEffect(() => {
     if (nebulaMode !== 'bloom' || !plotReady || !graphDivRef.current || clusterDataMap.size === 0) {
-      if (spritesRendererRef.current) {
-        spritesRendererRef.current.dispose();
-        spritesRendererRef.current = null;
+      if (hazeRendererRef.current) {
+        hazeRendererRef.current.dispose();
+        hazeRendererRef.current = null;
       }
       return;
     }
@@ -1354,17 +1354,17 @@ export function ScatterPlot3D({
       canvas.width = Math.round(cssW);
       canvas.height = Math.round(cssH);
 
-      if (spritesRendererRef.current) {
-        spritesRendererRef.current.resize(cssW, cssH);
+      if (hazeRendererRef.current) {
+        hazeRendererRef.current.resize(cssW, cssH);
       }
     };
 
     syncCanvasLayout();
 
-    const sprites = new NebulaSpritesRenderer(canvas);
-    spritesRendererRef.current = sprites;
-    sprites.resize(canvas.clientWidth, canvas.clientHeight);
-    sprites.updateClusters(clusterDataMap);
+    const haze = new HazeRenderer(canvas);
+    hazeRendererRef.current = haze;
+    haze.resize(canvas.clientWidth, canvas.clientHeight);
+    haze.updateClusters(clusterDataMap, points.length);
 
     // Hook into glplot's render loop for camera sync
     const originalOnRender = glplot.onrender;
@@ -1382,13 +1382,13 @@ export function ScatterPlot3D({
       const model = glplot.model || (boundsRef.current ? buildDataToSceneMatrix(boundsRef.current) : GL_IDENTITY_MATRIX);
       if (!projection || !view) return;
 
-      sprites.render(projection, view, model);
+      haze.render(projection, view, model);
     };
 
     return () => {
       if (glplot) glplot.onrender = originalOnRender || null;
-      sprites.dispose();
-      spritesRendererRef.current = null;
+      haze.dispose();
+      hazeRendererRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nebulaMode, plotReady, clusterDataMap]);
