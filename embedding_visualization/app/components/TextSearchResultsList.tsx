@@ -47,7 +47,7 @@ export function TextSearchResultsList({
             >
               <div className="flex items-center gap-2">
                 <span className="font-medium flex-1">
-                  {point.label}
+                  <HighlightedText text={point.label} query={searchQuery ?? ''} />
                 </span>
                 {categoryField && point.category && (
                   <Badge variant="secondary" className="text-xs shrink-0">
@@ -56,10 +56,8 @@ export function TextSearchResultsList({
                 )}
               </div>
               {point.document && point.document !== point.label && (
-                <p className="text-xs text-muted-foreground  mt-0.5">
-                  <HighlightedText text={point.document} query={searchQuery} />
-                 {/*{point.document.slice(0, 80)}
-                  {point.document.length > 80 ? '...' : ''}*/}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  <HighlightedText text={point.document} query={searchQuery ?? ''} />
                 </p>
               )}
             </button>

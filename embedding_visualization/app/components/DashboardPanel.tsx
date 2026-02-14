@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState, useEffect, useDeferredValue } from 'react';
 import {
   ResizableHandle,
   ResizablePanel,
@@ -13,13 +13,15 @@ import { SimilarItemsTable } from './SimilarItemsTable';
 import { EmbeddingSidebar } from './EmbeddingSidebar';
 import { SearchSidebar } from './SearchSidebar';
 import { AnalyticsSidebar } from './AnalyticsSidebar';
-import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap, TopicInfo } from '../../lib/types/types';
+import { Table2, Palette } from 'lucide-react';
+import { Button } from '@/lib/ui-primitives/button';
+import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap, TopicInfo, TemporalRange } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
-import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { cn } from '@/lib/utils/utils';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
+import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
@@ -45,6 +47,7 @@ interface DashboardPanelProps {
   searchQuery?: string;
   highlightedCount?: number;
   textSearchResults?: (Point2D | Point3D)[];
+  textSearchHighlights?: Set<number>;
   onTextResultClick?: (point: Point2D | Point3D) => void;
   // Panel state
   activePanel: ActivePanel;
@@ -87,6 +90,7 @@ export function DashboardPanel({
   searchQuery,
   highlightedCount,
   textSearchResults,
+  textSearchHighlights,
   onTextResultClick,
   activePanel,
   queryPromptName,
@@ -122,6 +126,100 @@ export function DashboardPanel({
     points, colorByField, state.nestedColorMode, state.categoricalPalette
   );
 
+  // Topic-mode detection: when coloring by topic_label, selectedTopicIds drives everything
+  const isTopicColorField = colorByField === 'topic_label';
+
+  // Maps between topic labels and topic IDs for legend ↔ topic selection sync
+  const topicLabelToIdMap = useMemo(() => {
+    if (!isTopicColorField || !topics?.length) return null;
+    const map = new Map<string, number>();
+    for (const t of topics) {
+      if (t.label) map.set(t.label, t.topicId);
+    }
+    return map;
+  }, [isTopicColorField, topics]);
+
+  const topicIdToLabelMap = useMemo(() => {
+    if (!isTopicColorField || !topics?.length) return null;
+    const map = new Map<number, string>();
+    for (const t of topics) {
+      if (t.label) map.set(t.topicId, t.label);
+    }
+    return map;
+  }, [isTopicColorField, topics]);
+
+  // Derive effective muted categories: in topic mode, derive from selectedTopicIds (no state writes)
+  const effectiveMutedCategories = useMemo(() => {
+    if (!isTopicColorField || !selectedTopicIds || selectedTopicIds.size === 0 || !topicIdToLabelMap) {
+      return state.mutedCategories ?? [];
+    }
+    // Compute the set of labels that should NOT be muted (selected topics + their subtopics)
+    const unmuted = new Set<string>();
+    for (const id of selectedTopicIds) {
+      const label = topicIdToLabelMap.get(id);
+      if (label) {
+        unmuted.add(label);
+        // In nested mode, include subtopics of selected topics
+        if (nestedColorMap?.hierarchy?.[label]) {
+          for (const sub of nestedColorMap.hierarchy[label]) {
+            unmuted.add(sub);
+          }
+        }
+      }
+    }
+    // All categories not in unmuted set are muted
+    const allCategories = nestedColorMap
+      ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
+      : categoryValues;
+    return allCategories.filter(c => !unmuted.has(c));
+  }, [isTopicColorField, selectedTopicIds, topicIdToLabelMap, state.mutedCategories, nestedColorMap, categoryValues]);
+
+  // Temporal range filtering: compute indices of points outside the selected time range
+  const deferredTemporalRange = useDeferredValue(state.temporalRange);
+
+  const temporallyMutedIndices = useMemo(() => {
+    const range = deferredTemporalRange;
+    if (!range) return null;
+    const startIdx = range.allPeriods.indexOf(range.startPeriod);
+    const endIdx = range.allPeriods.indexOf(range.endPeriod);
+    if (startIdx < 0 || endIdx < 0) return null;
+    // Build period→index map for O(1) lookups instead of O(P) indexOf per point
+    const periodIndexMap = new Map<string, number>();
+    for (let i = 0; i < range.allPeriods.length; i++) {
+      periodIndexMap.set(range.allPeriods[i], i);
+    }
+    const set = new Set<number>();
+    for (const p of points) {
+      const val = String(p.metadata?.[range.field] ?? '');
+      const periodIdx = periodIndexMap.get(val) ?? -1;
+      if (periodIdx < startIdx || periodIdx > endIdx || periodIdx === -1) {
+        set.add(p.index);
+      }
+    }
+    return set.size > 0 ? set : null;
+  }, [deferredTemporalRange, points]);
+
+  // Text search muting: points not matching the text query get muted (like temporal filtering)
+  const searchMutedIndices = useMemo(() => {
+    if (!textSearchHighlights || textSearchHighlights.size === 0) return null;
+    const set = new Set<number>();
+    for (const p of points) {
+      if (!textSearchHighlights.has(p.index)) set.add(p.index);
+    }
+    return set.size > 0 ? set : null;
+  }, [textSearchHighlights, points]);
+
+  // Combine temporal and search muting into a single set for scatter plots
+  const combinedMutedIndices = useMemo(() => {
+    if (!temporallyMutedIndices && !searchMutedIndices) return null;
+    if (temporallyMutedIndices && !searchMutedIndices) return temporallyMutedIndices;
+    if (!temporallyMutedIndices && searchMutedIndices) return searchMutedIndices;
+    const set = new Set<number>();
+    for (const i of temporallyMutedIndices!) set.add(i);
+    for (const i of searchMutedIndices!) set.add(i);
+    return set.size > 0 ? set : null;
+  }, [temporallyMutedIndices, searchMutedIndices]);
+
   // Check if we're using a continuous scale
   const isContinuousScale = state.colorScaleType === 'sequential' || state.colorScaleType === 'diverging' || state.colorScaleType === 'monochrome';
 
@@ -151,6 +249,22 @@ export function DashboardPanel({
 
   // Select-only handler: click isolates a category, shift+click toggles multi-select
   const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {
+    // In topic color mode, delegate to selectedTopicIds (always multi-select toggle;
+    // shiftKey distinction is not applicable — topics always use toggle behavior)
+    if (isTopicColorField && topicLabelToIdMap && onToggleTopic) {
+      // Look up topic ID from the category label
+      let topicId = topicLabelToIdMap.get(category);
+      // If not found directly, it might be a subtopic — find parent topic
+      if (topicId === undefined && nestedColorMap) {
+        const parentLabel = Object.entries(nestedColorMap.hierarchy)
+          .find(([, subs]) => subs.includes(category))?.[0];
+        if (parentLabel) topicId = topicLabelToIdMap.get(parentLabel);
+      }
+      if (topicId !== undefined) onToggleTopic(topicId);
+      return;
+    }
+
+    // Non-topic mode: existing mutedCategories behavior
     const muted = state.mutedCategories ?? [];
     const subtopics = nestedColorMap?.hierarchy?.[category];
 
@@ -203,12 +317,21 @@ export function DashboardPanel({
         onStateChange({ mutedCategories: allCategories.filter(c => !keepUnmuted.has(c)) });
       }
     }
-  }, [state.mutedCategories, onStateChange, nestedColorMap, categoryValues]);
+  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, nestedColorMap, state.mutedCategories, onStateChange, categoryValues]);
+
+  // Temporal range change handler
+  const handleTemporalRangeChange = useCallback((range: TemporalRange | null) => {
+    onStateChange({ temporalRange: range });
+  }, [onStateChange]);
 
   // Double-click reset: show all categories
   const handleCategoryReset = useCallback(() => {
-    onStateChange({ mutedCategories: [] });
-  }, [onStateChange]);
+    if (isTopicColorField && onClearAllTopics) {
+      onClearAllTopics();
+    } else {
+      onStateChange({ mutedCategories: [] });
+    }
+  }, [isTopicColorField, onClearAllTopics, onStateChange]);
 
   // Show legend for categorical scales with values, or continuous scales with numeric range
   const showLegend = colorByField && (
@@ -216,6 +339,37 @@ export function DashboardPanel({
     (isContinuousScale && numericRange !== undefined)
   );
   const showResultsTable = semanticSearchResults && semanticSearchResults.length > 0;
+
+  // Collapse/expand state for the results panel
+  const [resultsCollapsed, setResultsCollapsed] = useState(false);
+
+  // Auto-expand when new results arrive
+  useEffect(() => {
+    if (showResultsTable) setResultsCollapsed(false);
+  }, [showResultsTable]);
+
+  // Collapse/expand state for the legend
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const {
+    height: legendHeight,
+    handleRef: legendDragRef,
+    isDragging: legendDragging,
+    reset: resetLegendHeight,
+  } = useVerticalResize({
+    initialHeight: 256,
+    minHeight: 140,
+    maxHeight: 600,
+    onCollapse: () => setLegendCollapsed(true),
+  });
+
+  const legendDragHandle = (
+    <div
+      ref={legendDragRef}
+      className="h-3 w-full cursor-ns-resize flex items-center justify-center group pointer-events-auto"
+    >
+      <div className="h-0.5 w-8 rounded-full bg-border group-hover:bg-foreground/30 transition-colors" />
+    </div>
+  );
 
   // Convert colorByField to the 'category' | 'none' format expected by scatter plots
   const colorBy = colorByField ? 'category' : 'none';
@@ -235,11 +389,17 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
-      mutedCategories={state.mutedCategories}
+      mutedCategories={effectiveMutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
       categoricalPalette={state.categoricalPalette}
       nestedColorMap={nestedColorMap}
+      combinedMutedIndices={combinedMutedIndices}
+      hideFilteredPoints={state.hideFilteredPoints}
+      mutedPointOpacity={state.mutedPointOpacity}
+      showClusterLabels={state.showClusterLabels}
+      onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
+      topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
     />
   ) : (
     <ScatterPlot3D
@@ -256,11 +416,18 @@ export function DashboardPanel({
       onPointClick={onPointClick}
       showOnlyHighlighted={state.showOnlyHighlighted}
       showLabels={state.showLabels}
-      mutedCategories={state.mutedCategories}
+      mutedCategories={effectiveMutedCategories}
       tooltipFields={state.tooltipFields}
       hideUnclustered={state.hideUnclustered}
       categoricalPalette={state.categoricalPalette}
       nestedColorMap={nestedColorMap}
+      nebulaMode={state.nebulaMode}
+      showClusterLabels={state.showClusterLabels}
+      onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
+      topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
+      combinedMutedIndices={combinedMutedIndices}
+      hideFilteredPoints={state.hideFilteredPoints}
+      mutedPointOpacity={state.mutedPointOpacity}
     />
   );
 
@@ -276,43 +443,48 @@ export function DashboardPanel({
       </div>
 
       {/* 2. LAYER: Legend Overlay (Z-10) */}
-      {showLegend && (
-        <div className="absolute top-30 right-4 z-10 pointer-events-none">
+      {showLegend && !legendCollapsed && (
+        <div className={cn(
+          "absolute top-30 right-4 z-10 pointer-events-none",
+          legendDragging && "select-none"
+        )}>
+          <Legend
+            categoryField={colorByField}
+            categoryValues={categoryValues}
+            categoryCounts={categoryCounts}
+            mutedCategories={effectiveMutedCategories}
+            onCategoryToggle={handleCategoryToggle}
+            onCategoryReset={handleCategoryReset}
+            colorScaleType={state.colorScaleType}
+            numericRange={numericRange}
+            sequentialScaleName={state.sequentialScaleName}
+            divergingScaleName={state.divergingScaleName}
+            monochromeColor={state.monochromeColor}
+            categoricalPalette={state.categoricalPalette}
+            nestedColorMap={nestedColorMap}
+            maxHeight={legendHeight}
+            dragHandle={legendDragHandle}
+          />
+        </div>
+      )}
 
-          {/* Horizontal Spacer *
-        <div className="absolute right-10 bottom-0 left-0 top-40 z-10 pointer-events-none">
-          <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-            <ResizablePanel defaultSize={80} minSize={50} className="bg-transparent" />
-
-            <ResizableHandle className="bg-transparent hover:bg-border/30 w-2 pointer-events-auto" />
-
-            <ResizablePanel defaultSize={20} minSize={15} maxSize={50} className="pointer-events-none"> */}
-          <ScrollArea className="overflow-y-auto pointer-events-auto">
-            <Legend
-              categoryField={colorByField}
-              categoryValues={categoryValues}
-              categoryCounts={categoryCounts}
-              mutedCategories={state.mutedCategories}
-              onCategoryToggle={handleCategoryToggle}
-              onCategoryReset={handleCategoryReset}
-              colorScaleType={state.colorScaleType}
-              numericRange={numericRange}
-              sequentialScaleName={state.sequentialScaleName}
-              divergingScaleName={state.divergingScaleName}
-              monochromeColor={state.monochromeColor}
-              categoricalPalette={state.categoricalPalette}
-              nestedColorMap={nestedColorMap}
-            />
-          </ScrollArea>
-          {/* Horizontal Spacer 
-            </ResizablePanel>
-          </ResizablePanelGroup> */}
+      {/* 2b. LAYER: Collapsed Legend Pill (Z-10) */}
+      {showLegend && legendCollapsed && (
+        <div className="absolute top-30 right-4 z-10">
+          <Button
+            variant="circularghost"
+            size="icon"
+            onClick={() => { resetLegendHeight(); setLegendCollapsed(false); }}
+            aria-label="Show legend"
+          >
+            <Palette className="h-4 w-4" />
+          </Button>
         </div>
       )}
 
 
       {/* 3. LAYER: Table Overlay (Z-20) */}
-      {showResultsTable && (
+      {showResultsTable && !resultsCollapsed && (
         <div className={cn(
           "absolute inset-0 z-20 pointer-events-none transition-all duration-300 ease-in-out",
           isExpanded ? "pl-84" : "pl-0"
@@ -330,21 +502,40 @@ export function DashboardPanel({
               defaultSize={30}
               minSize={5}
               maxSize={120}
-              className="pointer-events-auto" // Re-enable clicks for the table
+              className="pointer-events-auto"
+              onResize={(size) => { if (size < 8) setResultsCollapsed(true); }}
             >
-              <div className="h-full w-full px-2 pb-2">
+              <div className={cn("h-full w-full px-2 pb-4",
+              isExpanded? "pr-4" : ""
+              )}
+              >
                 {/* Added background/blur so text is readable over the plot points */}
                 <div className="h-full border rounded-md shadow-lg overflow-hidden">
                   <SimilarItemsTable
                     results={semanticSearchResults}
                     queryLabel={searchQueryLabel}
                     categoryField={colorByField}
+                    onClose={() => setResultsCollapsed(true)}
                   />
                 </div>
               </div>
             </ResizablePanel>
 
           </ResizablePanelGroup>
+        </div>
+      )}
+
+      {/* 3b. LAYER: Collapsed Results Chip (Z-20) */}
+      {showResultsTable && resultsCollapsed && (
+        <div className="absolute bottom-4 right-4 z-20">
+          <Button
+            variant="circularghost"
+            size="icon"
+            onClick={() => setResultsCollapsed(false)}
+            aria-label="Show search results"
+          >
+            <Table2 className="h-4 w-4" />
+          </Button>
         </div>
       )}
 
@@ -413,6 +604,9 @@ export function DashboardPanel({
           categoryCounts={categoryCounts}
           availableFields={availableFields}
           categoricalPalette={state.categoricalPalette}
+          mutedCategories={effectiveMutedCategories}
+          temporalRange={state.temporalRange}
+          onTemporalRangeChange={handleTemporalRangeChange}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",

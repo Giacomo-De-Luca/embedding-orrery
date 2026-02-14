@@ -10,11 +10,24 @@ import json
 from pathlib import Path
 from chromadb.utils.embedding_functions import EmbeddingFunction
 from huggingface_hub import login
+from huggingface_hub.errors import GatedRepoError
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DIMENSIONS_FILE = Path(__file__).parent.parent / "utils" / "known_dimensions.json"
+
+_hf_logged_in = False
+
+def _ensure_hf_login():
+    """Login to HuggingFace Hub once per process, only if API key is available."""
+    global _hf_logged_in
+    if _hf_logged_in:
+        return
+    hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+    if hf_api_key:
+        login(token=hf_api_key, add_to_git_credential=False)
+        _hf_logged_in = True
 
 
 def _load_known_dimensions() -> dict[str, int]:
@@ -60,11 +73,6 @@ def create_embedding_function(
     Raises:
         ValueError: If provider is not supported or API key is missing
     """
-    hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
-    if hf_api_key:
-        # 'add_to_git_credential=False' prevents hanging on some systems asking for keychain access
-        login(token=hf_api_key, add_to_git_credential=False)
-
     if config is None:
         config = EmbeddingModelConfig()
 
@@ -90,14 +98,21 @@ def create_embedding_function(
         return len(test_embedding[0])
 
     if provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
-        # Local sentence-transformers model with optional prompt support
         from .specific_functions.embed_sentence_transformer import SentenceTransformerEmbeddingFunction
-        ef = SentenceTransformerEmbeddingFunction(
-            model_name=model_name,
-            device=device,
-            prompt=config.prompt,
-        )
-        dim = get_dimension(ef)  # Use helper instead of test embedding
+        try:
+            ef = SentenceTransformerEmbeddingFunction(
+                model_name=model_name,
+                device=device,
+                prompt=config.prompt,
+            )
+        except GatedRepoError:
+            _ensure_hf_login()
+            ef = SentenceTransformerEmbeddingFunction(
+                model_name=model_name,
+                device=device,
+                prompt=config.prompt,
+            )
+        dim = get_dimension(ef)
         return ef, dim
 
     elif provider == EmbeddingProvider.OPENAI:
@@ -131,7 +146,7 @@ def create_embedding_function(
         return ef, dim
 
     elif provider == EmbeddingProvider.HUGGINGFACE_API:
-        # HuggingFace Inference API - reads from CHROMA_HUGGINGFACE_API_KEY env var
+        _ensure_hf_login()
         ef = embedding_functions.HuggingFaceEmbeddingFunction(
             model_name=model_name
             # api_key read from CHROMA_HUGGINGFACE_API_KEY by default

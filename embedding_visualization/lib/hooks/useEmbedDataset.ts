@@ -23,8 +23,10 @@ import {
   type ExtractTopicsResult,
   type ReduceTopicsInput,
   type ReduceTopicsResult,
+  type GenerateLlmLabelsInput,
+  type GenerateLlmLabelsResult,
 } from '../graphql/mutations';
-import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS } from '../graphql/queries';
+import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS, GENERATE_LLM_LABELS } from '../graphql/queries';
 
 // ========== Hook Return Types ==========
 
@@ -79,6 +81,11 @@ export interface UseEmbedDatasetReturn {
   reduceTopics: (input: ReduceTopicsInput) => Promise<ReduceTopicsResult | null>;
   reduceTopicsLoading: boolean;
   lastReduceResult: ReduceTopicsResult | null;
+
+  // LLM label generation
+  generateLlmLabels: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
+  llmLabelsLoading: boolean;
+  lastLlmLabelsResult: GenerateLlmLabelsResult | null;
 
   // Active job tracking for progress display
   activeJobCollectionName: string | null;
@@ -153,6 +160,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   >(REDUCE_TOPICS);
 
   const [lastReduceResult, setLastReduceResult] = useState<ReduceTopicsResult | null>(null);
+
+  const [generateLlmLabelsMutation, { loading: llmLabelsLoading }] = useMutation<
+    { generateLlmLabels: GenerateLlmLabelsResult }
+  >(GENERATE_LLM_LABELS);
+
+  const [lastLlmLabelsResult, setLastLlmLabelsResult] = useState<GenerateLlmLabelsResult | null>(null);
 
   // ========== HuggingFace Operations ==========
 
@@ -452,6 +465,44 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     }
   }, [reduceTopicsMutation]);
 
+  // ========== LLM Label Generation ==========
+
+  const generateLlmLabels = useCallback(async (
+    input: GenerateLlmLabelsInput
+  ): Promise<GenerateLlmLabelsResult | null> => {
+    setError(null);
+    setLastLlmLabelsResult(null);
+
+    try {
+      const { data, errors } = await generateLlmLabelsMutation({
+        variables: { input },
+        context: {
+          fetchOptions: {
+            timeout: 600000 // 10 minutes
+          }
+        }
+      });
+
+      if (errors && errors.length > 0) {
+        setError(errors.map(e => e.message).join(', '));
+        return null;
+      }
+
+      const result = data?.generateLlmLabels || null;
+
+      if (result?.error) {
+        setError(result.error);
+      }
+
+      setLastLlmLabelsResult(result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate LLM labels';
+      setError(message);
+      return null;
+    }
+  }, [generateLlmLabelsMutation]);
+
   // ========== Collection Operations ==========
 
   const deleteCollection = useCallback(async (collectionName: string): Promise<boolean> => {
@@ -540,6 +591,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     reduceTopics,
     reduceTopicsLoading,
     lastReduceResult,
+
+    // LLM label generation
+    generateLlmLabels,
+    llmLabelsLoading,
+    lastLlmLabelsResult,
 
     // Collection operations
     deleteCollection,

@@ -12,6 +12,7 @@ import { Badge } from '@/lib/ui-primitives/badge';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
+import { ProgressModal } from './EmbeddingProgressModal';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Slider } from '@/lib/ui-primitives/slider';
@@ -24,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/lib/ui-primitives/select';
-import type { TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult } from '@/lib/graphql/mutations';
+import type { TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
 import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicConfigState } from './TopicConfigForm';
 
 interface TopicExtractionCardProps {
@@ -41,6 +42,11 @@ interface TopicExtractionCardProps {
   reduceTopics: (input: ReduceTopicsInput) => Promise<ReduceTopicsResult | null>;
   reduceTopicsLoading: boolean;
   lastReduceResult: ReduceTopicsResult | null;
+  // LLM label generation
+  generateLlmLabels: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
+  llmLabelsLoading: boolean;
+  lastLlmLabelsResult: GenerateLlmLabelsResult | null;
+  hasSubtopics: boolean;
 }
 
 export function TopicExtractionCard({
@@ -56,6 +62,10 @@ export function TopicExtractionCard({
   reduceTopics,
   reduceTopicsLoading,
   lastReduceResult,
+  generateLlmLabels,
+  llmLabelsLoading,
+  lastLlmLabelsResult,
+  hasSubtopics,
 }: TopicExtractionCardProps) {
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<TopicConfigState>(DEFAULT_TOPIC_CONFIG);
@@ -68,8 +78,27 @@ export function TopicExtractionCard({
   const [reduceLlmProvider, setReduceLlmProvider] = useState<string>('gemini');
   const [reduceLlmModel, setReduceLlmModel] = useState<string>('gemini-3-flash-preview');
 
+  // LLM label generation state
+  const [llmLabelScope, setLlmLabelScope] = useState<string>(hasSubtopics ? 'both' : 'topics_only');
+  const [llmLabelProvider, setLlmLabelProvider] = useState<string>('gemini');
+  const [llmLabelModel, setLlmLabelModel] = useState<string>('gemini-3-flash-preview');
+  const [llmLabelResume, setLlmLabelResume] = useState<boolean>(true);
+
   const handleExtract = async () => {
     const result = await extractTopics(collectionName, toTopicConfigInput(config));
+    if (result && !result.error) {
+      onTopicsExtracted();
+    }
+  };
+
+  const handleGenerateLlmLabels = async () => {
+    const result = await generateLlmLabels({
+      collectionName,
+      llmProvider: llmLabelProvider,
+      llmModel: llmLabelModel,
+      labelScope: llmLabelScope,
+      resume: llmLabelResume,
+    });
     if (result && !result.error) {
       onTopicsExtracted();
     }
@@ -345,11 +374,113 @@ export function TopicExtractionCard({
                     </div>
                   )}
                 </div>
+
+                {/* Generate LLM Labels */}
+                <Separator />
+                <div className="space-y-4">
+                  <h4 className="text-sm font-medium">Generate LLM Labels</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Add human-readable labels to existing topics using an LLM.
+                  </p>
+
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label>Label Scope</Label>
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        value={llmLabelScope}
+                        onValueChange={(v) => { if (v) setLlmLabelScope(v); }}
+                      >
+                        <ToggleGroupItem value="both" className="text-xs" disabled={!hasSubtopics}>Both</ToggleGroupItem>
+                        <ToggleGroupItem value="topics_only" className="text-xs">Topics Only</ToggleGroupItem>
+                        <ToggleGroupItem value="subtopics_only" className="text-xs" disabled={!hasSubtopics}>Subtopics Only</ToggleGroupItem>
+                      </ToggleGroup>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="llm-label-provider">Provider</Label>
+                      <Select value={llmLabelProvider} onValueChange={setLlmLabelProvider}>
+                        <SelectTrigger id="llm-label-provider">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="openai">OpenAI</SelectItem>
+                          <SelectItem value="gemini">Gemini</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="llm-label-model">Model</Label>
+                      <Input
+                        id="llm-label-model"
+                        value={llmLabelModel}
+                        onChange={(e) => setLlmLabelModel(e.target.value)}
+                        placeholder="gemini-3-flash-preview"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="llm-label-resume"
+                        checked={llmLabelResume}
+                        onCheckedChange={(checked) => setLlmLabelResume(checked === true)}
+                      />
+                      <Label htmlFor="llm-label-resume" className="cursor-pointer">
+                        Skip already-labeled topics
+                      </Label>
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleGenerateLlmLabels}
+                      disabled={llmLabelsLoading || topicsLoading || reduceTopicsLoading}
+                    >
+                      {llmLabelsLoading ? (
+                        <>
+                          <Spinner className="h-4 w-4 mr-2" />
+                          Generating Labels...
+                        </>
+                      ) : (
+                        'Generate LLM Labels'
+                      )}
+                    </Button>
+                  </div>
+
+                  {/* LLM Labels Results */}
+                  {lastLlmLabelsResult && !lastLlmLabelsResult.error && (
+                    <div className="space-y-3">
+                      <Separator />
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="secondary">
+                          {lastLlmLabelsResult.topicsLabeled}/{lastLlmLabelsResult.totalTopics} topics labeled
+                        </Badge>
+                        {lastLlmLabelsResult.totalSubtopics > 0 && (
+                          <Badge variant="secondary">
+                            {lastLlmLabelsResult.subtopicsLabeled}/{lastLlmLabelsResult.totalSubtopics} subtopics labeled
+                          </Badge>
+                        )}
+                        <Badge variant="outline">{lastLlmLabelsResult.durationSeconds.toFixed(1)}s</Badge>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </CardContent>
         </CollapsibleContent>
       </Card>
+      {/* LLM Labeling Progress Modal */}
+      {llmLabelsLoading && (
+        <ProgressModal
+          jobId={`${collectionName}_llm_labeling`}
+          title="Generating LLM Labels"
+          subtitle="Each topic is labeled individually via LLM API calls."
+          itemsLabel="topics"
+        />
+      )}
     </Collapsible>
   );
 }

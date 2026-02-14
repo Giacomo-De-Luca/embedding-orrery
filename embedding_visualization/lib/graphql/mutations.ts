@@ -339,7 +339,7 @@ export type JobStatus = 'running' | 'interrupted' | 'completed';
 export interface EmbeddingJob {
   collectionName: string;
   status: JobStatus;
-  jobType: 'huggingface' | 'local_file';
+  jobType: 'huggingface' | 'local_file' | 'llm_labeling';
   itemsEmbedded: number;
   totalExpected: number;
   batchesCompleted: number;
@@ -414,6 +414,24 @@ export interface ReduceTopicsResult {
   numTopicsAfter: number;
   topics: TopicInfo[];
   topicMappings: Record<string, number>;
+  durationSeconds: number;
+  error: string | null;
+}
+
+export interface GenerateLlmLabelsInput {
+  collectionName: string;
+  llmProvider: string;
+  llmModel: string;
+  labelScope: string;  // "both" | "topics_only" | "subtopics_only"
+  resume: boolean;
+}
+
+export interface GenerateLlmLabelsResult {
+  collectionName: string;
+  topicsLabeled: number;
+  subtopicsLabeled: number;
+  totalTopics: number;
+  totalSubtopics: number;
   durationSeconds: number;
   error: string | null;
 }

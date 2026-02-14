@@ -33,6 +33,10 @@ interface LegendProps {
   monochromeColor?: string;
   categoricalPalette?: string;
   nestedColorMap?: NestedColorMap | null;
+  /** Pixel max-height for the scrollable content area. Overrides built-in max-h when provided. */
+  maxHeight?: number;
+  /** Rendered at the bottom of the Card (e.g. a drag handle). */
+  dragHandle?: React.ReactNode;
 }
 
 /**
@@ -74,6 +78,8 @@ export function Legend({
   monochromeColor = '#1f77b4',
   categoricalPalette,
   nestedColorMap,
+  maxHeight,
+  dragHandle,
 }: LegendProps) {
   // Check if this is a continuous scale (sequential, diverging, or monochrome)
   const isContinuous = colorScaleType === 'sequential' || colorScaleType === 'diverging' || colorScaleType === 'monochrome';
@@ -107,7 +113,7 @@ export function Legend({
     return (
       <Card
         className={`w-fit gap-2 min-w-48 ${className ?? ''}`}
-        variant="outline"
+        variant="noBg"
       >
         <CardHeader className="">
           <CardTitle className="font-mono text-xs">{getCategoryDisplayName(categoryField ?? 'value')}</CardTitle>
@@ -126,6 +132,7 @@ export function Legend({
             <span>{formatNumericValue(max)}</span>
           </div>
         </CardContent>
+        {dragHandle}
       </Card>
     );
   }
@@ -146,7 +153,7 @@ export function Legend({
         variant="noBg"
       >
         <ScrollArea className="overflow-y-auto pointer-events-auto" style={{ maskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)', WebkitMaskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)' }}>
-        <CardContent className="space-y-0.5 max-h-80">
+        <CardContent className="space-y-0.5" style={{ maxHeight: maxHeight ?? 320 }}>
           {topics.map((topic) => {
             const isTopicMuted = mutedCategories.includes(topic);
             const topicCount = nestedColorMap.topicCounts[topic];
@@ -182,7 +189,7 @@ export function Legend({
                   />
                   <span
                     className={cn(
-                      "text-sm font-semibold flex-1 max-w-44 truncate",
+                      "text-sm font-semibold flex-1 max-w-44 truncate text-foreground/70",
                       isTopicMuted && "line-through"
                     )}
                   >
@@ -234,7 +241,7 @@ export function Legend({
                       />
                       <span
                         className={cn(
-                          "text-xs flex-1 max-w-40 truncate",
+                          "text-xs flex-1 max-w-40 truncate text-foreground/60",
                           isSubMuted && "line-through"
                         )}
                       >
@@ -254,6 +261,7 @@ export function Legend({
         </CardContent>
         <ScrollBar className="px-0" orientation="vertical" />
         </ScrollArea>
+        {dragHandle}
       </Card>
     );
   }
@@ -270,7 +278,7 @@ export function Legend({
 
 
       <ScrollArea className="overflow-y-auto pointer-events-auto" style={{ maskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)', WebkitMaskImage: 'linear-gradient(transparent, black 12px, black calc(100% - 12px), transparent)' }}>
-      <CardContent className="space-y-1 max-h-64">
+      <CardContent className="space-y-1" style={{ maxHeight: maxHeight ?? 256 }}>
         {values.map((value) => {
           const isMuted = mutedCategories.includes(value);
           const count = categoryCounts?.[value];
@@ -304,7 +312,7 @@ export function Legend({
               />
               <span
                 className={cn(
-                  "text-sm flex-1 max-w-48 truncate",
+                  "text-sm flex-1 max-w-48 truncate text-foreground/70",
                   isMuted && "line-through"
                 )}
               >
@@ -321,6 +329,7 @@ export function Legend({
       </CardContent>
       <ScrollBar className="px-0" orientation="vertical" />
       </ScrollArea>
+      {dragHandle}
     </Card>
   );
 }

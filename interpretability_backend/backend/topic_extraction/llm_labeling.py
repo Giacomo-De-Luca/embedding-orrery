@@ -131,6 +131,44 @@ def _create_labeler(provider: str, model: str):
         raise ValueError(f"Unsupported LLM provider: {provider}. Use 'gemini' or 'openai'.")
 
 
+def generate_llm_label_for_topic(
+    topic_id: int,
+    keywords: List[Tuple[str, float]],
+    sample_documents: List[str],
+    labeler,
+) -> str | None:
+    """Generate an LLM label for a single topic.
+
+    Args:
+        topic_id: The topic ID being labeled
+        keywords: List of (word, score) tuples for this topic
+        sample_documents: Representative documents for this topic
+        labeler: Pre-created labeler instance (from _create_labeler())
+
+    Returns:
+        Label string or None on failure.
+    """
+    keyword_str = ", ".join([w for w, _ in keywords[:10]])
+    docs_str = "\n".join([f"- {doc[:200]}" for doc in sample_documents[:4]])
+
+    prompt = DEFAULT_TOPIC_PROMPT.format(
+        documents=docs_str,
+        keywords=keyword_str
+    )
+
+    try:
+        call_start = time.time()
+        label = labeler.generate_label(prompt)
+        call_duration = time.time() - call_start
+        label = label.replace("topic: ", "").replace("Topic: ", "")
+        logger.info(f"Topic {topic_id} -> \"{label}\" ({call_duration:.1f}s)")
+        return label
+    except Exception as e:
+        call_duration = time.time() - call_start
+        logger.warning(f"Topic {topic_id} FAILED after {call_duration:.1f}s: {e}")
+        return None
+
+
 def generate_llm_labels(
     topics_data: Dict[int, List[Tuple[str, float]]],
     documents_df,
@@ -165,30 +203,17 @@ def generate_llm_labels(
 
     for call_num, topic_id in enumerate(topics_to_label, 1):
         keywords = topics_data[topic_id]
-
-        # Get representative documents for this topic
         topic_docs = documents_df[documents_df["Topic"] == topic_id]["Document"].tolist()
-        representative_docs = topic_docs[:4]
 
-        # Build prompt from template
-        keyword_str = ", ".join([w for w, _ in keywords[:10]])
-        docs_str = "\n".join([f"- {doc[:200]}" for doc in representative_docs])
-
-        prompt = DEFAULT_TOPIC_PROMPT.format(
-            documents=docs_str,
-            keywords=keyword_str
+        label = generate_llm_label_for_topic(
+            topic_id=topic_id,
+            keywords=keywords,
+            sample_documents=topic_docs,
+            labeler=labeler,
         )
-
-        try:
-            call_start = time.time()
-            label = labeler.generate_label(prompt)
-            call_duration = time.time() - call_start
-            label = label.replace("topic: ", "").replace("Topic: ", "")
+        if label is not None:
             labels[topic_id] = label
-            logger.info(f"[{call_num}/{total_calls}] Topic {topic_id} -> \"{label}\" ({call_duration:.1f}s)")
-        except Exception as e:
-            call_duration = time.time() - call_start
-            logger.warning(f"[{call_num}/{total_calls}] Topic {topic_id} FAILED after {call_duration:.1f}s: {e}")
+        logger.info(f"[{call_num}/{total_calls}] done")
 
     total_duration = time.time() - labeling_start
     logger.info(f"LLM labeling complete: {len(labels)}/{total_calls} labeled in {total_duration:.1f}s")

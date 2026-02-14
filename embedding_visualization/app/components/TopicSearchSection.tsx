@@ -13,6 +13,7 @@ import {
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
 import { cn } from '@/lib/utils/utils';
+import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { buildCategoryColorMap } from '@/lib/utils/categoryColors';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import type { TopicInfo } from '@/lib/types/types';
@@ -246,9 +247,12 @@ function TopicRow({
         />
         <div className="flex-1 min-w-0" onClick={onToggle}>
           <div className="flex items-center justify-between gap-1">
-            <span className="text-xs font-medium truncate">
-              {topic.label || `Topic ${topic.topicId}`}
-            </span>
+            <ScrollArea className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+              <span className="text-xs font-medium whitespace-nowrap" onClick={onToggle}>
+                {topic.label || `Topic ${topic.topicId}`}
+              </span>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
             <span className="text-[10px] text-muted-foreground flex-shrink-0">
               {topic.count}
             </span>

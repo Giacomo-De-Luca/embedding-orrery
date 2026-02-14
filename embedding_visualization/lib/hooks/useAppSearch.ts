@@ -31,7 +31,6 @@ export function useAppSearch(
   const [selectedPoint, setSelectedPoint] = useState<Point2D | Point3D | null>(null);
   const [semanticSearchResults, setSemanticSearchResults] = useState<SemanticSearchResult[] | null>(null);
   const [searchQueryLabel, setSearchQueryLabel] = useState<string | null>(null);
-  const [searchType, setSearchType] = useState<'text' | 'point' | null>(null);
 
   const { findSimilarByQuery, findSimilarById, loading } = useSemanticSearch(selectedCollection);
 
@@ -45,7 +44,6 @@ export function useAppSearch(
     }
 
     console.log('Search triggered:', query, 'metric:', distanceMetric, effectivePromptName ? `prompt: ${effectivePromptName}` : '');
-    setSearchType('text');
     try {
       const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, topicFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
@@ -57,7 +55,6 @@ export function useAppSearch(
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);
-    setSearchType('point');
     try {
       const results = await findSimilarById(point.id, 20, distanceMetric, topicFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
@@ -74,7 +71,6 @@ export function useAppSearch(
   const resetSearch = useCallback(() => {
     setSemanticSearchResults(null);
     setSelectedPoint(null);
-    setSearchType(null);
   }, []);
 
   return {
@@ -83,7 +79,6 @@ export function useAppSearch(
     semanticSearchResults,
     setSemanticSearchResults,
     searchQueryLabel,
-    searchType,
     handleSemanticSearch,
     handlePointClick,
     searchLoading: loading,

@@ -272,13 +272,13 @@ DashboardPanel (render plots + sidebar + tables)
 
 1. **Text Search**: User types in search bar
    - Local `String.includes()` filtering on label, document, metadata
-   - Auto-selects first match
+   - Non-matching points are muted (gray, low opacity); matches keep normal colors
    - Displays all matches in sidebar list
 
-2. **Point Selection**: User clicks point or selects from search results
+2. **Point Selection**: User clicks a point or a text search result in the sidebar
    - Triggers semantic search via GraphQL (findSimilarById)
    - Returns top N similar items with similarity scores
-   - Displays results in table and highlights in plot
+   - Displays results in table and highlights in plot with glow overlay
 
 3. **Semantic Search**: User enters query in header search
    - Embeds query and searches collection (findSimilarByQuery)

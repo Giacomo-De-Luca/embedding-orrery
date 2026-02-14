@@ -22,7 +22,7 @@ import {
 } from '@/lib/ui-primitives/collapsible';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { Trash2, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult } from '@/lib/graphql/mutations';
+import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
 import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 import { InlineEditableField, SelectOption } from './InlineEditableField';
 import { AddFieldForm } from './AddFieldForm';
@@ -65,6 +65,10 @@ interface CollectionManagerTabProps {
   reduceTopics: (input: ReduceTopicsInput) => Promise<ReduceTopicsResult | null>;
   reduceTopicsLoading: boolean;
   lastReduceResult: ReduceTopicsResult | null;
+  // LLM label generation
+  generateLlmLabels: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
+  llmLabelsLoading: boolean;
+  lastLlmLabelsResult: GenerateLlmLabelsResult | null;
 }
 
 // Read-only fields that cannot be edited (computed/system)
@@ -216,6 +220,9 @@ export function CollectionManagerTab({
   reduceTopics,
   reduceTopicsLoading,
   lastReduceResult,
+  generateLlmLabels,
+  llmLabelsLoading,
+  lastLlmLabelsResult,
 }: CollectionManagerTabProps) {
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -715,6 +722,10 @@ export function CollectionManagerTab({
           reduceTopics={reduceTopics}
           reduceTopicsLoading={reduceTopicsLoading}
           lastReduceResult={lastReduceResult}
+          generateLlmLabels={generateLlmLabels}
+          llmLabelsLoading={llmLabelsLoading}
+          lastLlmLabelsResult={lastLlmLabelsResult}
+          hasSubtopics={!!metadata.topic_hierarchy}
         />
       )}
 

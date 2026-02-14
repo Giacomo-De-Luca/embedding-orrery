@@ -4,11 +4,11 @@ import { cn } from "@/lib/utils/utils"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "@radix-ui/react-slot"
 
-
+// removed : dark:bg-input/10
 
 
 const cardVariant = cva(
-  "dark:bg-input/10 backdrop-blur-sm flex flex-col gap-6 rounded-xl py-6 shadow-sm",  {
+  " backdrop-blur-sm flex flex-col gap-6 rounded-xl py-6 shadow-sm",  {
     variants: {
       variant: {
         default: "",
@@ -25,8 +25,8 @@ const cardVariant = cva(
         circularghost:
           "hover:bg-accent backdrop-blur-md border-glass hover:text-accent-foreground rounded-full aspect-square dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
-        noBg: "bg-transparent dark:bg-transparent shadow-none"
-
+        noBg: "bg-transparent dark:bg-transparent shadow-none",
+        glassEdge: "glass-edge border border-white/15 dark:border-white/10",
       },
     },
     defaultVariants: {

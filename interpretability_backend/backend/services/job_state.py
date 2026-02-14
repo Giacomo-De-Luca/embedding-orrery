@@ -170,6 +170,29 @@ class JobStateService:
             }
             self._save(data)
 
+    def update_total_expected(
+        self,
+        collection_name: str,
+        total_expected: int,
+        total_batches: Optional[int] = None,
+    ) -> None:
+        """Update total_expected (and optionally total_batches) for a job.
+
+        Useful when the total work is not known at job start time.
+
+        Args:
+            collection_name: Name of the collection / job ID
+            total_expected: Updated total expected items
+            total_batches: Updated total batches (if provided)
+        """
+        with self._lock:
+            data = self._load()
+            if collection_name in data["jobs"]:
+                data["jobs"][collection_name]["total_expected"] = total_expected
+                if total_batches is not None:
+                    data["jobs"][collection_name]["total_batches"] = total_batches
+                self._save(data)
+
     def update_progress(
         self,
         collection_name: str,

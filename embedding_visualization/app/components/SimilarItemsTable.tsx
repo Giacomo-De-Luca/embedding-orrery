@@ -19,7 +19,7 @@ import {
 } from '@/lib/ui-primitives/table';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { ArrowUpDown } from 'lucide-react';
+import { ArrowUpDown, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import type { SemanticSearchResult } from '../../lib/types/types';
 import { getCategoryLabel, getCategoryDisplayName } from '../../lib/utils/categoryColors';
@@ -29,6 +29,7 @@ interface SimilarItemsTableProps {
   results: SemanticSearchResult[] | null;
   queryLabel: string | null;
   categoryField?: string | null;
+  onClose?: () => void;
 }
 
 // Fields to exclude from dynamic metadata columns
@@ -59,7 +60,7 @@ function fieldToDisplayName(field: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function SimilarItemsTable({ results, queryLabel, categoryField }: SimilarItemsTableProps) {
+export function SimilarItemsTable({ results, queryLabel, categoryField, onClose }: SimilarItemsTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { id: 'similarity', desc: true },
   ]);
@@ -261,6 +262,12 @@ export function SimilarItemsTable({ results, queryLabel, categoryField }: Simila
           <CardDescription className="ml-2">
             Items semantically similar to <span className="font-semibold text-foreground">{queryLabel}</span>
           </CardDescription>
+        )}
+        {onClose && (
+          <Button variant="ghost" size="icon" className="ml-auto h-7 w-7" onClick={onClose}>
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close results</span>
+          </Button>
         )}
       </CardHeader>
       <CardContent className="flex-1 min-h-0">

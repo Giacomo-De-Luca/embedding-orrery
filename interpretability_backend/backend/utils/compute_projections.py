@@ -13,9 +13,10 @@ from tqdm import tqdm
 from typing import Optional, Union, List, Literal
 
 from ..embedding_functions.config import DB_PATH
+from ..services.progress_emitter import emit_progress
 
 
-def compute_projections_for_collection(collection_name: str, projection_type: Optional[List[Literal["pca2d", "pca3d", "umap2d", "umap3d"]]] = ["pca2d", "pca3d", "umap2d", "umap3d"]) -> bool:
+def compute_projections_for_collection(collection_name: str, projection_type: Optional[List[Literal["pca2d", "pca3d", "umap2d", "umap3d"]]] = ["pca2d", "pca3d", "umap2d", "umap3d"], job_id: Optional[str] = None) -> bool:
     """
     Compute PCA and UMAP projections for a collection.
 
@@ -81,6 +82,21 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
         print(f"Computing projections for {len(ids)} items...")
         update_batch_size = 1000
 
+        # Track projection progress
+        requested = [p for p in (projection_type or []) if p in ("pca2d", "pca3d", "umap2d", "umap3d")]
+        total_projections = len(requested)
+        completed_projections = 0
+
+        def _emit_projection_done(name: str):
+            nonlocal completed_projections
+            completed_projections += 1
+            if job_id:
+                emit_progress(
+                    job_id=job_id, status="running",
+                    items_processed=completed_projections, total_items=total_projections,
+                    current_batch=0, total_batches=0,
+                    message=f"Projections: {completed_projections}/{total_projections} complete ({name} done)"
+                )
 
         if projection_type is not None and "pca2d" in projection_type:
 
@@ -103,6 +119,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
 
             del coords_pca_2d  # Free memory
             print("PCA 2D complete, memory freed")
+            _emit_projection_done("PCA 2D")
 
         if projection_type is not None and "pca3d" in projection_type:
 
@@ -125,6 +142,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
 
             del coords_pca_3d  # Free memory
             print("PCA 3D complete, memory freed")
+            _emit_projection_done("PCA 3D")
 
         if projection_type is not None and "umap2d" in projection_type:
 
@@ -149,6 +167,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
 
                 del coords_umap_2d  # Free memory
                 print("UMAP 2D complete, memory freed")
+                _emit_projection_done("UMAP 2D")
 
         if projection_type is not None and "umap3d" in projection_type:
                 
@@ -170,6 +189,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
 
                 del coords_umap_3d  # Free memory
                 print("UMAP 3D complete, memory freed")
+                _emit_projection_done("UMAP 3D")
 
             # Free embeddings - no longer needed
                 del embeddings

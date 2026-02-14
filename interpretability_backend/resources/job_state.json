@@ -41,6 +41,22 @@
       },
       "started_at": "2026-01-26T12:55:38.526218",
       "error": "RetryError[<Future at 0x173cef830 state=finished raised ClientError>]"
+    },
+    "lacan_sentences_gemini_document_llm_labeling": {
+      "collection_name": "lacan_sentences_gemini_document_llm_labeling",
+      "status": "interrupted",
+      "job_type": "llm_labeling",
+      "items_embedded": 750,
+      "total_expected": 908,
+      "batches_completed": 0,
+      "total_batches": 1,
+      "config": {
+        "collection_name": "lacan_sentences_gemini_document",
+        "llm_provider": "gemini",
+        "llm_model": "gemini-3-flash-preview",
+        "label_scope": "both"
+      },
+      "started_at": "2026-02-10T02:21:07.455135"
     }
   }
 }

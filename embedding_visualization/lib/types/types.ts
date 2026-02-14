@@ -127,6 +127,13 @@ export type ColorScaleType = 'categorical' | 'sequential' | 'diverging' | 'monoc
 // Re-export scale name types for convenience
 export type { SequentialScaleName, DivergingScaleName } from '../utils/categoryColors';
 
+export interface TemporalRange {
+  field: string;         // temporal field name (e.g. "year")
+  startPeriod: string;   // inclusive start (e.g. "1990")
+  endPeriod: string;     // inclusive end (e.g. "2010")
+  allPeriods: string[];  // sorted period values for index lookup
+}
+
 export interface VisualizationState {
   method: ProjectionMethod;
   mode: DimensionMode;
@@ -146,6 +153,11 @@ export interface VisualizationState {
   hideUnclustered?: boolean;  // When true, hide points with topic_id = -1 (unclustered/noise)
   categoricalPalette?: string;  // Crameri categorical palette name (e.g., 'batlowS') for categorical coloring
   nestedColorMode?: boolean;  // When true, color by subtopics within topics (Tableau-style nested hues)
+  nebulaMode?: boolean;  // 3D nebula haze effects around topic clusters
+  showClusterLabels?: boolean;  // When true, show topic/subtopic names at cluster centroids
+  temporalRange?: TemporalRange | null;  // Time range filter from temporal chart brush
+  hideFilteredPoints?: boolean;   // Remove muted points entirely instead of graying out
+  mutedPointOpacity?: number;     // 0-1, opacity for muted points (default 0.15)
 }
 
 /**

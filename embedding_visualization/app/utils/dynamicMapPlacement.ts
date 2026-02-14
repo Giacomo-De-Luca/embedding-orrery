@@ -3,7 +3,7 @@
 // The algorithm is based on the following research paper:
 // Been, Ken, Eli Daiches, and Chee Yap. "Dynamic Map Labeling." IEEE Transactions on Visualization and Computer Graphics 12, no. 5 (2006): 773–80. https://doi.org/10.1109/TVCG.2006.136.
 
-import { PriorityQueue } from "./priorityQueue.js";
+import { PriorityQueue } from "./priorityQueue";
 
 
 interface Point {

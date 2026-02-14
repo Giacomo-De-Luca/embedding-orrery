@@ -203,6 +203,28 @@ class ReduceTopicsResult:
 
 
 @strawberry.input
+class GenerateLlmLabelsInput:
+    """Input for standalone LLM label generation on existing topics."""
+    collection_name: str
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3-flash-preview"
+    label_scope: str = "both"  # "both" | "topics_only" | "subtopics_only"
+    resume: bool = False
+
+
+@strawberry.type
+class GenerateLlmLabelsResult:
+    """Result of standalone LLM label generation."""
+    collection_name: str
+    topics_labeled: int
+    subtopics_labeled: int
+    total_topics: int
+    total_subtopics: int
+    duration_seconds: float
+    error: Optional[str] = None
+
+
+@strawberry.input
 class EmbedDatasetInput:
     """Input for embedding a HuggingFace dataset."""
     dataset_id: str

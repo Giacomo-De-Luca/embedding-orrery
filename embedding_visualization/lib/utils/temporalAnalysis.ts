@@ -11,6 +11,11 @@ export interface TemporalCrossTabRow {
   [category: string]: string | number;
 }
 
+export interface TemporalCountRow {
+  period: string;
+  count: number;
+}
+
 /** Field names that strongly suggest temporal data */
 const TEMPORAL_NAME_PATTERNS = /^(year|date|time|month|period|decade|quarter|created_at|updated_at|timestamp|published)/i;
 
@@ -70,6 +75,38 @@ export function detectTemporalField(
 }
 
 /**
+ * Sort period strings: numerically if possible, otherwise lexicographically.
+ */
+export function sortPeriods(periods: string[]): string[] {
+  return [...periods].sort((a, b) => {
+    const numA = parseFloat(a);
+    const numB = parseFloat(b);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return a.localeCompare(b);
+  });
+}
+
+/**
+ * Compute simple period -> count for standalone temporal chart (no category breakdown).
+ */
+export function computeTemporalCounts(
+  points: (Point2D | Point3D)[],
+  temporalField: string
+): TemporalCountRow[] {
+  const counts = new Map<string, number>();
+
+  for (const point of points) {
+    const period = point.metadata?.[temporalField];
+    if (period === null || period === undefined || period === '') continue;
+    const key = String(period);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const sortedPeriods = sortPeriods(Array.from(counts.keys()));
+  return sortedPeriods.map(period => ({ period, count: counts.get(period)! }));
+}
+
+/**
  * Cross-tabulate category values across temporal periods.
  * Produces recharts-compatible data: [{ period: "2020", "Topic A": 12, "Topic B": 8 }, ...]
  */
@@ -99,12 +136,7 @@ export function computeTemporalCrossTab(
   }
 
   // Convert to recharts format, sorted by period
-  const periods = Array.from(crossTab.keys()).sort((a, b) => {
-    const numA = parseFloat(a);
-    const numB = parseFloat(b);
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-    return a.localeCompare(b);
-  });
+  const periods = sortPeriods(Array.from(crossTab.keys()));
 
   return periods.map(period => {
     const counts = crossTab.get(period)!;

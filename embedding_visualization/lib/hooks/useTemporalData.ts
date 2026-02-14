@@ -3,17 +3,22 @@ import type { Point2D, Point3D } from '../types/types';
 import {
   detectTemporalField,
   computeTemporalCrossTab,
+  computeTemporalCounts,
   type TemporalCrossTabRow,
+  type TemporalCountRow,
 } from '../utils/temporalAnalysis';
 
 interface TemporalData {
   temporalField: string | null;
   crossTabData: TemporalCrossTabRow[];
+  temporalCounts: TemporalCountRow[];
+  allPeriods: string[];
 }
 
 /**
  * Detects temporal fields and computes cross-tabulation data for the TemporalChart.
- * Only runs when a categorical colorByField is active.
+ * Detects temporal field regardless of whether a category field is set.
+ * Returns temporalCounts (standalone mode) and crossTabData (stacked mode).
  */
 export function useTemporalData(
   points: (Point2D | Point3D)[],
@@ -27,14 +32,24 @@ export function useTemporalData(
   }, [points]);
 
   const temporalField = useMemo(() => {
-    if (!categoryField || points.length === 0 || availableFields.length === 0) return null;
+    if (points.length === 0 || availableFields.length === 0) return null;
     return detectTemporalField(availableFields, itemMetadata);
-  }, [categoryField, points.length, availableFields, itemMetadata]);
+  }, [points.length, availableFields, itemMetadata]);
 
   const crossTabData = useMemo(() => {
     if (!temporalField || !categoryField || categoryValues.length === 0) return [];
     return computeTemporalCrossTab(points, categoryField, temporalField, categoryValues);
   }, [points, categoryField, temporalField, categoryValues]);
 
-  return { temporalField, crossTabData };
+  const temporalCounts = useMemo(() => {
+    if (!temporalField) return [];
+    return computeTemporalCounts(points, temporalField);
+  }, [points, temporalField]);
+
+  const allPeriods = useMemo(() => {
+    if (!temporalField) return [];
+    return temporalCounts.map(r => r.period);
+  }, [temporalField, temporalCounts]);
+
+  return { temporalField, crossTabData, temporalCounts, allPeriods };
 }

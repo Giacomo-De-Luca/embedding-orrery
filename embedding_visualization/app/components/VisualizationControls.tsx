@@ -18,6 +18,7 @@ import {
   ComboboxList,
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
+import { Slider } from '@/lib/ui-primitives/slider';
 import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
@@ -126,6 +127,23 @@ export function VisualizationControls({
             </div>
           </RadioGroup>
         </div>
+
+        {/* Nebula Cluster Effects (3D only) */}
+        {state.mode === '3d' && (
+          <>
+            <Separator />
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="nebula-mode"
+                checked={state.nebulaMode ?? false}
+                onCheckedChange={(checked) => onStateChange({ nebulaMode: checked === true })}
+              />
+              <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
+                Nebula effects
+              </Label>
+            </div>
+          </>
+        )}
 
         {/* Manual Dimension Selection */}
         {state.method === 'manual' && (
@@ -277,6 +295,58 @@ export function VisualizationControls({
               >
                 Color by subtopics
               </Label>
+            </div>
+          )}
+
+          {state.colorByField && (
+            <div className="flex items-center space-x-2 mt-2">
+              <Checkbox
+                id="show-cluster-labels"
+                checked={state.showClusterLabels ?? false}
+                onCheckedChange={(checked) => onStateChange({ showClusterLabels: checked === true })}
+              />
+              <Label
+                htmlFor="show-cluster-labels"
+                className="font-normal cursor-pointer text-sm"
+              >
+                Show cluster labels
+              </Label>
+            </div>
+          )}
+        </div>
+
+        <Separator />
+
+        {/* Filtered Points */}
+        <div className="space-y-3">
+          <Label className="text-base">Filtered Points</Label>
+
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="hide-filtered"
+              checked={state.hideFilteredPoints ?? false}
+              onCheckedChange={(checked) => onStateChange({ hideFilteredPoints: checked === true })}
+            />
+            <Label htmlFor="hide-filtered" className="font-normal cursor-pointer text-sm">
+              Hide filtered points
+            </Label>
+          </div>
+
+          {!(state.hideFilteredPoints) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-normal">Muted opacity</Label>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {Math.round((state.mutedPointOpacity ?? 0.15) * 100)}%
+                </span>
+              </div>
+              <Slider
+                min={0}
+                max={100}
+                step={5}
+                value={[Math.round((state.mutedPointOpacity ?? 0.15) * 100)]}
+                onValueChange={([v]) => onStateChange({ mutedPointOpacity: v / 100 })}
+              />
             </div>
           )}
         </div>

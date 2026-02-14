@@ -14,7 +14,7 @@ import {
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput } from '@/lib/graphql/mutations';
+import type { EmbeddingProvider, DataType, PortionStrategy, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 
 import { FileUploadZone } from './FileUploadZone';
@@ -23,7 +23,7 @@ import { DataTypeSelector } from './DataTypeSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-import { EmbeddingProgressModal } from './EmbeddingProgressModal';
+import { ProgressModal } from './EmbeddingProgressModal';
 import { JobsPanel } from './JobsPanel';
 import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
 
@@ -61,6 +61,8 @@ interface LocalFileTabProps {
   lastEmbedResult: EmbedDatasetResult | null;
   /** Collection name of currently running job for progress tracking */
   activeJobCollectionName?: string | null;
+  /** LLM label generation for resuming interrupted LLM labeling jobs */
+  generateLlmLabels?: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
 }
 
 export function LocalFileTab({
@@ -77,7 +79,11 @@ export function LocalFileTab({
   clearError,
   lastEmbedResult,
   activeJobCollectionName,
+  generateLlmLabels,
 }: LocalFileTabProps) {
+  // LLM labeling resume state
+  const [llmResumeJobId, setLlmResumeJobId] = useState<string | null>(null);
+
   // Local file specific state
   const [filePath, setFilePath] = useState('');
   const [dataType, setDataType] = useState<DataType>('TEXT');
@@ -220,6 +226,23 @@ export function LocalFileTab({
   };
 
   const handleResumeJob = async (job: EmbeddingJob) => {
+    // Handle LLM labeling jobs separately
+    if (job.jobType === 'llm_labeling' && generateLlmLabels) {
+      const llmConfig = job.config as { collection_name?: string; llm_provider?: string; llm_model?: string; label_scope?: string };
+      const jobId = `${llmConfig.collection_name || job.collectionName}_llm_labeling`;
+      setLlmResumeJobId(jobId);
+      await generateLlmLabels({
+        collectionName: llmConfig.collection_name || job.collectionName,
+        llmProvider: llmConfig.llm_provider || 'gemini',
+        llmModel: llmConfig.llm_model || 'gemini-3-flash-preview',
+        labelScope: llmConfig.label_scope || 'both',
+        resume: true,
+      });
+      setLlmResumeJobId(null);
+      await refreshCollections();
+      return;
+    }
+
     // Resume embedding with the stored configuration
     // Config is stored with Python snake_case - need to transform for GraphQL
     const config = job.config as Record<string, unknown>;
@@ -602,8 +625,18 @@ export function LocalFileTab({
 
       {/* Progress Modal - shown during embedding */}
       {embedLoading && activeJobCollectionName && (
-        <EmbeddingProgressModal
-          collectionName={activeJobCollectionName}
+        <ProgressModal
+          jobId={activeJobCollectionName}
+        />
+      )}
+
+      {/* Progress Modal - shown during LLM labeling resume */}
+      {llmResumeJobId && (
+        <ProgressModal
+          jobId={llmResumeJobId}
+          title="Generating LLM Labels"
+          subtitle="Each topic is labeled individually via LLM API calls."
+          itemsLabel="topics"
         />
       )}
 

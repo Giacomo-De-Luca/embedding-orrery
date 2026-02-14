@@ -36,7 +36,6 @@ export const HighlightedText = React.memo(function HighlightedText({
 
         if (isMatch) {
           return (
-            <div className='bg-amber-700'>
             <mark
               key={index}
               className={cn(
@@ -46,11 +45,10 @@ export const HighlightedText = React.memo(function HighlightedText({
             >
               {part}
             </mark>
-            </div>
           );
         }
 
-        return <span className = "bg-amber-300"   key={index}>{part}</span>;
+        return <span key={index}>{part}</span>;
       })}
     </span>
   );

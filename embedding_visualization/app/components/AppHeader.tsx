@@ -127,7 +127,7 @@ export function AppHeader({
           <div className="flex items-center gap-3">
             {totalWords && embeddingDim && (
               <>
-                <Badge variant="secondary" className="hidden sm:inline-flex">
+                <Badge variant="secondary" className="hidden backdrop-blur-sm sm:inline-flex">
                   {totalWords.toLocaleString()} points
                 </Badge>
                 <Badge variant="outline" className="hidden md:inline-flex">
@@ -139,25 +139,29 @@ export function AppHeader({
 
           {/* Semantic Search */}
           {onSemanticSearch && (
-            <div className="flex items-center gap-2 max-w-md flex-1">
-              <div className="relative flex-1">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Semantic search..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  className="pl-8"
-                  disabled={searchLoading}
-                />
-              </div>
-              <Button
+            <div className="relative max-w-xs flex-1">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Semantic search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="pl-8 pr-9"
+                disabled={searchLoading}
+              />
+              <button
                 onClick={handleSearch}
                 disabled={!searchQuery.trim() || searchLoading}
-                size="sm"
+                className={cn(
+                  "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full h-6 w-6 flex items-center justify-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                  searchQuery.trim()
+                    ? "backdrop-blur-sm bg-foreground/80 text-background hover:bg-foreground/90"
+                    : "backdrop-blur-sm bg-muted/40 text-muted-foreground"
+                )}
+                aria-label="Search"
               >
-                {searchLoading ? <Spinner className="h-4 w-4" /> : 'Search'}
-              </Button>
+                {searchLoading ? <Spinner className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
+              </button>
             </div>
           )}
         </div>

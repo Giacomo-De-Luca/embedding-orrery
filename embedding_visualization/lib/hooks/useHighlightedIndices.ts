@@ -2,18 +2,16 @@ import { useMemo } from 'react';
 import type { EmbeddingData, SemanticSearchResult, HighlightMap } from '../types/types';
 
 /**
- * Combines highlighted indices from text search, semantic search, and topic selection.
+ * Combines highlighted indices from semantic search and topic selection.
  *
  * Returns a Map where:
  * - Keys: point indices to highlight
  * - Values: similarity scores (0-1)
  *   - Selected point: 1.0 (it's the center of semantic search)
- *   - Text search matches: 1.0 (perfect match)
  *   - Semantic search results: actual similarity score
  *   - Topic-selected points: 1.0 (membership match)
  */
 export function useHighlightedIndices(
-  textSearchHighlights: Set<number> | undefined,
   semanticSearchResults: SemanticSearchResult[] | null,
   data: EmbeddingData | null,
   selectedPointIndex?: number,
@@ -28,13 +26,6 @@ export function useHighlightedIndices(
       highlightMap.set(selectedPointIndex, 1.0);
     }
 
-    // Add text search highlights (similarity = 1.0)
-    if (textSearchHighlights && textSearchHighlights.size > 0) {
-      textSearchHighlights.forEach(index => {
-        highlightMap.set(index, 1.0);
-      });
-    }
-
     // Add semantic search highlights (with actual similarity scores)
     if (semanticSearchResults && semanticSearchResults.length > 0 && data) {
       // Create map of id → similarity for fast lookup
@@ -46,7 +37,7 @@ export function useHighlightedIndices(
       data.ids.forEach((id, index) => {
         if (idToSimilarity.has(id)) {
           const similarity = idToSimilarity.get(id)!;
-          // If already present from text search or selected point, keep max similarity
+          // If already present from selected point, keep max similarity
           const currentSimilarity = highlightMap.get(index);
           if (currentSimilarity === undefined || similarity > currentSimilarity) {
             highlightMap.set(index, similarity);
@@ -67,5 +58,5 @@ export function useHighlightedIndices(
 
     // Return undefined if empty for backward compatibility
     return highlightMap.size > 0 ? highlightMap : undefined;
-  }, [semanticSearchResults, textSearchHighlights, data, selectedPointIndex, topicHighlightMap]);
+  }, [semanticSearchResults, data, selectedPointIndex, topicHighlightMap]);
 }

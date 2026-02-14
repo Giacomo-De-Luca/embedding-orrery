@@ -14,6 +14,8 @@ from .types import (
     EmbeddingProviderEnum,
     ExtractTopicsInput,
     ExtractTopicsResult,
+    GenerateLlmLabelsInput,
+    GenerateLlmLabelsResult,
     JSON,
     PortionStrategyEnum,
     ReduceTopicsInput,
@@ -139,7 +141,8 @@ class Mutation:
                 message="Computing projections (PCA/UMAP)..."
             )
             projections_computed = await asyncio.to_thread(
-                compute_projections_for_collection, input.collection_name
+                compute_projections_for_collection, input.collection_name,
+                job_id=input.collection_name,
             )
 
         # Extract topics if requested and projections succeeded
@@ -237,7 +240,8 @@ class Mutation:
                 message="Computing projections (PCA/UMAP)..."
             )
             projections_computed = await asyncio.to_thread(
-                compute_projections_for_collection, input.collection_name
+                compute_projections_for_collection, input.collection_name,
+                job_id=input.collection_name,
             )
 
         # Extract topics if requested and projections succeeded
@@ -443,6 +447,43 @@ class Mutation:
             topic_mappings=topic_mappings,
             duration_seconds=result.duration_seconds,
             error=result.error
+        )
+
+
+    @strawberry.mutation
+    async def generate_llm_labels(self, input: GenerateLlmLabelsInput, info=None) -> GenerateLlmLabelsResult:
+        """Generate LLM labels for existing topics in a collection.
+
+        Incrementally saves labels after each LLM call. Supports resume
+        by detecting already-labeled topics via keyword pattern matching.
+
+        Args:
+            input: Configuration for LLM label generation
+
+        Returns:
+            Result with labeling counts and timing
+        """
+        from ..services.topic_extraction_service import generate_llm_labels_for_collection
+
+        def run_labeling():
+            return generate_llm_labels_for_collection(
+                collection_name=input.collection_name,
+                llm_provider=input.llm_provider,
+                llm_model=input.llm_model,
+                label_scope=input.label_scope,
+                resume=input.resume,
+            )
+
+        result = await asyncio.to_thread(run_labeling)
+
+        return GenerateLlmLabelsResult(
+            collection_name=result.collection_name,
+            topics_labeled=result.topics_labeled,
+            subtopics_labeled=result.subtopics_labeled,
+            total_topics=result.total_topics,
+            total_subtopics=result.total_subtopics,
+            duration_seconds=result.duration_seconds,
+            error=result.error,
         )
 
 

@@ -202,6 +202,7 @@ export function SearchSidebar({
               selectedPointId={selectedPointId}
               onResultClick={onResultClick}
               categoryField={categoryField}
+              searchQuery={searchQuery}
               maxHeight={400}
             />
           )}

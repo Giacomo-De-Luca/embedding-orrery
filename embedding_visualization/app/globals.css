@@ -154,53 +154,6 @@
   }
 }
 
-/* Frosted glass tooltip - warm gold tint */
-.frosted-tooltip {
-  /*background: rgba(255, 245, 230, 0.75); */
-  background: rgba(255, 255, 255, 0.3);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
-  border-radius: 1px;
-  padding: 8px 12px;
-  max-width: 280px;
-
-  color: #1e293b;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.dark .frosted-tooltip {
-  background: rgba(255, 255, 255, 0.05);
-
-  color: #f1f5f9;
-}
-
-
-/* Frosted glass tooltip - warm gold tint */
-.frosted-tooltip {
-  background: rgba(255, 245, 230, 0.75);
-  border: 1px solid rgba(255, 215, 140, 0.4);
-  border-radius: 12px;
-  padding: 8px 12px;
-  max-width: 280px;
-  box-shadow:
-    0 4px 16px rgba(200, 160, 80, 0.15),
-    0 1px 3px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
-  color: #1e293b;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.dark .frosted-tooltip {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.25);
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.3),
-    0 1px 3px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 200, 100, 0.1);
-  color: #f1f5f9;
-}
 
 /* Hide Plotly's native hover tooltip */
 .js-plotly-plot .hoverlayer .hovertext {
@@ -254,3 +207,31 @@
   right: 24px !important;
 
 }
+
+
+
+  /* Frosted glass tooltip - warm gold tint */
+  .frosted-tooltip {
+    background: rgba(255, 245, 230, 0.2);
+    border: 1px solid rgba(255, 215, 140, 0.4);
+    border-radius: 12px;
+    padding: 8px 12px;
+    max-width: 280px;
+    box-shadow:
+      0 4px 16px rgba(200, 160, 80, 0.15),
+      0 1px 3px rgba(0, 0, 0, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    color: #1e293b;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .dark .frosted-tooltip {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow:
+      0 4px 16px rgba(0, 0, 0, 0.3),
+      0 1px 3px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 200, 100, 0.1);
+    color: #f1f5f9;
+  }

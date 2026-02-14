@@ -68,7 +68,7 @@ export function JobsPanel({ onResumeJob, statusFilter = 'interrupted' }: JobsPan
         <div className="flex items-center justify-between">
           <div>
             <CardTitle>
-              {statusFilter === 'interrupted' ? 'Interrupted Jobs' : 'Embedding Jobs'}
+              {statusFilter === 'interrupted' ? 'Interrupted Jobs' : 'Jobs'}
             </CardTitle>
             <CardDescription>
               {statusFilter === 'interrupted'
@@ -102,20 +102,28 @@ function JobCard({ job, onResume }: JobCardProps) {
     completed: 'bg-green-500',
   }[job.status];
 
+  const isLlmLabeling = job.jobType === 'llm_labeling';
+  const llmConfig = isLlmLabeling ? job.config as { collection_name?: string; llm_provider?: string; llm_model?: string } : null;
+
   return (
     <div className="border rounded-lg p-4 space-y-3">
       <div className="flex items-start justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium font-mono text-sm">{job.collectionName}</span>
+            <span className="font-medium font-mono text-sm">
+              {llmConfig?.collection_name || job.collectionName}
+            </span>
             <Badge variant="outline" className="text-xs">
               <span className={`w-2 h-2 rounded-full ${statusColor} mr-1`} />
               {job.status}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            Source: {job.source}
-            {job.embeddingModel && ` • Model: ${job.embeddingModel}`}
+            {isLlmLabeling ? (
+              <>LLM Labeling{llmConfig?.llm_provider && ` • ${llmConfig.llm_provider}/${llmConfig.llm_model}`}</>
+            ) : (
+              <>Source: {job.source}{job.embeddingModel && ` • Model: ${job.embeddingModel}`}</>
+            )}
           </p>
         </div>
         {job.status === 'interrupted' && onResume && (
@@ -139,7 +147,7 @@ function JobCard({ job, onResume }: JobCardProps) {
         <Progress value={job.percentComplete} className="h-2" />
         <div className="flex justify-between text-xs text-muted-foreground">
           <span>
-            {job.itemsEmbedded.toLocaleString()} / {job.totalExpected.toLocaleString()} items
+            {job.itemsEmbedded.toLocaleString()} / {job.totalExpected.toLocaleString()} {isLlmLabeling ? 'topics' : 'items'}
           </span>
           <span>
             Batch {job.batchesCompleted} / {job.totalBatches}

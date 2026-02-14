@@ -175,7 +175,7 @@ embedding_visualization/
 **Search & Interaction**:
 - `useAppSearch`: Unified search orchestration
 - `useSemanticSearch`: GraphQL semantic search (by query or ID)
-- `useHighlightedIndices`: Combine text + semantic highlights
+- `useHighlightedIndices`: Combine semantic search + topic highlights
 - `useCategoryData`: Compute category values and counts for Legend
 
 **Utilities**:

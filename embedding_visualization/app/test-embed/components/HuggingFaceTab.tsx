@@ -14,7 +14,7 @@ import {
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbeddingProvider, PortionStrategy, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput } from '@/lib/graphql/mutations';
+import type { EmbeddingProvider, PortionStrategy, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult, GeminiTaskType, EmbeddingJob, TopicConfigInput, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 
 import { SplitSelector } from './SplitSelector';
@@ -22,7 +22,7 @@ import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicCo
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-import { EmbeddingProgressModal } from './EmbeddingProgressModal';
+import { ProgressModal } from './EmbeddingProgressModal';
 import { JobsPanel } from './JobsPanel';
 import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
 
@@ -62,6 +62,8 @@ interface HuggingFaceTabProps {
   lastEmbedResult: EmbedDatasetResult | null;
   /** Collection name of currently running job for progress tracking */
   activeJobCollectionName?: string | null;
+  /** LLM label generation for resuming interrupted LLM labeling jobs */
+  generateLlmLabels?: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
 }
 
 export function HuggingFaceTab({
@@ -78,7 +80,11 @@ export function HuggingFaceTab({
   clearError,
   lastEmbedResult,
   activeJobCollectionName,
+  generateLlmLabels,
 }: HuggingFaceTabProps) {
+  // LLM labeling resume state
+  const [llmResumeJobId, setLlmResumeJobId] = useState<string | null>(null);
+
   // HuggingFace specific state
   const [datasetId, setDatasetId] = useState('dair-ai/emotion');
   const [selectedSplit, setSelectedSplit] = useState('train');
@@ -299,6 +305,23 @@ export function HuggingFaceTab({
   };
 
   const handleResumeJob = async (job: EmbeddingJob) => {
+    // Handle LLM labeling jobs separately
+    if (job.jobType === 'llm_labeling' && generateLlmLabels) {
+      const llmConfig = job.config as { collection_name?: string; llm_provider?: string; llm_model?: string; label_scope?: string };
+      const jobId = `${llmConfig.collection_name || job.collectionName}_llm_labeling`;
+      setLlmResumeJobId(jobId);
+      await generateLlmLabels({
+        collectionName: llmConfig.collection_name || job.collectionName,
+        llmProvider: llmConfig.llm_provider || 'gemini',
+        llmModel: llmConfig.llm_model || 'gemini-3-flash-preview',
+        labelScope: llmConfig.label_scope || 'both',
+        resume: true,
+      });
+      setLlmResumeJobId(null);
+      await refreshCollections();
+      return;
+    }
+
     // Resume embedding with the stored configuration
     // Config is stored with Python snake_case - need to transform for GraphQL
     const config = job.config as Record<string, unknown>;
@@ -698,13 +721,18 @@ export function HuggingFaceTab({
 
       {/* Progress Modal - shown during embedding */}
       {embedLoading && activeJobCollectionName && (
-        <EmbeddingProgressModal
-          collectionName={activeJobCollectionName}
-          additionalMessage={
-            portionStrategy === 'ALL' && availableSplits.length > 1
-              ? `Embedding ${availableSplits.length} splits sequentially`
-              : undefined
-          }
+        <ProgressModal
+          jobId={activeJobCollectionName}
+        />
+      )}
+
+      {/* Progress Modal - shown during LLM labeling resume */}
+      {llmResumeJobId && (
+        <ProgressModal
+          jobId={llmResumeJobId}
+          title="Generating LLM Labels"
+          subtitle="Each topic is labeled individually via LLM API calls."
+          itemsLabel="topics"
         />
       )}
 

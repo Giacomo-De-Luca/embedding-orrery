@@ -135,7 +135,6 @@ export default function Home() {
     semanticSearchResults,
     setSemanticSearchResults,
     searchQueryLabel,
-    searchType,
     handleSemanticSearch,
     handlePointClick,
     searchLoading,
@@ -164,25 +163,9 @@ export default function Home() {
     return points.filter(p => highlightedIndices.has(p.index));
   }, [highlightedIndices, filteredPoints2d, filteredPoints3d, visualizationState.mode]);
 
-  // Track previous search query to detect changes
-  const prevSearchQuery = useRef<string | undefined>(undefined);
-
-  // Auto-select first text search result and trigger semantic search
-  useEffect(() => {
-    const currentQuery = visualizationState.searchQuery?.trim();
-    const queryChanged = currentQuery !== prevSearchQuery.current;
-    prevSearchQuery.current = currentQuery;
-
-    // Only auto-select when query changes and we have results
-    if (queryChanged && currentQuery && textSearchResults.length > 0) {
-      handlePointClick(textSearchResults[0]);
-    }
-  }, [visualizationState.searchQuery, textSearchResults, handlePointClick]);
-
-  // Combine text search highlights with semantic search highlights and topic highlights
+  // Combine semantic search highlights and topic highlights (text search handled by muting, not glow)
   // Pass selectedPoint's index so it's included in highlights (semantic search returns similar items, not the query itself)
   const combinedHighlightedIndices: HighlightMap | undefined = useHighlightedIndices(
-    highlightedIndices,
     semanticSearchResults,
     data,
     selectedPoint?.index,
@@ -207,7 +190,7 @@ export default function Home() {
     if (isInitialLoad.current) return;
     resetSearch();
     setQueryPromptName(null);
-    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [], tooltipFields: undefined }));
+    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [], tooltipFields: undefined, temporalRange: null, hideFilteredPoints: false, mutedPointOpacity: undefined }));
   }, [selectedCollection, resetSearch]);
 
   // Apply colorBy from URL once data loads, then mark initial load complete
@@ -231,19 +214,6 @@ export default function Home() {
   useEffect(() => {
     setVisualizationState(prev => ({ ...prev, mutedCategories: [], hideUnclustered: false }));
   }, [visualizationState.colorByField]);
-
-  // Auto-select first search result when semantic search completes
-  // Only for text searches - point clicks already set selectedPoint in the handler
-  useEffect(() => {
-    if (semanticSearchResults && semanticSearchResults.length > 0 && searchType === 'text') {
-      const firstResultId = semanticSearchResults[0].id;
-      const points = visualizationState.mode === '3d' ? filteredPoints3d : filteredPoints2d;
-      const matchingPoint = points.find(p => p.id === firstResultId);
-      if (matchingPoint) {
-        setSelectedPoint(matchingPoint);
-      }
-    }
-  }, [semanticSearchResults, filteredPoints2d, filteredPoints3d, visualizationState.mode, setSelectedPoint, searchType]);
 
   return (
     <SidebarProvider>
@@ -293,6 +263,7 @@ export default function Home() {
                   points2d={filteredPoints2d}
                   points3d={filteredPoints3d}
                   highlightedIndices={combinedHighlightedIndices}
+                  textSearchHighlights={highlightedIndices}
                   onPointClick={handlePointClick}
                   selectedPoint={selectedPoint}
                   semanticSearchResults={semanticSearchResults}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useTheme } from 'next-themes';
 import type { PlotParams } from 'react-plotly.js';
@@ -10,12 +10,25 @@ import type {
   Config,
   PlotMouseEvent,
   PlotHoverEvent,
+  PlotRelayoutEvent,
 } from 'plotly.js';
 import type { Point2D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
+import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
+import { formatHoverText } from '../utils/rendeding';
+import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
+import {
+  computeClusterLabelPlacements,
+  computeCurrentScale,
+  projectDataToScreen,
+  type AxisRanges,
+  type PlotArea,
+  type ClusterLabelPlacement,
+} from '../utils/labelPlacement2D';
+
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 
 type PlotlyData = Partial<PlotData>;
@@ -51,17 +64,20 @@ interface ScatterPlot2DProps {
   categoricalPalette?: string;
   /** Nested topic/subtopic color map for hierarchical coloring */
   nestedColorMap?: NestedColorMap | null;
+  /** Combined indices to mute (temporal + text search) */
+  combinedMutedIndices?: Set<number> | null;
+  /** Remove muted points entirely instead of graying out */
+  hideFilteredPoints?: boolean;
+  /** 0-1, opacity for muted points (default 0.15) */
+  mutedPointOpacity?: number;
+  /** Show topic/subtopic names at cluster centroids */
+  showClusterLabels?: boolean;
+  /** Callback when a cluster label is clicked (topic toggle) */
+  onClusterLabelClick?: (topicId: number) => void;
+  /** Map from topic label string → topic ID for click handling */
+  topicLabelToIdMap?: Map<string, number> | null;
 }
 
-/**
- * Format hover text for a point.
- */
-function formatHoverText(point: Point2D): string {
-  const label = point.label || point.id;
-  const doc = point.document || '';
-  const truncatedDoc = doc.length > 100 ? doc.substring(0, 100) + '...' : doc;
-  return `${label}<br>${truncatedDoc}`;
-}
 
 export function ScatterPlot2D({
   points,
@@ -83,9 +99,52 @@ export function ScatterPlot2D({
   hideUnclustered = false,
   categoricalPalette,
   nestedColorMap,
+  combinedMutedIndices,
+  hideFilteredPoints = false,
+  mutedPointOpacity,
+  showClusterLabels = false,
+  onClusterLabelClick,
+  topicLabelToIdMap,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const graphDivRef = useRef<any>(null);
   const { width, height } = useContainerDimensions(containerRef, { width: 800, height: 600 });
+
+  // Data bounds for zoom-out limit
+  const bounds = useMemo(() => {
+    if (points.length === 0) return null;
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    return { minX, maxX, minY, maxY };
+  }, [points]);
+
+  // Block zoom-out when visible axes exceed 2x the data extent
+  const MAX_RANGE_MULTIPLIER = 2.0;
+  const isAtZoomOutLimit2D = useCallback(() => {
+    const gd = graphDivRef.current;
+    if (!gd?._fullLayout || !bounds) return false;
+    const xRange = gd._fullLayout.xaxis?.range;
+    const yRange = gd._fullLayout.yaxis?.range;
+    if (!xRange || !yRange) return false;
+    const visibleX = Math.abs(xRange[1] - xRange[0]);
+    const visibleY = Math.abs(yRange[1] - yRange[0]);
+    const dataX = (bounds.maxX - bounds.minX) || 1;
+    const dataY = (bounds.maxY - bounds.minY) || 1;
+    return visibleX >= dataX * MAX_RANGE_MULTIPLIER || visibleY >= dataY * MAX_RANGE_MULTIPLIER;
+  }, [bounds]);
+  useZoomLimit(containerRef, isAtZoomOutLimit2D);
+
+  // --- Cluster labels: canvas overlay refs and state ---
+  const labelCanvasRef = useRef<HTMLCanvasElement>(null);
+  const clusterPlacementsRef = useRef<ClusterLabelPlacement[]>([]);
+  const initialRangesRef = useRef<AxisRanges | null>(null);
+  const currentRangesRef = useRef<AxisRanges | null>(null);
+  // Store drawn label bounding boxes for click hit-testing
+  const drawnLabelBoxesRef = useRef<{ loX: number; loY: number; hiX: number; hiY: number; label: string }[]>([]);
 
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme ?? 'light';
@@ -100,6 +159,212 @@ export function ScatterPlot2D({
   const colorMap = useMemo(() => {
     return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette);
   }, [categoryField, categoryValues, categoricalPalette]);
+
+  // --- Cluster label data (shared with 3D pattern via groupPointsByCluster) ---
+  const clusterDataMap = useMemo(() => {
+    if (!showClusterLabels || !categoryField) return new Map<string, ClusterData>();
+
+    let displayPoints: Point2D[] = hideUnclustered
+      ? points.filter(p => {
+          const topicId = p.metadata?.['topic_id'];
+          if (topicId === '-1' || topicId === -1) return false;
+          const topicLabel = p.metadata?.['topic_label'];
+          if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+          return true;
+        })
+      : points;
+
+    if (mutedCategories.length > 0) {
+      const mutedSet = new Set(mutedCategories);
+      displayPoints = displayPoints.filter(p => {
+        const category = p.metadata?.[categoryField];
+        return category == null || !mutedSet.has(String(category));
+      });
+    }
+
+    // groupPointsByCluster works with Point3D but Point2D is compatible (z defaults via centroid calc)
+    return groupPointsByCluster(displayPoints as any, categoryField, colorMap, nestedColorMap);
+  }, [showClusterLabels, points, categoryField, colorMap, nestedColorMap, hideUnclustered, mutedCategories]);
+
+  // --- Cluster label font constant ---
+  const CLUSTER_FONT = 'bold 13px Geist Mono, monospace';
+  const CLUSTER_FONT_SIZE = 13;
+
+  // --- Recompute Apple placements when clusters or layout change ---
+  useEffect(() => {
+    if (!showClusterLabels || clusterDataMap.size === 0 || !bounds) {
+      clusterPlacementsRef.current = [];
+      return;
+    }
+
+    // Use a temporary canvas for text measurement
+    const canvas = labelCanvasRef.current ?? document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Compute initial ranges from data bounds with some padding (Plotly auto-pads ~5%)
+    const padX = (bounds.maxX - bounds.minX) * 0.05 || 0.5;
+    const padY = (bounds.maxY - bounds.minY) * 0.05 || 0.5;
+    const initRanges: AxisRanges = {
+      xRange: [bounds.minX - padX, bounds.maxX + padX],
+      yRange: [bounds.minY - padY, bounds.maxY + padY],
+    };
+    initialRangesRef.current = initRanges;
+
+    // Use the Plotly layout area (approximate — margins are 50px each side)
+    const plotArea: PlotArea = {
+      left: 50,
+      top: 50,
+      width: Math.max(width - 100, 100),
+      height: Math.max(height - 100, 100),
+    };
+
+    clusterPlacementsRef.current = computeClusterLabelPlacements(
+      clusterDataMap,
+      ctx,
+      CLUSTER_FONT,
+      initRanges,
+      plotArea,
+    );
+  }, [showClusterLabels, clusterDataMap, bounds, width, height]);
+
+  // --- Render cluster labels on the canvas overlay ---
+  const renderClusterLabels = useCallback(() => {
+    const canvas = labelCanvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = width;
+    const cssH = height;
+
+    // Resize canvas backing store
+    const bw = Math.round(cssW * dpr);
+    const bh = Math.round(cssH * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    // Clear hit-test boxes
+    drawnLabelBoxesRef.current = [];
+
+    const placements = clusterPlacementsRef.current;
+    const initRanges = initialRangesRef.current;
+    if (!placements.length || !initRanges) return;
+
+    // Get current axis ranges from Plotly's internal layout
+    const gd = graphDivRef.current;
+    const xRange = gd?._fullLayout?.xaxis?.range;
+    const yRange = gd?._fullLayout?.yaxis?.range;
+    if (!xRange || !yRange) return;
+
+    const curRanges: AxisRanges = {
+      xRange: [xRange[0], xRange[1]],
+      yRange: [yRange[0], yRange[1]],
+    };
+    currentRangesRef.current = curRanges;
+
+    const scale = computeCurrentScale(curRanges, initRanges);
+
+    // Get the plot area from Plotly's internal layout for accurate coordinate mapping
+    const fl = gd?._fullLayout;
+    const plotArea: PlotArea = {
+      left: fl?.margin?.l ?? 50,
+      top: fl?.margin?.t ?? 50,
+      width: (fl?.width ?? cssW) - (fl?.margin?.l ?? 50) - (fl?.margin?.r ?? 50),
+      height: (fl?.height ?? cssH) - (fl?.margin?.t ?? 50) - (fl?.margin?.b ?? 50),
+    };
+
+    ctx.font = CLUSTER_FONT;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+
+    const boxes: { loX: number; loY: number; hiX: number; hiY: number; label: string }[] = [];
+
+    for (const cl of placements) {
+      // Check Apple visibility: placement must exist and current scale must be in range
+      if (!cl.placement) continue;
+      if (scale < cl.placement.minScale || scale > cl.placement.maxScale) continue;
+
+      // Project data centroid to current screen position
+      const screen = projectDataToScreen(cl.dataX, cl.dataY, curRanges, plotArea);
+
+      // Clip to plot area
+      if (screen.x < plotArea.left - 20 || screen.x > plotArea.left + plotArea.width + 20) continue;
+      if (screen.y < plotArea.top - 20 || screen.y > plotArea.top + plotArea.height + 20) continue;
+
+      const textWidth = ctx.measureText(cl.label).width;
+      const pad = 4;
+      const box = {
+        loX: screen.x - textWidth / 2 - pad,
+        loY: screen.y - CLUSTER_FONT_SIZE * 0.6 - pad,
+        hiX: screen.x + textWidth / 2 + pad,
+        hiY: screen.y + CLUSTER_FONT_SIZE * 0.6 + pad,
+        label: cl.label,
+      };
+
+      // Draw label with stroke outline for readability (same style as 3D)
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 4;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(cl.label, screen.x, screen.y);
+      ctx.fillStyle = desaturateHex(cl.color, 0.3, isDark);
+      ctx.fillText(cl.label, screen.x, screen.y);
+
+      boxes.push(box);
+    }
+
+    drawnLabelBoxesRef.current = boxes;
+    ctx.globalAlpha = 1.0;
+  }, [width, height, isDark]);
+
+  // --- Handle Plotly relayout (zoom/pan) to re-render cluster labels ---
+  const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
+    if (showClusterLabels && clusterDataMap.size > 0) {
+      // Use rAF to let Plotly finish its layout update first
+      requestAnimationFrame(() => renderClusterLabels());
+    }
+  }, [showClusterLabels, clusterDataMap.size, renderClusterLabels]);
+
+  // Re-render labels when cluster data, size, or theme changes
+  useEffect(() => {
+    if (showClusterLabels && clusterDataMap.size > 0) {
+      // Small delay to ensure Plotly has laid out
+      const timer = setTimeout(() => renderClusterLabels(), 50);
+      return () => clearTimeout(timer);
+    } else if (labelCanvasRef.current) {
+      const ctx = labelCanvasRef.current.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
+      drawnLabelBoxesRef.current = [];
+    }
+  }, [showClusterLabels, clusterDataMap, width, height, renderClusterLabels]);
+
+  // --- Click handler for cluster labels (intercept before Plotly) ---
+  const handleContainerClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onClusterLabelClick || !topicLabelToIdMap || drawnLabelBoxesRef.current.length === 0) return;
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    for (const box of drawnLabelBoxesRef.current) {
+      if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
+        const topicId = topicLabelToIdMap.get(box.label);
+        if (topicId !== undefined) {
+          e.stopPropagation();
+          onClusterLabelClick(topicId);
+          return;
+        }
+      }
+    }
+  }, [onClusterLabelClick, topicLabelToIdMap]);
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
@@ -253,22 +518,64 @@ export function ScatterPlot2D({
               // Check if subtopic or its parent topic is muted
               const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
               const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
-              traces.push({
-                x: subPoints.map(p => p.x),
-                y: subPoints.map(p => p.y),
-                mode: 'markers' as const,
-                type: 'scattergl' as const,
-                name: sub,
-                marker: {
-                  size: markerStyle.size,
-                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                  opacity: isMuted ? 0.2 : dimOpacity,
-                },
-                text: subPoints.map(formatHoverText),
-                hovertemplate: '<b>%{text}</b><extra></extra>',
-                customdata: subPoints as any,
-                showlegend: false,
-              } satisfies PlotlyData);
+              if (hideFilteredPoints && isMuted) return;
+              if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+                const activePoints = subPoints.filter(p => !combinedMutedIndices.has(p.index));
+                const mutedPts = subPoints.filter(p => combinedMutedIndices.has(p.index));
+                if (activePoints.length > 0) {
+                  traces.push({
+                    x: activePoints.map(p => p.x),
+                    y: activePoints.map(p => p.y),
+                    mode: 'markers' as const,
+                    type: 'scattergl' as const,
+                    name: sub,
+                    marker: {
+                      size: markerStyle.size,
+                      color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                      opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
+                    },
+                    text: activePoints.map(formatHoverText),
+                    hovertemplate: '<b>%{text}</b><extra></extra>',
+                    customdata: activePoints as any,
+                    showlegend: false,
+                  } satisfies PlotlyData);
+                }
+                if (mutedPts.length > 0 && !hideFilteredPoints) {
+                  traces.push({
+                    x: mutedPts.map(p => p.x),
+                    y: mutedPts.map(p => p.y),
+                    mode: 'markers' as const,
+                    type: 'scattergl' as const,
+                    name: sub,
+                    marker: {
+                      size: markerStyle.size,
+                      color: '#9ca3af',
+                      opacity: mutedPointOpacity ?? 0.15,
+                    },
+                    text: mutedPts.map(formatHoverText),
+                    hovertemplate: '<b>%{text}</b><extra></extra>',
+                    customdata: mutedPts as any,
+                    showlegend: false,
+                  } satisfies PlotlyData);
+                }
+              } else {
+                traces.push({
+                  x: subPoints.map(p => p.x),
+                  y: subPoints.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: sub,
+                  marker: {
+                    size: markerStyle.size,
+                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
+                  },
+                  text: subPoints.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: subPoints as any,
+                  showlegend: false,
+                } satisfies PlotlyData);
+              }
             });
           } else {
             const pointsByCategory: Record<string, Point2D[]> = {};
@@ -283,42 +590,125 @@ export function ScatterPlot2D({
 
             Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
               const isMuted = mutedCategories.includes(cat);
-              traces.push({
-                x: catPoints.map(p => p.x),
-                y: catPoints.map(p => p.y),
-                mode: 'markers' as const,
-                type: 'scattergl' as const,
-                name: getCategoryLabel(categoryField, cat),
-                marker: {
-                  size: markerStyle.size,
-                  color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                  opacity: isMuted ? 0.2 : dimOpacity,  // Even more muted when category is toggled off
-                },
-                text: catPoints.map(formatHoverText),
-                hovertemplate: '<b>%{text}</b><extra></extra>',
-                customdata: catPoints as any,
-                showlegend: false,
-              } satisfies PlotlyData);
+              if (hideFilteredPoints && isMuted) return;
+              if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+                const activePoints = catPoints.filter(p => !combinedMutedIndices.has(p.index));
+                const mutedPts = catPoints.filter(p => combinedMutedIndices.has(p.index));
+                if (activePoints.length > 0) {
+                  traces.push({
+                    x: activePoints.map(p => p.x),
+                    y: activePoints.map(p => p.y),
+                    mode: 'markers' as const,
+                    type: 'scattergl' as const,
+                    name: getCategoryLabel(categoryField, cat),
+                    marker: {
+                      size: markerStyle.size,
+                      color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                      opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
+                    },
+                    text: activePoints.map(formatHoverText),
+                    hovertemplate: '<b>%{text}</b><extra></extra>',
+                    customdata: activePoints as any,
+                    showlegend: false,
+                  } satisfies PlotlyData);
+                }
+                if (mutedPts.length > 0 && !hideFilteredPoints) {
+                  traces.push({
+                    x: mutedPts.map(p => p.x),
+                    y: mutedPts.map(p => p.y),
+                    mode: 'markers' as const,
+                    type: 'scattergl' as const,
+                    name: getCategoryLabel(categoryField, cat),
+                    marker: {
+                      size: markerStyle.size,
+                      color: '#9ca3af',
+                      opacity: mutedPointOpacity ?? 0.15,
+                    },
+                    text: mutedPts.map(formatHoverText),
+                    hovertemplate: '<b>%{text}</b><extra></extra>',
+                    customdata: mutedPts as any,
+                    showlegend: false,
+                  } satisfies PlotlyData);
+                }
+              } else {
+                traces.push({
+                  x: catPoints.map(p => p.x),
+                  y: catPoints.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: getCategoryLabel(categoryField, cat),
+                  marker: {
+                    size: markerStyle.size,
+                    color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
+                  },
+                  text: catPoints.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: catPoints as any,
+                  showlegend: false,
+                } satisfies PlotlyData);
+              }
             });
           }
         } else {
           // MODE: NO COLORING - use gold fallback
-          traces.push({
-            x: filteredUnhighlightedPoints.map(p => p.x),
-            y: filteredUnhighlightedPoints.map(p => p.y),
-            mode: 'markers' as const,
-            type: 'scattergl' as const,
-            name: 'Other items',
-            marker: {
-              size: markerStyle.size,
-              color: '#e5a819ff',
-              opacity: dimOpacity,
-            },
-            text: filteredUnhighlightedPoints.map(formatHoverText),
-            hovertemplate: '<b>%{text}</b><extra></extra>',
-            customdata: filteredUnhighlightedPoints as any,
-            showlegend: false,
-          } satisfies PlotlyData);
+          if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+            const activePoints = filteredUnhighlightedPoints.filter(p => !combinedMutedIndices.has(p.index));
+            const mutedPts = filteredUnhighlightedPoints.filter(p => combinedMutedIndices.has(p.index));
+            if (activePoints.length > 0) {
+              traces.push({
+                x: activePoints.map(p => p.x),
+                y: activePoints.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: 'Other items',
+                marker: {
+                  size: markerStyle.size,
+                  color: '#e5a819ff',
+                  opacity: dimOpacity,
+                },
+                text: activePoints.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: activePoints as any,
+                showlegend: false,
+              } satisfies PlotlyData);
+            }
+            if (mutedPts.length > 0 && !hideFilteredPoints) {
+              traces.push({
+                x: mutedPts.map(p => p.x),
+                y: mutedPts.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: 'Other items',
+                marker: {
+                  size: markerStyle.size,
+                  color: '#9ca3af',
+                  opacity: mutedPointOpacity ?? 0.15,
+                },
+                text: mutedPts.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: mutedPts as any,
+                showlegend: false,
+              } satisfies PlotlyData);
+            }
+          } else {
+            traces.push({
+              x: filteredUnhighlightedPoints.map(p => p.x),
+              y: filteredUnhighlightedPoints.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              name: 'Other items',
+              marker: {
+                size: markerStyle.size,
+                color: '#e5a819ff',
+                opacity: dimOpacity,
+              },
+              text: filteredUnhighlightedPoints.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: filteredUnhighlightedPoints as any,
+              showlegend: false,
+            } satisfies PlotlyData);
+          }
         }
       }
 
@@ -524,25 +914,69 @@ export function ScatterPlot2D({
 
       if (numericData && plotlyColorScale) {
         // MODE: NATIVE COLORSCALE (GPU ACCELERATED)
-        traces = [{
-          x: displayPoints.map(p => p.x),
-          y: displayPoints.map(p => p.y),
-        mode: 'markers' as const,
-        type: 'scattergl' as const,
-        name: 'Data',
-        marker: {
-          size: markerStyle.size,
-          color: displayPoints.map(p => numericData.cleanValues[p.index]),
-          colorscale: plotlyColorScale as any,
-          cmin: numericData.min,
-          cmax: numericData.max,
-          opacity: markerStyle.opacity,
-          showscale: false, // Disabled - using custom Legend component instead
-        },
-        text: displayPoints.map(formatHoverText),
-        hovertemplate: '<b>%{text}</b><extra></extra>',
-        customdata: displayPoints as any,
-      } satisfies PlotlyData];
+        if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+          const activePoints = displayPoints.filter(p => !combinedMutedIndices.has(p.index));
+          const mutedPts = displayPoints.filter(p => combinedMutedIndices.has(p.index));
+          if (activePoints.length > 0) {
+            traces.push({
+              x: activePoints.map(p => p.x),
+              y: activePoints.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              name: 'Data',
+              marker: {
+                size: markerStyle.size,
+                color: activePoints.map(p => numericData.cleanValues[p.index]),
+                colorscale: plotlyColorScale as any,
+                cmin: numericData.min,
+                cmax: numericData.max,
+                opacity: markerStyle.opacity,
+                showscale: false,
+              },
+              text: activePoints.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: activePoints as any,
+            } satisfies PlotlyData);
+          }
+          if (mutedPts.length > 0 && !hideFilteredPoints) {
+            traces.push({
+              x: mutedPts.map(p => p.x),
+              y: mutedPts.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              name: 'Outside range',
+              marker: {
+                size: markerStyle.size,
+                color: '#9ca3af',
+                opacity: mutedPointOpacity ?? 0.15,
+              },
+              text: mutedPts.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: mutedPts as any,
+              showlegend: false,
+            } satisfies PlotlyData);
+          }
+        } else {
+          traces = [{
+            x: displayPoints.map(p => p.x),
+            y: displayPoints.map(p => p.y),
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            name: 'Data',
+            marker: {
+              size: markerStyle.size,
+              color: displayPoints.map(p => numericData.cleanValues[p.index]),
+              colorscale: plotlyColorScale as any,
+              cmin: numericData.min,
+              cmax: numericData.max,
+              opacity: markerStyle.opacity,
+              showscale: false, // Disabled - using custom Legend component instead
+            },
+            text: displayPoints.map(formatHoverText),
+            hovertemplate: '<b>%{text}</b><extra></extra>',
+            customdata: displayPoints as any,
+          } satisfies PlotlyData];
+        }
       } else if (colorBy === 'category' && categoryValues.length > 0) {
         if (nestedColorMap) {
           // NESTED: group by subtopic_label
@@ -553,24 +987,65 @@ export function ScatterPlot2D({
             pointsBySub[sub].push(point);
           });
 
-          traces = Object.entries(pointsBySub).map(([sub, subPoints]) => {
+          Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
             const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
             const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
-            return {
-              x: subPoints.map(p => p.x),
-              y: subPoints.map(p => p.y),
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              name: sub,
-              marker: {
-                size: markerStyle.size,
-                color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                opacity: isMuted ? 0.4 : markerStyle.opacity,
-              },
-              text: subPoints.map(formatHoverText),
-              hovertemplate: '<b>%{text}</b><extra></extra>',
-              customdata: subPoints as any,
-            } satisfies PlotlyData;
+            if (hideFilteredPoints && isMuted) return;
+            if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+              const activePoints = subPoints.filter(p => !combinedMutedIndices.has(p.index));
+              const mutedPts = subPoints.filter(p => combinedMutedIndices.has(p.index));
+              if (activePoints.length > 0) {
+                traces.push({
+                  x: activePoints.map(p => p.x),
+                  y: activePoints.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: sub,
+                  marker: {
+                    size: markerStyle.size,
+                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : markerStyle.opacity,
+                  },
+                  text: activePoints.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: activePoints as any,
+                } satisfies PlotlyData);
+              }
+              if (mutedPts.length > 0 && !hideFilteredPoints) {
+                traces.push({
+                  x: mutedPts.map(p => p.x),
+                  y: mutedPts.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: sub,
+                  marker: {
+                    size: markerStyle.size,
+                    color: '#9ca3af',
+                    opacity: mutedPointOpacity ?? 0.15,
+                  },
+                  text: mutedPts.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: mutedPts as any,
+                  showlegend: false,
+                } satisfies PlotlyData);
+              }
+            } else {
+              traces.push({
+                x: subPoints.map(p => p.x),
+                y: subPoints.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: sub,
+                marker: {
+                  size: markerStyle.size,
+                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                  opacity: isMuted ? (mutedPointOpacity ?? 0.15) : markerStyle.opacity,
+                },
+                text: subPoints.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: subPoints as any,
+              } satisfies PlotlyData);
+            }
           });
         } else {
           const pointsByCategory: Record<string, Point2D[]> = {};
@@ -583,40 +1058,119 @@ export function ScatterPlot2D({
             pointsByCategory[cat].push(point);
           });
 
-          traces = Object.entries(pointsByCategory).map(([cat, catPoints]) => {
+          Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
             const isMuted = mutedCategories.includes(cat);
-            return {
-              x: catPoints.map(p => p.x),
-              y: catPoints.map(p => p.y),
-              mode: 'markers' as const,
-              type: 'scattergl' as const,
-              name: getCategoryLabel(categoryField, cat),
-              marker: {
-                size: markerStyle.size,
-                color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                opacity: isMuted ? 0.4 : markerStyle.opacity,
-              },
-              text: catPoints.map(formatHoverText),
-              hovertemplate: '<b>%{text}</b><extra></extra>',
-              customdata: catPoints as any,
-            } satisfies PlotlyData;
+            if (hideFilteredPoints && isMuted) return;
+            if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+              const activePoints = catPoints.filter(p => !combinedMutedIndices.has(p.index));
+              const mutedPts = catPoints.filter(p => combinedMutedIndices.has(p.index));
+              if (activePoints.length > 0) {
+                traces.push({
+                  x: activePoints.map(p => p.x),
+                  y: activePoints.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: getCategoryLabel(categoryField, cat),
+                  marker: {
+                    size: markerStyle.size,
+                    color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : markerStyle.opacity,
+                  },
+                  text: activePoints.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: activePoints as any,
+                } satisfies PlotlyData);
+              }
+              if (mutedPts.length > 0 && !hideFilteredPoints) {
+                traces.push({
+                  x: mutedPts.map(p => p.x),
+                  y: mutedPts.map(p => p.y),
+                  mode: 'markers' as const,
+                  type: 'scattergl' as const,
+                  name: getCategoryLabel(categoryField, cat),
+                  marker: {
+                    size: markerStyle.size,
+                    color: '#9ca3af',
+                    opacity: mutedPointOpacity ?? 0.15,
+                  },
+                  text: mutedPts.map(formatHoverText),
+                  hovertemplate: '<b>%{text}</b><extra></extra>',
+                  customdata: mutedPts as any,
+                  showlegend: false,
+                } satisfies PlotlyData);
+              }
+            } else {
+              traces.push({
+                x: catPoints.map(p => p.x),
+                y: catPoints.map(p => p.y),
+                mode: 'markers' as const,
+                type: 'scattergl' as const,
+                name: getCategoryLabel(categoryField, cat),
+                marker: {
+                  size: markerStyle.size,
+                  color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
+                  opacity: isMuted ? (mutedPointOpacity ?? 0.15) : markerStyle.opacity,
+                },
+                text: catPoints.map(formatHoverText),
+                hovertemplate: '<b>%{text}</b><extra></extra>',
+                customdata: catPoints as any,
+              } satisfies PlotlyData);
+            }
           });
         }
       } else {
-        traces = [{
-          x: displayPoints.map(p => p.x),
-          y: displayPoints.map(p => p.y),
-          mode: 'markers' as const,
-          type: 'scattergl' as const,
-          marker: {
-            size: markerStyle.size,
-            color: '#1f77b4',
-            opacity: markerStyle.opacity,
-          },
-          text: displayPoints.map(formatHoverText),
-          hovertemplate: '<b>%{text}</b><extra></extra>',
-          customdata: displayPoints as any,
-        } satisfies PlotlyData];
+        if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+          const activePoints = displayPoints.filter(p => !combinedMutedIndices.has(p.index));
+          const mutedPts = displayPoints.filter(p => combinedMutedIndices.has(p.index));
+          if (activePoints.length > 0) {
+            traces.push({
+              x: activePoints.map(p => p.x),
+              y: activePoints.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              marker: {
+                size: markerStyle.size,
+                color: '#1f77b4',
+                opacity: markerStyle.opacity,
+              },
+              text: activePoints.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: activePoints as any,
+            } satisfies PlotlyData);
+          }
+          if (mutedPts.length > 0 && !hideFilteredPoints) {
+            traces.push({
+              x: mutedPts.map(p => p.x),
+              y: mutedPts.map(p => p.y),
+              mode: 'markers' as const,
+              type: 'scattergl' as const,
+              marker: {
+                size: markerStyle.size,
+                color: '#9ca3af',
+                opacity: mutedPointOpacity ?? 0.15,
+              },
+              text: mutedPts.map(formatHoverText),
+              hovertemplate: '<b>%{text}</b><extra></extra>',
+              customdata: mutedPts as any,
+              showlegend: false,
+            } satisfies PlotlyData);
+          }
+        } else {
+          traces = [{
+            x: displayPoints.map(p => p.x),
+            y: displayPoints.map(p => p.y),
+            mode: 'markers' as const,
+            type: 'scattergl' as const,
+            marker: {
+              size: markerStyle.size,
+              color: '#1f77b4',
+              opacity: markerStyle.opacity,
+            },
+            text: displayPoints.map(formatHoverText),
+            hovertemplate: '<b>%{text}</b><extra></extra>',
+            customdata: displayPoints as any,
+          } satisfies PlotlyData];
+        }
       }
     }
 
@@ -678,13 +1232,14 @@ export function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, categoryField, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap]);
+  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, highlightedIndices, selectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
       width,
       height,
       uirevision: 'true', // Preserve zoom/pan state on resize
+      dragmode: 'pan',
       hovermode: 'closest' as const,
       showlegend: false, 
       // showlegend: colorBy === 'category' && categoryValues.length > 0,
@@ -697,7 +1252,7 @@ export function ScatterPlot2D({
         font: { color: axisColor },
       },
       xaxis: {
-        title: { text: 'x', font: { color: axisColor } },
+        title: { text: '', font: { color: axisColor } },
         gridcolor: gridColor,
         zerolinecolor: gridColor,
         tickfont: { color: axisColor },
@@ -708,7 +1263,7 @@ export function ScatterPlot2D({
         showtitle: false,
       },
       yaxis: {
-        title: { text: 'y', font: { color: axisColor } },
+        title: { text: '', font: { color: axisColor } },
         gridcolor: gridColor,
         zerolinecolor: gridColor,
         tickfont: { color: axisColor },
@@ -729,6 +1284,7 @@ export function ScatterPlot2D({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
+    scrollZoom: true,
   } as Partial<Config>;
 
   const handleClick = (event: PlotMouseEvent) => {
@@ -774,8 +1330,15 @@ export function ScatterPlot2D({
     setTooltipData(null);
   };
 
+  const hasClusterLabels = showClusterLabels && clusterDataMap.size > 0;
+
 return (
-  <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
+  <div
+    ref={containerRef}
+    className={className ?? 'h-full w-full'}
+    style={{ position: 'relative' }}
+    onClickCapture={hasClusterLabels ? handleContainerClick : undefined}
+  >
     <Plot
       data={plotData}
       layout={layout}
@@ -783,8 +1346,23 @@ return (
       onClick={plotReady ? handleClick : undefined}
       onHover={handleHover}
       onUnhover={handleUnhover}
-      onInitialized={() => setPlotReady(true)}
+      onRelayout={handleRelayout}
+      onInitialized={(_figure, graphDiv) => { graphDivRef.current = graphDiv; setPlotReady(true); }}
     />
+    {hasClusterLabels && (
+      <canvas
+        ref={labelCanvasRef}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: `${width}px`,
+          height: `${height}px`,
+          pointerEvents: 'none',
+          zIndex: 10,
+        }}
+      />
+    )}
     <FrostedTooltip data={tooltipData} />
   </div>
 );

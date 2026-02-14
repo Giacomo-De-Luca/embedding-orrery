@@ -1,4 +1,4 @@
-import type { Point3D } from '../../lib/types/types';
+import type { Point2D, Point3D } from '../../lib/types/types';
 
 // --- Animation Helpers ---
 export const easeInOutCubic = (t: number): number => {
@@ -44,7 +44,7 @@ export const getZoomMultiplier = (
 };
 
 
-export function formatHoverText(point: Point3D): string {
+export function formatHoverText(point: Point3D | Point2D): string {
   const label = point.label || point.id;
   const doc = point.document || '';
   const truncatedDoc = doc.length > 100 ? doc.substring(0, 100) + '...' : doc;

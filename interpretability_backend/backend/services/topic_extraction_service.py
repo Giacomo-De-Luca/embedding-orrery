@@ -17,7 +17,7 @@ import chromadb
 from chromadb.config import Settings
 
 from ..topic_extraction.cluster_and_label import GenerateTopics
-from ..topic_extraction.llm_labeling import generate_llm_labels
+from ..topic_extraction.llm_labeling import generate_llm_labels, generate_llm_label_for_topic, _create_labeler
 from ..embedding_functions.config import DB_PATH
 from .progress_emitter import emit_progress
 
@@ -818,4 +818,409 @@ def reduce_existing_topics(
             topics=[],
             duration_seconds=duration,
             error=str(e)
+        )
+
+
+# ========== Standalone LLM Label Generation ==========
+
+import re
+
+@dataclass
+class LlmLabelingResult:
+    """Result of standalone LLM label generation."""
+    collection_name: str
+    topics_labeled: int
+    subtopics_labeled: int
+    total_topics: int
+    total_subtopics: int
+    duration_seconds: float
+    error: Optional[str] = None
+
+
+_KEYWORD_LABEL_PATTERN = re.compile(r'^[\w\-/]+( \| [\w\-/]+)+$')
+
+
+def _is_keyword_label(label: str) -> bool:
+    """Return True if label looks like a keyword-pattern label 'word | word | word'."""
+    return bool(_KEYWORD_LABEL_PATTERN.match(label))
+
+
+def _update_label_for_group(
+    collection,
+    all_ids: List[str],
+    all_metadatas: List[dict],
+    group_id: int,
+    new_label: str,
+    id_field: str = "topic_id",
+    label_field: str = "topic_label",
+    batch_size: int = 1000,
+) -> None:
+    """Update label for all items belonging to a specific topic/subtopic group."""
+    ids_to_update = []
+    metas_to_update = []
+    for item_id, meta in zip(all_ids, all_metadatas):
+        if int(meta.get(id_field, -1)) == group_id:
+            updated = meta.copy()
+            updated[label_field] = new_label
+            ids_to_update.append(item_id)
+            metas_to_update.append(updated)
+
+    for i in range(0, len(ids_to_update), batch_size):
+        collection.update(
+            ids=ids_to_update[i:i + batch_size],
+            metadatas=metas_to_update[i:i + batch_size],
+        )
+
+
+def _update_topic_summary_label(collection, topic_id: int, new_label: str) -> None:
+    """Update one topic's label in the collection-level topic_summary JSON."""
+    metadata = collection.metadata or {}
+    summary = json.loads(metadata.get("topic_summary", "[]"))
+    for entry in summary:
+        if entry["topic_id"] == topic_id:
+            entry["label"] = new_label
+            break
+    metadata["topic_summary"] = json.dumps(summary)
+    collection.modify(metadata=metadata)
+
+
+def _update_subtopic_label_in_hierarchy(collection, old_label: str, new_label: str) -> None:
+    """Update a subtopic label in the topic_hierarchy JSON and topic_summary subtopics."""
+    metadata = collection.metadata or {}
+
+    # Update topic_hierarchy
+    hierarchy_json = metadata.get("topic_hierarchy")
+    if hierarchy_json:
+        hierarchy = json.loads(hierarchy_json)
+        for parent_label, subtopic_list in hierarchy.items():
+            hierarchy[parent_label] = [
+                new_label if s == old_label else s for s in subtopic_list
+            ]
+        metadata["topic_hierarchy"] = json.dumps(hierarchy)
+
+    # Update subtopics lists in topic_summary
+    summary = json.loads(metadata.get("topic_summary", "[]"))
+    for entry in summary:
+        if "subtopics" in entry:
+            entry["subtopics"] = [
+                new_label if s == old_label else s for s in entry["subtopics"]
+            ]
+    metadata["topic_summary"] = json.dumps(summary)
+
+    collection.modify(metadata=metadata)
+
+
+def generate_llm_labels_for_collection(
+    collection_name: str,
+    llm_provider: str = "gemini",
+    llm_model: str = "gemini-3-flash-preview",
+    label_scope: str = "both",
+    resume: bool = False,
+) -> LlmLabelingResult:
+    """Generate LLM labels for existing topics in a collection.
+
+    Incrementally saves labels to ChromaDB after each LLM call.
+    Supports resume by detecting already-labeled topics (non-keyword labels).
+
+    Args:
+        collection_name: Name of collection with existing topics
+        llm_provider: "gemini" or "openai"
+        llm_model: Model name for the provider
+        label_scope: "both", "topics_only", or "subtopics_only"
+        resume: If True, skip topics that already have non-keyword labels
+
+    Returns:
+        LlmLabelingResult with counts and timing
+    """
+    start_time = time.time()
+    job_id = f"{collection_name}_llm_labeling"
+    job_state_service = None
+
+    try:
+        # Register job state
+        from .job_state import get_job_state_service
+        job_state_service = get_job_state_service()
+        job_state_service.start_job(
+            collection_name=job_id,
+            job_type="llm_labeling",
+            total_expected=0,
+            total_batches=0,
+            config={
+                "collection_name": collection_name,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+                "label_scope": label_scope,
+            },
+        )
+
+        # Step 1: Load collection and validate
+        emit_progress(
+            job_id=job_id, status="running",
+            items_processed=0, total_items=0,
+            current_batch=0, total_batches=1,
+            message="Loading collection..."
+        )
+        logger.info(f"LLM labeling for collection: {collection_name}")
+
+        db_path = str(DB_PATH.resolve())
+        client = chromadb.PersistentClient(
+            path=db_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        collection = client.get_collection(
+            name=collection_name,
+            embedding_function=None
+        )
+
+        metadata = collection.metadata or {}
+        if not metadata.get("has_topics", False):
+            raise ValueError(f"Collection '{collection_name}' has no topics. Run extractTopics first.")
+
+        # Step 2: Load items and topic summary
+        results = collection.get(include=["metadatas", "documents"])
+        all_ids = results["ids"]
+        all_documents = results["documents"] or [""] * len(all_ids)
+        all_metadatas = results["metadatas"] or [{}] * len(all_ids)
+
+        topic_summary = json.loads(metadata.get("topic_summary", "[]"))
+        has_hierarchy = bool(metadata.get("topic_hierarchy"))
+
+        # Build topics_data from summary
+        topics_data: Dict[int, List[Tuple[str, float]]] = {}
+        topic_labels_map: Dict[int, str] = {}
+        for entry in topic_summary:
+            tid = entry["topic_id"]
+            keywords = [(kw["word"], kw["score"]) for kw in entry.get("keywords", [])]
+            topics_data[tid] = keywords
+            topic_labels_map[tid] = entry.get("label", "")
+
+        # Create labeler
+        labeler = _create_labeler(llm_provider, llm_model)
+
+        # Build documents grouped by topic for sample retrieval
+        topic_docs: Dict[int, List[str]] = {}
+        subtopic_docs: Dict[int, List[str]] = {}
+        for doc, meta in zip(all_documents, all_metadatas):
+            tid = int(meta.get("topic_id", -1))
+            if tid not in topic_docs:
+                topic_docs[tid] = []
+            topic_docs[tid].append(doc)
+
+            stid_raw = meta.get("subtopic_id")
+            if stid_raw is not None:
+                stid = int(stid_raw)
+                if stid not in subtopic_docs:
+                    subtopic_docs[stid] = []
+                subtopic_docs[stid].append(doc)
+
+        topics_labeled = 0
+        subtopics_labeled = 0
+        total_topics = len([t for t in topics_data.keys() if t != -1])
+
+        # Gather subtopic info
+        subtopic_labels_map: Dict[int, str] = {}
+        subtopic_keywords: Dict[int, List[Tuple[str, float]]] = {}
+        if has_hierarchy and label_scope in ("both", "subtopics_only"):
+            # Collect unique subtopics from item metadata
+            for meta in all_metadatas:
+                stid_raw = meta.get("subtopic_id")
+                if stid_raw is not None:
+                    stid = int(stid_raw)
+                    if stid != -1 and stid not in subtopic_labels_map:
+                        subtopic_labels_map[stid] = meta.get("subtopic_label", "")
+
+            # Extract subtopic keywords via c-TF-IDF
+            if subtopic_docs and subtopic_labels_map:
+                import pandas as pd
+                from sklearn.feature_extraction.text import CountVectorizer
+                from ..topic_extraction.cluster_and_label import ClassTfidfTransformer
+
+                sub_doc_ids = []
+                sub_doc_texts = []
+                sub_doc_topics = []
+                for idx, (doc, meta) in enumerate(zip(all_documents, all_metadatas)):
+                    stid_raw = meta.get("subtopic_id")
+                    if stid_raw is not None:
+                        sub_doc_ids.append(idx)
+                        sub_doc_texts.append(doc)
+                        sub_doc_topics.append(int(stid_raw))
+
+                sub_df = pd.DataFrame({
+                    "Document_ID": sub_doc_ids,
+                    "Document": sub_doc_texts,
+                    "Topic": sub_doc_topics,
+                })
+
+                docs_per_sub = sub_df.groupby(['Topic'], as_index=False).agg({'Document': ' '.join})
+                try:
+                    count_vec = CountVectorizer(stop_words="english", ngram_range=(1, 1))
+                    X = count_vec.fit_transform(docs_per_sub.Document.values)
+                    words = count_vec.get_feature_names_out()
+                    ctfidf = ClassTfidfTransformer()
+                    ctfidf_matrix = ctfidf.fit_transform(X)
+
+                    for row_idx, sub_tid in enumerate(docs_per_sub.Topic.values):
+                        row = ctfidf_matrix[row_idx].toarray().flatten()
+                        top_indices = row.argsort()[-10:][::-1]
+                        subtopic_keywords[int(sub_tid)] = [
+                            (words[i], float(row[i])) for i in top_indices if row[i] > 0
+                        ]
+                except ValueError:
+                    logger.warning("Failed to extract subtopic keywords (empty vocabulary)")
+
+        total_subtopics = len(subtopic_labels_map)
+        total_work = (total_topics if label_scope in ("both", "topics_only") else 0) + \
+                     (total_subtopics if label_scope in ("both", "subtopics_only") else 0)
+
+        # Update job state with total count now that we know it
+        job_state_service.update_total_expected(job_id, total_expected=total_work, total_batches=1)
+        job_state_service.update_progress(job_id, 0, 0)
+
+        progress_idx = 0
+
+        # Step 3: Label topics
+        if label_scope in ("both", "topics_only"):
+            for topic_id in sorted(topics_data.keys()):
+                if topic_id == -1:
+                    continue
+
+                current_label = topic_labels_map.get(topic_id, "")
+                if resume and current_label and not _is_keyword_label(current_label):
+                    logger.info(f"Skipping topic {topic_id} (already labeled: '{current_label}')")
+                    progress_idx += 1
+                    continue
+
+                keywords = topics_data[topic_id]
+                docs = topic_docs.get(topic_id, [])
+
+                label = generate_llm_label_for_topic(
+                    topic_id=topic_id,
+                    keywords=keywords,
+                    sample_documents=docs,
+                    labeler=labeler,
+                )
+
+                if label is not None:
+                    # Incremental save: update items
+                    _update_label_for_group(
+                        collection, all_ids, all_metadatas,
+                        group_id=topic_id, new_label=label,
+                        id_field="topic_id", label_field="topic_label",
+                    )
+                    # Update in-memory metadata to reflect changes for subsequent saves
+                    for meta in all_metadatas:
+                        if int(meta.get("topic_id", -1)) == topic_id:
+                            meta["topic_label"] = label
+
+                    # Incremental save: update topic_summary
+                    _update_topic_summary_label(collection, topic_id, label)
+                    topics_labeled += 1
+
+                progress_idx += 1
+                emit_progress(
+                    job_id=job_id, status="running",
+                    items_processed=progress_idx, total_items=total_work,
+                    current_batch=0, total_batches=1,
+                    message=f"Labeling topic {progress_idx}/{total_work}..."
+                )
+                job_state_service.update_progress(job_id, progress_idx, 0)
+
+        # Step 4: Label subtopics
+        if label_scope in ("both", "subtopics_only") and has_hierarchy:
+            for sub_id in sorted(subtopic_labels_map.keys()):
+                current_label = subtopic_labels_map.get(sub_id, "")
+                if resume and current_label and not _is_keyword_label(current_label):
+                    logger.info(f"Skipping subtopic {sub_id} (already labeled: '{current_label}')")
+                    progress_idx += 1
+                    continue
+
+                kws = subtopic_keywords.get(sub_id, [])
+                docs = subtopic_docs.get(sub_id, [])
+
+                if not kws and not docs:
+                    progress_idx += 1
+                    continue
+
+                label = generate_llm_label_for_topic(
+                    topic_id=sub_id,
+                    keywords=kws,
+                    sample_documents=docs,
+                    labeler=labeler,
+                )
+
+                if label is not None:
+                    old_label = current_label
+
+                    # Incremental save: update items
+                    _update_label_for_group(
+                        collection, all_ids, all_metadatas,
+                        group_id=sub_id, new_label=label,
+                        id_field="subtopic_id", label_field="subtopic_label",
+                    )
+                    for meta in all_metadatas:
+                        stid_raw = meta.get("subtopic_id")
+                        if stid_raw is not None and int(stid_raw) == sub_id:
+                            meta["subtopic_label"] = label
+
+                    # Incremental save: update hierarchy and summary
+                    if old_label:
+                        _update_subtopic_label_in_hierarchy(collection, old_label, label)
+                    subtopics_labeled += 1
+
+                progress_idx += 1
+                emit_progress(
+                    job_id=job_id, status="running",
+                    items_processed=progress_idx, total_items=total_work,
+                    current_batch=0, total_batches=1,
+                    message=f"Labeling subtopic {progress_idx}/{total_work}..."
+                )
+                job_state_service.update_progress(job_id, progress_idx, 0)
+
+        duration = time.time() - start_time
+
+        # Mark complete
+        job_state_service.complete_job(job_id)
+        emit_progress(
+            job_id=job_id, status="completed",
+            items_processed=total_work, total_items=total_work,
+            current_batch=1, total_batches=1,
+            message="Complete!"
+        )
+
+        logger.info(
+            f"LLM labeling complete: {topics_labeled} topics, {subtopics_labeled} subtopics in {duration:.1f}s"
+        )
+
+        return LlmLabelingResult(
+            collection_name=collection_name,
+            topics_labeled=topics_labeled,
+            subtopics_labeled=subtopics_labeled,
+            total_topics=total_topics,
+            total_subtopics=total_subtopics,
+            duration_seconds=duration,
+        )
+
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"LLM labeling failed: {e}")
+
+        if job_state_service:
+            job_state_service.fail_job(job_id, str(e))
+
+        emit_progress(
+            job_id=job_id, status="failed",
+            items_processed=0, total_items=0,
+            current_batch=0, total_batches=0,
+            error=str(e),
+            message=f"Failed: {str(e)}"
+        )
+
+        return LlmLabelingResult(
+            collection_name=collection_name,
+            topics_labeled=0,
+            subtopics_labeled=0,
+            total_topics=0,
+            total_subtopics=0,
+            duration_seconds=duration,
+            error=str(e),
         )

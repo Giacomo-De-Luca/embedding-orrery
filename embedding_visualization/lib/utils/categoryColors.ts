@@ -376,6 +376,25 @@ export function getCategoryDisplayName(categoryField: string | null): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// ============ Color manipulation utilities ============
+
+/**
+ * Desaturate a hex color by blending it toward a neutral gray.
+ * @param hex - Hex color string (e.g. '#ff6600' or 'ff6600')
+ * @param amount - Blend amount: 0 = original color, 1 = fully neutral (default 0.3)
+ * @param isDark - Theme mode: blends toward light gray in dark mode, dark gray in light mode
+ * @returns CSS rgb() string
+ */
+export function desaturateHex(hex: string, amount: number = 0.3, isDark: boolean = false): string {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  const neutral = isDark ? 0xc0 : 0x60;
+  const keep = 1 - amount;
+  return `rgb(${Math.round(r * keep + neutral * amount)},${Math.round(g * keep + neutral * amount)},${Math.round(b * keep + neutral * amount)})`;
+}
+
 // ============ Legacy exports for backwards compatibility ============
 
 /** @deprecated Use buildCategoryColorMap with 'pos' field instead */
