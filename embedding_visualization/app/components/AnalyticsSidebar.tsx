@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   Sidebar,
   SidebarContent,
@@ -13,8 +13,10 @@ import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { CategoryBarChart } from './charts/CategoryBarChart';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
+import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
 import type { Point2D, Point3D, TemporalRange } from '../../lib/types/types';
+import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 
 interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   points: (Point2D | Point3D)[];
@@ -26,6 +28,8 @@ interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   mutedCategories?: string[];
   temporalRange?: TemporalRange | null;
   onTemporalRangeChange?: (range: TemporalRange | null) => void;
+  textSearchHighlights?: Set<number>;
+  colorFieldOptions?: ColorFieldOption[];
 }
 
 export function AnalyticsSidebar({
@@ -38,13 +42,34 @@ export function AnalyticsSidebar({
   mutedCategories = [],
   temporalRange,
   onTemporalRangeChange,
+  textSearchHighlights,
+  colorFieldOptions,
   className,
   ...props
 }: AnalyticsSidebarProps) {
+  // Independent analysis field: null means "follow colorByField"
+  const [analysisField, setAnalysisField] = useState<string | null>(null);
+
+  // Reset analysisField when colorByField changes (so it follows by default)
+  useEffect(() => {
+    setAnalysisField(null);
+  }, [colorByField]);
+
+  const effectiveAnalysisField = analysisField ?? colorByField;
+
+  // Compute category data for the analysis field (may differ from colorByField)
+  const isOverridden = analysisField !== null && analysisField !== colorByField;
+  const { categoryValues: analysisCategoryValues, categoryCounts: analysisCategoryCounts } =
+    useCategoryData(points, isOverridden ? analysisField : null);
+
+  // Use analysis-specific data when overridden, otherwise use parent-provided data
+  const activeCategoryValues = isOverridden ? analysisCategoryValues : categoryValues;
+  const activeCategoryCounts = isOverridden ? analysisCategoryCounts : categoryCounts;
+
   // Filter out unclustered noise points from topic fields.
   const filteredCategoryValues = useMemo(() => {
-    const preset = colorByField ? CATEGORY_PRESETS[colorByField.toLowerCase()] : null;
-    if (!preset) return categoryValues;
+    const preset = effectiveAnalysisField ? CATEGORY_PRESETS[effectiveAnalysisField.toLowerCase()] : null;
+    if (!preset) return activeCategoryValues;
     const noiseValues = new Set<string>();
     for (const [key, label] of Object.entries(preset.labels ?? {})) {
       if (label === 'Unclustered') {
@@ -52,18 +77,32 @@ export function AnalyticsSidebar({
         noiseValues.add(label);
       }
     }
-    if (noiseValues.size === 0) return categoryValues;
-    return categoryValues.filter(v => !noiseValues.has(v));
-  }, [colorByField, categoryValues]);
+    if (noiseValues.size === 0) return activeCategoryValues;
+    return activeCategoryValues.filter(v => !noiseValues.has(v));
+  }, [effectiveAnalysisField, activeCategoryValues]);
 
   const filteredCounts = useMemo(() => {
-    if (filteredCategoryValues.length === categoryValues.length) return categoryCounts;
+    if (filteredCategoryValues.length === activeCategoryValues.length) return activeCategoryCounts;
     const counts: Record<string, number> = {};
     for (const v of filteredCategoryValues) {
-      if (categoryCounts[v] !== undefined) counts[v] = categoryCounts[v];
+      if (activeCategoryCounts[v] !== undefined) counts[v] = activeCategoryCounts[v];
     }
     return counts;
-  }, [filteredCategoryValues, categoryValues.length, categoryCounts]);
+  }, [filteredCategoryValues, activeCategoryValues.length, activeCategoryCounts]);
+
+  // Compute search match counts per category when text search is active
+  const searchMatchCounts = useMemo(() => {
+    if (!textSearchHighlights || textSearchHighlights.size === 0 || !effectiveAnalysisField) return null;
+    const counts: Record<string, number> = {};
+    for (const p of points) {
+      if (!textSearchHighlights.has(p.index)) continue;
+      const value = p.metadata?.[effectiveAnalysisField];
+      if (value === null || value === undefined || value === '') continue;
+      const key = String(value);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }, [textSearchHighlights, effectiveAnalysisField, points]);
 
   const { temporalField, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,
@@ -72,7 +111,7 @@ export function AnalyticsSidebar({
     availableFields
   );
 
-  const hasCategoricalData = colorByField && filteredCategoryValues.length > 0;
+  const hasCategoricalData = effectiveAnalysisField && filteredCategoryValues.length > 0;
   const hasTemporalData = temporalField && allPeriods.length >= 2;
   const hasStackedTemporalData = hasTemporalData && crossTabData.length >= 2 && hasCategoricalData;
 
@@ -103,6 +142,10 @@ export function AnalyticsSidebar({
     });
   }, [onTemporalRangeChange, temporalField]);
 
+  const handleAnalysisFieldChange = React.useCallback((field: string | null) => {
+    setAnalysisField(field);
+  }, []);
+
   return (
     <Sidebar
       collapsible="offcanvas"
@@ -119,10 +162,26 @@ export function AnalyticsSidebar({
         <div className="p-4 space-y-6">
           {hasCategoricalData && (
             <CategoryBarChart
-              categoryField={colorByField}
+              categoryField={effectiveAnalysisField}
               categoryValues={filteredCategoryValues}
               categoryCounts={filteredCounts}
               categoricalPalette={categoricalPalette}
+              searchMatchCounts={searchMatchCounts}
+              colorFieldOptions={colorFieldOptions}
+              analysisField={analysisField}
+              onAnalysisFieldChange={handleAnalysisFieldChange}
+            />
+          )}
+
+          {!hasCategoricalData && colorFieldOptions && colorFieldOptions.length > 0 && (
+            <CategoryBarChart
+              categoryField={null}
+              categoryValues={[]}
+              categoryCounts={{}}
+              categoricalPalette={categoricalPalette}
+              colorFieldOptions={colorFieldOptions}
+              analysisField={analysisField}
+              onAnalysisFieldChange={handleAnalysisFieldChange}
             />
           )}
 
@@ -146,7 +205,7 @@ export function AnalyticsSidebar({
             </>
           )}
 
-          {!hasCategoricalData && !hasTemporalData && (
+          {!hasCategoricalData && !hasTemporalData && (!colorFieldOptions || colorFieldOptions.length === 0) && (
             <p className="text-sm text-muted-foreground">
               Select a categorical color field to view distribution charts.
             </p>

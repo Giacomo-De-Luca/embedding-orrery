@@ -45,7 +45,7 @@ interface LocalFileTabProps {
     sampleSeed?: number;
     computeProjections?: boolean;
     batchSize?: number;
-    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType; prompt?: string; promptName?: string };
+    embeddingModel?: { provider: EmbeddingProvider; modelName: string; ollamaUrl?: string; task?: string; taskType?: GeminiTaskType; prompt?: string };
     resume?: boolean;
     extractTopics?: boolean;
     topicConfig?: TopicConfigInput;
@@ -210,8 +210,7 @@ export function LocalFileTab({
         ollamaUrl: embeddingProvider === 'OLLAMA' ? ollamaUrl : undefined,
         task: embeddingProvider === 'QWEN' ? qwenTask : undefined,
         taskType: embeddingProvider === 'GEMINI' ? geminiTaskType : undefined,
-        promptName: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? promptName ?? undefined : undefined,
-        prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' && customPrompt ? customPrompt : undefined,
+        prompt: embeddingProvider === 'SENTENCE_TRANSFORMERS' ? (customPrompt || promptName || undefined) : undefined,
       } : undefined,
       extractTopics: enableTopics || undefined,
       topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
@@ -259,8 +258,7 @@ export function LocalFileTab({
       ollamaUrl: storedModel.ollama_url as string | undefined,
       task: storedModel.task as string | undefined,
       taskType: storedModel.task_type as GeminiTaskType | undefined,
-      prompt: storedModel.prompt as string | undefined,
-      promptName: storedModel.prompt_name as string | undefined,
+      prompt: (storedModel.prompt ?? storedModel.prompt_name) as string | undefined,
     } : undefined;
 
     await embedLocalFile({

@@ -65,6 +65,8 @@ export function TemporalFilterChart({
   const [rangeStart, setRangeStart] = useState(0);
   const [rangeEnd, setRangeEnd] = useState(Math.max(0, allPeriods.length - 1));
   const [isDragging, setIsDragging] = useState(false);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [hoveredY, setHoveredY] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -223,6 +225,7 @@ export function TemporalFilterChart({
       startRange: [rangeStartRef.current, rangeEndRef.current],
     };
     setIsDragging(true);
+    setHoveredIndex(null);
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
   }, [onMouseMove, onMouseUp]);
@@ -234,6 +237,7 @@ export function TemporalFilterChart({
       startRange: [rangeStartRef.current, rangeEndRef.current],
     };
     setIsDragging(true);
+    setHoveredIndex(null);
     document.addEventListener('touchmove', onTouchMove, { passive: true });
     document.addEventListener('touchend', onTouchEnd);
   }, [onTouchMove, onTouchEnd]);
@@ -372,7 +376,17 @@ export function TemporalFilterChart({
           </ChartContainer>
 
           {/* 2. Range picker overlay */}
-          <div className="absolute inset-0 rounded-lg border border-border/40">
+          <div
+            className="absolute inset-0 rounded-lg border border-border/40"
+            onMouseMove={(e) => {
+              if (!isDragging) {
+                setHoveredIndex(clientXToIndex(e.clientX));
+                const rect = containerRef.current?.getBoundingClientRect();
+                if (rect) setHoveredY(e.clientY - rect.top);
+              }
+            }}
+            onMouseLeave={() => setHoveredIndex(null)}
+          >
             {/* Left dim overlay */}
             <div
               className="absolute inset-y-0 left-0 bg-background/60 rounded-l-lg"
@@ -427,6 +441,61 @@ export function TemporalFilterChart({
                 if (e.touches.length === 1) startTouchDrag('right', e.touches[0].clientX);
               }}
             />
+
+            {/* Hover tooltip */}
+            {hoveredIndex !== null && !isDragging && chartData[hoveredIndex] && (() => {
+              const data = chartData[hoveredIndex] as Record<string, unknown>;
+              const period = data.period as string;
+              const tooltipPct = allPeriods.length > 1
+                ? (hoveredIndex / (allPeriods.length - 1)) * 100
+                : 50;
+
+              return (
+                <div
+                  className="absolute pointer-events-none z-10"
+                  style={{
+                    left: `${tooltipPct}%`,
+                    top: hoveredY,
+                    transform: 'translate(-50%, -100%)',
+                  }}
+                >
+                  <div className="rounded-lg border bg-background p-2 shadow-sm whitespace-nowrap">
+                    <p className="text-xs font-medium mb-1">{period}</p>
+                    {isStackedMode ? (
+                      <>
+                        {topCategories.map(cat => {
+                          const safeKey = sanitizeKey(cat);
+                          const value = (data[safeKey] as number | undefined) ?? 0;
+                          const color = chartConfig[safeKey]?.color ?? '#7f7f7f';
+                          return (
+                            <div key={safeKey} className="flex items-center gap-1.5">
+                              <span
+                                className="inline-block w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: color }}
+                              />
+                              <span className="text-xs text-muted-foreground">{chartConfig[safeKey]?.label ?? cat}:</span>
+                              <span className="text-xs ml-auto pl-2">{value.toLocaleString()}</span>
+                            </div>
+                          );
+                        })}
+                        <div className="border-t mt-1 pt-1 flex justify-between gap-3">
+                          <span className="text-xs text-muted-foreground">Total:</span>
+                          <span className="text-xs font-medium">
+                            {topCategories
+                              .reduce((sum, cat) => sum + ((data[sanitizeKey(cat)] as number | undefined) ?? 0), 0)
+                              .toLocaleString()}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Count: {((data.count as number | undefined) ?? 0).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </CardContent>
