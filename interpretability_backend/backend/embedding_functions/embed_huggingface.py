@@ -25,6 +25,7 @@ from ..clients.huggingface_client import (
     load_dataset_portion,
 )
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
+from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.id_utils import IDDeduplicator
 from ..utils.batch_utils import sort_items_by_length
 from ..services.job_state import get_job_state_service, JobStatus
@@ -311,6 +312,7 @@ def embed_huggingface_dataset(
 
                 # Extract metadata (only add source_split, no duplicated source info)
                 metadata = extract_metadata(row, metadata_columns, source_split=config.split)
+                metadata = preprocess_color_metadata(metadata, row)
                 metadata["row_index"] = row_idx
 
                 ids.append(doc_id)

@@ -16,7 +16,10 @@ claude.md
 
 ### interrupted progress
 
+*/job_state.json
+
 job_state.json
+
 
 ## Lacan Dataset:
 
@@ -28,6 +31,7 @@ seminars.txt
 writings.pdf
 writings.txt
 sentence_list.tsv
+nrc_annotated.tsv
 
 
 # Virtual environments

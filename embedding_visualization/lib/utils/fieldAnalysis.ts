@@ -256,7 +256,10 @@ export function analyzeColorFields(
 
     // Determine recommended scale
     let recommendedScale: 'categorical' | 'sequential';
-    if (valueType === 'string') {
+    // mapped_colour is always sequential (pre-computed colorscale position 0-1)
+    if (field === 'mapped_colour') {
+      recommendedScale = 'sequential';
+    } else if (valueType === 'string') {
       recommendedScale = 'categorical';
     } else {
       // Numeric fields: categorical if <20 unique, sequential otherwise

@@ -9,6 +9,7 @@ import {
   interpolatePlasma,
   interpolateInferno,
   interpolateMagma,
+  interpolateRainbow,
   // Diverging
   interpolateRdBu,
   interpolateSpectral,
@@ -41,7 +42,7 @@ export interface CategoryColorPreset {
 // ============ Scale Name Types ============
 
 /** D3 built-in sequential scale names */
-export type D3SequentialScaleName = 'sinebow' | 'viridis' | 'cividis' | 'turbo' | 'plasma' | 'inferno' | 'magma';
+export type D3SequentialScaleName = 'sinebow' | 'viridis' | 'cividis' | 'turbo' | 'plasma' | 'inferno' | 'magma' | 'rainbow';
 
 /** D3 built-in diverging scale names */
 export type D3DivergingScaleName = 'blueGold' | 'rdBu' | 'spectral' | 'piYG' | 'puOr' | 'brBG';
@@ -78,6 +79,7 @@ function interpolateBlueGold(t: number): string {
 
 const SEQUENTIAL_INTERPOLATORS: Record<D3SequentialScaleName, (t: number) => string> = {
   sinebow: interpolateSinebow,
+  rainbow: interpolateRainbow,
   viridis: interpolateViridis,
   cividis: interpolateCividis,
   turbo: interpolateTurbo,

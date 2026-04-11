@@ -17,6 +17,7 @@ from .config import (
     LocalFileEmbeddingConfig,
 )
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
+from ..utils.color_preprocessing import preprocess_color_metadata
 
 
 def embed_images(
@@ -182,6 +183,7 @@ def embed_images(
 
             # Extract metadata using shared function
             metadata = extract_metadata(row, metadata_columns)
+            metadata = preprocess_color_metadata(metadata, row)
             metadata["row_index"] = row_idx
 
             ids.append(doc_id)

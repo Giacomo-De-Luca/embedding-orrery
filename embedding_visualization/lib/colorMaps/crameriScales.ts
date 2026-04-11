@@ -31,6 +31,9 @@ const crameriIndex = index as CrameriIndex;
 /** Curated Crameri sequential colormaps (3) */
 export const CRAMERI_SEQUENTIAL_NAMES = ['batlow', 'hawaii', 'lipari'];
 
+/** Custom color-column colormaps (Hilbert-ordered strips for direct color visualization) */
+export const COLOR_STRIP_NAMES = ['hilbertColor', 'hueSatColor', 'xkcdColor', 'rainbow'];
+
 /** Curated Crameri diverging colormaps (3) */
 export const CRAMERI_DIVERGING_NAMES = ['managua', 'berlin', 'roma'];
 
@@ -54,6 +57,13 @@ function formatLabel(name: string): string {
     batlowKS: 'Batlow KS',
     batlowWS: 'Batlow WS',
   };
+  const colorStrip: Record<string, string> = {
+    hilbertColor: 'Hilbert RGB',
+    hueSatColor: 'Hue × Saturation',
+    xkcdColor: 'XKCD Survey',
+    rainbow: 'Rainbow',
+  };
+  if (colorStrip[name]) return colorStrip[name];
   if (special[name]) return special[name];
   // For S-suffix categorical: strip S, capitalize, add " S"
   if (name.endsWith('S') && name.length > 1) {
@@ -66,6 +76,10 @@ function formatLabel(name: string): string {
 
 export const CRAMERI_SEQUENTIAL_LABELS: Record<string, string> = Object.fromEntries(
   CRAMERI_SEQUENTIAL_NAMES.map(n => [n, formatLabel(n)])
+);
+
+export const COLOR_STRIP_LABELS: Record<string, string> = Object.fromEntries(
+  COLOR_STRIP_NAMES.map(n => [n, formatLabel(n)])
 );
 
 export const CRAMERI_DIVERGING_LABELS: Record<string, string> = Object.fromEntries(

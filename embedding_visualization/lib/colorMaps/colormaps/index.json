@@ -238,5 +238,21 @@
   "vikO": {
     "type": "cyclic",
     "numColors": 256
+  },
+  "hilbertColor": {
+    "type": "sequential",
+    "numColors": 512
+  },
+  "hueSatColor": {
+    "type": "sequential",
+    "numColors": 360
+  },
+  "xkcdColor": {
+    "type": "sequential",
+    "numColors": 954
+  },
+  "rainbow": {
+    "type": "sequential",
+    "numColors": 360
   }
 }

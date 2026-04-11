@@ -23,6 +23,7 @@ from .config import (
 )
 from .create_embedding_function import create_embedding_function, get_device
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
+from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.id_utils import IDDeduplicator
 from ..utils.batch_utils import sort_items_by_length
 from .embed_images import embed_images
@@ -371,6 +372,7 @@ def embed_text_from_local(
 
             # Extract metadata using shared function
             metadata = extract_metadata(row, metadata_columns)
+            metadata = preprocess_color_metadata(metadata, row)
             metadata["row_index"] = row_idx
 
             ids.append(doc_id)

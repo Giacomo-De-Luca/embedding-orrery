@@ -101,19 +101,29 @@ export function HuggingFaceTab({
   const handleEmbeddingColumnsChange = (cols: string[]) => {
     setSelectedEmbeddingColumns(cols);
 
-    // Auto-update template if it's empty or looks like a default template
-    // Default pattern is like: {col1}, {col2}
-    const isDefaultTemplate = !textTemplate || /^{([\w\s]+)}(, {([\w\s]+)})*$/.test(textTemplate);
+    // Determine added/removed columns
+    const removed = selectedEmbeddingColumns.filter(c => !cols.includes(c));
+    const added = cols.filter(c => !selectedEmbeddingColumns.includes(c));
 
-    // Check if the current template only contains previously selected columns
-    // This is a heuristic to decide if we should overwrite
-    if (isDefaultTemplate) {
-      if (cols.length > 0) {
-        setTextTemplate(cols.map(c => `{${c}}`).join(', '));
+    let updated = textTemplate;
+
+    // Remove placeholders for unchecked columns
+    for (const col of removed) {
+      // Remove {col} and any surrounding ", " separator
+      updated = updated.replace(new RegExp(`,\\s*\\{${col}\\}|\\{${col}\\}\\s*,\\s*|\\{${col}\\}`, 'g'), '');
+    }
+    updated = updated.trim();
+
+    // Append placeholders for newly checked columns
+    for (const col of added) {
+      if (updated) {
+        updated = `${updated}, {${col}}`;
       } else {
-        setTextTemplate('');
+        updated = `{${col}}`;
       }
     }
+
+    setTextTemplate(updated);
   };
 
   // Portion configuration

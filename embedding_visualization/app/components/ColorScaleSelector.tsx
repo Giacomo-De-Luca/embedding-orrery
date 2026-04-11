@@ -31,9 +31,11 @@ import {
   CRAMERI_SEQUENTIAL_NAMES,
   CRAMERI_DIVERGING_NAMES,
   CRAMERI_CATEGORICAL_NAMES,
+  COLOR_STRIP_NAMES,
   CRAMERI_SEQUENTIAL_LABELS,
   CRAMERI_DIVERGING_LABELS,
   CRAMERI_CATEGORICAL_LABELS,
+  COLOR_STRIP_LABELS,
   preloadCrameriColormaps,
   crameriGradientCSS,
   getCrameriColors,
@@ -43,6 +45,7 @@ import {
 // Human-readable labels for D3 scale names
 const D3_SEQUENTIAL_LABELS: Record<D3SequentialScaleName, string> = {
   sinebow: 'Sinebow',
+  rainbow: 'Rainbow',
   viridis: 'Viridis',
   cividis: 'Cividis',
   turbo: 'Turbo',
@@ -201,7 +204,7 @@ export function ColorScaleSelector({
     const toLoad: string[] = [];
 
     if (colorScaleType === 'sequential') {
-      toLoad.push(...CRAMERI_SEQUENTIAL_NAMES);
+      toLoad.push(...CRAMERI_SEQUENTIAL_NAMES, ...COLOR_STRIP_NAMES);
     } else if (colorScaleType === 'diverging') {
       toLoad.push(...CRAMERI_DIVERGING_NAMES);
     } else if (colorScaleType === 'categorical') {
@@ -374,6 +377,26 @@ export function ColorScaleSelector({
                               <CrameriGradientPreview name={name} />
                             </div>
                             <span className="text-sm">{CRAMERI_SEQUENTIAL_LABELS[name]}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+
+                    <ScaleGroupHeader>Color Strips</ScaleGroupHeader>
+                    <ScrollArea className="max-h-64">
+                      <div className="space-y-1">
+                        {COLOR_STRIP_NAMES.map((name) => (
+                          <div
+                            key={name}
+                            className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors ${
+                              sequentialScaleName === name ? 'bg-accent' : 'hover:bg-accent/50'
+                            }`}
+                            onClick={() => handleSequentialScaleChange(name)}
+                          >
+                            <div className="w-24 h-2 rounded-sm overflow-hidden">
+                              <CrameriGradientPreview name={name} />
+                            </div>
+                            <span className="text-sm">{COLOR_STRIP_LABELS[name]}</span>
                           </div>
                         ))}
                       </div>
