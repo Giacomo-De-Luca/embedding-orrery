@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
-import { Point2D, Point3D, SemanticSearchResult, DistanceMetric, FilterInput } from '../types/types';
+import { useState, useCallback, useMemo } from 'react';
+import { Point2D, Point3D, SemanticSearchResult, DistanceMetric, FilterInput, TemporalRange } from '../types/types';
 import { useSemanticSearch } from './useSemanticSearch';
 import { transformSearchResults } from '../utils/data-transform';
+import { buildTemporalFilterInputs } from '../utils/temporalFilters';
 
 /**
  * Map document-time prompt names to query-time equivalents.
@@ -26,7 +27,8 @@ export function useAppSearch(
   distanceMetric: DistanceMetric = 'COSINE',
   queryPromptName?: string | null,  // null=none, 'auto'=auto-detect, or explicit value
   embeddingPromptName?: string | null,  // From collection metadata, for auto-detect
-  topicFilters?: FilterInput[]  // Optional topic filters to scope semantic search
+  topicFilters?: FilterInput[],  // Optional topic filters to scope semantic search
+  temporalRange?: TemporalRange | null,  // Optional temporal range to scope semantic search
 ) {
   const [selectedPoint, setSelectedPoint] = useState<Point2D | Point3D | null>(null);
   const [semanticSearchResults, setSemanticSearchResults] = useState<SemanticSearchResult[] | null>(null);
@@ -34,6 +36,14 @@ export function useAppSearch(
   const [searchType, setSearchType] = useState<'text' | 'point' | null>(null);
 
   const { findSimilarByQuery, findSimilarById, loading } = useSemanticSearch(selectedCollection);
+
+  // Build combined filters from topic selection + temporal range
+  const allFilters = useMemo(() => {
+    if (!temporalRange) return topicFilters;
+    const filters: FilterInput[] = topicFilters ? [...topicFilters] : [];
+    filters.push(...buildTemporalFilterInputs(temporalRange));
+    return filters;
+  }, [topicFilters, temporalRange]);
 
   const handleSemanticSearch = useCallback(async (query: string) => {
     // Resolve effective prompt name
@@ -46,19 +56,19 @@ export function useAppSearch(
 
     console.log('Search triggered:', query, 'metric:', distanceMetric, effectivePromptName ? `prompt: ${effectivePromptName}` : '');
     try {
-      const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, topicFilters);
+      const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, allFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(query);
       setSearchType('text');
     } catch (error) {
       console.error('Search error:', error);
     }
-  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, topicFilters]);
+  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters]);
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);
     try {
-      const results = await findSimilarById(point.id, 20, distanceMetric, topicFilters);
+      const results = await findSimilarById(point.id, 20, distanceMetric, allFilters);
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(point.label || point.id);
       // Set selected point AFTER semantic search completes
@@ -68,7 +78,7 @@ export function useAppSearch(
     } catch (error) {
       console.error('Point click search error:', error);
     }
-  }, [findSimilarById, colorByField, distanceMetric, topicFilters]);
+  }, [findSimilarById, colorByField, distanceMetric, allFilters]);
 
   // Reset state when collection changes
   const resetSearch = useCallback(() => {

@@ -450,6 +450,9 @@ class ProjectionData:
 def build_where_clause(filters: Optional[List[FilterInput]]) -> Optional[Dict[str, Any]]:
     """Build ChromaDB where clause from filter inputs.
 
+    Uses $and wrapping when there are multiple filters, which is required
+    when the same field appears more than once (e.g. year >= 1956 AND year <= 1979).
+
     Args:
         filters: List of filter inputs
 
@@ -459,26 +462,15 @@ def build_where_clause(filters: Optional[List[FilterInput]]) -> Optional[Dict[st
     if not filters:
         return None
 
-    where = {}
+    clauses = []
     for f in filters:
-        if f.operator == FilterOperator.EQ:
-            where[f.field] = {"$eq": f.value}
-        elif f.operator == FilterOperator.NE:
-            where[f.field] = {"$ne": f.value}
-        elif f.operator == FilterOperator.GT:
-            where[f.field] = {"$gt": f.value}
-        elif f.operator == FilterOperator.GTE:
-            where[f.field] = {"$gte": f.value}
-        elif f.operator == FilterOperator.LT:
-            where[f.field] = {"$lt": f.value}
-        elif f.operator == FilterOperator.LTE:
-            where[f.field] = {"$lte": f.value}
-        elif f.operator == FilterOperator.IN:
-            where[f.field] = {"$in": f.value}
-        elif f.operator == FilterOperator.NIN:
-            where[f.field] = {"$nin": f.value}
+        clauses.append({f.field: {f.operator.value: f.value}})
 
-    return where if where else None
+    if not clauses:
+        return None
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
 
 
 # ========== Embedding Job Types ==========

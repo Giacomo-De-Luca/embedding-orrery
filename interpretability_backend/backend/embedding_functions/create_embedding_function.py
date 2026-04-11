@@ -146,12 +146,21 @@ def create_embedding_function(
         return ef, dim
 
     elif provider == EmbeddingProvider.HUGGINGFACE_API:
-        _ensure_hf_login()
-        ef = embedding_functions.HuggingFaceEmbeddingFunction(
+
+        try:
+            ef = embedding_functions.HuggingFaceEmbeddingFunction(
             model_name=model_name
             # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
-        )
-        dim = get_dimension(ef)  # Use helper instead of test embedding
+            )
+            dim = get_dimension(ef)  # Use helper instead of test embedding
+        except GatedRepoError:
+            _ensure_hf_login()
+            ef = embedding_functions.HuggingFaceEmbeddingFunction(
+            model_name=model_name
+            # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
+            )
+            dim = get_dimension(ef)  # Use helper instead of test embedding
+
         return ef, dim
     
     elif provider == EmbeddingProvider.GEMINI:

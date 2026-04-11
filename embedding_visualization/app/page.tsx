@@ -12,6 +12,7 @@ import { useVisualizationPoints } from '../lib/hooks/useVisualizationPoints';
 import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
+import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import type { VisualizationState, HighlightMap } from '../lib/types/types';
 
 
@@ -146,7 +147,8 @@ export default function Home() {
     visualizationState.distanceMetric ?? 'COSINE',
     queryPromptName,
     data?.metadata?.embedding_prompt,
-    topicSearch.topicFilters
+    topicSearch.topicFilters,
+    visualizationState.temporalRange,
   );
 
   // Update visualization state
@@ -157,12 +159,16 @@ export default function Home() {
   const visualizationPoints = useVisualizationPoints(data, visualizationState);
   const { filteredPoints2d, filteredPoints3d, highlightedIndices } = visualizationPoints;
 
-  // Compute text search results from highlighted indices
+  // Compute text search results from highlighted indices, filtered by temporal range
   const textSearchResults = useMemo(() => {
     if (!highlightedIndices || highlightedIndices.size === 0) return [];
     const points = visualizationState.mode === '2d' ? filteredPoints2d : filteredPoints3d;
-    return points.filter(p => highlightedIndices.has(p.index));
-  }, [highlightedIndices, filteredPoints2d, filteredPoints3d, visualizationState.mode]);
+    const range = visualizationState.temporalRange;
+    return points.filter(p =>
+      highlightedIndices.has(p.index) &&
+      (!range || isInTemporalRange(p.metadata, range))
+    );
+  }, [highlightedIndices, filteredPoints2d, filteredPoints3d, visualizationState.mode, visualizationState.temporalRange]);
 
   // Auto-select first semantic search result when a text-query search completes
   // This triggers the camera fly-to animation in ScatterPlot3D
