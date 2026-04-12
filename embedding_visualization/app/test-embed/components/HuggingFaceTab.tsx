@@ -160,16 +160,26 @@ export function HuggingFaceTab({
       .filter(f => f.dtype === 'string' || f.dtype === 'str')
       .map(f => f.name);
 
-    if (textCols.length > 0) {
-      setSelectedEmbeddingColumns([textCols[0]]);
-      setTextTemplate(`{${textCols[0]}}`);
+    const embeddingCol = textCols.length > 0 ? textCols[0] : features[0]?.name;
+
+    if (embeddingCol) {
+      setSelectedEmbeddingColumns([embeddingCol]);
+      setTextTemplate(`{${embeddingCol}}`);
     }
 
-    const metaCols = features
-      .filter(f => ['class_label', 'int64', 'int32', 'int8'].includes(f.dtype))
-      .map(f => f.name);
+    // Default all other columns to metadata (excluding the embedding column)
+    setSelectedMetadataColumns(
+      features.map(f => f.name).filter(name => name !== embeddingCol)
+    );
 
-    setSelectedMetadataColumns(metaCols);
+    // Auto-detect ID column
+    const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'doc_id'];
+    const idMatch = features.find(f =>
+      idNames.some(name => f.name.toLowerCase() === name)
+    );
+    if (idMatch) {
+      setIdColumn(idMatch.name);
+    }
 
     if (datasetId && !collectionName) {
       const suggestedName = datasetId.split('/').pop()?.replace(/[^a-zA-Z0-9_-]/g, '_') || 'dataset';

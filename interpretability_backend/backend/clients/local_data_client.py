@@ -1,5 +1,6 @@
 """Local data file client for loading parquet, JSON, CSV and TSV files."""
 
+import json as json_module
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -72,12 +73,17 @@ def load_local_dataframe(file_path: str, nrows: Optional[int] = None) -> pd.Data
              df = pd.read_parquet(file_path)
              
     elif suffix == ".json":
-        # Standard JSON is hard to stream, read partial if possible but usually full
-        # If nrows is small, we assume it's for preview and try to be smart?
-        # Standard JSON is often a single list. 
-        df = pd.read_json(file_path)
-        if nrows:
-            df = df.head(nrows)
+        if nrows is not None and nrows <= 100:
+            # Optimization: for small previews, avoid full pandas parse of large JSON
+            with open(file_path, 'r') as f:
+                data = json_module.load(f)
+            if isinstance(data, list):
+                data = data[:nrows]
+            df = pd.DataFrame(data)
+        else:
+            df = pd.read_json(file_path)
+            if nrows:
+                df = df.head(nrows)
             
     elif suffix in (".jsonl", ".ndjson"):
         df = pd.read_json(file_path, lines=True, nrows=nrows)
@@ -144,10 +150,18 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             num_rows = _count_lines(file_path) + 1 # No header in JSONL usually
 
         elif file_type == "json":
-            # Fallback to full read for standard JSON
-            df = pd.read_json(file_path)
-            columns = list(df.columns)
-            num_rows = len(df)
+            # Use stdlib json to avoid heavy pandas DataFrame construction
+            with open(file_path, 'r') as f:
+                data = json_module.load(f)
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                columns = list(data[0].keys())
+                num_rows = len(data)
+            elif isinstance(data, dict):
+                columns = list(data.keys())
+                num_rows = 1
+            else:
+                columns = []
+                num_rows = 0
 
         else:
              return LocalFileInfo(

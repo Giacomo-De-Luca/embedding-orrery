@@ -17,6 +17,45 @@ from .config import (
 )
 from ..utils.text_processing import format_text_for_embedding, extract_metadata
 from ..utils.color_preprocessing import preprocess_color_metadata
+from ..utils.id_utils import IDDeduplicator
+
+
+def _parse_vector(value) -> Optional[List[float]]:
+    """Parse a vector value from various formats into a list of floats.
+
+    Handles: list, numpy array, or string representation of a JSON array
+    (common when loading from TSV/CSV where arrays are stored as text).
+    Returns None if the value cannot be parsed.
+    """
+    if isinstance(value, list):
+        return [float(x) for x in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith('['):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [float(x) for x in parsed]
+            except (json.JSONDecodeError, ValueError, TypeError):
+                return None
+    return None
+
+
+def _is_vector_like(value) -> bool:
+    """Check if a value looks like it could be a vector column."""
+    if isinstance(value, (list, np.ndarray)) and len(value) >= 3:
+        return True
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith('[') and len(value) > 10:
+            try:
+                parsed = json.loads(value)
+                return isinstance(parsed, list) and len(parsed) >= 3
+            except (json.JSONDecodeError, ValueError):
+                return False
+    return False
 
 
 def embed_vectors(
@@ -45,10 +84,10 @@ def embed_vectors(
     """
     vector_column = config.vector_column
     if not vector_column:
-        # Try to find a vector column
+        # Try to find a vector column (handles lists, numpy arrays, AND string-encoded arrays from TSV/CSV)
         first_row = rows[0]
         for k, v in first_row.items():
-            if isinstance(v, (list, np.ndarray)) and len(v) > 10:
+            if _is_vector_like(v):
                 vector_column = k
                 break
 
@@ -62,14 +101,18 @@ def embed_vectors(
             error="No vector column found or specified"
         )
 
-    # Get embedding dimension from first row
-    first_vector = rows[0][vector_column]
-    if isinstance(first_vector, list):
-        embedding_dim = len(first_vector)
-    elif isinstance(first_vector, np.ndarray):
-        embedding_dim = first_vector.shape[0]
-    else:
-        embedding_dim = len(list(first_vector))
+    # Get embedding dimension from first row (parse string vectors if needed)
+    first_vector = _parse_vector(rows[0][vector_column])
+    if first_vector is None:
+        return EmbeddingResult(
+            collection_name=config.collection_name,
+            total_embedded=0,
+            embedding_dim=0,
+            device=device,
+            duration_seconds=time.time() - start_time,
+            error=f"Could not parse vector from column '{vector_column}'. Value: {str(rows[0][vector_column])[:100]}"
+        )
+    embedding_dim = len(first_vector)
 
     print(f"Using pre-computed vectors from column '{vector_column}' (dim={embedding_dim})")
 
@@ -109,6 +152,7 @@ def embed_vectors(
 
     # Process in batches
     total_embedded = 0
+    id_deduplicator = IDDeduplicator()
 
     for batch_start in tqdm(range(0, len(rows), EMBEDDING_BATCH_SIZE),
                             desc="Adding vectors", unit="batch"):
@@ -122,14 +166,15 @@ def embed_vectors(
         for i, row in enumerate(batch):
             row_idx = batch_start + i
 
-            # Get vector
-            vector = row[vector_column]
-            if isinstance(vector, np.ndarray):
-                vector = vector.tolist()
+            # Get vector (parse string-encoded arrays from TSV/CSV)
+            vector = _parse_vector(row[vector_column])
+            if vector is None:
+                continue
 
-            # Generate ID
+            # Generate ID (deduplicate to avoid ChromaDB rejection)
             if config.id_column and config.id_column in row:
-                doc_id = str(row[config.id_column])
+                base_id = str(row[config.id_column])
+                doc_id = id_deduplicator.get_unique_id(base_id)
             else:
                 doc_id = f"{config.collection_name}_{row_idx}"
 

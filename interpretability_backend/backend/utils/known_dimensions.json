@@ -10,6 +10,7 @@
  "embed-english-v3.0": 1024,
  "embed-multilingual-v3.0": 1024,
  "gemini-embedding-001": 3072,
+ "google/embeddinggemma-300m": 768,
  "mxbai-embed-large": 1024,
  "nomic-embed-text": 768,
  "paraphrase-MiniLM-L6-v2": 384,

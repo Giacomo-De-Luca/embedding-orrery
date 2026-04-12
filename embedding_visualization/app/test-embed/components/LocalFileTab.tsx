@@ -153,9 +153,35 @@ export function LocalFileTab({
   }, [filePath]);
 
   const autoConfigureColumns = (columns: string[]) => {
-    if (columns.length > 0) {
-      setSelectedEmbeddingColumns([columns[0]]);
-      setTextTemplate(`{${columns[0]}}`);
+    if (columns.length === 0) return;
+
+    let embeddingCol: string;
+
+    if (dataType === 'VECTOR') {
+      // Auto-detect vector column by common name patterns
+      const vectorNames = ['embedding', 'embeddings', 'vector', 'vectors', 'emb'];
+      const match = columns.find(col =>
+        vectorNames.some(name => col.toLowerCase().includes(name))
+      );
+      embeddingCol = match || columns[0];
+      setSelectedEmbeddingColumns([embeddingCol]);
+      setTextTemplate('');
+    } else {
+      embeddingCol = columns[0];
+      setSelectedEmbeddingColumns([embeddingCol]);
+      setTextTemplate(`{${embeddingCol}}`);
+    }
+
+    // Default all other columns to metadata (excluding the embedding/vector column)
+    setSelectedMetadataColumns(columns.filter(col => col !== embeddingCol));
+
+    // Auto-detect ID column by common name patterns
+    const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'feature_id', 'doc_id'];
+    const idMatch = columns.find(col =>
+      idNames.some(name => col.toLowerCase() === name)
+    );
+    if (idMatch) {
+      setIdColumn(idMatch);
     }
 
     if (filePath && !collectionName) {
@@ -187,7 +213,7 @@ export function LocalFileTab({
     clearError();
 
     if (selectedEmbeddingColumns.length === 0) {
-      alert('Please select at least one embedding column');
+      alert(dataType === 'VECTOR' ? 'Please select a vector column' : 'Please select at least one embedding column');
       return;
     }
     if (!collectionName) {
@@ -296,6 +322,7 @@ export function LocalFileTab({
   const isDataLoaded = Boolean(localFileInfo);
   const columns = localFileInfo?.columns.map(name => ({ name, dtype: 'unknown' })) || [];
   const totalRows = localFileInfo?.numRows;
+  const isVectorMode = dataType === 'VECTOR';
 
   return (
     <div className="space-y-6">
@@ -376,12 +403,15 @@ export function LocalFileTab({
           <CardHeader>
             <CardTitle>Column Configuration</CardTitle>
             <CardDescription>
-              Select columns for embedding and configure the text template
+              {isVectorMode
+                ? 'Select the vector column and metadata fields'
+                : 'Select columns for embedding and configure the text template'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ColumnSelector
               columns={columns}
+              dataType={dataType}
               selectedEmbeddingColumns={selectedEmbeddingColumns}
               selectedMetadataColumns={selectedMetadataColumns}
               onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
@@ -401,7 +431,9 @@ export function LocalFileTab({
           <CardHeader>
             <CardTitle>Dataset Portion</CardTitle>
             <CardDescription>
-              Choose which portion of the file to embed
+              {isVectorMode
+                ? 'Choose which portion of the file to import'
+                : 'Choose which portion of the file to embed'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -573,7 +605,9 @@ export function LocalFileTab({
                 checked={enableTopics}
                 onCheckedChange={(checked) => setEnableTopics(checked === true)}
               />
-              <Label htmlFor="local-enable-topics" className="cursor-pointer">Extract topics after embedding</Label>
+              <Label htmlFor="local-enable-topics" className="cursor-pointer">
+                {isVectorMode ? 'Extract topics after import' : 'Extract topics after embedding'}
+              </Label>
             </div>
             {enableTopics && (
               <TopicConfigForm value={topicConfig} onChange={setTopicConfig} />
@@ -591,7 +625,7 @@ export function LocalFileTab({
           className="w-full md:w-auto"
         >
           {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
-          Embed File
+          {isVectorMode ? 'Import Vectors' : 'Embed File'}
         </Button>
       )}
 
@@ -600,7 +634,9 @@ export function LocalFileTab({
         <Card className={lastEmbedResult.error ? 'border-destructive' : 'border-green-500'}>
           <CardHeader>
             <CardTitle>
-              {lastEmbedResult.error ? '❌ Embedding Failed' : '✅ Embedding Complete!'}
+              {lastEmbedResult.error
+                ? (isVectorMode ? '❌ Import Failed' : '❌ Embedding Failed')
+                : (isVectorMode ? '✅ Import Complete!' : '✅ Embedding Complete!')}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -609,8 +645,8 @@ export function LocalFileTab({
             ) : (
               <div className="space-y-2">
                 <p><strong>Collection:</strong> {lastEmbedResult.collectionName}</p>
-                <p><strong>Total Embedded:</strong> {lastEmbedResult.totalEmbedded.toLocaleString()}</p>
-                <p><strong>Embedding Dim:</strong> {lastEmbedResult.embeddingDim}</p>
+                <p><strong>{isVectorMode ? 'Total Imported:' : 'Total Embedded:'}</strong> {lastEmbedResult.totalEmbedded.toLocaleString()}</p>
+                <p><strong>Dimensions:</strong> {lastEmbedResult.embeddingDim}</p>
                 <p><strong>Device:</strong> {lastEmbedResult.device}</p>
                 <p><strong>Duration:</strong> {lastEmbedResult.durationSeconds.toFixed(2)}s</p>
                 <p><strong>Projections:</strong> {lastEmbedResult.projectionsComputed ? '✓ Computed' : 'Not computed'}</p>
