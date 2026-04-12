@@ -4,6 +4,7 @@ import json as json_module
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -127,7 +128,10 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             # OPTIMIZATION: Read only metadata
             metadata = pq.read_metadata(file_path)
             num_rows = metadata.num_rows
-            columns = metadata.schema.names
+            # Use read_schema for logical column names (read_metadata gives
+            # physical leaf names which flatten nested types like list<float>)
+            schema = pq.read_schema(file_path)
+            columns = schema.names
 
         elif file_type == "csv":
             # OPTIMIZATION: Read only header for columns
@@ -211,12 +215,16 @@ def get_local_file_preview(
             row_dict = {}
             for col in df.columns:
                 value = row[col]
-                if pd.isna(value):
+                # Check array-like types BEFORE pd.isna() to avoid
+                # "truth value of array is ambiguous" error
+                if isinstance(value, np.ndarray):
+                    row_dict[col] = value[:10].tolist() if len(value) > 10 else value.tolist()
+                elif isinstance(value, list):
+                    row_dict[col] = value[:10] if len(value) > 10 else value
+                elif pd.isna(value):
                     row_dict[col] = None
                 elif isinstance(value, (str, int, float, bool)):
                     row_dict[col] = value
-                elif isinstance(value, list):
-                    row_dict[col] = value[:10] if len(value) > 10 else value
                 else:
                     row_dict[col] = str(value)[:200]
             rows.append(row_dict)
@@ -278,9 +286,15 @@ def load_local_file_portion(
         row_dict = {}
         for col in df.columns:
             value = row[col]
-            if pd.isna(value):
+            # Check array-like types BEFORE pd.isna() to avoid
+            # "truth value of array is ambiguous" error
+            if isinstance(value, np.ndarray):
+                row_dict[col] = value.tolist()
+            elif isinstance(value, list):
+                row_dict[col] = value
+            elif pd.isna(value):
                 row_dict[col] = None
-            elif isinstance(value, (str, int, float, bool, list)):
+            elif isinstance(value, (str, int, float, bool)):
                 row_dict[col] = value
             else:
                 try:
