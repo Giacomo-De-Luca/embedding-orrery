@@ -1285,12 +1285,12 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     [axisColor, colorBy, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
   );
 
-  const config = {
+  const config = useMemo<Partial<Config>>(() => ({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
     scrollZoom: true,
-  } as Partial<Config>;
+  }), []);
 
   const handleClick = (event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) {

@@ -151,7 +151,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
             if has_umap:
                 print("Computing UMAP 2D projections...")
                 reducer_2d = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1,
-                                    metric='cosine', random_state=42, verbose=True)
+                                    metric='cosine', random_state=42, verbose=False)
                 coords_umap_2d = reducer_2d.fit_transform(embeddings)
 
                 print("Storing UMAP 2D projections...")
@@ -173,7 +173,7 @@ def compute_projections_for_collection(collection_name: str, projection_type: Op
                 
                 print("Computing UMAP 3D projections...")
                 reducer_3d = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1,
-                                    metric='cosine', random_state=42, verbose=True)
+                                    metric='cosine', random_state=42, verbose=False)
                 coords_umap_3d = reducer_3d.fit_transform(embeddings)
 
                 print("Storing UMAP 3D projections...")

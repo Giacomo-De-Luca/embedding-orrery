@@ -11,7 +11,7 @@ import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, cal
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
-import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, getZoomMultiplier, formatHoverText } from '../utils/rendeding';
+import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
 import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
@@ -70,6 +70,7 @@ interface ScatterPlot3DProps {
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
+  data?: PlotData[];
   _fullLayout?: {
     scene?: {
       camera?: any;
@@ -201,7 +202,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     });
   }, []);
 
-  const currentZoomMultiplier = useRef(getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center));
 
   // Ref to track bounds for projection (avoids stale closure)
   const boundsRef = useRef(bounds);
@@ -223,35 +223,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const targetCenterX = (selectedPoint.x - dataCenterX) / maxRange;
     const targetCenterY = (selectedPoint.y - dataCenterY) / maxRange;
     const targetCenterZ = (selectedPoint.z - dataCenterZ) / maxRange;
-
-    // Debug: log Plotly scene internals to understand coordinate mapping
-    const sceneLayout = (graphDivRef.current._fullLayout?.scene) as any;
-    const glplot = sceneLayout?._scene?.glplot;
-    // Try multiple paths for model matrix
-    const modelPaths = {
-      'glplot.model': glplot?.model,
-      'glplot.cameraParams.model': glplot?.cameraParams?.model,
-      'glplot.objects[0].model': glplot?.objects?.[0]?.model,
-      'glplot._model': glplot?._model,
-    };
-    const foundModel = Object.entries(modelPaths).find(([, v]) => v != null);
-    console.log('[3D Camera Debug]', JSON.stringify({
-      clickedPoint: { x: selectedPoint.x, y: selectedPoint.y, z: selectedPoint.z },
-      computedTarget: { x: targetCenterX, y: targetCenterY, z: targetCenterZ },
-      dataBounds: bounds,
-      maxRange,
-      axisRanges: {
-        x: sceneLayout?.xaxis?.range ? [...sceneLayout.xaxis.range] : null,
-        y: sceneLayout?.yaxis?.range ? [...sceneLayout.yaxis.range] : null,
-        z: sceneLayout?.zaxis?.range ? [...sceneLayout.zaxis.range] : null,
-      },
-      aspectratio: sceneLayout?.aspectratio,
-      glplotBounds: glplot?.bounds ? [Array.from(glplot.bounds[0]), Array.from(glplot.bounds[1])] : null,
-      modelMatrixPath: foundModel ? foundModel[0] : null,
-      modelMatrix: foundModel ? Array.from(foundModel[1]).slice(0, 16) : null,
-      glplotKeys: glplot ? Object.keys(glplot).slice(0, 20) : null,
-      cameraFormat: glplot?.camera ? (Array.isArray(glplot.camera.eye) ? 'array' : typeof glplot.camera.eye) : null,
-    }, null, 2));
 
     // Adaptive target radius based on dataset size (similar to defaultEye calculation)
     // Small datasets (100 pts): ~0.32
@@ -445,7 +416,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   // --- OPTIMIZED TRACES ---
   const baseTraces = useMemo((): PlotlyData[] => {
     const traces: PlotlyData[] = [];
-    const hasHighlights = highlightedIndices && highlightedIndices.size > 0;
 
     // Apply hideUnclustered filter
     // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
@@ -467,8 +437,8 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const allCustomData = displayPoints;
 
     if (!showOnlyHighlighted) {
-      const dimOpacity = hasHighlights ? markerStyle.opacity * 0.9 : markerStyle.opacity;
-      const dimSize = hasHighlights ? Math.max(markerStyle.size * 0.6, 2) : Math.max(markerStyle.size * 0.7, 2);
+      const dimOpacity = markerStyle.opacity;
+      const dimSize = Math.max(markerStyle.size * 0.7, 2);
 
       if (numericData && plotlyColorScale) {
         // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
@@ -491,7 +461,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
               z: activeIndices.map(i => allZ[i]),
               mode: 'markers',
               type: 'scatter3d',
-              name: hasHighlights ? 'Context' : 'Data',
+              name: 'Data',
               marker: {
                 sizemode: 'diameter',
                 size: dimSize,
@@ -536,7 +506,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
             z: allZ,
             mode: 'markers',
             type: 'scatter3d',
-            name: hasHighlights ? 'Context' : 'Data',
+            name: 'Data',
             marker: {
               sizemode: 'diameter',
               size: dimSize,
@@ -735,11 +705,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
               z: activeIndices.map(i => allZ[i]),
               mode: 'markers',
               type: 'scatter3d',
-              name: hasHighlights ? 'Context' : 'Data',
+              name: 'Data',
               marker: {
                 sizemode: 'diameter',
                 size: dimSize,
-                color: hasHighlights ? '#e5a819ff' : '#1f77b4',
+                color: '#1f77b4',
                 opacity: dimOpacity,
               },
               text: activeIndices.map(i => allText[i]),
@@ -775,11 +745,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
             z: allZ,
             mode: 'markers',
             type: 'scatter3d',
-            name: hasHighlights ? 'Context' : 'Data',
+            name: 'Data',
             marker: {
               sizemode: 'diameter',
               size: dimSize,
-              color: hasHighlights ? '#e5a819ff' : '#1f77b4',
+              color: '#1f77b4',
               opacity: dimOpacity,
             },
             text: allText,
@@ -791,89 +761,91 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       }
     }
 
-    // --- BLOOM / HIGHLIGHTS (Rendered on top) ---
-    if (hasHighlights) {
-      const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
-      if (highlightedPoints.length > 0) {
-        const hX = highlightedPoints.map(p => p.x);
-        const hY = highlightedPoints.map(p => p.y);
-        const hZ = highlightedPoints.map(p => p.z);
-
-        const outerSizes: number[] = [];
-        const outerColors: string[] = [];
-        const outerOpacities: number[] = [];
-        const innerSizes: number[] = [];
-        const innerColors: string[] = [];
-        const coreSizes: number[] = [];
-        const coreColors: string[] = [];
-        const coreTexts: string[] = [];
-        const coreCustomData: any[] = [];
-
-        highlightedPoints.forEach(point => {
-          const similarity = highlightedIndices!.get(point.index) ?? 1.0;
-          const luminosity = calculateLuminosity(similarity);
-          const colors = calculateSimilarityColors(similarity);
-
-          outerSizes.push(Math.max(markerStyle.size * highlightScale.outerMultiplier, 30));
-          outerColors.push(colors.outerGlow);
-          outerOpacities.push(luminosity.outer);
-
-          innerSizes.push(Math.max(markerStyle.size * highlightScale.innerMultiplier, 18));
-          innerColors.push(colors.glowColor);
-
-          coreSizes.push(Math.max(markerStyle.size * highlightScale.coreMultiplier, 9));
-          coreColors.push(colors.coreColor);
-          coreTexts.push(formatHoverText(point));
-          coreCustomData.push(point);
-        });
-
-        // 1. Outer Glow
-        traces.push({
-          x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
-          marker: {
-            sizemode: 'diameter', size: outerSizes, color: outerColors, opacity: 0.15, line: { width: 0 }
-          },
-          hoverinfo: 'skip', showlegend: false
-        });
-
-        // 2. Inner Glow
-        traces.push({
-          x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
-          marker: {
-            sizemode: 'diameter', size: innerSizes, color: innerColors, opacity: 0.3, line: { width: 0 }
-          },
-          hoverinfo: 'skip', showlegend: false
-        });
-
-        // 3. Core
-        // Only make highlights clickable when base traces aren't shown (prevents duplicate clicks)
-        traces.push({
-          x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
-          marker: {
-            sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors[0], width: 1 }
-          },
-          text: coreTexts,
-          hoverinfo: 'none',
-          customdata: coreCustomData as any,
-          showlegend: false
-        });
-      }
-    }
-
     return traces;
   }, [
-    points, highlightedIndices, markerStyle, highlightScale, showOnlyHighlighted,
+    points, markerStyle, showOnlyHighlighted,
     colorBy, isDark, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
     mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity
   ]);
+
+  // Highlight/glow traces — separated from baseTraces so that search results
+  // only recompute ~20 points instead of rebuilding all base point data.
+  const highlightTraces = useMemo((): PlotlyData[] => {
+    if (!highlightedIndices || highlightedIndices.size === 0) return [];
+
+    const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
+    if (highlightedPoints.length === 0) return [];
+
+    const traces: PlotlyData[] = [];
+    const hX = highlightedPoints.map(p => p.x);
+    const hY = highlightedPoints.map(p => p.y);
+    const hZ = highlightedPoints.map(p => p.z);
+
+    const outerSizes: number[] = [];
+    const outerColors: string[] = [];
+    const innerSizes: number[] = [];
+    const innerColors: string[] = [];
+    const coreSizes: number[] = [];
+    const coreColors: string[] = [];
+    const coreTexts: string[] = [];
+    const coreCustomData: any[] = [];
+
+    highlightedPoints.forEach(point => {
+      const similarity = highlightedIndices.get(point.index) ?? 1.0;
+      const luminosity = calculateLuminosity(similarity);
+      const colors = calculateSimilarityColors(similarity);
+
+      outerSizes.push(Math.max(markerStyle.size * highlightScale.outerMultiplier, 30));
+      outerColors.push(colors.outerGlow);
+
+      innerSizes.push(Math.max(markerStyle.size * highlightScale.innerMultiplier, 18));
+      innerColors.push(colors.glowColor);
+
+      coreSizes.push(Math.max(markerStyle.size * highlightScale.coreMultiplier, 9));
+      coreColors.push(colors.coreColor);
+      coreTexts.push(formatHoverText(point));
+      coreCustomData.push(point);
+    });
+
+    // 1. Outer Glow
+    traces.push({
+      x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
+      marker: {
+        sizemode: 'diameter', size: outerSizes, color: outerColors, opacity: 0.15, line: { width: 0 }
+      },
+      hoverinfo: 'skip', showlegend: false
+    });
+
+    // 2. Inner Glow
+    traces.push({
+      x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
+      marker: {
+        sizemode: 'diameter', size: innerSizes, color: innerColors, opacity: 0.3, line: { width: 0 }
+      },
+      hoverinfo: 'skip', showlegend: false
+    });
+
+    // 3. Core
+    traces.push({
+      x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
+      marker: {
+        sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors[0], width: 1 }
+      },
+      text: coreTexts,
+      hoverinfo: 'none',
+      customdata: coreCustomData as any,
+      showlegend: false
+    });
+
+    return traces;
+  }, [highlightedIndices, points, markerStyle, highlightScale]);
 
   // Selected point traces — uses renderedSelectedPoint (deferred) to avoid Plotly.react during camera animation
   const selectedTraces = useMemo((): PlotlyData[] => {
     if (!renderedSelectedPoint) return [];
     const traces: PlotlyData[] = [];
-    const hasHighlights = highlightedIndices && highlightedIndices.size > 0;
 
-    if (hasHighlights) {
+    if (highlightedIndices && highlightedIndices.size > 0) {
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
       const lineX: number[] = [], lineY: number[] = [], lineZ: number[] = [];
       highlightedPoints.forEach(p => {
@@ -1208,7 +1180,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           currentCameraRef.current.eye = { x: ex, y: ey, z: ez };
           currentCameraRef.current.center = { x: ccx, y: ccy, z: ccz };
 
-          renderLabels();
+          // Skip expensive label rendering during fly-to animation to avoid stutter
+          if (!isAnimatingRef.current) {
+            renderLabels();
+          }
         }
       }
       rafId = requestAnimationFrame(pollCamera);
@@ -1230,13 +1205,45 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   // Re-render labels on resize or when label data changes (e.g. search results arrive while camera is stationary)
   useEffect(() => {
-    if (hasAnyLabels) renderLabels();
+    if (hasAnyLabels && !isAnimatingRef.current) renderLabels();
   }, [width, height, hasAnyLabels, renderLabels, showLabels, highlightedIndices, selectedPoint]);
 
-  const plotData = useMemo(() => [
-    ...baseTraces,
-    ...selectedTraces,
-  ], [baseTraces, selectedTraces]);
+  // plotData only contains stable base traces — highlight/selected traces are managed
+  // imperatively via Plotly.addTraces/deleteTraces to avoid triggering expensive Plotly.react
+  const plotData = baseTraces;
+
+  // When baseTraces change, Plotly.react (from <Plot>) will replace all traces,
+  // so our overlay count resets — re-add overlays on next effect run.
+  const overlayTraceCountRef = useRef(0);
+  useEffect(() => {
+    overlayTraceCountRef.current = 0;
+  }, [baseTraces]);
+
+  // Imperatively manage overlay traces (highlights + selected point) without touching
+  // the Plot component's data prop, which would trigger a full Plotly.react diff on all traces.
+  useEffect(() => {
+    if (!plotReady || !graphDivRef.current || !plotlyLibRef.current) return;
+    const Plotly = plotlyLibRef.current;
+    const gd = graphDivRef.current;
+
+    const overlayTraces = [...highlightTraces, ...selectedTraces];
+
+    // Remove previously added overlay traces
+    if (overlayTraceCountRef.current > 0) {
+      const totalTraces = (gd.data?.length) || 0;
+      const indicesToRemove = Array.from(
+        { length: overlayTraceCountRef.current },
+        (_, i) => totalTraces - overlayTraceCountRef.current + i
+      );
+      try { Plotly.deleteTraces(gd, indicesToRemove); } catch { /* ignore if already removed */ }
+    }
+
+    // Add new overlay traces
+    if (overlayTraces.length > 0) {
+      Plotly.addTraces(gd, overlayTraces);
+    }
+    overlayTraceCountRef.current = overlayTraces.length;
+  }, [highlightTraces, selectedTraces, plotReady]);
 
   const layout = useMemo<Partial<Layout>>(() => ({
     width, height, autosize: true, uirevision: 'true', hovermode: 'closest', showlegend: false,
@@ -1257,14 +1264,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   }), [axisColor, height, paperBg, sceneBg, width]);
 
-  const config: Partial<Config> = { displayModeBar: true, displaylogo: false, responsive: true };
+  const config = useMemo<Partial<Config>>(() => ({ displayModeBar: true, displaylogo: false, responsive: true }), []);
 
-  const mouseDownTimeRef = useRef<number>(0);
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const handleMouseDown = () => { mouseDownTimeRef.current = Date.now(); };
+    const handleMouseDown = (e: MouseEvent) => { mouseDownPosRef.current = { x: e.clientX, y: e.clientY }; };
     container.addEventListener('mousedown', handleMouseDown);
     return () => container.removeEventListener('mousedown', handleMouseDown);
   }, []);
@@ -1286,20 +1293,19 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   const handleClick = useCallback((event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) return;
-    const now = Date.now();
 
-    // Check drag - ignore clicks that were part of a drag gesture
-    if (now - mouseDownTimeRef.current > 500) return;
+    // Drag detection: ignore clicks where the mouse moved significantly from mousedown
+    const downPos = mouseDownPosRef.current;
+    if (downPos && event.event) {
+      const dx = (event.event as MouseEvent).clientX - downPos.x;
+      const dy = (event.event as MouseEvent).clientY - downPos.y;
+      if (dx * dx + dy * dy > 25) return; // >5px movement = drag
+    }
 
     const point = event.points[0];
     if (!point.customdata || typeof point.customdata !== 'object') return;
 
     const clickedPoint = point.customdata as unknown as Point3D;
-
-    // Log camera for debugging
-    currentZoomMultiplier.current = getZoomMultiplier(currentCameraRef.current.eye, currentCameraRef.current.center);
-    console.log('Point clicked:', clickedPoint.id, 'Camera:', currentCameraRef.current.eye, 'Zoom:', currentZoomMultiplier.current);
-
     onPointClick(clickedPoint);
   }, [onPointClick]);
 
