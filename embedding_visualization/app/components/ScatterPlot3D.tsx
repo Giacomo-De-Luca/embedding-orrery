@@ -215,9 +215,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
 
 
-  // --- Camera Animation Effect (Unchanged logic) ---
+  // --- Camera Animation Effect ---
+  // Fires on renderedSelectedPoint (not selectedPoint) so highlight traces are already
+  // present in plotData before the fly-to animation begins.
   useEffect(() => {
-    if (!selectedPoint || !bounds || !plotReady || !graphDivRef.current) return;
+    if (!renderedSelectedPoint || !bounds || !plotReady || !graphDivRef.current) return;
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 
     const dataCenterX = (bounds.minX + bounds.maxX) / 2;
@@ -225,9 +227,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const dataCenterZ = (bounds.minZ + bounds.maxZ) / 2;
     const maxRange = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) || 1;
 
-    const targetCenterX = (selectedPoint.x - dataCenterX) / maxRange;
-    const targetCenterY = (selectedPoint.y - dataCenterY) / maxRange;
-    const targetCenterZ = (selectedPoint.z - dataCenterZ) / maxRange;
+    const targetCenterX = (renderedSelectedPoint.x - dataCenterX) / maxRange;
+    const targetCenterY = (renderedSelectedPoint.y - dataCenterY) / maxRange;
+    const targetCenterZ = (renderedSelectedPoint.z - dataCenterZ) / maxRange;
 
     // Adaptive target radius based on dataset size (similar to defaultEye calculation)
     // Small datasets (100 pts): ~0.32
@@ -336,7 +338,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
       isAnimatingRef.current = false;
     };
-  }, [selectedPoint, bounds, plotReady]);
+  }, [renderedSelectedPoint, bounds, plotReady]);
 
   const MAX_CAMERA_DISTANCE = 3.0;
 
