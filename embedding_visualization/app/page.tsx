@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { useShallow } from 'zustand/react/shallow';
 import { AppHeader } from './components/AppHeader';
 import { AppFooter } from './components/AppFooter';
 import { DashboardPanel, type ActivePanel } from './components/DashboardPanel';
@@ -13,6 +14,8 @@ import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
+import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
+import { defaultColorScaleForType } from '../lib/types/types';
 import type { VisualizationState, HighlightMap } from '../lib/types/types';
 
 
@@ -43,19 +46,46 @@ export default function Home() {
     }
   }, [collections, selectedCollection, collectionFromUrl]);
 
-  const [visualizationState, setVisualizationState] = useState<VisualizationState>({
-    method: 'umap',
-    mode: '3d',
-    colorByField: null,
-    searchQuery: '',
-    selectedDimensions: [0, 1, 2],
-    distanceMetric: 'COSINE',
-  });
+  // --- Zustand store for visualization state ---
+  const store = useVisualizationStore;
+  const method = store((s) => s.method);
+  const mode = store((s) => s.mode);
+  const colorByField = store((s) => s.colorByField);
+  const searchQuery = store((s) => s.searchQuery);
+  const distanceMetric = store((s) => s.distanceMetric);
+  const temporalRange = store((s) => s.temporalRange);
+
+  // Compat bridge: construct old VisualizationState shape for un-migrated children
+  const visualizationState = useVisualizationStore(useShallow((s): VisualizationState => ({
+    method: s.method,
+    mode: s.mode,
+    selectedDimensions: s.selectedDimensions,
+    colorByField: s.colorByField,
+    colorScaleType: s.colorScale.type,
+    sequentialScaleName: s.colorScale.type === 'sequential' ? s.colorScale.scaleName : undefined,
+    divergingScaleName: s.colorScale.type === 'diverging' ? s.colorScale.scaleName : undefined,
+    monochromeColor: s.colorScale.type === 'monochrome' ? s.colorScale.baseColor : undefined,
+    categoricalPalette: s.categoricalPalette,
+    searchQuery: s.searchQuery,
+    distanceMetric: s.distanceMetric,
+    showOnlyHighlighted: s.showOnlyHighlighted,
+    showLabels: s.showLabels,
+    showContours: s.showContours,
+    mutedCategories: s.mutedCategories,
+    tooltipFields: s.tooltipFields,
+    hideUnclustered: s.hideUnclustered,
+    nestedColorMode: s.nestedColorMode,
+    nebulaMode: s.nebulaMode,
+    showClusterLabels: s.showClusterLabels,
+    temporalRange: s.temporalRange,
+    hideFilteredPoints: s.hideFilteredPoints,
+    mutedPointOpacity: s.mutedPointOpacity,
+  })));
 
   const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(
     selectedCollection,
-    visualizationState.method,
-    visualizationState.mode,
+    method,
+    mode,
   );
 
   // Sync URL when collection or colorBy changes
@@ -64,17 +94,17 @@ export default function Home() {
     const params = new URLSearchParams();
     params.set('collection', selectedCollection);
     // During initial load, preserve colorBy from the original URL until state catches up
-    const colorBy = visualizationState.colorByField
+    const effectiveColorBy = colorByField
       ?? (isInitialLoad.current ? initialColorByRef.current : null);
-    if (colorBy) {
-      params.set('colorBy', colorBy);
+    if (effectiveColorBy) {
+      params.set('colorBy', effectiveColorBy);
     }
     const newSearch = `?${params.toString()}`;
     // Only navigate if the URL actually changed
     if (newSearch !== window.location.search) {
       router.replace(newSearch, { scroll: false });
     }
-  }, [selectedCollection, visualizationState.colorByField, router]);
+  }, [selectedCollection, colorByField, router]);
 
   // Get topics for selected collection
   const selectedCollectionTopics = useMemo(() => {
@@ -124,7 +154,7 @@ export default function Home() {
     selectedCollectionTopics,
     data,
     selectedCollection,
-    visualizationState.distanceMetric ?? 'COSINE',
+    distanceMetric ?? 'COSINE',
     queryPromptName,
     data?.metadata?.embedding_prompt,
   );
@@ -143,17 +173,48 @@ export default function Home() {
     resetSearch
   } = useAppSearch(
     selectedCollection,
-    visualizationState.colorByField ?? null,
-    visualizationState.distanceMetric ?? 'COSINE',
+    colorByField ?? null,
+    distanceMetric ?? 'COSINE',
     queryPromptName,
     data?.metadata?.embedding_prompt,
     topicSearch.topicFilters,
-    visualizationState.temporalRange,
+    temporalRange,
   );
 
-  // Update visualization state
+  // Compat bridge: convert old Partial<VisualizationState> writes to store actions
   const updateState = useCallback((newState: Partial<VisualizationState>) => {
-    setVisualizationState(prev => ({ ...prev, ...newState }));
+    const s = useVisualizationStore.getState();
+    // Map old flat color fields to the new union if any color fields are being set
+    const patch: Partial<import('../lib/stores/useVisualizationStore').VisualizationStoreState> = {};
+    for (const [key, value] of Object.entries(newState)) {
+      switch (key) {
+        case 'colorScaleType': {
+          // When colorScaleType changes, rebuild the entire colorScale union with defaults
+          const type = value as import('../lib/types/types').ColorScaleType;
+          patch.colorScale = defaultColorScaleForType(type);
+          break;
+        }
+        case 'sequentialScaleName':
+          if (s.colorScale.type === 'sequential') {
+            patch.colorScale = { type: 'sequential', scaleName: value as import('../lib/utils/categoryColors').SequentialScaleName };
+          }
+          break;
+        case 'divergingScaleName':
+          if (s.colorScale.type === 'diverging') {
+            patch.colorScale = { type: 'diverging', scaleName: value as import('../lib/utils/categoryColors').DivergingScaleName };
+          }
+          break;
+        case 'monochromeColor':
+          if (s.colorScale.type === 'monochrome') {
+            patch.colorScale = { type: 'monochrome', baseColor: value as string };
+          }
+          break;
+        default:
+          // Pass through all other fields directly
+          (patch as Record<string, unknown>)[key] = value;
+      }
+    }
+    s.updatePartial(patch);
   }, []);
 
   const visualizationPoints = useVisualizationPoints(data, visualizationState);
@@ -162,26 +223,25 @@ export default function Home() {
   // Compute text search results from highlighted indices, filtered by temporal range
   const textSearchResults = useMemo(() => {
     if (!highlightedIndices || highlightedIndices.size === 0) return [];
-    const points = visualizationState.mode === '2d' ? filteredPoints2d : filteredPoints3d;
-    const range = visualizationState.temporalRange;
+    const points = mode === '2d' ? filteredPoints2d : filteredPoints3d;
     return points.filter(p =>
       highlightedIndices.has(p.index) &&
-      (!range || isInTemporalRange(p.metadata, range))
+      (!temporalRange || isInTemporalRange(p.metadata, temporalRange))
     );
-  }, [highlightedIndices, filteredPoints2d, filteredPoints3d, visualizationState.mode, visualizationState.temporalRange]);
+  }, [highlightedIndices, filteredPoints2d, filteredPoints3d, mode, temporalRange]);
 
   // Auto-select first semantic search result when a text-query search completes
   // This triggers the camera fly-to animation in ScatterPlot3D
   useEffect(() => {
     if (semanticSearchResults && semanticSearchResults.length > 0 && searchType === 'text') {
       const firstResultId = semanticSearchResults[0].id;
-      const points = visualizationState.mode === '3d' ? filteredPoints3d : filteredPoints2d;
+      const points = mode === '3d' ? filteredPoints3d : filteredPoints2d;
       const matchingPoint = points.find(p => p.id === firstResultId);
       if (matchingPoint) {
         setSelectedPoint(matchingPoint);
       }
     }
-  }, [semanticSearchResults, filteredPoints2d, filteredPoints3d, visualizationState.mode, setSelectedPoint, searchType]);
+  }, [semanticSearchResults, filteredPoints2d, filteredPoints3d, mode, setSelectedPoint, searchType]);
 
   // Combine semantic search highlights and topic highlights (text search handled by muting, not glow)
   // Selected point is excluded — it has its own overlay traces in ScatterPlot3D
@@ -194,13 +254,7 @@ export default function Home() {
   // Initialize tooltipFields with smart defaults when data loads
   useEffect(() => {
     if (defaultTooltipFields.length > 0) {
-      setVisualizationState(prev => {
-        // Only set if tooltipFields hasn't been initialized yet (don't override user selections)
-        if (prev.tooltipFields === undefined) {
-          return { ...prev, tooltipFields: defaultTooltipFields };
-        }
-        return prev;
-      });
+      store.getState().initTooltipFields(defaultTooltipFields);
     }
   }, [defaultTooltipFields]);
 
@@ -209,7 +263,7 @@ export default function Home() {
     if (isInitialLoad.current) return;
     resetSearch();
     setQueryPromptName(null);
-    setVisualizationState(prev => ({ ...prev, colorByField: null, mutedCategories: [], tooltipFields: undefined, temporalRange: null, hideFilteredPoints: false, mutedPointOpacity: undefined }));
+    store.getState().resetForCollectionChange();
   }, [selectedCollection, resetSearch]);
 
   // Apply colorBy from URL once data loads, then mark initial load complete
@@ -220,19 +274,12 @@ export default function Home() {
     if (initialColorBy) {
       const fieldOption = colorFieldOptions.find(f => f.field === initialColorBy);
       if (fieldOption) {
-        setVisualizationState(prev => ({
-          ...prev,
-          colorByField: initialColorBy,
-          colorScaleType: fieldOption.recommendedScale,
-        }));
+        store.getState().setColorByField(initialColorBy, fieldOption.recommendedScale);
       }
     }
   }, [colorFieldOptions]);
 
-  // Reset muted categories and hideUnclustered when colorByField changes (categories are now different)
-  useEffect(() => {
-    setVisualizationState(prev => ({ ...prev, mutedCategories: [], hideUnclustered: false }));
-  }, [visualizationState.colorByField]);
+  // Auto-reset of mutedCategories on colorByField change is handled by the store subscription
 
   return (
     <SidebarProvider>
@@ -293,7 +340,7 @@ export default function Home() {
                     pca_2d_variance: data.metadata.pca_2d_variance,
                     pca_3d_variance: data.metadata.pca_3d_variance,
                   }}
-                  searchQuery={visualizationState.searchQuery}
+                  searchQuery={searchQuery}
                   highlightedCount={combinedHighlightedIndices?.size}
                   colorFieldOptions={colorFieldOptions}
                   textSearchResults={textSearchResults}

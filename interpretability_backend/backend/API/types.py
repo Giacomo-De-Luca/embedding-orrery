@@ -320,6 +320,30 @@ class EmbedLocalFileInput:
     topic_config: Optional[TopicConfigInput] = None
 
 
+# ========== Text Search Types ==========
+
+@strawberry.enum
+class TextSearchMode(Enum):
+    """Mode for text search matching."""
+    CONTAINS = "contains"
+    EXACT = "exact"
+
+
+@strawberry.type
+class TextSearchMatch:
+    """A single text search match."""
+    id: str
+    matched_field: str
+    snippet: Optional[str] = None
+
+
+@strawberry.type
+class TextSearchResponse:
+    """Result of a text search query."""
+    matches: List[TextSearchMatch]
+    total_matches: int
+
+
 # ========== Search & Filter Types ==========
 
 @strawberry.enum

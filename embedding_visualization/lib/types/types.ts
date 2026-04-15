@@ -127,11 +127,51 @@ export type ColorScaleType = 'categorical' | 'sequential' | 'diverging' | 'monoc
 // Re-export scale name types for convenience
 export type { SequentialScaleName, DivergingScaleName } from '../utils/categoryColors';
 
+/**
+ * Discriminated union for color scale configuration.
+ * Each variant carries only the parameters relevant to that scale type.
+ * `categoricalPalette` is intentionally separate — chart components need it
+ * regardless of which scale type the scatter plot uses.
+ */
+export type ColorScale =
+  | { type: 'categorical' }
+  | { type: 'sequential'; scaleName: import('../utils/categoryColors').SequentialScaleName }
+  | { type: 'diverging'; scaleName: import('../utils/categoryColors').DivergingScaleName }
+  | { type: 'monochrome'; baseColor: string };
+
+export const DEFAULT_COLOR_SCALE: ColorScale = { type: 'categorical' };
+
+/** Build a ColorScale with sensible defaults from just a type name */
+export function defaultColorScaleForType(type: ColorScaleType): ColorScale {
+  switch (type) {
+    case 'categorical': return { type: 'categorical' };
+    case 'sequential':  return { type: 'sequential', scaleName: 'sinebow' };
+    case 'diverging':   return { type: 'diverging', scaleName: 'blueGold' };
+    case 'monochrome':  return { type: 'monochrome', baseColor: '#1f77b4' };
+  }
+}
+
 export interface TemporalRange {
   field: string;         // temporal field name (e.g. "year")
   startPeriod: string;   // inclusive start (e.g. "1990")
   endPeriod: string;     // inclusive end (e.g. "2010")
   allPeriods: string[];  // sorted period values for index lookup
+}
+
+// ---- Text Search ----
+
+export type TextSearchMode = 'CONTAINS' | 'EXACT';
+
+export interface TextSearchConfig {
+  fields: string[] | null; // null = document only (default, fastest)
+  mode: TextSearchMode;
+  caseSensitive: boolean;
+}
+
+export interface TextSearchMatch {
+  id: string;
+  matchedField: string;
+  snippet?: string | null;
 }
 
 export interface VisualizationState {
@@ -158,6 +198,7 @@ export interface VisualizationState {
   temporalRange?: TemporalRange | null;  // Time range filter from temporal chart brush
   hideFilteredPoints?: boolean;   // Remove muted points entirely instead of graying out
   mutedPointOpacity?: number;     // 0-1, opacity for muted points (default 0.15)
+  textSearchConfig?: TextSearchConfig;  // Server-side text search configuration
 }
 
 /**

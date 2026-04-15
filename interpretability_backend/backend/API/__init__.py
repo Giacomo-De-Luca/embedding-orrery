@@ -26,6 +26,10 @@ from .types import (
     LocalFilePreview,
     DataTypeEnum,
     EmbedLocalFileInput,
+    # Text search types
+    TextSearchMode,
+    TextSearchMatch,
+    TextSearchResponse,
     # Search & filter types
     SimilarityMeasure,
     FilterOperator,
@@ -71,6 +75,9 @@ __all__ = [
     "LocalFilePreview",
     "DataTypeEnum",
     "EmbedLocalFileInput",
+    "TextSearchMode",
+    "TextSearchMatch",
+    "TextSearchResponse",
     "SimilarityMeasure",
     "FilterOperator",
     "FilterInput",

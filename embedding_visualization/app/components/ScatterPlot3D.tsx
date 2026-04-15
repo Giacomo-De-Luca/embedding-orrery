@@ -6,11 +6,11 @@ import type { Point3D, HighlightMap, ColorScaleType, NestedColorMap } from '../.
 import { useTheme } from 'next-themes';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
-import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
+import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
-import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel, formatHoverText } from '../utils/rendeding';
+import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
 import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
@@ -20,6 +20,82 @@ import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 const GL_IDENTITY_MATRIX = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
 
 type PlotlyData = Partial<PlotData>;
+
+/** Build a scatter3d trace from a point subset with the given marker options. */
+function buildScatter3dTrace(
+  pts: Point3D[],
+  opts: {
+    name: string;
+    size: number;
+    color: string | number[];
+    opacity: number;
+    colorscaleOpts?: { colorscale: any; cmin: number; cmax: number };
+  },
+): PlotlyData {
+  const trace: PlotlyData = {
+    x: pts.map(p => p.x),
+    y: pts.map(p => p.y),
+    z: pts.map(p => p.z),
+    mode: 'markers',
+    type: 'scatter3d',
+    name: opts.name,
+    marker: {
+      sizemode: 'diameter',
+      size: opts.size,
+      color: opts.color as any,
+      opacity: opts.opacity,
+      ...(opts.colorscaleOpts && {
+        colorscale: opts.colorscaleOpts.colorscale,
+        cmin: opts.colorscaleOpts.cmin,
+        cmax: opts.colorscaleOpts.cmax,
+        showscale: false,
+      }),
+    },
+    hoverinfo: 'none',
+    customdata: pts.map(p => p.index) as any,
+    showlegend: false,
+  };
+  return trace;
+}
+
+/** Build a scatter3d trace from indexed subsets of pre-computed arrays (for numeric colorscale mode). */
+function buildIndexedScatter3dTrace(
+  allX: number[], allY: number[], allZ: number[],
+  indices: number[],
+  pointIndices: number[],
+  opts: {
+    name: string;
+    size: number;
+    color: string | number[];
+    opacity: number;
+    colorscaleOpts?: { colorscale: any; cmin: number; cmax: number };
+  },
+): PlotlyData {
+  const trace: PlotlyData = {
+    x: indices.map(i => allX[i]),
+    y: indices.map(i => allY[i]),
+    z: indices.map(i => allZ[i]),
+    mode: 'markers',
+    type: 'scatter3d',
+    name: opts.name,
+    marker: {
+      sizemode: 'diameter',
+      size: opts.size,
+      color: opts.color as any,
+      opacity: opts.opacity,
+      ...(opts.colorscaleOpts && {
+        colorscale: opts.colorscaleOpts.colorscale,
+        cmin: opts.colorscaleOpts.cmin,
+        cmax: opts.colorscaleOpts.cmax,
+        showscale: false,
+      }),
+    },
+    hoverinfo: 'none',
+    customdata: indices.map(i => pointIndices[i]) as any,
+    showlegend: false,
+  };
+  return trace;
+}
 
 interface ScatterPlot3DProps {
   points: Point3D[];
@@ -140,8 +216,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const defaultCenter = { x: 0, y: 0, z: 0 };
   const animationFrameRef = useRef<number | undefined>(undefined);
   const isAnimatingRef = useRef(false);
+  const pendingFlyToRef = useRef<Point3D | null>(null);
   const lastClickTimeRef = useRef<number>(0);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
   const [plotReady, setPlotReady] = useState(false);
   const [plotlyLoaded, setPlotlyLoaded] = useState(false);
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
@@ -214,131 +293,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
 
 
-
-  // --- Camera Animation Effect ---
-  // Fires on renderedSelectedPoint (not selectedPoint) so highlight traces are already
-  // present in plotData before the fly-to animation begins.
-  useEffect(() => {
-    if (!renderedSelectedPoint || !bounds || !plotReady || !graphDivRef.current) return;
-    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-
-    const dataCenterX = (bounds.minX + bounds.maxX) / 2;
-    const dataCenterY = (bounds.minY + bounds.maxY) / 2;
-    const dataCenterZ = (bounds.minZ + bounds.maxZ) / 2;
-    const maxRange = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) || 1;
-
-    const targetCenterX = (renderedSelectedPoint.x - dataCenterX) / maxRange;
-    const targetCenterY = (renderedSelectedPoint.y - dataCenterY) / maxRange;
-    const targetCenterZ = (renderedSelectedPoint.z - dataCenterZ) / maxRange;
-
-    // Adaptive target radius based on dataset size (similar to defaultEye calculation)
-    // Small datasets (100 pts): ~0.32
-    // Medium datasets (10k pts): ~0.08
-    // Large datasets (100k+ pts): ~0.05 (very close)
-    //const baseTargetR = 0.4;
-    //const zoomRate = 0.08; // How much to zoom in per power of 10
-    //const calculatedTargetR = baseTargetR - (zoomRate * Math.log10(Math.max(pointCount, 1)));
-    //const targetR = Math.min(Math.max(calculatedTargetR, 0.05), 0.5);
-
-    const targetR = 0.15
-
-    const targetPhi = 1.3;
-    const duration = 2000;
-
-    let startEye: any, startCenter: any, startSpherical: any, targetSpherical: any, startTime: number;
-    let initialized = false;
-
-    const animate = (currentTime: number) => {
-      if (!isAnimatingRef.current || !graphDivRef.current) return;
-
-      if (!initialized) {
-        const scene = graphDivRef.current._fullLayout?.scene;
-        const layoutCamera = scene?.camera;
-        if (layoutCamera?.eye) {
-          startEye = { ...layoutCamera.eye };
-          startCenter = layoutCamera.center ? { ...layoutCamera.center } : { x: 0, y: 0, z: 0 };
-        } else {
-          startEye = { ...currentCameraRef.current.eye };
-          startCenter = { ...currentCameraRef.current.center };
-        }
-        // Convert eye position RELATIVE to center (not absolute from origin)
-        startSpherical = cartesianToSpherical(
-          startEye.x - startCenter.x,
-          startEye.y - startCenter.y,
-          startEye.z - startCenter.z
-        );
-        targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
-        startTime = currentTime;
-        initialized = true;
-      }
-
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const ease = easeInOutCubic(progress);
-
-      const newCenter = {
-        x: lerp(startCenter.x, targetCenterX, ease),
-        y: lerp(startCenter.y, targetCenterY, ease),
-        z: lerp(startCenter.z, targetCenterZ, ease),
-      };
-
-      const curR = lerp(startSpherical.r, targetSpherical.r, ease);
-      const curTheta = lerp(startSpherical.theta, targetSpherical.theta, ease);
-      const curPhi = lerp(startSpherical.phi, targetSpherical.phi, ease);
-
-      // Convert spherical to cartesian (gives position relative to center)
-      const relativeEye = sphericalToCartesian(curR, curTheta, curPhi);
-
-      // Add the interpolated center to get absolute eye position
-      const newEye = {
-        x: relativeEye.x + newCenter.x,
-        y: relativeEye.y + newCenter.y,
-        z: relativeEye.z + newCenter.z,
-      };
-
-      currentCameraRef.current = { eye: newEye, center: newCenter };
-      const currentScene = graphDivRef.current._fullLayout?.scene?._scene;
-      const glplot = currentScene?.glplot as any;
-
-      if (glplot?.camera) {
-        if (Array.isArray(glplot.camera.eye)) {
-          glplot.camera.eye = [newEye.x, newEye.y, newEye.z];
-          glplot.camera.center = [newCenter.x, newCenter.y, newCenter.z];
-          glplot.camera.up = [0, 0, 1];
-        } else if (glplot.camera.eye && typeof glplot.camera.eye === 'object') {
-          glplot.camera.eye.x = newEye.x;
-          glplot.camera.eye.y = newEye.y;
-          glplot.camera.eye.z = newEye.z;
-          glplot.camera.center.x = newCenter.x;
-          glplot.camera.center.y = newCenter.y;
-          glplot.camera.center.z = newCenter.z;
-        }
-        if (typeof glplot.camera.update === 'function') glplot.camera.update();
-        if (typeof glplot.draw === 'function') glplot.draw();
-      }
-
-      if (progress < 1) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      } else {
-        isAnimatingRef.current = false;
-        if (plotlyLibRef.current && graphDivRef.current) {
-          plotlyLibRef.current.relayout(graphDivRef.current, {
-            'scene.camera': { eye: newEye, center: newCenter, up: { x: 0, y: 0, z: 1 } },
-          });
-        }
-        // Re-render labels now that animation is done (skipped during fly-to)
-        renderLabelsRef.current?.();
-      }
-    };
-
-    isAnimatingRef.current = true;
-    animationFrameRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-      isAnimatingRef.current = false;
-    };
-  }, [renderedSelectedPoint, bounds, plotReady]);
 
   const MAX_CAMERA_DISTANCE = 3.0;
 
@@ -422,359 +376,137 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const markerStyle = useMemo(() => calculateMarkerStyle(points.length), [points.length]);
   const highlightScale = useMemo(() => calculateHighlightScale(points.length), [points.length]);
 
+  // Shared filtered points: used by both baseTraces and clusterDataMap
+  const displayPoints = useMemo(() => {
+    if (!hideUnclustered) return points;
+    return points.filter(p => {
+      const topicId = p.metadata?.['topic_id'];
+      if (topicId === '-1' || topicId === -1) return false;
+      const topicLabel = p.metadata?.['topic_label'];
+      if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
+      return true;
+    });
+  }, [points, hideUnclustered]);
+
   // --- OPTIMIZED TRACES ---
   const baseTraces = useMemo((): PlotlyData[] => {
+    if (showOnlyHighlighted) return [];
+
     const traces: PlotlyData[] = [];
+    const dimOpacity = markerStyle.opacity;
+    const dimSize = Math.max(markerStyle.size * 0.7, 2);
+    const mutedOp = mutedPointOpacity ?? 0.15;
 
-    // Apply hideUnclustered filter
-    // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
-    const displayPoints = hideUnclustered
-      ? points.filter(p => {
-          const topicId = p.metadata?.['topic_id'];
-          if (topicId === '-1' || topicId === -1) return false;
-          const topicLabel = p.metadata?.['topic_label'];
-          if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-          return true;
-        })
-      : points;
+    // Helper: split a point array into active/muted subsets based on combinedMutedIndices
+    const splitByMuted = (pts: Point3D[]) => {
+      const active: Point3D[] = [];
+      const muted: Point3D[] = [];
+      for (const p of pts) {
+        if (combinedMutedIndices!.has(p.index)) muted.push(p);
+        else active.push(p);
+      }
+      return { active, muted };
+    };
 
-    // Compute data arrays from filtered points
-    const allX = displayPoints.map(p => p.x);
-    const allY = displayPoints.map(p => p.y);
-    const allZ = displayPoints.map(p => p.z);
-    const allText = displayPoints.map(formatHoverText);
-    const allCustomData = displayPoints;
+    // Helper: push active + muted traces for a categorical group
+    const pushCategoricalTraces = (pts: Point3D[], name: string, color: string, isMuted: boolean) => {
+      if (hideFilteredPoints && isMuted) return;
+      const catColor = isMuted ? '#9ca3af' : color;
+      const catOpacity = isMuted ? mutedOp : dimOpacity;
 
-    if (!showOnlyHighlighted) {
-      const dimOpacity = markerStyle.opacity;
-      const dimSize = Math.max(markerStyle.size * 0.7, 2);
-
-      if (numericData && plotlyColorScale) {
-        // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
-        if (combinedMutedIndices) {
-          // Split into active vs muted points
-          const activeIndices: number[] = [];
-          const mutedIndices: number[] = [];
-          displayPoints.forEach((_, i) => {
-            if (combinedMutedIndices.has(displayPoints[i].index)) {
-              mutedIndices.push(i);
-            } else {
-              activeIndices.push(i);
-            }
-          });
-          // Active points with normal colorscale
-          if (activeIndices.length > 0) {
-            traces.push({
-              x: activeIndices.map(i => allX[i]),
-              y: activeIndices.map(i => allY[i]),
-              z: activeIndices.map(i => allZ[i]),
-              mode: 'markers',
-              type: 'scatter3d',
-              name: 'Data',
-              marker: {
-                sizemode: 'diameter',
-                size: dimSize,
-                color: activeIndices.map(i => numericData.cleanValues[i]) as any,
-                colorscale: plotlyColorScale as any,
-                cmin: numericData.min,
-                cmax: numericData.max,
-                opacity: dimOpacity,
-                showscale: false,
-              },
-              text: activeIndices.map(i => allText[i]),
-              hoverinfo: 'none',
-              customdata: activeIndices.map(i => allCustomData[i]) as any,
-              showlegend: false,
-            });
-          }
-          // Temporally-muted points grayed out
-          if (mutedIndices.length > 0 && !hideFilteredPoints) {
-            traces.push({
-              x: mutedIndices.map(i => allX[i]),
-              y: mutedIndices.map(i => allY[i]),
-              z: mutedIndices.map(i => allZ[i]),
-              mode: 'markers',
-              type: 'scatter3d',
-              name: 'Temporal (muted)',
-              marker: {
-                sizemode: 'diameter',
-                size: dimSize,
-                color: '#9ca3af',
-                opacity: mutedPointOpacity ?? 0.15,
-              },
-              text: mutedIndices.map(i => allText[i]),
-              hoverinfo: 'none',
-              customdata: mutedIndices.map(i => allCustomData[i]) as any,
-              showlegend: false,
-            });
-          }
-        } else {
-          traces.push({
-            x: allX,
-            y: allY,
-            z: allZ,
-            mode: 'markers',
-            type: 'scatter3d',
-            name: 'Data',
-            marker: {
-              sizemode: 'diameter',
-              size: dimSize,
-              // Pass raw numbers array
-              color: numericData.cleanValues as any,
-              // Use the sampled scale
-              colorscale: plotlyColorScale as any,
-              // Map min/max explicitly
-              cmin: numericData.min,
-              cmax: numericData.max,
-              opacity: dimOpacity,
-              showscale: false, // Disabled - using custom Legend component instead
-            },
-            text: allText,
-            hoverinfo: 'none',
-            customdata: allCustomData as any,
-            showlegend: false,
-          });
+      if (combinedMutedIndices) {
+        const { active, muted } = splitByMuted(pts);
+        if (active.length > 0) {
+          traces.push(buildScatter3dTrace(active, { name, size: dimSize, color: catColor, opacity: catOpacity }));
         }
-      } else if (colorBy === 'category' && categoryValues.length > 0) {
-        if (nestedColorMap) {
-          // --- MODE: NESTED CATEGORICAL ---
-          const pointsBySub: Record<string, Point3D[]> = {};
-          displayPoints.forEach(point => {
-            const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
-            if (!pointsBySub[sub]) pointsBySub[sub] = [];
-            pointsBySub[sub].push(point);
-          });
-
-          Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
-            const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
-            const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
-            if (hideFilteredPoints && isMuted) return;
-
-            if (combinedMutedIndices) {
-              const activePoints = subPoints.filter(p => !combinedMutedIndices.has(p.index));
-              const mutedPts = subPoints.filter(p => combinedMutedIndices.has(p.index));
-
-              if (activePoints.length > 0) {
-                traces.push({
-                  x: activePoints.map(p => p.x),
-                  y: activePoints.map(p => p.y),
-                  z: activePoints.map(p => p.z),
-                  mode: 'markers',
-                  type: 'scatter3d',
-                  name: sub,
-                  marker: {
-                    sizemode: 'diameter',
-                    size: dimSize,
-                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
-                  },
-                  text: activePoints.map(formatHoverText),
-                  hoverinfo: 'none',
-                  customdata: activePoints as any,
-                  showlegend: false,
-                });
-              }
-              if (mutedPts.length > 0 && !hideFilteredPoints) {
-                traces.push({
-                  x: mutedPts.map(p => p.x),
-                  y: mutedPts.map(p => p.y),
-                  z: mutedPts.map(p => p.z),
-                  mode: 'markers',
-                  type: 'scatter3d',
-                  name: sub,
-                  marker: {
-                    sizemode: 'diameter',
-                    size: dimSize,
-                    color: '#9ca3af',
-                    opacity: mutedPointOpacity ?? 0.15,
-                  },
-                  text: mutedPts.map(formatHoverText),
-                  hoverinfo: 'none',
-                  customdata: mutedPts as any,
-                  showlegend: false,
-                });
-              }
-            } else {
-              traces.push({
-                x: subPoints.map(p => p.x),
-                y: subPoints.map(p => p.y),
-                z: subPoints.map(p => p.z),
-                mode: 'markers',
-                type: 'scatter3d',
-                name: sub,
-                marker: {
-                  sizemode: 'diameter',
-                  size: dimSize,
-                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                  opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
-                },
-                text: subPoints.map(formatHoverText),
-                hoverinfo: 'none',
-                customdata: subPoints as any,
-                showlegend: false,
-              });
-            }
-          });
-        } else {
-          // --- MODE: CATEGORICAL (Standard) ---
-          const pointsByCategory: Record<string, Point3D[]> = {};
-          displayPoints.forEach(point => {
-            const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-            const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
-            if (!pointsByCategory[cat]) pointsByCategory[cat] = [];
-            pointsByCategory[cat].push(point);
-          });
-
-          Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
-            const isMuted = mutedCategories.includes(cat);
-            if (hideFilteredPoints && isMuted) return;
-
-            if (combinedMutedIndices) {
-              const activePoints = catPoints.filter(p => !combinedMutedIndices.has(p.index));
-              const mutedPts = catPoints.filter(p => combinedMutedIndices.has(p.index));
-
-              if (activePoints.length > 0) {
-                traces.push({
-                  x: activePoints.map(p => p.x),
-                  y: activePoints.map(p => p.y),
-                  z: activePoints.map(p => p.z),
-                  mode: 'markers',
-                  type: 'scatter3d',
-                  name: getCategoryLabel(categoryField, cat),
-                  marker: {
-                    sizemode: 'diameter',
-                    size: dimSize,
-                    color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                    opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
-                  },
-                  text: activePoints.map(formatHoverText),
-                  hoverinfo: 'none',
-                  customdata: activePoints as any,
-                  showlegend: false,
-                });
-              }
-              if (mutedPts.length > 0 && !hideFilteredPoints) {
-                traces.push({
-                  x: mutedPts.map(p => p.x),
-                  y: mutedPts.map(p => p.y),
-                  z: mutedPts.map(p => p.z),
-                  mode: 'markers',
-                  type: 'scatter3d',
-                  name: getCategoryLabel(categoryField, cat),
-                  marker: {
-                    sizemode: 'diameter',
-                    size: dimSize,
-                    color: '#9ca3af',
-                    opacity: mutedPointOpacity ?? 0.15,
-                  },
-                  text: mutedPts.map(formatHoverText),
-                  hoverinfo: 'none',
-                  customdata: mutedPts as any,
-                  showlegend: false,
-                });
-              }
-            } else {
-              traces.push({
-                x: catPoints.map(p => p.x),
-                y: catPoints.map(p => p.y),
-                z: catPoints.map(p => p.z),
-                mode: 'markers',
-                type: 'scatter3d',
-                name: getCategoryLabel(categoryField, cat),
-                marker: {
-                  sizemode: 'diameter',
-                  size: dimSize,
-                  color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                  opacity: isMuted ? (mutedPointOpacity ?? 0.15) : dimOpacity,
-                },
-                text: catPoints.map(formatHoverText),
-                hoverinfo: 'none',
-                customdata: catPoints as any,
-                showlegend: false,
-              });
-            }
-          });
+        if (muted.length > 0 && !hideFilteredPoints) {
+          traces.push(buildScatter3dTrace(muted, { name, size: dimSize, color: '#9ca3af', opacity: mutedOp }));
         }
       } else {
-        // --- MODE: NO COLORING ---
-        if (combinedMutedIndices) {
-          const activeIndices: number[] = [];
-          const mutedIndices: number[] = [];
-          displayPoints.forEach((_, i) => {
-            if (combinedMutedIndices.has(displayPoints[i].index)) {
-              mutedIndices.push(i);
-            } else {
-              activeIndices.push(i);
-            }
-          });
-          if (activeIndices.length > 0) {
-            traces.push({
-              x: activeIndices.map(i => allX[i]),
-              y: activeIndices.map(i => allY[i]),
-              z: activeIndices.map(i => allZ[i]),
-              mode: 'markers',
-              type: 'scatter3d',
-              name: 'Data',
-              marker: {
-                sizemode: 'diameter',
-                size: dimSize,
-                color: '#1f77b4',
-                opacity: dimOpacity,
-              },
-              text: activeIndices.map(i => allText[i]),
-              hoverinfo: 'none',
-              customdata: activeIndices.map(i => allCustomData[i]) as any,
-              showlegend: false,
-            });
-          }
-          if (mutedIndices.length > 0 && !hideFilteredPoints) {
-            traces.push({
-              x: mutedIndices.map(i => allX[i]),
-              y: mutedIndices.map(i => allY[i]),
-              z: mutedIndices.map(i => allZ[i]),
-              mode: 'markers',
-              type: 'scatter3d',
-              name: 'Temporal (muted)',
-              marker: {
-                sizemode: 'diameter',
-                size: dimSize,
-                color: '#9ca3af',
-                opacity: mutedPointOpacity ?? 0.15,
-              },
-              text: mutedIndices.map(i => allText[i]),
-              hoverinfo: 'none',
-              customdata: mutedIndices.map(i => allCustomData[i]) as any,
-              showlegend: false,
-            });
-          }
-        } else {
-          traces.push({
-            x: allX,
-            y: allY,
-            z: allZ,
-            mode: 'markers',
-            type: 'scatter3d',
-            name: 'Data',
-            marker: {
-              sizemode: 'diameter',
-              size: dimSize,
-              color: '#1f77b4',
-              opacity: dimOpacity,
-            },
-            text: allText,
-            hoverinfo: 'none',
-            customdata: allCustomData as any,
-            showlegend: false,
-          });
+        traces.push(buildScatter3dTrace(pts, { name, size: dimSize, color: catColor, opacity: catOpacity }));
+      }
+    };
+
+    if (numericData && plotlyColorScale) {
+      // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
+      const csOpts = { colorscale: plotlyColorScale as any, cmin: numericData.min, cmax: numericData.max };
+      const allX = displayPoints.map(p => p.x);
+      const allY = displayPoints.map(p => p.y);
+      const allZ = displayPoints.map(p => p.z);
+      const pointIndices = displayPoints.map(p => p.index);
+
+      if (combinedMutedIndices) {
+        const activeIdx: number[] = [];
+        const mutedIdx: number[] = [];
+        displayPoints.forEach((p, i) => {
+          if (combinedMutedIndices.has(p.index)) mutedIdx.push(i);
+          else activeIdx.push(i);
+        });
+        if (activeIdx.length > 0) {
+          traces.push(buildIndexedScatter3dTrace(allX, allY, allZ, activeIdx, pointIndices, {
+            name: 'Data', size: dimSize,
+            color: activeIdx.map(i => numericData.cleanValues[i]),
+            opacity: dimOpacity, colorscaleOpts: csOpts,
+          }));
         }
+        if (mutedIdx.length > 0 && !hideFilteredPoints) {
+          traces.push(buildIndexedScatter3dTrace(allX, allY, allZ, mutedIdx, pointIndices, {
+            name: 'Temporal (muted)', size: dimSize, color: '#9ca3af', opacity: mutedOp,
+          }));
+        }
+      } else {
+        traces.push(buildIndexedScatter3dTrace(
+          allX, allY, allZ,
+          displayPoints.map((_, i) => i), pointIndices,
+          { name: 'Data', size: dimSize, color: numericData.cleanValues as any, opacity: dimOpacity, colorscaleOpts: csOpts },
+        ));
+      }
+    } else if (colorBy === 'category' && categoryValues.length > 0) {
+      if (nestedColorMap) {
+        // --- MODE: NESTED CATEGORICAL ---
+        const pointsBySub: Record<string, Point3D[]> = {};
+        for (const point of displayPoints) {
+          const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+          (pointsBySub[sub] ??= []).push(point);
+        }
+        for (const [sub, subPoints] of Object.entries(pointsBySub)) {
+          const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+          const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
+          pushCategoricalTraces(subPoints, sub, nestedColorMap.subtopicColors[sub] || '#7f7f7f', isMuted);
+        }
+      } else {
+        // --- MODE: CATEGORICAL (Standard) ---
+        const pointsByCategory: Record<string, Point3D[]> = {};
+        for (const point of displayPoints) {
+          const raw = categoryField ? point.metadata?.[categoryField] : undefined;
+          const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+          (pointsByCategory[cat] ??= []).push(point);
+        }
+        for (const [cat, catPoints] of Object.entries(pointsByCategory)) {
+          const isMuted = mutedCategories.includes(cat);
+          pushCategoricalTraces(catPoints, getCategoryLabel(categoryField, cat), colorMap[cat] || '#7f7f7f', isMuted);
+        }
+      }
+    } else {
+      // --- MODE: NO COLORING ---
+      if (combinedMutedIndices) {
+        const { active, muted } = splitByMuted(displayPoints);
+        if (active.length > 0) {
+          traces.push(buildScatter3dTrace(active, { name: 'Data', size: dimSize, color: '#1f77b4', opacity: dimOpacity }));
+        }
+        if (muted.length > 0 && !hideFilteredPoints) {
+          traces.push(buildScatter3dTrace(muted, { name: 'Temporal (muted)', size: dimSize, color: '#9ca3af', opacity: mutedOp }));
+        }
+      } else {
+        traces.push(buildScatter3dTrace(displayPoints, { name: 'Data', size: dimSize, color: '#1f77b4', opacity: dimOpacity }));
       }
     }
 
     return traces;
   }, [
-    points, markerStyle, showOnlyHighlighted,
-    colorBy, isDark, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
-    mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity
+    displayPoints, markerStyle, showOnlyHighlighted,
+    colorBy, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
+    mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity
   ]);
 
   // Pre-compute highlighted points via direct index lookup — O(k) not O(n)
@@ -817,14 +549,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       const innerColors: string[] = [];
       const coreSizes: number[] = [];
       const coreColors: string[] = [];
-      const coreTexts: string[] = [];
-      const coreCustomData: any[] = [];
+      const coreIndices: number[] = [];
 
       allOverlayPoints.forEach(point => {
         const isSelected = renderedSelectedPoint && point.index === renderedSelectedPoint.index;
-        // Selected point gets max similarity (brightest glow)
         const similarity = isSelected ? 1.0 : (highlightedIndices?.get(point.index) ?? 1.0);
-        const luminosity = calculateLuminosity(similarity);
         const colors = calculateSimilarityColors(similarity);
 
         outerSizes.push(Math.max(markerStyle.size * (isSelected ? highlightScale.selectedOuterMultiplier : highlightScale.outerMultiplier), isSelected ? 35 : 30));
@@ -835,8 +564,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
         coreSizes.push(Math.max(markerStyle.size * (isSelected ? highlightScale.selectedCoreMultiplier : highlightScale.coreMultiplier), isSelected ? 10 : 9));
         coreColors.push(colors.coreColor);
-        coreTexts.push(formatHoverText(point));
-        coreCustomData.push(point);
+        coreIndices.push(point.index);
       });
 
       // --- Pass 1: All point overlays ---
@@ -859,7 +587,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       traces.push({
         x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
         marker: { sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors, width: 1 } },
-        text: coreTexts, hoverinfo: 'none', customdata: coreCustomData as any, showlegend: false
+        hoverinfo: 'none', customdata: coreIndices as any, showlegend: false
       });
 
       // --- Pass 2: Connection lines ---
@@ -885,6 +613,121 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
     return traces;
   }, [renderedSelectedPoint, highlightedIndices, highlightedPoints, markerStyle, highlightScale, isDark]);
+
+  // Queue a fly-to target when renderedSelectedPoint changes.
+  // The actual animation starts from the overlay-trace update effect (after Plotly.redraw).
+  useEffect(() => {
+    pendingFlyToRef.current = renderedSelectedPoint ?? null;
+  }, [renderedSelectedPoint]);
+
+  // Start camera fly-to animation. Called imperatively after Plotly.redraw so the
+  // main thread is free and the animation frames aren't blocked.
+  const startFlyTo = useCallback((target: Point3D) => {
+    if (!bounds || !graphDivRef.current) return;
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+
+    const dataCenterX = (bounds.minX + bounds.maxX) / 2;
+    const dataCenterY = (bounds.minY + bounds.maxY) / 2;
+    const dataCenterZ = (bounds.minZ + bounds.maxZ) / 2;
+    const maxRange = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) || 1;
+
+    const targetCenterX = (target.x - dataCenterX) / maxRange;
+    const targetCenterY = (target.y - dataCenterY) / maxRange;
+    const targetCenterZ = (target.z - dataCenterZ) / maxRange;
+
+    const targetR = 0.15;
+    const targetPhi = 1.3;
+    const duration = 2000;
+
+    let startEye: any, startCenter: any, startSpherical: any, targetSpherical: any, startTime: number;
+    let initialized = false;
+
+    const animate = (currentTime: number) => {
+      if (!isAnimatingRef.current || !graphDivRef.current) return;
+
+      if (!initialized) {
+        const scene = graphDivRef.current._fullLayout?.scene;
+        const layoutCamera = scene?.camera;
+        if (layoutCamera?.eye) {
+          startEye = { ...layoutCamera.eye };
+          startCenter = layoutCamera.center ? { ...layoutCamera.center } : { x: 0, y: 0, z: 0 };
+        } else {
+          startEye = { ...currentCameraRef.current.eye };
+          startCenter = { ...currentCameraRef.current.center };
+        }
+        startSpherical = cartesianToSpherical(
+          startEye.x - startCenter.x,
+          startEye.y - startCenter.y,
+          startEye.z - startCenter.z
+        );
+        targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
+        startTime = currentTime;
+        initialized = true;
+      }
+
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const ease = easeInOutCubic(progress);
+
+      const newCenter = {
+        x: lerp(startCenter.x, targetCenterX, ease),
+        y: lerp(startCenter.y, targetCenterY, ease),
+        z: lerp(startCenter.z, targetCenterZ, ease),
+      };
+
+      const curR = lerp(startSpherical.r, targetSpherical.r, ease);
+      const curTheta = lerp(startSpherical.theta, targetSpherical.theta, ease);
+      const curPhi = lerp(startSpherical.phi, targetSpherical.phi, ease);
+
+      const relativeEye = sphericalToCartesian(curR, curTheta, curPhi);
+
+      const newEye = {
+        x: relativeEye.x + newCenter.x,
+        y: relativeEye.y + newCenter.y,
+        z: relativeEye.z + newCenter.z,
+      };
+
+      currentCameraRef.current = { eye: newEye, center: newCenter };
+      const currentScene = graphDivRef.current._fullLayout?.scene?._scene;
+      const glplot = currentScene?.glplot as any;
+
+      if (glplot?.camera) {
+        if (Array.isArray(glplot.camera.eye)) {
+          glplot.camera.eye = [newEye.x, newEye.y, newEye.z];
+          glplot.camera.center = [newCenter.x, newCenter.y, newCenter.z];
+          glplot.camera.up = [0, 0, 1];
+        } else if (glplot.camera.eye && typeof glplot.camera.eye === 'object') {
+          glplot.camera.eye.x = newEye.x;
+          glplot.camera.eye.y = newEye.y;
+          glplot.camera.eye.z = newEye.z;
+          glplot.camera.center.x = newCenter.x;
+          glplot.camera.center.y = newCenter.y;
+          glplot.camera.center.z = newCenter.z;
+        }
+        if (typeof glplot.camera.update === 'function') glplot.camera.update();
+        if (typeof glplot.draw === 'function') glplot.draw();
+      }
+
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        isAnimatingRef.current = false;
+        if (plotlyLibRef.current && graphDivRef.current) {
+          plotlyLibRef.current.relayout(graphDivRef.current, {
+            'scene.camera': { eye: newEye, center: newCenter, up: { x: 0, y: 0, z: 1 } },
+          });
+        }
+        renderLabelsRef.current?.();
+      }
+    };
+
+    isAnimatingRef.current = true;
+    const labelCtx = labelCanvasRef.current?.getContext('2d');
+    if (labelCtx && labelCanvasRef.current) {
+      labelCtx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
+    }
+    animationFrameRef.current = requestAnimationFrame(animate);
+  }, [bounds]);
 
   // Populate label render data (no React state — just a ref for the canvas renderer)
   useEffect(() => {
@@ -912,27 +755,18 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const clusterDataMap = useMemo(() => {
     if ((!nebulaMode && !showClusterLabels) || !categoryField) return new Map<string, ClusterData>();
 
-    // Apply same hideUnclustered filter as baseTraces, then exclude muted categories
-    let displayPoints = hideUnclustered
-      ? points.filter(p => {
-          const topicId = p.metadata?.['topic_id'];
-          if (topicId === '-1' || topicId === -1) return false;
-          const topicLabel = p.metadata?.['topic_label'];
-          if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-          return true;
-        })
-      : points;
-
+    // Further filter by muted categories (displayPoints already handles hideUnclustered)
+    let clusterPoints = displayPoints;
     if (mutedCategories.length > 0) {
       const mutedSet = new Set(mutedCategories);
-      displayPoints = displayPoints.filter(p => {
+      clusterPoints = displayPoints.filter(p => {
         const category = p.metadata?.[categoryField];
         return category == null || !mutedSet.has(String(category));
       });
     }
 
-    return groupPointsByCluster(displayPoints, categoryField, colorMap, nestedColorMap);
-  }, [nebulaMode, showClusterLabels, points, categoryField, colorMap, nestedColorMap, hideUnclustered, mutedCategories]);
+    return groupPointsByCluster(clusterPoints, categoryField, colorMap, nestedColorMap);
+  }, [nebulaMode, showClusterLabels, displayPoints, categoryField, colorMap, nestedColorMap, mutedCategories]);
 
   // --- Cluster label data for canvas overlay ---
   const clusterLabelDataRef = useRef<{
@@ -1293,7 +1127,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     gd.data?.splice(baseCount, oldCount, ...(overlayTraces as PlotData[]));
     overlayTraceCountRef.current = newCount;
     Plotly.redraw(gd);
-  }, [overlayTraces, plotReady]);
+
+    // Start fly-to animation after Plotly.redraw has finished (main thread is free)
+    const flyTarget = pendingFlyToRef.current;
+    if (flyTarget) {
+      pendingFlyToRef.current = null;
+      startFlyTo(flyTarget);
+    }
+  }, [overlayTraces, plotReady, startFlyTo]);
 
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -1332,9 +1173,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     }
 
     const point = event.points[0];
-    if (!point.customdata || typeof point.customdata !== 'object') return;
+    if (point.customdata == null) return;
 
-    const clickedPoint = point.customdata as unknown as Point3D;
+    const idx = point.customdata as unknown as number;
+    const clickedPoint = pointsRef.current[idx];
+    if (!clickedPoint) return;
     onPointClick(clickedPoint);
   }, [onPointClick]);
 
@@ -1344,36 +1187,38 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const handlePlotlyHover = (data: any) => {
       if (data.points && data.points.length > 0) {
         const pt = data.points[0];
-        if (pt.customdata && typeof pt.customdata === 'object') {
-          const point = pt.customdata as unknown as Point3D;
-          const containerRect = containerRef.current?.getBoundingClientRect();
+        if (pt.customdata == null) return;
 
-          // For 3D, try to use event coordinates or fallback to bbox
-          let x: number, y: number;
-          const mouseEvent = data.event as MouseEvent | undefined;
+        const idx = pt.customdata as unknown as number;
+        const point = pointsRef.current[idx];
+        if (!point) return;
 
-          if (mouseEvent && mouseEvent.clientX !== undefined) {
-            x = mouseEvent.clientX - (containerRect?.left ?? 0);
-            y = mouseEvent.clientY - (containerRect?.top ?? 0);
-          } else if (pt.bbox) {
-            x = pt.bbox.x0 + (pt.bbox.x1 - pt.bbox.x0) / 2;
-            y = pt.bbox.y0;
-          } else {
-            // Use xaxis/yaxis pixel positions if available
-            x = pt.xaxis?.l2p?.(pt.x) ?? (containerRect?.width ?? 400) / 2;
-            y = pt.yaxis?.l2p?.(pt.y) ?? (containerRect?.height ?? 300) / 2;
-          }
+        const containerRect = containerRef.current?.getBoundingClientRect();
 
-          setTooltipData({
-            x,
-            y,
-            label: point.label || point.id,
-            document: point.document,
-            visible: true,
-            metadata: point.metadata,
-            tooltipFields,
-          });
+        // For 3D, try to use event coordinates or fallback to bbox
+        let x: number, y: number;
+        const mouseEvent = data.event as MouseEvent | undefined;
+
+        if (mouseEvent && mouseEvent.clientX !== undefined) {
+          x = mouseEvent.clientX - (containerRect?.left ?? 0);
+          y = mouseEvent.clientY - (containerRect?.top ?? 0);
+        } else if (pt.bbox) {
+          x = pt.bbox.x0 + (pt.bbox.x1 - pt.bbox.x0) / 2;
+          y = pt.bbox.y0;
+        } else {
+          x = pt.xaxis?.l2p?.(pt.x) ?? (containerRect?.width ?? 400) / 2;
+          y = pt.yaxis?.l2p?.(pt.y) ?? (containerRect?.height ?? 300) / 2;
         }
+
+        setTooltipData({
+          x,
+          y,
+          label: point.label || point.id,
+          document: point.document,
+          visible: true,
+          metadata: point.metadata,
+          tooltipFields,
+        });
       }
     };
     const handlePlotlyUnhover = () => setTooltipData(null);

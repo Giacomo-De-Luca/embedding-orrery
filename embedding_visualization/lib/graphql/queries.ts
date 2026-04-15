@@ -53,6 +53,35 @@ export const GET_COLLECTION_DATA = gql`
 `;
 
 /**
+ * Full-text search across document content and/or metadata fields.
+ * Uses ChromaDB native where_document for documents, Python filter for metadata.
+ */
+export const TEXT_SEARCH = gql`
+  query TextSearch(
+    $collectionName: String!
+    $query: String!
+    $fields: [String!]
+    $mode: TextSearchMode
+    $caseSensitive: Boolean
+  ) {
+    textSearch(
+      collectionName: $collectionName
+      query: $query
+      fields: $fields
+      mode: $mode
+      caseSensitive: $caseSensitive
+    ) {
+      matches {
+        id
+        matchedField
+        snippet
+      }
+      totalMatches
+    }
+  }
+`;
+
+/**
  * Query to find semantically similar items using a text query (embeds the query)
  */
 export const SEMANTIC_SEARCH = gql`

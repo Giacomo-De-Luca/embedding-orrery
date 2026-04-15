@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List
 import numpy as np
 from pathlib import Path
 import json
+import re
 
 # Import embedding function factory to ensure correct model is used
 from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
@@ -461,3 +462,143 @@ class ChromaDBClient:
             "name": collection_name,
             "metadata": new_metadata
         }
+
+    # ---- Text Search ----
+
+    DOCUMENT_SENTINEL = "__document__"
+    _SNIPPET_RADIUS = 100  # chars each side of the match
+
+    def text_search(
+        self,
+        collection_name: str,
+        query: str,
+        fields: Optional[List[str]] = None,
+        mode: str = "contains",
+        case_sensitive: bool = False,
+    ) -> Dict[str, Any]:
+        """Full-text search across document content and/or metadata fields.
+
+        Uses ChromaDB's native ``where_document`` for document text and falls
+        back to a lightweight Python filter for metadata fields (ChromaDB does
+        not support substring matching on metadata).
+
+        Args:
+            collection_name: Name of the collection to search.
+            query: The search string.
+            fields: List of fields to search.  Use ``"__document__"`` for the
+                embedded document text.  ``None`` (default) searches documents
+                only (fastest path).
+            mode: ``"contains"`` for substring match, ``"exact"`` for full-value
+                match.
+            case_sensitive: When ``False`` (default) matching is
+                case-insensitive.
+
+        Returns:
+            ``{"matches": [...], "total_matches": int}``
+        """
+        if not query:
+            return {"matches": [], "total_matches": 0}
+
+        collection = self.get_collection(collection_name, load_embedding_function=False)
+
+        # Resolve target fields
+        if fields is None:
+            target_fields = [self.DOCUMENT_SENTINEL]
+        else:
+            target_fields = list(fields)
+
+        search_document = self.DOCUMENT_SENTINEL in target_fields
+        metadata_fields = [f for f in target_fields if f != self.DOCUMENT_SENTINEL]
+
+        # Collect matches: id -> first matched field
+        matched: Dict[str, str] = {}
+
+        # --- 1. Document search (native ChromaDB) ---
+        if search_document:
+            where_doc = self._build_where_document(query, mode, case_sensitive)
+            try:
+                doc_results = collection.get(where_document=where_doc, include=[])
+                for item_id in doc_results["ids"]:
+                    matched.setdefault(item_id, self.DOCUMENT_SENTINEL)
+            except Exception:
+                # Graceful fallback — empty results on regex/query errors
+                pass
+
+        # --- 2. Metadata field search (Python filter) ---
+        if metadata_fields:
+            meta_results = collection.get(include=["metadatas"])
+            ids = meta_results["ids"]
+            metadatas = meta_results["metadatas"] or [{}] * len(ids)
+
+            for item_id, meta in zip(ids, metadatas):
+                if item_id in matched:
+                    continue  # already matched via document
+                for field in metadata_fields:
+                    value = meta.get(field)
+                    if value is None:
+                        continue
+                    str_val = str(value)
+                    if self._matches(str_val, query, mode, case_sensitive):
+                        matched[item_id] = field
+                        break
+
+        # --- 3. Build snippets for document matches ---
+        doc_match_ids = [mid for mid, f in matched.items() if f == self.DOCUMENT_SENTINEL]
+        snippets: Dict[str, str] = {}
+        if doc_match_ids:
+            docs_result = collection.get(ids=doc_match_ids, include=["documents"])
+            for item_id, doc in zip(docs_result["ids"], docs_result["documents"] or []):
+                if doc:
+                    snippets[item_id] = self._extract_snippet(doc, query, case_sensitive)
+
+        # --- 4. Assemble response ---
+        matches = []
+        for item_id, field in matched.items():
+            matches.append({
+                "id": item_id,
+                "matched_field": field,
+                "snippet": snippets.get(item_id),
+            })
+
+        return {"matches": matches, "total_matches": len(matches)}
+
+    # -- helpers --
+
+    @staticmethod
+    def _build_where_document(query: str, mode: str, case_sensitive: bool) -> Dict[str, Any]:
+        """Build a ChromaDB ``where_document`` clause."""
+        escaped = re.escape(query)
+        if mode == "exact":
+            # Full-document match with anchors
+            pattern = f"^{escaped}$"
+            if not case_sensitive:
+                pattern = f"(?i){pattern}"
+            return {"$regex": pattern}
+        else:  # contains
+            if case_sensitive:
+                return {"$contains": query}
+            return {"$regex": f"(?i){escaped}"}
+
+    @staticmethod
+    def _matches(value: str, query: str, mode: str, case_sensitive: bool) -> bool:
+        """Check if *value* matches *query* for metadata field filtering."""
+        if case_sensitive:
+            return (query == value) if mode == "exact" else (query in value)
+        return (query.lower() == value.lower()) if mode == "exact" else (query.lower() in value.lower())
+
+    @classmethod
+    def _extract_snippet(cls, document: str, query: str, case_sensitive: bool) -> str:
+        """Return a ~200-char context window around the first match."""
+        doc_search = document if case_sensitive else document.lower()
+        q = query if case_sensitive else query.lower()
+        idx = doc_search.find(q)
+        if idx == -1:
+            return document[:cls._SNIPPET_RADIUS * 2]
+        start = max(0, idx - cls._SNIPPET_RADIUS)
+        end = min(len(document), idx + len(query) + cls._SNIPPET_RADIUS)
+        snippet = document[start:end]
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(document):
+            snippet = snippet + "..."
+        return snippet

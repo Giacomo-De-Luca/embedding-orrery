@@ -19,6 +19,9 @@ from .types import (
     ProjectionData,
     SemanticSearchResult,
     SimilarityMeasure,
+    TextSearchMatch,
+    TextSearchMode,
+    TextSearchResponse,
     TopicInfo,
     TopicKeyword,
     build_where_clause,
@@ -506,3 +509,49 @@ class Query:
                     break
 
         return search_results
+
+    @strawberry.field
+    def text_search(
+        self,
+        collection_name: str,
+        query: str,
+        fields: Optional[List[str]] = None,
+        mode: TextSearchMode = TextSearchMode.CONTAINS,
+        case_sensitive: bool = False,
+        info=None,
+    ) -> TextSearchResponse:
+        """Full-text search across document content and/or metadata fields.
+
+        Args:
+            collection_name: Name of the collection to search.
+            query: The search string.
+            fields: Fields to search. Use "__document__" for the embedded text.
+                None (default) searches documents only.
+            mode: CONTAINS (substring) or EXACT (full value).
+            case_sensitive: Whether matching is case-sensitive.
+
+        Returns:
+            TextSearchResponse with matching items.
+        """
+        client = get_chromadb_client()
+        result = client.text_search(
+            collection_name=collection_name,
+            query=query,
+            fields=fields,
+            mode=mode.value,
+            case_sensitive=case_sensitive,
+        )
+
+        matches = [
+            TextSearchMatch(
+                id=m["id"],
+                matched_field=m["matched_field"],
+                snippet=m.get("snippet"),
+            )
+            for m in result["matches"]
+        ]
+
+        return TextSearchResponse(
+            matches=matches,
+            total_matches=result["total_matches"],
+        )
