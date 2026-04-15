@@ -839,7 +839,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
               size: coreSizes,
               color: coreColors,
               opacity: 1,
-              line: { color: coreLineColors[0] || 'rgba(100, 150, 255, 0.6)', width: 1 },
+              line: { color: coreLineColors, width: 1 },
             },
             text: coreTexts,
             hovertemplate: '<b>%{text}</b><extra></extra>',

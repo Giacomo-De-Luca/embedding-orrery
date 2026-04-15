@@ -72,7 +72,7 @@ export function useEmbeddingData(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [executeQuery] = useLazyQuery<{ collection: Record<string, any> }>(GET_COLLECTION_DATA, {
-    fetchPolicy: 'network-only', // We manage caching ourselves via projectionsRef
+    fetchPolicy: 'no-cache', // We manage caching ourselves via projectionsRef — skip Apollo's InMemoryCache to avoid duplicating 200k items in RAM
   });
 
   const [updateMetadata] = useMutation(UPDATE_COLLECTION_METADATA);

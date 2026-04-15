@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import dynamic from 'next/dynamic';
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
@@ -19,13 +18,6 @@ import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 
 // Hoisted identity matrix for haze renderer model matrix fallback (avoids per-frame allocation)
 const GL_IDENTITY_MATRIX = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-
-// Factory pattern: use pre-bundled plotly.js-dist-min to avoid glslify bundler issues
-const Plot = dynamic(async () => {
-  const { default: createPlotlyComponent } = await import('react-plotly.js/factory');
-  const { default: PlotlyLib } = await import('plotly.js-dist-min');
-  return createPlotlyComponent(PlotlyLib);
-}, { ssr: false });
 
 type PlotlyData = Partial<PlotData>;
 
@@ -151,6 +143,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const lastClickTimeRef = useRef<number>(0);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
   const [plotReady, setPlotReady] = useState(false);
+  const [plotlyLoaded, setPlotlyLoaded] = useState(false);
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
   const plotlyLibRef = useRef<any>(null);
 
@@ -194,11 +187,24 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     similarities: Map<number, number>;
     selectedIndex: number | null;
   } | null>(null);
+  const renderLabelsRef = useRef<(() => void) | null>(null);
 
+  // Load Plotly library and create initial plot imperatively (bypasses react-plotly.js
+  // which does an O(n) deep-equality diff of all trace data on every React render)
   useEffect(() => {
-    import('plotly.js-dist-min').then((lib) => {
+    let cancelled = false;
+    // NOTE: importing from 'plotly.js' (source build) rather than 'plotly.js-dist-min'
+    // so that our patch to plotly.js/src/plots/gl3d/scene.js (fast-path skip of
+    // trace.update when input refs unchanged) actually takes effect. The minified
+    // pre-built bundle would bypass it.
+    import('plotly.js').then((lib) => {
+      if (cancelled) return;
       plotlyLibRef.current = lib.default;
+      // Trigger initial plot creation via the base-trace effect
+      setPlotReady(false);   // reset so newPlot runs
+      setPlotlyLoaded(true);
     });
+    return () => { cancelled = true; };
   }, []);
 
 
@@ -318,6 +324,8 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
             'scene.camera': { eye: newEye, center: newCenter, up: { x: 0, y: 0, z: 1 } },
           });
         }
+        // Re-render labels now that animation is done (skipped during fly-to)
+        renderLabelsRef.current?.();
       }
     };
 
@@ -835,7 +843,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     traces.push({
       x: hX, y: hY, z: hZ, mode: 'markers', type: 'scatter3d',
       marker: {
-        sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors[0], width: 1 }
+        sizemode: 'diameter', size: coreSizes, color: coreColors, opacity: 1, line: { color: innerColors, width: 1 }
       },
       text: coreTexts,
       hoverinfo: 'none',
@@ -1148,6 +1156,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     ctx.globalAlpha = 1.0;
   }, [width, height, isDark, showClusterLabels, clusterDataMap]);
 
+  // Keep ref in sync so the camera animation can call renderLabels on completion
+  renderLabelsRef.current = renderLabels;
+
   // rAF-based camera polling: detect camera changes during 3D rotation/zoom/pan
   // (onRelayout does NOT fire during 3D mouse interaction)
   useEffect(() => {
@@ -1212,38 +1223,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (hasAnyLabels && !isAnimatingRef.current) renderLabels();
   }, [width, height, hasAnyLabels, renderLabels, showLabels, highlightedIndices, selectedPoint]);
 
-  // plotData only contains stable base traces — highlight/selected traces are managed
-  // imperatively via Plotly.addTraces/deleteTraces to avoid triggering expensive Plotly.react
-  const plotData = baseTraces;
-
-  // When baseTraces change, Plotly.react (from <Plot>) will replace all traces,
-  // so our overlay count resets — re-add overlays on next effect run.
-  const overlayTraceCountRef = useRef(0);
-  useEffect(() => {
-    overlayTraceCountRef.current = 0;
-  }, [baseTraces]);
-
-  // Imperatively manage overlay traces (highlights + selected point) without touching
-  // the Plot component's data prop, which would trigger a full Plotly.react diff on all traces.
-  useEffect(() => {
-    if (!plotReady || !graphDivRef.current || !plotlyLibRef.current) return;
-    const Plotly = plotlyLibRef.current;
-    const gd = graphDivRef.current;
-
-    const overlayTraces = [...highlightTraces, ...selectedTraces];
-    const oldCount = overlayTraceCountRef.current;
-    const newCount = overlayTraces.length;
-
-    if (oldCount === 0 && newCount === 0) return;
-
-    // Splice overlay traces in place and redraw once
-    // (avoids two separate 3D scene rebuilds from deleteTraces + addTraces)
-    const baseCount = (gd.data?.length ?? 0) - oldCount;
-    gd.data?.splice(baseCount, oldCount, ...(overlayTraces as PlotData[]));
-    overlayTraceCountRef.current = newCount;
-    Plotly.redraw(gd);
-  }, [highlightTraces, selectedTraces, plotReady]);
-
   const layout = useMemo<Partial<Layout>>(() => ({
     width, height, autosize: true, uirevision: 'true', hovermode: 'closest', showlegend: false,
     paper_bgcolor: paperBg,
@@ -1260,10 +1239,72 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       zaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false },
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
-
-  }), [axisColor, height, paperBg, sceneBg, width]);
+  }), [axisColor, defaultEye, height, paperBg, sceneBg, width]);
 
   const config = useMemo<Partial<Config>>(() => ({ displayModeBar: true, displaylogo: false, responsive: true }), []);
+
+  // --- FULLY IMPERATIVE PLOTLY MANAGEMENT ---
+  // Bypasses react-plotly.js which does an O(n) deep-equality diff on every React render.
+  // With 200k points that diff alone freezes the main thread for seconds.
+
+  const overlayTraceCountRef = useRef(0);
+  const plotInitializedRef = useRef(false);
+
+  // 1. Create the plot once when Plotly loads and the container is ready
+  useEffect(() => {
+    if (!plotlyLoaded || !plotlyLibRef.current || !graphDivRef.current) return;
+    if (plotInitializedRef.current) return;
+
+    const Plotly = plotlyLibRef.current;
+    const gd = graphDivRef.current;
+
+    Plotly.newPlot(gd, baseTraces as PlotData[], layout, config).then(() => {
+      plotInitializedRef.current = true;
+      overlayTraceCountRef.current = 0;
+      setPlotReady(true);
+    });
+
+    return () => {
+      if (plotInitializedRef.current && plotlyLibRef.current && graphDivRef.current) {
+        plotlyLibRef.current.purge(graphDivRef.current);
+        plotInitializedRef.current = false;
+      }
+    };
+  // Only run on mount/unmount — subsequent updates handled by dedicated effects below
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plotlyLoaded]);
+
+  // 2. Update base traces when they change (ref-equality check via deps — instant, not deep)
+  useEffect(() => {
+    if (!plotReady || !plotlyLibRef.current || !graphDivRef.current) return;
+    const Plotly = plotlyLibRef.current;
+    const gd = graphDivRef.current;
+
+    // Rebuild all traces: base + current overlays
+    const overlayTraces = [...highlightTraces, ...selectedTraces];
+    const allTraces = [...baseTraces, ...overlayTraces];
+    overlayTraceCountRef.current = overlayTraces.length;
+    Plotly.react(gd, allTraces as PlotData[], layout, config);
+  }, [baseTraces, layout, config, plotReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 3. Update overlay traces (highlights + selected) without touching base traces
+  useEffect(() => {
+    if (!plotReady || !graphDivRef.current || !plotlyLibRef.current) return;
+    const Plotly = plotlyLibRef.current;
+    const gd = graphDivRef.current;
+
+    const overlayTraces = [...highlightTraces, ...selectedTraces];
+    const oldCount = overlayTraceCountRef.current;
+    const newCount = overlayTraces.length;
+
+    if (oldCount === 0 && newCount === 0) return;
+
+    // Splice overlay traces in place and redraw once
+    const baseCount = (gd.data?.length ?? 0) - oldCount;
+    gd.data?.splice(baseCount, oldCount, ...(overlayTraces as PlotData[]));
+    overlayTraceCountRef.current = newCount;
+    Plotly.redraw(gd);
+  }, [highlightTraces, selectedTraces, plotReady]);
 
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -1350,14 +1391,18 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (typeof graphDiv.on === 'function') {
       graphDiv.on('plotly_hover', handlePlotlyHover);
       graphDiv.on('plotly_unhover', handlePlotlyUnhover);
+      graphDiv.on('plotly_click', handleClick);
+      graphDiv.on('plotly_relayout', handleRelayout);
     }
     return () => {
       if (typeof graphDiv.removeListener === 'function') {
         graphDiv.removeListener('plotly_hover', handlePlotlyHover);
         graphDiv.removeListener('plotly_unhover', handlePlotlyUnhover);
+        graphDiv.removeListener('plotly_click', handleClick);
+        graphDiv.removeListener('plotly_relayout', handleRelayout);
       }
     };
-  }, [plotReady, tooltipFields]);
+  }, [plotReady, tooltipFields, handleClick, handleRelayout]);
 
   // --- NEBULA: Haze sprites (separate overlay canvas) ---
   const hazeRendererRef = useRef<HazeRenderer | null>(null);
@@ -1440,17 +1485,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}>
-      <Plot
-        data={plotData}
-        layout={layout}
-        config={config}
-        onClick={plotReady ? handleClick : undefined}
-        onInitialized={(_figure, graphDiv) => {
-          graphDivRef.current = graphDiv as PlotlyGraphDiv;
-          setPlotReady(true);
-        }}
-        onRelayout={handleRelayout}
-      />
+      <div ref={graphDivRef as React.RefObject<HTMLDivElement>} style={{ width: '100%', height: '100%' }} />
       {nebulaMode && (
         <canvas
           ref={hazeCanvasRef}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useLazyQuery } from '@apollo/client/react';
 import { SEMANTIC_SEARCH, SEMANTIC_SEARCH_BY_ID } from '../graphql/queries';
 import type { SemanticSearchResult, DistanceMetric, FilterInput } from '../types/types';
@@ -18,10 +18,13 @@ interface SemanticSearchByIdData {
  */
 export function useSemanticSearch(collectionName: string | null) {
   const [searchSimilar, { data: dataByQuery, loading: loadingByQuery, error: errorByQuery }] =
-    useLazyQuery<SemanticSearchData>(SEMANTIC_SEARCH);
+    useLazyQuery<SemanticSearchData>(SEMANTIC_SEARCH, { fetchPolicy: 'no-cache' });
 
   const [searchSimilarById, { data: dataById, loading: loadingById, error: errorById }] =
-    useLazyQuery<SemanticSearchByIdData>(SEMANTIC_SEARCH_BY_ID);
+    useLazyQuery<SemanticSearchByIdData>(SEMANTIC_SEARCH_BY_ID, { fetchPolicy: 'no-cache' });
+
+  // Shared abort controller: any new search (by-query or by-ID) cancels the previous in-flight request
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   /**
    * Find items semantically similar to the query text (embeds the query)
@@ -39,6 +42,10 @@ export function useSemanticSearch(collectionName: string | null) {
         return null;
       }
 
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       try {
         console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPrompt ? `, prompt: ${queryPrompt}` : ''}${filters?.length ? `, filters: ${filters.length}` : ''})`);
 
@@ -51,6 +58,7 @@ export function useSemanticSearch(collectionName: string | null) {
             queryPrompt: queryPrompt || undefined,
             filters: filters?.length ? filters : undefined,
           },
+          context: { fetchOptions: { signal: controller.signal } },
         });
 
         if (result.data?.semanticSearch) {
@@ -61,6 +69,7 @@ export function useSemanticSearch(collectionName: string | null) {
 
         return null;
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return null;
         console.error('Error finding similar items:', err);
         throw err;
       }
@@ -83,6 +92,10 @@ export function useSemanticSearch(collectionName: string | null) {
         return null;
       }
 
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       try {
         console.log(`Searching for items similar to: "${itemId}" (by ID, metric: ${similarityMeasure}${filters?.length ? `, filters: ${filters.length}` : ''})`);
 
@@ -94,6 +107,7 @@ export function useSemanticSearch(collectionName: string | null) {
             similarityMeasure,
             filters: filters?.length ? filters : undefined,
           },
+          context: { fetchOptions: { signal: controller.signal } },
         });
 
         if (result.data?.semanticSearchById) {
@@ -104,6 +118,7 @@ export function useSemanticSearch(collectionName: string | null) {
 
         return null;
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return null;
         console.error('Error finding similar items by ID:', err);
         throw err;
       }

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { Point2D, Point3D, SemanticSearchResult, DistanceMetric, FilterInput, TemporalRange } from '../types/types';
 import { useSemanticSearch } from './useSemanticSearch';
 import { transformSearchResults } from '../utils/data-transform';
@@ -37,6 +37,10 @@ export function useAppSearch(
 
   const { findSimilarByQuery, findSimilarById, loading } = useSemanticSearch(selectedCollection);
 
+  // Shared counter: both point-click and text search increment this.
+  // After await, if the counter has moved on, the result is stale — discard it.
+  const searchRequestIdRef = useRef(0);
+
   // Build combined filters from topic selection + temporal range
   const allFilters = useMemo(() => {
     if (!temporalRange) return topicFilters;
@@ -54,13 +58,18 @@ export function useAppSearch(
       effectivePromptName = queryPromptName;
     }
 
+    const requestId = ++searchRequestIdRef.current;
+
     console.log('Search triggered:', query, 'metric:', distanceMetric, effectivePromptName ? `prompt: ${effectivePromptName}` : '');
     try {
       const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, allFilters);
+      if (searchRequestIdRef.current !== requestId) return; // superseded by newer search
       setSemanticSearchResults(transformSearchResults(results, colorByField));
       setSearchQueryLabel(query);
       setSearchType('text');
     } catch (error) {
+      if (searchRequestIdRef.current !== requestId) return;
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Search error:', error);
     }
   }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters]);
@@ -73,16 +82,22 @@ export function useAppSearch(
     setSearchQueryLabel(point.label || point.id);
     setSearchType('point');
 
+    const requestId = ++searchRequestIdRef.current;
+
     try {
       const results = await findSimilarById(point.id, 20, distanceMetric, allFilters);
+      if (searchRequestIdRef.current !== requestId) return; // superseded by newer click/search
       setSemanticSearchResults(transformSearchResults(results, colorByField));
     } catch (error) {
+      if (searchRequestIdRef.current !== requestId) return;
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Point click search error:', error);
     }
   }, [findSimilarById, colorByField, distanceMetric, allFilters]);
 
   // Reset state when collection changes
   const resetSearch = useCallback(() => {
+    ++searchRequestIdRef.current; // invalidate any in-flight request
     setSemanticSearchResults(null);
     setSelectedPoint(null);
   }, []);
