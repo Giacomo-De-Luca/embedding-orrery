@@ -1,10 +1,9 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronDown, Settings2 } from 'lucide-react';
+import { ChevronDown, Settings2, Loader2 } from 'lucide-react';
 import {
   Sidebar,
-  SidebarContent,
   SidebarContentPlain,
   SidebarFooter,
   SidebarHeader,
@@ -17,15 +16,25 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+} from '@/lib/ui-primitives/dropdown-menu';
+import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import { TopicSearchSection } from './TopicSearchSection';
-import type { Point2D, Point3D, TopicInfo } from '../../lib/types/types';
+import type { Point2D, Point3D, TopicInfo, TextSearchConfig } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import { cn } from '@/lib/utils/utils';
-import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
+import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 
+// Must match ChromaDBClient.DOCUMENT_SENTINEL in the backend
+const DOCUMENT_SENTINEL = '__document__';
 
 interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   searchQuery: string;
@@ -42,6 +51,9 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   // Query prompt configuration
   queryPromptName?: string | null;
   onQueryPromptNameChange?: (value: string | null) => void;
+  // Text search config
+  textSearchLoading?: boolean;
+  availableFields?: string[];
   // Topic search props
   topics?: TopicInfo[];
   topicSearchMode?: TopicSearchMode;
@@ -75,6 +87,8 @@ export function SearchSidebar({
   categoryField,
   queryPromptName,
   onQueryPromptNameChange,
+  textSearchLoading,
+  availableFields = [],
   // Topic search props
   topics,
   topicSearchMode,
@@ -98,6 +112,50 @@ export function SearchSidebar({
   const hasSearch = Boolean(searchQuery && searchQuery.trim().length > 0);
   const showResults = hasSearch && textSearchResults && textSearchResults.length > 0;
 
+  // Read search config from store
+  const textSearchConfig = useVisualizationStore((s) => s.textSearchConfig);
+  const setTextSearchConfig = useVisualizationStore((s) => s.setTextSearchConfig);
+
+  // Derive selected fields set (null = document only)
+  const selectedFields = textSearchConfig.fields;
+  const isAllFields = selectedFields !== null &&
+    selectedFields.includes(DOCUMENT_SENTINEL) &&
+    availableFields.every(f => selectedFields.includes(f));
+
+  const toggleField = React.useCallback((field: string) => {
+    const current = selectedFields ?? [DOCUMENT_SENTINEL];
+    const next = current.includes(field)
+      ? current.filter(f => f !== field)
+      : [...current, field];
+    // If nothing selected, revert to document only (null)
+    setTextSearchConfig({
+      ...textSearchConfig,
+      fields: next.length === 0 ? null : next,
+    });
+  }, [selectedFields, textSearchConfig, setTextSearchConfig]);
+
+  const toggleAllFields = React.useCallback(() => {
+    if (isAllFields) {
+      // Reset to document only
+      setTextSearchConfig({ ...textSearchConfig, fields: null });
+    } else {
+      setTextSearchConfig({
+        ...textSearchConfig,
+        fields: [DOCUMENT_SENTINEL, ...availableFields],
+      });
+    }
+  }, [isAllFields, availableFields, textSearchConfig, setTextSearchConfig]);
+
+  const fieldSummary = React.useMemo(() => {
+    if (selectedFields === null) return 'Document';
+    const count = selectedFields.length;
+    if (isAllFields) return 'All fields';
+    if (count === 1) {
+      return selectedFields[0] === DOCUMENT_SENTINEL ? 'Document' : selectedFields[0];
+    }
+    return `${count} fields`;
+  }, [selectedFields, isAllFields]);
+
   return (
     <Sidebar
       collapsible="offcanvas"
@@ -106,9 +164,6 @@ export function SearchSidebar({
     >
       <SidebarHeader className="border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          {/*<div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Search className="size-3.5" />
-          </div>*/}
           <span className="font-semibold">Search</span>
         </div>
       </SidebarHeader>
@@ -118,7 +173,12 @@ export function SearchSidebar({
         <div className="p-4 space-y-6 ">
           {/* Search Input */}
           <div className="space-y-3">
-            <Label htmlFor="sidebar-search" className="text-base">Search</Label>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="sidebar-search" className="text-base">Search</Label>
+              {textSearchLoading && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+              )}
+            </div>
             <DebouncedSearchInput
               id="sidebar-search"
               className="max-w-5/6"
@@ -182,6 +242,78 @@ export function SearchSidebar({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-4 pt-2">
+              {/* Search fields selector */}
+              <div className="space-y-2">
+                <Label className="text-sm">Search in</Label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full justify-between h-8 text-xs">
+                      {fieldSummary}
+                      <ChevronDown className="h-3 w-3 ml-1 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-56 max-h-64 overflow-y-auto">
+                    <DropdownMenuCheckboxItem
+                      checked={isAllFields}
+                      onCheckedChange={toggleAllFields}
+                    >
+                      All fields
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem
+                      checked={(selectedFields ?? [DOCUMENT_SENTINEL]).includes(DOCUMENT_SENTINEL)}
+                      onCheckedChange={() => toggleField(DOCUMENT_SENTINEL)}
+                    >
+                      Document
+                    </DropdownMenuCheckboxItem>
+                    {availableFields.map((field) => (
+                      <DropdownMenuCheckboxItem
+                        key={field}
+                        checked={(selectedFields ?? []).includes(field)}
+                        onCheckedChange={() => toggleField(field)}
+                      >
+                        {field}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {/* Match mode toggle */}
+              <div className="space-y-2">
+                <Label className="text-sm">Match mode</Label>
+                <ToggleGroup
+                  type="single"
+                  value={textSearchConfig.mode}
+                  onValueChange={(value) => {
+                    if (value) setTextSearchConfig({ ...textSearchConfig, mode: value as 'CONTAINS' | 'EXACT' });
+                  }}
+                  className="justify-start"
+                >
+                  <ToggleGroupItem value="CONTAINS" className="text-xs h-7 px-3">
+                    Contains
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="EXACT" className="text-xs h-7 px-3">
+                    Exact
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+
+              {/* Case sensitivity toggle */}
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="case-sensitive"
+                  checked={textSearchConfig.caseSensitive}
+                  onCheckedChange={(checked) =>
+                    setTextSearchConfig({ ...textSearchConfig, caseSensitive: checked === true })
+                  }
+                />
+                <Label htmlFor="case-sensitive" className="text-sm font-normal cursor-pointer">
+                  Case sensitive
+                </Label>
+              </div>
+
+              {/* Query prompt name */}
               <div className="space-y-2">
                 <Label htmlFor="query-prompt-name" className="text-sm">Query Prompt Name</Label>
                 <PromptCombobox

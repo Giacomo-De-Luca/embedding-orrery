@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import type {
   EmbeddingData,
-  VisualizationState,
+  ProjectionMethod,
   Point2D,
   Point3D,
 } from '../types/types';
@@ -9,9 +9,6 @@ import type {
 interface VisualizationPointsResult {
   points2d: Point2D[];
   points3d: Point3D[];
-  filteredPoints2d: Point2D[];
-  filteredPoints3d: Point3D[];
-  highlightedIndices?: Set<number>;
 }
 
 /**
@@ -30,7 +27,7 @@ function getMetadataValue(
 
 export function useVisualizationPoints(
   data: EmbeddingData | null | undefined,
-  visualizationState: VisualizationState,
+  visualizationState: { method: ProjectionMethod; searchQuery?: string },
 ): VisualizationPointsResult {
   const manualWarningShown = useRef(false);
 
@@ -98,50 +95,5 @@ export function useVisualizationPoints(
     return { points2d: mapped2d, points3d: mapped3d };
   }, [data, visualizationState.method]);
 
-  const { filteredPoints2d, filteredPoints3d, highlightedIndices } = useMemo(() => {
-    const searchQuery = visualizationState.searchQuery?.trim();
-
-    if (!searchQuery) {
-      return {
-        filteredPoints2d: points2d,
-        filteredPoints3d: points3d,
-        highlightedIndices: undefined,
-      };
-    }
-
-    const query = searchQuery.toLowerCase();
-    const highlighted = new Set<number>();
-
-    points2d.forEach((point) => {
-      // Search in label, document, and all string metadata values
-      if (
-        point.label.toLowerCase().includes(query) ||
-        point.document.toLowerCase().includes(query)
-      ) {
-        highlighted.add(point.index);
-      } else {
-        // Also search in other metadata fields
-        for (const value of Object.values(point.metadata)) {
-          if (typeof value === 'string' && value.toLowerCase().includes(query)) {
-            highlighted.add(point.index);
-            break;
-          }
-        }
-      }
-    });
-
-    return {
-      filteredPoints2d: points2d,
-      filteredPoints3d: points3d,
-      highlightedIndices: highlighted,
-    };
-  }, [points2d, points3d, visualizationState.searchQuery]);
-
-  return {
-    points2d,
-    points3d,
-    filteredPoints2d,
-    filteredPoints3d,
-    highlightedIndices,
-  };
+  return { points2d, points3d };
 }

@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
-import type { Point3D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
+import type { Point3D, HighlightMap, NestedColorMap, ColorScale } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
@@ -99,13 +99,9 @@ function buildIndexedScatter3dTrace(
 
 interface ScatterPlot3DProps {
   points: Point3D[];
-  colorBy?: 'category' | 'none';
   categoryField?: string | null;  // Field to color by (used for both categorical AND numeric)
   categoryValues?: string[];
-  colorScaleType?: ColorScaleType;
-  monochromeColor?: string;
-  sequentialScaleName?: SequentialScaleName;
-  divergingScaleName?: DivergingScaleName;
+  colorScale?: ColorScale;
   highlightedIndices?: HighlightMap;
   selectedPoint?: Point3D | null;
   onPointClick?: (point: Point3D) => void;
@@ -154,13 +150,9 @@ interface PlotlyGraphDiv extends HTMLDivElement {
 
 export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   points,
-  colorBy = 'none',
   categoryField = null,
   categoryValues = [],
-  colorScaleType = 'categorical',
-  monochromeColor = '#1f77b4',
-  sequentialScaleName = 'sinebow',
-  divergingScaleName = 'blueGold',
+  colorScale = { type: 'categorical' },
   highlightedIndices,
   selectedPoint,
   onPointClick,
@@ -311,7 +303,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   // --- 1. OPTIMIZED DATA EXTRACTION (Raw Numbers) ---
   const numericData = useMemo(() => {
-    if (colorScaleType === 'categorical' || !categoryField) return null;
+    if (colorScale.type === 'categorical' || !categoryField) return null;
 
     // Extract raw numbers instead of mapping to hex strings
     const values: (number | null)[] = points.map(p => {
@@ -340,15 +332,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       // Pass nulls as NaN for Plotly to render as transparent/grey if needed
       cleanValues: values.map(v => (v === null || isNaN(v)) ? NaN : v)
     };
-  }, [colorScaleType, categoryField, points]);
+  }, [colorScale.type, categoryField, points]);
 
   // --- 2. GENERATE PLOTLY NATIVE COLORSCALE ---
-  // Bridge your D3/custom scale logic to a Plotly array [[0, 'hex'], [1, 'hex']]
+  // Bridge the ColorScale union to a Plotly array [[0, 'hex'], [1, 'hex']]
   const plotlyColorScale = useMemo(() => {
-    if (colorScaleType === 'categorical') return undefined;
+    if (colorScale.type === 'categorical') return undefined;
 
     // For Crameri scales, use the pre-computed 256-step Plotly array directly
-    const scaleName = colorScaleType === 'diverging' ? divergingScaleName : sequentialScaleName;
+    const scaleName = colorScale.type === 'diverging' || colorScale.type === 'sequential'
+      ? colorScale.scaleName : undefined;
     if (scaleName && isCrameriScale(scaleName)) {
       const crameriScale = getCrameriPlotlyScale(scaleName);
       if (crameriScale) return crameriScale;
@@ -357,12 +350,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
     // Request a normalized interpolator (0 to 1) from your utils
     let scaleFunc: (t: number) => string;
-    if (colorScaleType === 'monochrome') {
-      scaleFunc = getMonochromeScale(monochromeColor, [0, 1]);
-    } else if (colorScaleType === 'diverging') {
-      scaleFunc = getDivergingScale([0, 0.5, 1], divergingScaleName);
+    if (colorScale.type === 'monochrome') {
+      scaleFunc = getMonochromeScale(colorScale.baseColor, [0, 1]);
+    } else if (colorScale.type === 'diverging') {
+      scaleFunc = getDivergingScale([0, 0.5, 1], colorScale.scaleName);
+    } else if (colorScale.type === 'sequential') {
+      scaleFunc = getSequentialScale([0, 1], colorScale.scaleName);
     } else {
-      scaleFunc = getSequentialScale([0, 1], sequentialScaleName);
+      return undefined;
     }
 
     // Sample the function to create a gradient definition
@@ -371,7 +366,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       const t = i / steps;
       return [t, scaleFunc(t)]; // [0.1, '#ff0000']
     });
-  }, [colorScaleType, monochromeColor, sequentialScaleName, divergingScaleName]);
+  }, [colorScale]);
 
   const markerStyle = useMemo(() => calculateMarkerStyle(points.length), [points.length]);
   const highlightScale = useMemo(() => calculateHighlightScale(points.length), [points.length]);
@@ -397,12 +392,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const dimSize = Math.max(markerStyle.size * 0.7, 2);
     const mutedOp = mutedPointOpacity ?? 0.15;
 
-    // Helper: split a point array into active/muted subsets based on combinedMutedIndices
-    const splitByMuted = (pts: Point3D[]) => {
+    // Helper: split a point array into active/muted subsets
+    const splitByMuted = (pts: Point3D[], mutedSet: Set<number>) => {
       const active: Point3D[] = [];
       const muted: Point3D[] = [];
       for (const p of pts) {
-        if (combinedMutedIndices!.has(p.index)) muted.push(p);
+        if (mutedSet.has(p.index)) muted.push(p);
         else active.push(p);
       }
       return { active, muted };
@@ -415,7 +410,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       const catOpacity = isMuted ? mutedOp : dimOpacity;
 
       if (combinedMutedIndices) {
-        const { active, muted } = splitByMuted(pts);
+        const { active, muted } = splitByMuted(pts, combinedMutedIndices);
         if (active.length > 0) {
           traces.push(buildScatter3dTrace(active, { name, size: dimSize, color: catColor, opacity: catOpacity }));
         }
@@ -461,7 +456,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           { name: 'Data', size: dimSize, color: numericData.cleanValues as any, opacity: dimOpacity, colorscaleOpts: csOpts },
         ));
       }
-    } else if (colorBy === 'category' && categoryValues.length > 0) {
+    } else if (categoryField != null && categoryValues.length > 0) {
       if (nestedColorMap) {
         // --- MODE: NESTED CATEGORICAL ---
         const pointsBySub: Record<string, Point3D[]> = {};
@@ -490,7 +485,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     } else {
       // --- MODE: NO COLORING ---
       if (combinedMutedIndices) {
-        const { active, muted } = splitByMuted(displayPoints);
+        const { active, muted } = splitByMuted(displayPoints, combinedMutedIndices);
         if (active.length > 0) {
           traces.push(buildScatter3dTrace(active, { name: 'Data', size: dimSize, color: '#1f77b4', opacity: dimOpacity }));
         }
@@ -505,7 +500,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     return traces;
   }, [
     displayPoints, markerStyle, showOnlyHighlighted,
-    colorBy, categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
+    categoryValues, colorMap, numericData, plotlyColorScale, categoryField,
     mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity
   ]);
 
@@ -614,11 +609,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     return traces;
   }, [renderedSelectedPoint, highlightedIndices, highlightedPoints, markerStyle, highlightScale, isDark]);
 
-  // Queue a fly-to target when renderedSelectedPoint changes.
+  // Queue fly-to target from selectedPoint (not renderedSelectedPoint, which lags behind
+  // for text searches because the auto-select effect in page.tsx fires after highlightedIndices).
   // The actual animation starts from the overlay-trace update effect (after Plotly.redraw).
   useEffect(() => {
-    pendingFlyToRef.current = renderedSelectedPoint ?? null;
-  }, [renderedSelectedPoint]);
+    pendingFlyToRef.current = selectedPoint ?? null;
+  }, [selectedPoint]);
 
   // Start camera fly-to animation. Called imperatively after Plotly.redraw so the
   // main thread is free and the animation frames aren't blocked.
@@ -1128,12 +1124,18 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     overlayTraceCountRef.current = newCount;
     Plotly.redraw(gd);
 
-    // Start fly-to animation after Plotly.redraw has finished (main thread is free)
-    const flyTarget = pendingFlyToRef.current;
-    if (flyTarget) {
-      pendingFlyToRef.current = null;
-      startFlyTo(flyTarget);
-    }
+    // Defer fly-to by one frame: Plotly.redraw is done (main thread free), and
+    // parent effects (e.g. page.tsx auto-select) have flushed, so pendingFlyToRef
+    // holds the correct selectedPoint even for text-query searches.
+    const rafId = requestAnimationFrame(() => {
+      const flyTarget = pendingFlyToRef.current;
+      if (flyTarget) {
+        pendingFlyToRef.current = null;
+        startFlyTo(flyTarget);
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
   }, [overlayTraces, plotReady, startFlyTo]);
 
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);

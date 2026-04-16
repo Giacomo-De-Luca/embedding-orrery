@@ -6,7 +6,10 @@ from typing import Optional, Dict, Any, List
 import numpy as np
 from pathlib import Path
 import json
+import logging
 import re
+
+logger = logging.getLogger("star_map")
 
 # Import embedding function factory to ensure correct model is used
 from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
@@ -520,9 +523,8 @@ class ChromaDBClient:
                 doc_results = collection.get(where_document=where_doc, include=[])
                 for item_id in doc_results["ids"]:
                     matched.setdefault(item_id, self.DOCUMENT_SENTINEL)
-            except Exception:
-                # Graceful fallback — empty results on regex/query errors
-                pass
+            except Exception as e:
+                logger.warning("Document search failed for query %r: %s", query, e)
 
         # --- 2. Metadata field search (Python filter) ---
         if metadata_fields:

@@ -13,7 +13,9 @@ import { Button } from '@/lib/ui-primitives/button';
 import { Label } from '@/lib/ui-primitives/label';
 import { RadioGroup, RadioGroupItem } from '@/lib/ui-primitives/radio-group';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
-import type { ColorScaleType } from '@/lib/types/types';
+import type { ColorScaleType, ColorScale } from '@/lib/types/types';
+import { defaultColorScaleForType } from '@/lib/types/types';
+import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import {
   getSequentialScale,
   getDivergingScale,
@@ -40,6 +42,8 @@ import {
   crameriGradientCSS,
   getCrameriColors,
   isCrameriLoaded,
+  isCrameriScale,
+  loadCrameriColormap,
 } from '@/lib/colorMaps/crameriScales';
 
 // Human-readable labels for D3 scale names
@@ -63,46 +67,26 @@ const D3_DIVERGING_LABELS: Record<D3DivergingScaleName, string> = {
   brBG: 'Brown-Blue-Green',
 };
 
-interface ColorScaleSelectorProps {
-  colorScaleType: ColorScaleType;
-  onColorScaleTypeChange: (type: ColorScaleType) => void;
-  monochromeColor?: string;
-  onMonochromeColorChange?: (color: string) => void;
-  sequentialScaleName?: SequentialScaleName;
-  onSequentialScaleNameChange?: (name: SequentialScaleName) => void;
-  divergingScaleName?: DivergingScaleName;
-  onDivergingScaleNameChange?: (name: DivergingScaleName) => void;
-  categoricalPalette?: string;
-  onCategoricalPaletteChange?: (palette: string | undefined) => void;
-}
-
 interface ColorScalePreviewProps {
-  type: ColorScaleType;
-  baseColor?: string;
-  sequentialScaleName?: SequentialScaleName;
-  divergingScaleName?: DivergingScaleName;
+  colorScale: ColorScale;
 }
 
-function ColorScalePreview({
-  type,
-  baseColor = '#1f77b4',
-  sequentialScaleName = 'sinebow',
-  divergingScaleName = 'blueGold',
-}: ColorScalePreviewProps) {
+function ColorScalePreview({ colorScale }: ColorScalePreviewProps) {
   const colors = useMemo(() => {
-    if (type === 'categorical') {
+    if (colorScale.type === 'categorical') {
       return generateCategoryColors(10);
-    } else if (type === 'sequential') {
-      const scale = getSequentialScale([0, 1], sequentialScaleName);
+    } else if (colorScale.type === 'sequential') {
+      const scale = getSequentialScale([0, 1], colorScale.scaleName);
       return Array.from({ length: 10 }, (_, i) => scale(i / 9));
-    } else if (type === 'monochrome') {
-      const scale = getMonochromeScale(baseColor, [0, 1]);
+    } else if (colorScale.type === 'monochrome') {
+      const scale = getMonochromeScale(colorScale.baseColor, [0, 1]);
       return Array.from({ length: 10 }, (_, i) => scale(i / 9));
     } else {
-      const scale = getDivergingScale([-1, 0, 1], divergingScaleName);
+      const scale = getDivergingScale([-1, 0, 1], colorScale.scaleName);
       return Array.from({ length: 10 }, (_, i) => scale(-1 + (i * 2) / 9));
     }
-  }, [type, baseColor, sequentialScaleName, divergingScaleName]);
+  }, [colorScale]);
+  const type = colorScale.type;
 
   if (type === 'categorical') {
     return (
@@ -180,18 +164,38 @@ function ScaleGroupHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function ColorScaleSelector({
-  colorScaleType,
-  onColorScaleTypeChange,
-  monochromeColor = '#1f77b4',
-  onMonochromeColorChange,
-  sequentialScaleName = 'sinebow',
-  onSequentialScaleNameChange,
-  divergingScaleName = 'blueGold',
-  onDivergingScaleNameChange,
-  categoricalPalette,
-  onCategoricalPaletteChange,
-}: ColorScaleSelectorProps) {
+export function ColorScaleSelector() {
+  const colorScale = useVisualizationStore((s) => s.colorScale);
+  const categoricalPalette = useVisualizationStore((s) => s.categoricalPalette);
+  const setColorScale = useVisualizationStore((s) => s.setColorScale);
+  const setCategoricalPalette = useVisualizationStore((s) => s.setCategoricalPalette);
+
+  // Derived values from the union
+  const colorScaleType = colorScale.type;
+  const monochromeColor = colorScale.type === 'monochrome' ? colorScale.baseColor : '#1f77b4';
+  const sequentialScaleName: SequentialScaleName = colorScale.type === 'sequential' ? colorScale.scaleName : 'sinebow';
+  const divergingScaleName: DivergingScaleName = colorScale.type === 'diverging' ? colorScale.scaleName : 'blueGold';
+
+  // Callbacks that write through the store
+  const onColorScaleTypeChange = useCallback((type: ColorScaleType) => {
+    setColorScale(defaultColorScaleForType(type));
+  }, [setColorScale]);
+  const onMonochromeColorChange = useCallback((color: string) => {
+    setColorScale({ type: 'monochrome', baseColor: color });
+  }, [setColorScale]);
+  const onSequentialScaleNameChange = useCallback((name: SequentialScaleName) => {
+    if (isCrameriScale(name)) loadCrameriColormap(name);
+    setColorScale({ type: 'sequential', scaleName: name });
+  }, [setColorScale]);
+  const onDivergingScaleNameChange = useCallback((name: DivergingScaleName) => {
+    if (isCrameriScale(name)) loadCrameriColormap(name);
+    setColorScale({ type: 'diverging', scaleName: name });
+  }, [setColorScale]);
+  const onCategoricalPaletteChange = useCallback((palette: string | undefined) => {
+    if (palette && isCrameriScale(palette)) loadCrameriColormap(palette);
+    setCategoricalPalette(palette);
+  }, [setCategoricalPalette]);
+
   const [open, setOpen] = useState(false);
   const [localMonochromeColor, setLocalMonochromeColor] = useState(monochromeColor);
   // Counter to force re-render when Crameri colormaps finish loading
@@ -280,7 +284,7 @@ export function ColorScaleSelector({
                   Distinct colors for discrete categories
                 </p>
                 <div className="ml-6">
-                  <ColorScalePreview type="categorical" />
+                  <ColorScalePreview colorScale={{ type: 'categorical' }} />
                 </div>
                 {colorScaleType === 'categorical' && (
                   <div className="ml-6 mt-2 space-y-2">
@@ -342,7 +346,7 @@ export function ColorScaleSelector({
                   Continuous scale for numeric values (low → high)
                 </p>
                 <div className="ml-6">
-                  <ColorScalePreview type="sequential" sequentialScaleName={sequentialScaleName} />
+                  <ColorScalePreview colorScale={{ type: 'sequential', scaleName: sequentialScaleName }} />
                 </div>
                 {colorScaleType === 'sequential' && (
                   <div className="ml-6 mt-2 space-y-2">
@@ -356,7 +360,7 @@ export function ColorScaleSelector({
                         onClick={() => handleSequentialScaleChange(name)}
                       >
                         <div className="w-24 h-2 rounded-sm overflow-hidden">
-                          <ColorScalePreview type="sequential" sequentialScaleName={name} />
+                          <ColorScalePreview colorScale={{ type: 'sequential', scaleName: name }} />
                         </div>
                         <span className="text-sm">{D3_SEQUENTIAL_LABELS[name]}</span>
                       </div>
@@ -418,7 +422,7 @@ export function ColorScaleSelector({
                   Centered scale for values with a midpoint
                 </p>
                 <div className="ml-6">
-                  <ColorScalePreview type="diverging" divergingScaleName={divergingScaleName} />
+                  <ColorScalePreview colorScale={{ type: 'diverging', scaleName: divergingScaleName }} />
                 </div>
                 {colorScaleType === 'diverging' && (
                   <div className="ml-6 mt-2 space-y-2">
@@ -432,7 +436,7 @@ export function ColorScaleSelector({
                         onClick={() => handleDivergingScaleChange(name)}
                       >
                         <div className="w-24 h-2 rounded-sm overflow-hidden">
-                          <ColorScalePreview type="diverging" divergingScaleName={name} />
+                          <ColorScalePreview colorScale={{ type: 'diverging', scaleName: name }} />
                         </div>
                         <span className="text-sm">{D3_DIVERGING_LABELS[name]}</span>
                       </div>
@@ -473,7 +477,7 @@ export function ColorScaleSelector({
                   Opacity gradient using a single base color
                 </p>
                 <div className="ml-6">
-                  <ColorScalePreview type="monochrome" baseColor={monochromeColor} />
+                  <ColorScalePreview colorScale={{ type: 'monochrome', baseColor: monochromeColor }} />
                 </div>
                 {colorScaleType === 'monochrome' && (
                   <div className="ml-6 mt-2 flex items-center gap-2">

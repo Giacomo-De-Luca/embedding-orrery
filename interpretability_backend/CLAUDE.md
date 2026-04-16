@@ -51,7 +51,7 @@ ChromaDB (persistent vector storage)
 
 ### API Layer (`backend/API/`)
 - **`types.py`** - All GraphQL type definitions. When adding new fields to queries/mutations, define types here.
-- **`queries.py`** - Read operations. `Query` class with `@strawberry.field` methods.
+- **`queries.py`** - Read operations. `Query` class with `@strawberry.field` methods. Includes `text_search` query (full-text search with field selection, mode, case-sensitivity).
 - **`mutations.py`** - Write operations. `Mutation` class with `@strawberry.mutation` methods. Embedding mutations use `asyncio.to_thread()` to run in background threads while the event loop handles WebSocket progress.
 - **`subscriptions.py`** - `Subscription.embedding_progress(job_id)` async generator. Registers queue with progress_emitter, yields JobProgress events.
 - **`chromadb_instance.py`** - Lazy singleton `get_chromadb_client()`.
@@ -63,6 +63,7 @@ ChromaDB (persistent vector storage)
   - `semantic_search(...)` - Query with distance → similarity conversion
   - `get_projection_data(name)` - Extracts projections from item metadata (JSON-encoded)
   - `get_all_items(...)` - Filtered item retrieval
+  - `text_search(collection_name, query, fields, mode, case_sensitive)` - Full-text search via `where_document` (native `$regex`/`$contains`) for documents; Python filter for metadata fields. Returns matching IDs with snippets.
   - `update_collection_metadata(...)` - Merge metadata updates
 - **`huggingface_client.py`** - Dataset info/preview via `datasets` library, portion loading (FIRST_N, RANDOM_SAMPLE, ROW_RANGE, ALL)
 - **`local_data_client.py`** - File loading via pandas/pyarrow. Optimized: parquet reads metadata without loading data, CSV reads only headers for info.

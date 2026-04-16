@@ -10,13 +10,11 @@ import {
 } from '@/lib/ui-primitives/sidebar';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { VisualizationControls } from './VisualizationControls';
-import type { VisualizationState, Point2D, Point3D } from '../../lib/types/types';
+import type { Point2D, Point3D } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  state: VisualizationState;
-  onStateChange: (newState: Partial<VisualizationState>) => void;
   embeddingDim: number;
   metadata: {
     pca_2d_variance?: number[];
@@ -29,8 +27,6 @@ interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
 }
 
 export function EmbeddingSidebar({
-  state,
-  onStateChange,
   embeddingDim,
   metadata,
   selectedPoint,
@@ -59,8 +55,6 @@ export function EmbeddingSidebar({
       <SidebarContent className="gap-0">
         <div className="p-4 space-y-6">
           <VisualizationControls
-            state={state}
-            onStateChange={onStateChange}
             embeddingDim={embeddingDim}
             metadata={metadata}
             colorFieldOptions={colorFieldOptions}

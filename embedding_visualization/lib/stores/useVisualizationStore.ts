@@ -7,6 +7,7 @@ import type {
   DimensionMode,
   DistanceMetric,
   TemporalRange,
+  TextSearchConfig,
 } from '../types/types';
 import { DEFAULT_COLOR_SCALE, defaultColorScaleForType } from '../types/types';
 
@@ -28,6 +29,7 @@ export interface VisualizationStoreState {
 
   // Search / filter
   searchQuery: string;
+  textSearchConfig: TextSearchConfig;
   distanceMetric: DistanceMetric;
 
   // Visibility toggles
@@ -66,6 +68,7 @@ interface VisualizationStoreActions {
 
   // Search / filter
   setSearchQuery: (query: string) => void;
+  setTextSearchConfig: (config: TextSearchConfig) => void;
   setDistanceMetric: (metric: DistanceMetric) => void;
 
   // Boolean toggles (generic setter)
@@ -84,9 +87,7 @@ interface VisualizationStoreActions {
   setTooltipFields: (fields: string[]) => void;
   initTooltipFields: (fields: string[]) => void;
 
-  // Bulk / lifecycle
-  /** Temporary escape hatch: merge partial state during migration. Remove when migration is complete. */
-  updatePartial: (partial: Partial<VisualizationStoreState>) => void;
+  // Lifecycle
   resetForCollectionChange: () => void;
 }
 
@@ -107,6 +108,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
     categoricalPalette: undefined,
     nestedColorMode: false,
     searchQuery: '',
+    textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false },
     distanceMetric: 'COSINE',
     showOnlyHighlighted: false,
     showLabels: false,
@@ -139,6 +141,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
     setNestedColorMode: (enabled) => set({ nestedColorMode: enabled }),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
+    setTextSearchConfig: (config) => set({ textSearchConfig: config }),
     setDistanceMetric: (metric) => set({ distanceMetric: metric }),
 
     setFlag: (flag, value) => set({ [flag]: value }),
@@ -152,7 +155,6 @@ export const useVisualizationStore = create<VisualizationStore>()(
       prev.tooltipFields === undefined ? { tooltipFields: fields } : prev
     ),
 
-    updatePartial: (partial) => set(partial),
     resetForCollectionChange: () => set({
       colorByField: null,
       colorScale: DEFAULT_COLOR_SCALE,
@@ -161,6 +163,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
       temporalRange: null,
       hideFilteredPoints: false,
       mutedPointOpacity: 0.15,
+      textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false },
     }),
   }))
 );

@@ -16,7 +16,7 @@ import {
 import { isCrameriScale, crameriGradientCSS } from '../../lib/colorMaps/crameriScales';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
-import type { NestedColorMap } from '../../lib/types/types';
+import type { NestedColorMap, ColorScale } from '../../lib/types/types';
 
 interface LegendProps {
   className?: string;
@@ -26,11 +26,8 @@ interface LegendProps {
   mutedCategories?: string[];
   onCategoryToggle?: (category: string, shiftKey: boolean) => void;
   onCategoryReset?: () => void;
-  colorScaleType?: 'categorical' | 'sequential' | 'diverging' | 'monochrome';
+  colorScale?: ColorScale;
   numericRange?: { min: number; max: number };
-  sequentialScaleName?: SequentialScaleName;
-  divergingScaleName?: DivergingScaleName;
-  monochromeColor?: string;
   categoricalPalette?: string;
   nestedColorMap?: NestedColorMap | null;
   /** Pixel max-height for the scrollable content area. Overrides built-in max-h when provided. */
@@ -71,39 +68,35 @@ export function Legend({
   mutedCategories = [],
   onCategoryToggle,
   onCategoryReset,
-  colorScaleType = 'categorical',
+  colorScale = { type: 'categorical' },
   numericRange,
-  sequentialScaleName = 'sinebow',
-  divergingScaleName = 'blueGold',
-  monochromeColor = '#1f77b4',
   categoricalPalette,
   nestedColorMap,
   maxHeight,
   dragHandle,
 }: LegendProps) {
   // Check if this is a continuous scale (sequential, diverging, or monochrome)
-  const isContinuous = colorScaleType === 'sequential' || colorScaleType === 'diverging' || colorScaleType === 'monochrome';
+  const isContinuous = colorScale.type === 'sequential' || colorScale.type === 'diverging' || colorScale.type === 'monochrome';
 
   // Generate gradient dynamically from the actual scale function
   const gradient = useMemo(() => {
-    if (colorScaleType === 'sequential') {
-      // Try Crameri gradient first (from cache, returns null if not loaded)
-      if (isCrameriScale(sequentialScaleName)) {
-        const crameri = crameriGradientCSS(sequentialScaleName, 20);
+    if (colorScale.type === 'sequential') {
+      if (isCrameriScale(colorScale.scaleName)) {
+        const crameri = crameriGradientCSS(colorScale.scaleName, 20);
         if (crameri) return crameri;
       }
-      return generateGradientCSS(getSequentialScale([0, 1], sequentialScaleName));
-    } else if (colorScaleType === 'diverging') {
-      if (isCrameriScale(divergingScaleName)) {
-        const crameri = crameriGradientCSS(divergingScaleName, 20);
+      return generateGradientCSS(getSequentialScale([0, 1], colorScale.scaleName));
+    } else if (colorScale.type === 'diverging') {
+      if (isCrameriScale(colorScale.scaleName)) {
+        const crameri = crameriGradientCSS(colorScale.scaleName, 20);
         if (crameri) return crameri;
       }
-      return generateGradientCSS(getDivergingScale([0, 0.5, 1], divergingScaleName));
-    } else if (colorScaleType === 'monochrome') {
-      return generateGradientCSS(getMonochromeScale(monochromeColor, [0, 1]));
+      return generateGradientCSS(getDivergingScale([0, 0.5, 1], colorScale.scaleName));
+    } else if (colorScale.type === 'monochrome') {
+      return generateGradientCSS(getMonochromeScale(colorScale.baseColor, [0, 1]));
     }
     return '';
-  }, [colorScaleType, sequentialScaleName, divergingScaleName, monochromeColor]);
+  }, [colorScale]);
 
   // For continuous scales, render a gradient bar
   if (isContinuous && numericRange) {

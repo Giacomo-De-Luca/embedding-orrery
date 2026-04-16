@@ -2,7 +2,6 @@
 
 import { useEffect, useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useShallow } from 'zustand/react/shallow';
 import { AppHeader } from './components/AppHeader';
 import { AppFooter } from './components/AppFooter';
 import { DashboardPanel, type ActivePanel } from './components/DashboardPanel';
@@ -13,10 +12,10 @@ import { useVisualizationPoints } from '../lib/hooks/useVisualizationPoints';
 import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
+import { useTextSearch } from '../lib/hooks/useTextSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
-import { defaultColorScaleForType } from '../lib/types/types';
-import type { VisualizationState, HighlightMap } from '../lib/types/types';
+import type { HighlightMap } from '../lib/types/types';
 
 
 
@@ -52,35 +51,9 @@ export default function Home() {
   const mode = store((s) => s.mode);
   const colorByField = store((s) => s.colorByField);
   const searchQuery = store((s) => s.searchQuery);
+  const textSearchConfig = store((s) => s.textSearchConfig);
   const distanceMetric = store((s) => s.distanceMetric);
   const temporalRange = store((s) => s.temporalRange);
-
-  // Compat bridge: construct old VisualizationState shape for un-migrated children
-  const visualizationState = useVisualizationStore(useShallow((s): VisualizationState => ({
-    method: s.method,
-    mode: s.mode,
-    selectedDimensions: s.selectedDimensions,
-    colorByField: s.colorByField,
-    colorScaleType: s.colorScale.type,
-    sequentialScaleName: s.colorScale.type === 'sequential' ? s.colorScale.scaleName : undefined,
-    divergingScaleName: s.colorScale.type === 'diverging' ? s.colorScale.scaleName : undefined,
-    monochromeColor: s.colorScale.type === 'monochrome' ? s.colorScale.baseColor : undefined,
-    categoricalPalette: s.categoricalPalette,
-    searchQuery: s.searchQuery,
-    distanceMetric: s.distanceMetric,
-    showOnlyHighlighted: s.showOnlyHighlighted,
-    showLabels: s.showLabels,
-    showContours: s.showContours,
-    mutedCategories: s.mutedCategories,
-    tooltipFields: s.tooltipFields,
-    hideUnclustered: s.hideUnclustered,
-    nestedColorMode: s.nestedColorMode,
-    nebulaMode: s.nebulaMode,
-    showClusterLabels: s.showClusterLabels,
-    temporalRange: s.temporalRange,
-    hideFilteredPoints: s.hideFilteredPoints,
-    mutedPointOpacity: s.mutedPointOpacity,
-  })));
 
   const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(
     selectedCollection,
@@ -181,67 +154,37 @@ export default function Home() {
     temporalRange,
   );
 
-  // Compat bridge: convert old Partial<VisualizationState> writes to store actions
-  const updateState = useCallback((newState: Partial<VisualizationState>) => {
-    const s = useVisualizationStore.getState();
-    // Map old flat color fields to the new union if any color fields are being set
-    const patch: Partial<import('../lib/stores/useVisualizationStore').VisualizationStoreState> = {};
-    for (const [key, value] of Object.entries(newState)) {
-      switch (key) {
-        case 'colorScaleType': {
-          // When colorScaleType changes, rebuild the entire colorScale union with defaults
-          const type = value as import('../lib/types/types').ColorScaleType;
-          patch.colorScale = defaultColorScaleForType(type);
-          break;
-        }
-        case 'sequentialScaleName':
-          if (s.colorScale.type === 'sequential') {
-            patch.colorScale = { type: 'sequential', scaleName: value as import('../lib/utils/categoryColors').SequentialScaleName };
-          }
-          break;
-        case 'divergingScaleName':
-          if (s.colorScale.type === 'diverging') {
-            patch.colorScale = { type: 'diverging', scaleName: value as import('../lib/utils/categoryColors').DivergingScaleName };
-          }
-          break;
-        case 'monochromeColor':
-          if (s.colorScale.type === 'monochrome') {
-            patch.colorScale = { type: 'monochrome', baseColor: value as string };
-          }
-          break;
-        default:
-          // Pass through all other fields directly
-          (patch as Record<string, unknown>)[key] = value;
-      }
-    }
-    s.updatePartial(patch);
-  }, []);
 
-  const visualizationPoints = useVisualizationPoints(data, visualizationState);
-  const { filteredPoints2d, filteredPoints3d, highlightedIndices } = visualizationPoints;
+  const { points2d, points3d } = useVisualizationPoints(data, { method, searchQuery });
+
+  // Server-side text search
+  const {
+    highlightedIndices: textSearchHighlightedIndices,
+    loading: textSearchLoading,
+  } = useTextSearch(selectedCollection, searchQuery, textSearchConfig, data?.ids);
 
   // Compute text search results from highlighted indices, filtered by temporal range
   const textSearchResults = useMemo(() => {
-    if (!highlightedIndices || highlightedIndices.size === 0) return [];
-    const points = mode === '2d' ? filteredPoints2d : filteredPoints3d;
+    if (!textSearchHighlightedIndices || textSearchHighlightedIndices.size === 0) return [];
+    const points = mode === '2d' ? points2d : points3d;
     return points.filter(p =>
-      highlightedIndices.has(p.index) &&
+      textSearchHighlightedIndices.has(p.index) &&
       (!temporalRange || isInTemporalRange(p.metadata, temporalRange))
     );
-  }, [highlightedIndices, filteredPoints2d, filteredPoints3d, mode, temporalRange]);
+  }, [textSearchHighlightedIndices, points2d, points3d, mode, temporalRange]);
 
   // Auto-select first semantic search result when a text-query search completes
   // This triggers the camera fly-to animation in ScatterPlot3D
   useEffect(() => {
     if (semanticSearchResults && semanticSearchResults.length > 0 && searchType === 'text') {
       const firstResultId = semanticSearchResults[0].id;
-      const points = mode === '3d' ? filteredPoints3d : filteredPoints2d;
-      const matchingPoint = points.find(p => p.id === firstResultId);
+      const pts = mode === '3d' ? points3d : points2d;
+      const matchingPoint = pts.find(p => p.id === firstResultId);
       if (matchingPoint) {
         setSelectedPoint(matchingPoint);
       }
     }
-  }, [semanticSearchResults, filteredPoints2d, filteredPoints3d, mode, setSelectedPoint, searchType]);
+  }, [semanticSearchResults, points2d, points3d, mode, setSelectedPoint, searchType]);
 
   // Combine semantic search highlights and topic highlights (text search handled by muting, not glow)
   // Selected point is excluded — it has its own overlay traces in ScatterPlot3D
@@ -325,16 +268,15 @@ export default function Home() {
           ) : data ? (
             <>
                 <DashboardPanel
-                  state={visualizationState}
-                  points2d={filteredPoints2d}
-                  points3d={filteredPoints3d}
+                  points2d={points2d}
+                  points3d={points3d}
                   highlightedIndices={combinedHighlightedIndices}
-                  textSearchHighlights={highlightedIndices}
+                  textSearchHighlights={textSearchHighlightedIndices}
+                  textSearchLoading={textSearchLoading}
                   onPointClick={handlePointClick}
                   selectedPoint={selectedPoint}
                   semanticSearchResults={semanticSearchResults}
                   searchQueryLabel={searchQueryLabel}
-                  onStateChange={updateState}
                   embeddingDim={data.metadata.embedding_dim}
                   metadata={{
                     pca_2d_variance: data.metadata.pca_2d_variance,

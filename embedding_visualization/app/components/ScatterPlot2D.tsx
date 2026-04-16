@@ -12,7 +12,7 @@ import type {
   PlotHoverEvent,
   PlotRelayoutEvent,
 } from 'plotly.js';
-import type { Point2D, HighlightMap, ColorScaleType, NestedColorMap } from '../../lib/types/types';
+import type { Point2D, HighlightMap, NestedColorMap, ColorScale } from '../../lib/types/types';
 import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
@@ -38,13 +38,9 @@ const Plot = dynamic<PlotParams>(() => import('react-plotly.js'), { ssr: false }
 
 interface ScatterPlot2DProps {
   points: Point2D[];
-  colorBy?: 'category' | 'none';
   categoryField?: string | null;  // Field to color by (used for both categorical AND numeric)
   categoryValues?: string[];
-  colorScaleType?: ColorScaleType;
-  monochromeColor?: string;
-  sequentialScaleName?: SequentialScaleName;
-  divergingScaleName?: DivergingScaleName;
+  colorScale?: ColorScale;
   highlightedIndices?: HighlightMap;
   selectedPoint?: Point2D | null;
   onPointClick?: (point: Point2D) => void;
@@ -81,13 +77,9 @@ interface ScatterPlot2DProps {
 
 export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   points,
-  colorBy = 'none',
   categoryField = null,
   categoryValues = [],
-  colorScaleType = 'categorical',
-  monochromeColor = '#1f77b4',
-  sequentialScaleName = 'sinebow',
-  divergingScaleName = 'blueGold',
+  colorScale = { type: 'categorical' },
   highlightedIndices,
   selectedPoint,
   onPointClick,
@@ -373,7 +365,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
-    if (colorScaleType === 'categorical' || !categoryField) return null;
+    if (colorScale.type === 'categorical' || !categoryField) return null;
 
     const values: (number | null)[] = points.map(p => {
       const val = p.metadata?.[categoryField];
@@ -402,14 +394,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       max,
       cleanValues: values.map(v => (v === null) ? NaN : v)
     };
-  }, [colorScaleType, categoryField, points]);
+  }, [colorScale.type, categoryField, points]);
 
   // Generate Plotly-compatible colorscale array
   const plotlyColorScale = useMemo(() => {
-    if (colorScaleType === 'categorical') return undefined;
+    if (colorScale.type === 'categorical') return undefined;
 
     // For Crameri scales, use the pre-computed 256-step Plotly array directly
-    const scaleName = colorScaleType === 'diverging' ? divergingScaleName : sequentialScaleName;
+    const scaleName = colorScale.type === 'diverging' || colorScale.type === 'sequential'
+      ? colorScale.scaleName : undefined;
     if (scaleName && isCrameriScale(scaleName)) {
       const crameriScale = getCrameriPlotlyScale(scaleName);
       if (crameriScale) return crameriScale;
@@ -417,12 +410,14 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
 
     let scaleFunc: (t: number) => string;
-    if (colorScaleType === 'monochrome') {
-      scaleFunc = getMonochromeScale(monochromeColor, [0, 1]);
-    } else if (colorScaleType === 'diverging') {
-      scaleFunc = getDivergingScale([0, 0.5, 1], divergingScaleName);
+    if (colorScale.type === 'monochrome') {
+      scaleFunc = getMonochromeScale(colorScale.baseColor, [0, 1]);
+    } else if (colorScale.type === 'diverging') {
+      scaleFunc = getDivergingScale([0, 0.5, 1], colorScale.scaleName);
+    } else if (colorScale.type === 'sequential') {
+      scaleFunc = getSequentialScale([0, 1], colorScale.scaleName);
     } else {
-      scaleFunc = getSequentialScale([0, 1], sequentialScaleName);
+      return undefined;
     }
 
     // Sample the scale to create Plotly gradient definition
@@ -431,7 +426,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       const t = i / steps;
       return [t, scaleFunc(t)] as [number, string];
     });
-  }, [colorScaleType, monochromeColor, sequentialScaleName, divergingScaleName]);
+  }, [colorScale]);
 
   // Calculate dynamic marker style based on point count
   const markerStyle = useMemo(() => {
@@ -508,7 +503,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             customdata: filteredUnhighlightedPoints as any,
             showlegend: false,
           } satisfies PlotlyData);
-        } else if (colorBy === 'category' && categoryValues.length > 0) {
+        } else if (categoryField != null && categoryValues.length > 0) {
           // MODE: CATEGORICAL - preserve category colors with dimming
           if (nestedColorMap) {
             // NESTED: group by subtopic_label, color from nestedColorMap
@@ -982,7 +977,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             customdata: displayPoints as any,
           } satisfies PlotlyData];
         }
-      } else if (colorBy === 'category' && categoryValues.length > 0) {
+      } else if (categoryField != null && categoryValues.length > 0) {
         if (nestedColorMap) {
           // NESTED: group by subtopic_label
           const pointsBySub: Record<string, Point2D[]> = {};
@@ -1237,7 +1232,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, colorBy, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
+  }, [points, categoryField, categoryValues, colorMap, numericData, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
@@ -1247,7 +1242,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       dragmode: 'pan',
       hovermode: 'closest' as const,
       showlegend: false, 
-      // showlegend: colorBy === 'category' && categoryValues.length > 0,
+      // showlegend: categoryField != null && categoryValues.length > 0,
       plot_bgcolor: plotBg,
       paper_bgcolor: paperBg,
       font: { color: axisColor },
@@ -1282,7 +1277,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       },
       margin: { l: 50, r: 50, t: 50, b: 50 },
     }),
-    [axisColor, colorBy, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
+    [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
   );
 
   const config = useMemo<Partial<Config>>(() => ({

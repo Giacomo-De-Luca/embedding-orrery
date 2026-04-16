@@ -15,23 +15,23 @@ import { SearchSidebar } from './SearchSidebar';
 import { AnalyticsSidebar } from './AnalyticsSidebar';
 import { Table2, Palette } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
-import type { Point2D, Point3D, VisualizationState, SemanticSearchResult, HighlightMap, TopicInfo, TemporalRange } from '../../lib/types/types';
+import type { Point2D, Point3D, SemanticSearchResult, HighlightMap, TopicInfo, TemporalRange } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { cn } from '@/lib/utils/utils';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
+import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
 interface DashboardPanelProps {
-  state: VisualizationState;
+  // Data
   points2d: Point2D[];
   points3d: Point3D[];
   highlightedIndices?: HighlightMap;
   onPointClick: (point: Point2D | Point3D) => void;
-  onStateChange: (newState: Partial<VisualizationState>) => void;
   selectedPoint?: Point2D | Point3D | null;
   // Search results panel props
   semanticSearchResults: SemanticSearchResult[] | null;
@@ -48,6 +48,7 @@ interface DashboardPanelProps {
   highlightedCount?: number;
   textSearchResults?: (Point2D | Point3D)[];
   textSearchHighlights?: Set<number>;
+  textSearchLoading?: boolean;
   onTextResultClick?: (point: Point2D | Point3D) => void;
   // Panel state
   activePanel: ActivePanel;
@@ -75,12 +76,10 @@ interface DashboardPanelProps {
 }
 
 export function DashboardPanel({
-  state,
   points2d,
   points3d,
   highlightedIndices,
   onPointClick,
-  onStateChange,
   selectedPoint,
   semanticSearchResults,
   searchQueryLabel,
@@ -91,6 +90,7 @@ export function DashboardPanel({
   highlightedCount,
   textSearchResults,
   textSearchHighlights,
+  textSearchLoading,
   onTextResultClick,
   activePanel,
   queryPromptName,
@@ -114,8 +114,27 @@ export function DashboardPanel({
   onClearAllTopics,
 }: DashboardPanelProps) {
   const isExpanded = activePanel !== null;
-  const is2D = state.mode === '2d';
-  const colorByField = state.colorByField;
+
+  // --- Visualization state from Zustand store ---
+  const mode = useVisualizationStore((s) => s.mode);
+  const colorByField = useVisualizationStore((s) => s.colorByField);
+  const colorScale = useVisualizationStore((s) => s.colorScale);
+  const categoricalPalette = useVisualizationStore((s) => s.categoricalPalette);
+  const nestedColorMode = useVisualizationStore((s) => s.nestedColorMode);
+  const mutedCategories = useVisualizationStore((s) => s.mutedCategories);
+  const temporalRange = useVisualizationStore((s) => s.temporalRange);
+  const showOnlyHighlighted = useVisualizationStore((s) => s.showOnlyHighlighted);
+  const showLabels = useVisualizationStore((s) => s.showLabels);
+  const tooltipFields = useVisualizationStore((s) => s.tooltipFields);
+  const hideUnclustered = useVisualizationStore((s) => s.hideUnclustered);
+  const nebulaMode = useVisualizationStore((s) => s.nebulaMode);
+  const showClusterLabels = useVisualizationStore((s) => s.showClusterLabels);
+  const hideFilteredPoints = useVisualizationStore((s) => s.hideFilteredPoints);
+  const mutedPointOpacity = useVisualizationStore((s) => s.mutedPointOpacity);
+  const setMutedCategories = useVisualizationStore((s) => s.setMutedCategories);
+  const setTemporalRange = useVisualizationStore((s) => s.setTemporalRange);
+
+  const is2D = mode === '2d';
 
   // Compute category values and counts from points
   const points = is2D ? points2d : points3d;
@@ -123,7 +142,7 @@ export function DashboardPanel({
 
   // Nested topic/subtopic color mapping
   const { available: nestedColorAvailable, nestedColorMap } = useNestedCategoryData(
-    points, colorByField, state.nestedColorMode, state.categoricalPalette
+    points, colorByField, nestedColorMode, categoricalPalette
   );
 
   // Topic-mode detection: when coloring by topic_label, selectedTopicIds drives everything
@@ -151,7 +170,7 @@ export function DashboardPanel({
   // Derive effective muted categories: in topic mode, derive from selectedTopicIds (no state writes)
   const effectiveMutedCategories = useMemo(() => {
     if (!isTopicColorField || !selectedTopicIds || selectedTopicIds.size === 0 || !topicIdToLabelMap) {
-      return state.mutedCategories ?? [];
+      return mutedCategories ?? [];
     }
     // Compute the set of labels that should NOT be muted (selected topics + their subtopics)
     const unmuted = new Set<string>();
@@ -172,10 +191,10 @@ export function DashboardPanel({
       ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
       : categoryValues;
     return allCategories.filter(c => !unmuted.has(c));
-  }, [isTopicColorField, selectedTopicIds, topicIdToLabelMap, state.mutedCategories, nestedColorMap, categoryValues]);
+  }, [isTopicColorField, selectedTopicIds, topicIdToLabelMap, mutedCategories, nestedColorMap, categoryValues]);
 
   // Temporal range filtering: compute indices of points outside the selected time range
-  const deferredTemporalRange = useDeferredValue(state.temporalRange);
+  const deferredTemporalRange = useDeferredValue(temporalRange);
 
   const temporallyMutedIndices = useMemo(() => {
     const range = deferredTemporalRange;
@@ -221,7 +240,7 @@ export function DashboardPanel({
   }, [temporallyMutedIndices, searchMutedIndices]);
 
   // Check if we're using a continuous scale
-  const isContinuousScale = state.colorScaleType === 'sequential' || state.colorScaleType === 'diverging' || state.colorScaleType === 'monochrome';
+  const isContinuousScale = colorScale.type === 'sequential' || colorScale.type === 'diverging' || colorScale.type === 'monochrome';
 
   // Compute numeric range for continuous scales
   const numericRange = useMemo(() => {
@@ -265,7 +284,7 @@ export function DashboardPanel({
     }
 
     // Non-topic mode: existing mutedCategories behavior
-    const muted = state.mutedCategories ?? [];
+    const muted = mutedCategories ?? [];
     const subtopics = nestedColorMap?.hierarchy?.[category];
 
     // In nested mode, allCategories must include both topics and subtopics
@@ -279,15 +298,15 @@ export function DashboardPanel({
         const allRelated = [category, ...subtopics];
         const isCurrentlyMuted = muted.includes(category);
         if (isCurrentlyMuted) {
-          onStateChange({ mutedCategories: muted.filter(c => !allRelated.includes(c)) });
+          setMutedCategories(muted.filter(c => !allRelated.includes(c)));
         } else {
-          onStateChange({ mutedCategories: [...new Set([...muted, ...allRelated])] });
+          setMutedCategories([...new Set([...muted, ...allRelated])]);
         }
       } else {
         const newMuted = muted.includes(category)
           ? muted.filter(c => c !== category)
           : [...muted, category];
-        onStateChange({ mutedCategories: newMuted });
+        setMutedCategories(newMuted);
       }
     } else {
       // Normal click: select only this category (mute all others)
@@ -312,26 +331,26 @@ export function DashboardPanel({
       const isAlreadyIsolated = selected.length > 0 && selected.every(c => keepUnmuted.has(c));
 
       if (isAlreadyIsolated) {
-        onStateChange({ mutedCategories: [] });
+        setMutedCategories([]);
       } else {
-        onStateChange({ mutedCategories: allCategories.filter(c => !keepUnmuted.has(c)) });
+        setMutedCategories(allCategories.filter(c => !keepUnmuted.has(c)));
       }
     }
-  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, nestedColorMap, state.mutedCategories, onStateChange, categoryValues]);
+  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, nestedColorMap, mutedCategories, setMutedCategories, categoryValues]);
 
   // Temporal range change handler
   const handleTemporalRangeChange = useCallback((range: TemporalRange | null) => {
-    onStateChange({ temporalRange: range });
-  }, [onStateChange]);
+    setTemporalRange(range);
+  }, [setTemporalRange]);
 
   // Double-click reset: show all categories
   const handleCategoryReset = useCallback(() => {
     if (isTopicColorField && onClearAllTopics) {
       onClearAllTopics();
     } else {
-      onStateChange({ mutedCategories: [] });
+      setMutedCategories([]);
     }
-  }, [isTopicColorField, onClearAllTopics, onStateChange]);
+  }, [isTopicColorField, onClearAllTopics, setMutedCategories]);
 
   // Show legend for categorical scales with values, or continuous scales with numeric range
   const showLegend = colorByField && (
@@ -371,63 +390,52 @@ export function DashboardPanel({
     </div>
   );
 
-  // Convert colorByField to the 'category' | 'none' format expected by scatter plots
-  const colorBy = colorByField ? 'category' : 'none';
-
   const plot = is2D ? (
     <ScatterPlot2D
       points={points2d}
-      colorBy={colorBy}
       categoryField={colorByField}
       categoryValues={categoryValues}
-      colorScaleType={state.colorScaleType}
-      monochromeColor={state.monochromeColor}
-      sequentialScaleName={state.sequentialScaleName}
-      divergingScaleName={state.divergingScaleName}
+      colorScale={colorScale}
       highlightedIndices={highlightedIndices}
       selectedPoint={selectedPoint as Point2D | null}
       onPointClick={onPointClick}
-      showOnlyHighlighted={state.showOnlyHighlighted}
-      showLabels={state.showLabels}
+      showOnlyHighlighted={showOnlyHighlighted}
+      showLabels={showLabels}
       mutedCategories={effectiveMutedCategories}
-      tooltipFields={state.tooltipFields}
-      hideUnclustered={state.hideUnclustered}
-      categoricalPalette={state.categoricalPalette}
+      tooltipFields={tooltipFields}
+      hideUnclustered={hideUnclustered}
+      categoricalPalette={categoricalPalette}
       nestedColorMap={nestedColorMap}
       combinedMutedIndices={combinedMutedIndices}
-      hideFilteredPoints={state.hideFilteredPoints}
-      mutedPointOpacity={state.mutedPointOpacity}
-      showClusterLabels={state.showClusterLabels}
+      hideFilteredPoints={hideFilteredPoints}
+      mutedPointOpacity={mutedPointOpacity}
+      showClusterLabels={showClusterLabels}
       onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
       topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
     />
   ) : (
     <ScatterPlot3D
       points={points3d}
-      colorBy={colorBy}
       categoryField={colorByField}
       categoryValues={categoryValues}
-      colorScaleType={state.colorScaleType}
-      monochromeColor={state.monochromeColor}
-      sequentialScaleName={state.sequentialScaleName}
-      divergingScaleName={state.divergingScaleName}
+      colorScale={colorScale}
       highlightedIndices={highlightedIndices}
       selectedPoint={selectedPoint as Point3D | null}
       onPointClick={onPointClick}
-      showOnlyHighlighted={state.showOnlyHighlighted}
-      showLabels={state.showLabels}
+      showOnlyHighlighted={showOnlyHighlighted}
+      showLabels={showLabels}
       mutedCategories={effectiveMutedCategories}
-      tooltipFields={state.tooltipFields}
-      hideUnclustered={state.hideUnclustered}
-      categoricalPalette={state.categoricalPalette}
+      tooltipFields={tooltipFields}
+      hideUnclustered={hideUnclustered}
+      categoricalPalette={categoricalPalette}
       nestedColorMap={nestedColorMap}
-      nebulaMode={state.nebulaMode}
-      showClusterLabels={state.showClusterLabels}
+      nebulaMode={nebulaMode}
+      showClusterLabels={showClusterLabels}
       onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
       topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
       combinedMutedIndices={combinedMutedIndices}
-      hideFilteredPoints={state.hideFilteredPoints}
-      mutedPointOpacity={state.mutedPointOpacity}
+      hideFilteredPoints={hideFilteredPoints}
+      mutedPointOpacity={mutedPointOpacity}
     />
   );
 
@@ -455,12 +463,9 @@ export function DashboardPanel({
             mutedCategories={effectiveMutedCategories}
             onCategoryToggle={handleCategoryToggle}
             onCategoryReset={handleCategoryReset}
-            colorScaleType={state.colorScaleType}
+            colorScale={colorScale}
             numericRange={numericRange}
-            sequentialScaleName={state.sequentialScaleName}
-            divergingScaleName={state.divergingScaleName}
-            monochromeColor={state.monochromeColor}
-            categoricalPalette={state.categoricalPalette}
+            categoricalPalette={categoricalPalette}
             nestedColorMap={nestedColorMap}
             maxHeight={legendHeight}
             dragHandle={legendDragHandle}
@@ -543,8 +548,6 @@ export function DashboardPanel({
       <div className="absolute inset-y-0 left-0 z-40 pointer-events-none">
         {/* Controls Sidebar */}
         <EmbeddingSidebar
-          state={state}
-          onStateChange={onStateChange}
           embeddingDim={embeddingDim}
           metadata={metadata}
           selectedPoint={selectedPoint || null}
@@ -561,11 +564,11 @@ export function DashboardPanel({
         {/* Search Sidebar */}
         <SearchSidebar
           searchQuery={searchQuery ?? ''}
-          onSearchChange={(value) => onStateChange({ searchQuery: value })}
-          showOnlyHighlighted={state.showOnlyHighlighted ?? false}
-          onShowOnlyHighlightedChange={(checked) => onStateChange({ showOnlyHighlighted: checked })}
-          showLabels={state.showLabels ?? false}
-          onShowLabelsChange={(checked) => onStateChange({ showLabels: checked })}
+          onSearchChange={(value) => useVisualizationStore.getState().setSearchQuery(value)}
+          showOnlyHighlighted={showOnlyHighlighted ?? false}
+          onShowOnlyHighlightedChange={(checked) => useVisualizationStore.getState().setFlag('showOnlyHighlighted', checked)}
+          showLabels={showLabels ?? false}
+          onShowLabelsChange={(checked) => useVisualizationStore.getState().setFlag('showLabels', checked)}
           hasHighlights={Boolean(highlightedCount && highlightedCount > 0)}
           textSearchResults={textSearchResults}
           selectedPointId={selectedPoint?.id}
@@ -588,7 +591,9 @@ export function DashboardPanel({
           onToggleTopic={onToggleTopic}
           onSelectAllTopics={onSelectAllTopics}
           onClearAllTopics={onClearAllTopics}
-          categoricalPalette={state.categoricalPalette}
+          categoricalPalette={categoricalPalette}
+          textSearchLoading={textSearchLoading}
+          availableFields={availableFields}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
@@ -603,9 +608,9 @@ export function DashboardPanel({
           categoryValues={categoryValues}
           categoryCounts={categoryCounts}
           availableFields={availableFields}
-          categoricalPalette={state.categoricalPalette}
+          categoricalPalette={categoricalPalette}
           mutedCategories={effectiveMutedCategories}
-          temporalRange={state.temporalRange}
+          temporalRange={temporalRange}
           onTemporalRangeChange={handleTemporalRangeChange}
           textSearchHighlights={textSearchHighlights}
           colorFieldOptions={colorFieldOptions}

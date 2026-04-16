@@ -19,15 +19,14 @@ import {
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
 import { Slider } from '@/lib/ui-primitives/slider';
-import type { ProjectionMethod, DimensionMode, DistanceMetric, VisualizationState } from '../../lib/types/types';
+import type { ProjectionMethod, DimensionMode, DistanceMetric } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
-import { isCrameriScale, loadCrameriColormap } from '../../lib/colorMaps/crameriScales';
 import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
+import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
+import { useShallow } from 'zustand/react/shallow';
 
 interface VisualizationControlsProps {
-  state: VisualizationState;
-  onStateChange: (newState: Partial<VisualizationState>) => void;
   embeddingDim: number;
   metadata?: {
     pca_2d_variance?: number[];
@@ -39,18 +38,37 @@ interface VisualizationControlsProps {
 }
 
 export function VisualizationControls({
-  state,
-  onStateChange,
   embeddingDim,
   metadata,
   colorFieldOptions = [],
   availableFields = [],
   nestedColorAvailable,
 }: VisualizationControlsProps) {
+  const store = useVisualizationStore;
+  const {
+    method, mode, colorByField, selectedDimensions,
+    nebulaMode, hideUnclustered, nestedColorMode,
+    showClusterLabels, hideFilteredPoints, mutedPointOpacity,
+    distanceMetric, tooltipFields,
+  } = store(useShallow((s) => ({
+    method: s.method,
+    mode: s.mode,
+    colorByField: s.colorByField,
+    selectedDimensions: s.selectedDimensions,
+    nebulaMode: s.nebulaMode,
+    hideUnclustered: s.hideUnclustered,
+    nestedColorMode: s.nestedColorMode,
+    showClusterLabels: s.showClusterLabels,
+    hideFilteredPoints: s.hideFilteredPoints,
+    mutedPointOpacity: s.mutedPointOpacity,
+    distanceMetric: s.distanceMetric,
+    tooltipFields: s.tooltipFields,
+  })));
+
   // Handle field selection with auto-detection of scale type
   const handleFieldChange = (value: string) => {
     if (value === 'none') {
-      onStateChange({ colorByField: null, colorScaleType: 'categorical' });
+      store.getState().setColorByField(null);
       return;
     }
 
@@ -58,7 +76,7 @@ export function VisualizationControls({
     if (!fieldOption) return;
 
     // Use the recommended scale from the field analysis
-    onStateChange({ colorByField: value, colorScaleType: fieldOption.recommendedScale });
+    store.getState().setColorByField(value, fieldOption.recommendedScale);
   };
 
   return (
@@ -67,8 +85,8 @@ export function VisualizationControls({
         <div className="space-y-3">
           <Label className="text-base">Projection Method</Label>
           <RadioGroup
-            value={state.method}
-            onValueChange={(value) => onStateChange({ method: value as ProjectionMethod })}
+            value={method}
+            onValueChange={(value) => store.getState().setMethod(value as ProjectionMethod)}
           >
             <div className="flex items-center space-x-2">
               <RadioGroupItem value="pca" id="method-pca" />
@@ -76,12 +94,12 @@ export function VisualizationControls({
                 PCA (Principal Component Analysis)
               </Label>
             </div>
-            {metadata?.pca_2d_variance && state.mode === '2d' && state.method === 'pca' && (
+            {metadata?.pca_2d_variance && mode === '2d' && method === 'pca' && (
               <p className="text-xs text-muted-foreground ml-6">
                 Explained variance: {(metadata.pca_2d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
               </p>
             )}
-            {metadata?.pca_3d_variance && state.mode === '3d' && state.method === 'pca' && (
+            {metadata?.pca_3d_variance && mode === '3d' && method === 'pca' && (
               <p className="text-xs text-muted-foreground ml-6">
                 Explained variance: {(metadata.pca_3d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
               </p>
@@ -109,8 +127,8 @@ export function VisualizationControls({
         <div className="space-y-3">
           <Label className="text-base">Dimensions</Label>
           <RadioGroup
-            value={state.mode}
-            onValueChange={(value) => onStateChange({ mode: value as DimensionMode })}
+            value={mode}
+            onValueChange={(value) => store.getState().setMode(value as DimensionMode)}
           >
             <div className="flex items-center space-x-2">
               <RadioGroupItem value="2d" id="mode-2d" />
@@ -129,14 +147,14 @@ export function VisualizationControls({
         </div>
 
         {/* Nebula Cluster Effects (3D only) */}
-        {state.mode === '3d' && (
+        {mode === '3d' && (
           <>
             <Separator />
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="nebula-mode"
-                checked={state.nebulaMode ?? false}
-                onCheckedChange={(checked) => onStateChange({ nebulaMode: checked === true })}
+                checked={nebulaMode ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('nebulaMode', checked === true)}
               />
               <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
                 Nebula effects
@@ -146,7 +164,7 @@ export function VisualizationControls({
         )}
 
         {/* Manual Dimension Selection */}
-        {state.method === 'manual' && (
+        {method === 'manual' && (
           <>
             <Separator />
             <div className="space-y-3">
@@ -159,11 +177,11 @@ export function VisualizationControls({
                     type="number"
                     min={0}
                     max={embeddingDim - 1}
-                    value={state.selectedDimensions?.[0] ?? 0}
+                    value={selectedDimensions?.[0] ?? 0}
                     onChange={(e) => {
-                      const dims = state.selectedDimensions ?? [0, 1, 2];
+                      const dims = [...(selectedDimensions ?? [0, 1, 2])];
                       dims[0] = parseInt(e.target.value);
-                      onStateChange({ selectedDimensions: [...dims] });
+                      store.getState().setSelectedDimensions(dims);
                     }}
                   />
                 </div>
@@ -175,16 +193,16 @@ export function VisualizationControls({
                     type="number"
                     min={0}
                     max={embeddingDim - 1}
-                    value={state.selectedDimensions?.[1] ?? 1}
+                    value={selectedDimensions?.[1] ?? 1}
                     onChange={(e) => {
-                      const dims = state.selectedDimensions ?? [0, 1, 2];
+                      const dims = [...(selectedDimensions ?? [0, 1, 2])];
                       dims[1] = parseInt(e.target.value);
-                      onStateChange({ selectedDimensions: [...dims] });
+                      store.getState().setSelectedDimensions(dims);
                     }}
                   />
                 </div>
 
-                {state.mode === '3d' && (
+                {mode === '3d' && (
                   <div className="space-y-1.5">
                     <Label htmlFor="dim-z" className="text-xs">Dimension 3 (Z-axis)</Label>
                     <Input
@@ -192,11 +210,11 @@ export function VisualizationControls({
                       type="number"
                       min={0}
                       max={embeddingDim - 1}
-                      value={state.selectedDimensions?.[2] ?? 2}
+                      value={selectedDimensions?.[2] ?? 2}
                       onChange={(e) => {
-                        const dims = state.selectedDimensions ?? [0, 1, 2];
+                        const dims = [...(selectedDimensions ?? [0, 1, 2])];
                         dims[2] = parseInt(e.target.value);
-                        onStateChange({ selectedDimensions: [...dims] });
+                        store.getState().setSelectedDimensions(dims);
                       }}
                     />
                   </div>
@@ -213,7 +231,7 @@ export function VisualizationControls({
           <Label htmlFor="color-by" className="text-base">Color By</Label>
           <div className="flex items-center gap-2">
             <Select
-              value={state.colorByField ?? 'none'}
+              value={colorByField ?? 'none'}
               onValueChange={handleFieldChange}
             >
               <SelectTrigger id="color-by" className="flex-1">
@@ -234,41 +252,20 @@ export function VisualizationControls({
               </SelectContent>
             </Select>
             {/* Show scale selector when a field is selected (allows override of auto-detected type) */}
-            {state.colorByField && (
-              <ColorScaleSelector
-                colorScaleType={state.colorScaleType ?? 'categorical'}
-                onColorScaleTypeChange={(type) => onStateChange({ colorScaleType: type })}
-                monochromeColor={state.monochromeColor}
-                onMonochromeColorChange={(color) => onStateChange({ monochromeColor: color })}
-                sequentialScaleName={state.sequentialScaleName}
-                onSequentialScaleNameChange={(name) => {
-                  // Preload Crameri data so scatter plots can use it
-                  if (isCrameriScale(name)) loadCrameriColormap(name);
-                  onStateChange({ sequentialScaleName: name });
-                }}
-                divergingScaleName={state.divergingScaleName}
-                onDivergingScaleNameChange={(name) => {
-                  if (isCrameriScale(name)) loadCrameriColormap(name);
-                  onStateChange({ divergingScaleName: name });
-                }}
-                categoricalPalette={state.categoricalPalette}
-                onCategoricalPaletteChange={(palette) => {
-                  if (palette && isCrameriScale(palette)) loadCrameriColormap(palette);
-                  onStateChange({ categoricalPalette: palette });
-                }}
-              />
+            {colorByField && (
+              <ColorScaleSelector />
             )}
           </div>
 
           {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
-          {state.colorByField &&
-            CATEGORY_PRESETS[state.colorByField.toLowerCase()]?.labels &&
-            Object.values(CATEGORY_PRESETS[state.colorByField.toLowerCase()].labels!).includes('Unclustered') && (
+          {colorByField &&
+            CATEGORY_PRESETS[colorByField.toLowerCase()]?.labels &&
+            Object.values(CATEGORY_PRESETS[colorByField.toLowerCase()].labels!).includes('Unclustered') && (
             <div className="flex items-center space-x-2 mt-2">
               <Checkbox
                 id="hide-unclustered"
-                checked={state.hideUnclustered ?? false}
-                onCheckedChange={(checked) => onStateChange({ hideUnclustered: checked === true })}
+                checked={hideUnclustered ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('hideUnclustered', checked === true)}
               />
               <Label
                 htmlFor="hide-unclustered"
@@ -280,12 +277,12 @@ export function VisualizationControls({
           )}
 
           {/* Nested subtopic coloring - only when topic_label is selected and subtopics exist */}
-          {nestedColorAvailable && state.colorByField === 'topic_label' && (
+          {nestedColorAvailable && colorByField === 'topic_label' && (
             <div className="flex items-center space-x-2 mt-2">
               <Checkbox
                 id="nested-color-mode"
-                checked={state.nestedColorMode ?? false}
-                onCheckedChange={(checked) => onStateChange({ nestedColorMode: checked === true })}
+                checked={nestedColorMode ?? false}
+                onCheckedChange={(checked) => store.getState().setNestedColorMode(checked === true)}
               />
               <Label
                 htmlFor="nested-color-mode"
@@ -296,12 +293,12 @@ export function VisualizationControls({
             </div>
           )}
 
-          {state.colorByField && (
+          {colorByField && (
             <div className="flex items-center space-x-2 mt-2">
               <Checkbox
                 id="show-cluster-labels"
-                checked={state.showClusterLabels ?? false}
-                onCheckedChange={(checked) => onStateChange({ showClusterLabels: checked === true })}
+                checked={showClusterLabels ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('showClusterLabels', checked === true)}
               />
               <Label
                 htmlFor="show-cluster-labels"
@@ -322,28 +319,28 @@ export function VisualizationControls({
           <div className="flex items-center space-x-2">
             <Checkbox
               id="hide-filtered"
-              checked={state.hideFilteredPoints ?? false}
-              onCheckedChange={(checked) => onStateChange({ hideFilteredPoints: checked === true })}
+              checked={hideFilteredPoints ?? false}
+              onCheckedChange={(checked) => store.getState().setFlag('hideFilteredPoints', checked === true)}
             />
             <Label htmlFor="hide-filtered" className="font-normal cursor-pointer text-sm">
               Hide filtered points
             </Label>
           </div>
 
-          {!(state.hideFilteredPoints) && (
+          {!(hideFilteredPoints) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-normal">Muted opacity</Label>
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {Math.round((state.mutedPointOpacity ?? 0.15) * 100)}%
+                  {Math.round((mutedPointOpacity ?? 0.15) * 100)}%
                 </span>
               </div>
               <Slider
                 min={0}
                 max={100}
                 step={5}
-                value={[Math.round((state.mutedPointOpacity ?? 0.15) * 100)]}
-                onValueChange={([v]) => onStateChange({ mutedPointOpacity: v / 100 })}
+                value={[Math.round((mutedPointOpacity ?? 0.15) * 100)]}
+                onValueChange={([v]) => store.getState().setMutedPointOpacity(v / 100)}
               />
             </div>
           )}
@@ -355,8 +352,8 @@ export function VisualizationControls({
         <div className="space-y-3">
           <Label htmlFor="distance-metric" className="text-base">Distance Metric</Label>
           <Select
-            value={state.distanceMetric ?? 'COSINE'}
-            onValueChange={(value) => onStateChange({ distanceMetric: value as DistanceMetric })}
+            value={distanceMetric ?? 'COSINE'}
+            onValueChange={(value) => store.getState().setDistanceMetric(value as DistanceMetric)}
           >
             <SelectTrigger id="distance-metric">
               <SelectValue placeholder="Select metric" />
@@ -376,8 +373,8 @@ export function VisualizationControls({
         <div className="flex items-center space-x-2">
           <Checkbox
             id="show-contours"
-            checked={state.showContours ?? false}
-            onCheckedChange={(checked) => onStateChange({ showContours: checked === true })}
+            checked={false}
+            onCheckedChange={(checked) => store.getState().setFlag('showContours', checked === true)}
           />
           <Label
             htmlFor="show-contours"
@@ -399,8 +396,8 @@ export function VisualizationControls({
               </p>
               <TooltipFieldsCombobox
                 availableFields={availableFields}
-                selectedFields={state.tooltipFields ?? []}
-                onChange={(fields) => onStateChange({ tooltipFields: fields })}
+                selectedFields={tooltipFields ?? []}
+                onChange={(fields) => store.getState().setTooltipFields(fields)}
               />
             </div>
           </>
