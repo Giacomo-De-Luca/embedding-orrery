@@ -4,17 +4,19 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, NestedColorMap, ColorScale } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex } from '../../lib/utils/categoryColors';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
-import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getZoomLevel } from '../utils/rendeding';
+import { getZoomLevel } from '../utils/rendeding';
+import { useCameraFlyTo, type Bounds3D } from '../../lib/hooks/cameraAnimation';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
 import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
+import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
 
 // Hoisted identity matrix for haze renderer model matrix fallback (avoids per-frame allocation)
 const GL_IDENTITY_MATRIX = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
@@ -60,7 +62,7 @@ function buildScatter3dTrace(
 
 /** Build a scatter3d trace from indexed subsets of pre-computed arrays (for numeric colorscale mode). */
 function buildIndexedScatter3dTrace(
-  allX: number[], allY: number[], allZ: number[],
+  allX: ArrayLike<number>, allY: ArrayLike<number>, allZ: ArrayLike<number>,
   indices: number[],
   pointIndices: number[],
   opts: {
@@ -181,10 +183,8 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme ?? 'light';
   const isDark = theme === 'dark';
-
   // Theme colors
   const axisColor = isDark ? '#e2e8f0' : '#0f172a';
-  const gridColor = isDark ? '#334155' : '#e5e7eb';
   const sceneBg = 'rgba(0,0,0,0)';
   const paperBg = 'rgba(0,0,0,0)';
 
@@ -206,10 +206,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   //const defaultEye = { x: 0.9, y: 0.9, z: 0.9 };
   const defaultCenter = { x: 0, y: 0, z: 0 };
-  const animationFrameRef = useRef<number | undefined>(undefined);
-  const isAnimatingRef = useRef(false);
   const pendingFlyToRef = useRef<Point3D | null>(null);
-  const lastClickTimeRef = useRef<number>(0);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
   const pointsRef = useRef(points);
   pointsRef.current = points;
@@ -259,6 +256,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     selectedIndex: number | null;
   } | null>(null);
   const renderLabelsRef = useRef<(() => void) | null>(null);
+
+  const { startFlyTo, isAnimatingRef } = useCameraFlyTo(
+    bounds, graphDivRef, currentCameraRef, plotlyLibRef, renderLabelsRef, labelCanvasRef,
+  );
 
   // Load Plotly library and create initial plot imperatively (bypasses react-plotly.js
   // which does an O(n) deep-equality diff of all trace data on every React render)
@@ -425,10 +426,18 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (numericData && plotlyColorScale) {
       // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
       const csOpts = { colorscale: plotlyColorScale as any, cmin: numericData.min, cmax: numericData.max };
-      const allX = displayPoints.map(p => p.x);
-      const allY = displayPoints.map(p => p.y);
-      const allZ = displayPoints.map(p => p.z);
-      const pointIndices = displayPoints.map(p => p.index);
+      const n = displayPoints.length;
+      const allX = new Float64Array(n);
+      const allY = new Float64Array(n);
+      const allZ = new Float64Array(n);
+      const pointIndices = new Array<number>(n);
+      for (let i = 0; i < n; i++) {
+        const p = displayPoints[i];
+        allX[i] = p.x;
+        allY[i] = p.y;
+        allZ[i] = p.z;
+        pointIndices[i] = p.index;
+      }
 
       if (combinedMutedIndices) {
         const activeIdx: number[] = [];
@@ -450,11 +459,17 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           }));
         }
       } else {
-        traces.push(buildIndexedScatter3dTrace(
-          allX, allY, allZ,
-          displayPoints.map((_, i) => i), pointIndices,
-          { name: 'Data', size: dimSize, color: numericData.cleanValues as any, opacity: dimOpacity, colorscaleOpts: csOpts },
-        ));
+        traces.push({
+          x: allX, y: allY, z: allZ,
+          mode: 'markers', type: 'scatter3d', name: 'Data',
+          marker: {
+            sizemode: 'diameter', size: dimSize,
+            color: numericData.cleanValues as any,
+            colorscale: csOpts.colorscale, cmin: csOpts.cmin, cmax: csOpts.cmax,
+            opacity: dimOpacity, showscale: false,
+          },
+          hoverinfo: 'none', customdata: pointIndices as any, showlegend: false,
+        });
       }
     } else if (categoryField != null && categoryValues.length > 0) {
       if (nestedColorMap) {
@@ -615,115 +630,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   useEffect(() => {
     pendingFlyToRef.current = selectedPoint ?? null;
   }, [selectedPoint]);
-
-  // Start camera fly-to animation. Called imperatively after Plotly.redraw so the
-  // main thread is free and the animation frames aren't blocked.
-  const startFlyTo = useCallback((target: Point3D) => {
-    if (!bounds || !graphDivRef.current) return;
-    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-
-    const dataCenterX = (bounds.minX + bounds.maxX) / 2;
-    const dataCenterY = (bounds.minY + bounds.maxY) / 2;
-    const dataCenterZ = (bounds.minZ + bounds.maxZ) / 2;
-    const maxRange = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) || 1;
-
-    const targetCenterX = (target.x - dataCenterX) / maxRange;
-    const targetCenterY = (target.y - dataCenterY) / maxRange;
-    const targetCenterZ = (target.z - dataCenterZ) / maxRange;
-
-    const targetR = 0.15;
-    const targetPhi = 1.3;
-    const duration = 2000;
-
-    let startEye: any, startCenter: any, startSpherical: any, targetSpherical: any, startTime: number;
-    let initialized = false;
-
-    const animate = (currentTime: number) => {
-      if (!isAnimatingRef.current || !graphDivRef.current) return;
-
-      if (!initialized) {
-        const scene = graphDivRef.current._fullLayout?.scene;
-        const layoutCamera = scene?.camera;
-        if (layoutCamera?.eye) {
-          startEye = { ...layoutCamera.eye };
-          startCenter = layoutCamera.center ? { ...layoutCamera.center } : { x: 0, y: 0, z: 0 };
-        } else {
-          startEye = { ...currentCameraRef.current.eye };
-          startCenter = { ...currentCameraRef.current.center };
-        }
-        startSpherical = cartesianToSpherical(
-          startEye.x - startCenter.x,
-          startEye.y - startCenter.y,
-          startEye.z - startCenter.z
-        );
-        targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
-        startTime = currentTime;
-        initialized = true;
-      }
-
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const ease = easeInOutCubic(progress);
-
-      const newCenter = {
-        x: lerp(startCenter.x, targetCenterX, ease),
-        y: lerp(startCenter.y, targetCenterY, ease),
-        z: lerp(startCenter.z, targetCenterZ, ease),
-      };
-
-      const curR = lerp(startSpherical.r, targetSpherical.r, ease);
-      const curTheta = lerp(startSpherical.theta, targetSpherical.theta, ease);
-      const curPhi = lerp(startSpherical.phi, targetSpherical.phi, ease);
-
-      const relativeEye = sphericalToCartesian(curR, curTheta, curPhi);
-
-      const newEye = {
-        x: relativeEye.x + newCenter.x,
-        y: relativeEye.y + newCenter.y,
-        z: relativeEye.z + newCenter.z,
-      };
-
-      currentCameraRef.current = { eye: newEye, center: newCenter };
-      const currentScene = graphDivRef.current._fullLayout?.scene?._scene;
-      const glplot = currentScene?.glplot as any;
-
-      if (glplot?.camera) {
-        if (Array.isArray(glplot.camera.eye)) {
-          glplot.camera.eye = [newEye.x, newEye.y, newEye.z];
-          glplot.camera.center = [newCenter.x, newCenter.y, newCenter.z];
-          glplot.camera.up = [0, 0, 1];
-        } else if (glplot.camera.eye && typeof glplot.camera.eye === 'object') {
-          glplot.camera.eye.x = newEye.x;
-          glplot.camera.eye.y = newEye.y;
-          glplot.camera.eye.z = newEye.z;
-          glplot.camera.center.x = newCenter.x;
-          glplot.camera.center.y = newCenter.y;
-          glplot.camera.center.z = newCenter.z;
-        }
-        if (typeof glplot.camera.update === 'function') glplot.camera.update();
-        if (typeof glplot.draw === 'function') glplot.draw();
-      }
-
-      if (progress < 1) {
-        animationFrameRef.current = requestAnimationFrame(animate);
-      } else {
-        isAnimatingRef.current = false;
-        if (plotlyLibRef.current && graphDivRef.current) {
-          plotlyLibRef.current.relayout(graphDivRef.current, {
-            'scene.camera': { eye: newEye, center: newCenter, up: { x: 0, y: 0, z: 1 } },
-          });
-        }
-        renderLabelsRef.current?.();
-      }
-    };
-
-    isAnimatingRef.current = true;
-    const labelCtx = labelCanvasRef.current?.getContext('2d');
-    if (labelCtx && labelCanvasRef.current) {
-      labelCtx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
-    }
-    animationFrameRef.current = requestAnimationFrame(animate);
-  }, [bounds]);
 
   // Populate label render data (no React state — just a ref for the canvas renderer)
   useEffect(() => {
@@ -1062,7 +968,13 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     margin: { l: 0, r: 0, t: 0, b: 0 },
   }), [axisColor, defaultEye, height, paperBg, sceneBg, width]);
 
-  const config = useMemo<Partial<Config>>(() => ({ displayModeBar: true, displaylogo: false, responsive: true }), []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const config = useMemo<Partial<Config>>(() => ({
+    displayModeBar: true,
+    displaylogo: false,
+    responsive: true,
+    modeBarButtons: build3DModeBarButtons(plotlyLibRef.current),
+  }), [plotlyLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- FULLY IMPERATIVE PLOTLY MANAGEMENT ---
   // Bypasses react-plotly.js which does an O(n) deep-equality diff on every React render.

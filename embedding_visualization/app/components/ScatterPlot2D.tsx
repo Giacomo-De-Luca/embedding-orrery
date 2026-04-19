@@ -30,6 +30,7 @@ import {
 } from '../utils/labelPlacement2D';
 
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
+import { build2DModeBarButtons } from '../../lib/utils/plotlyIcons';
 
 type PlotlyData = Partial<PlotData>;
 
@@ -146,6 +147,14 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme ?? 'light';
   const isDark = theme === 'dark';
+
+  // Load Plotly lib reference (cache hit since react-plotly.js already loaded the module)
+  const plotlyLibRef = useRef<any>(null);
+  const [plotlyReady, setPlotlyReady] = useState(false);
+  useEffect(() => {
+    import('plotly.js').then((lib) => { plotlyLibRef.current = lib.default; setPlotlyReady(true); });
+  }, []);
+
   const axisColor = isDark ? '#e2e8f0' : '#0f172a';
   const gridColor = isDark ? '#334155' : '#e5e7eb';
   const plotBg = isDark ? "rgba(0,0,0,0" : "rgba(0,0,0,0)";
@@ -1280,12 +1289,14 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
   );
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const config = useMemo<Partial<Config>>(() => ({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
     scrollZoom: true,
-  }), []);
+    modeBarButtons: build2DModeBarButtons(plotlyLibRef.current),
+  }), [plotlyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClick = (event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) {

@@ -35,7 +35,7 @@ function mat4Multiply(a: Float32Array, b: Float32Array): Float32Array {
 }
 
 /** Multiply a column-major 4x4 matrix by a vec4. */
-function multiplyMat4Vec4(
+export function multiplyMat4Vec4(
   m: Float32Array,
   v: [number, number, number, number],
 ): [number, number, number, number] {

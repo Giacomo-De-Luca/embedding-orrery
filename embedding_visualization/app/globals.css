@@ -205,7 +205,21 @@
 .modebar-container {
   top: 80px !important;
   right: 24px !important;
+}
 
+/* Lucide icons are stroke-based — override Plotly's default fill rendering.
+   All modebar buttons use custom Lucide icons, no default Plotly buttons remain. */
+.modebar-btn path {
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 2 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+/* Hide Plotly's native tooltips on modebar buttons */
+.modebar-btn::before {
+  display: none !important;
 }
 
 

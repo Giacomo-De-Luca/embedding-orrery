@@ -1,11 +1,19 @@
 # ScatterPlot3D Performance & Maintainability Analysis
 
 **Date:** 2025-04-15
-**File:** `app/components/ScatterPlot3D.tsx` (1484 lines)
+**File:** `app/components/ScatterPlot3D.tsx`
+
+## Resolved Issues
+
+- **#1** Trace duplication -- refactored to `buildScatter3dTrace`/`buildIndexedScatter3dTrace` helpers
+- **#2** Unused `text` arrays -- removed `formatHoverText` from all traces
+- **#3** Full Point3D in customdata -- now stores `point.index`, handlers use `pointsRef` lookup
+- **#4** Multi-pass array allocations -- single-pass extraction with pre-allocated `Float64Array` for coordinates
+- **#6** Duplicated `hideUnclustered` filter -- extracted shared `displayPoints` useMemo
 
 ---
 
-## Critical Performance Issues
+## Critical Performance Issues (remaining)
 
 ### 1. Massive trace-building duplication in `baseTraces` (lines 416-768)
 **Problem:** ~350 lines of deeply nested conditionals with the same trace-building pattern (map x, y, z, text, customdata) copy-pasted **~12 times** across three coloring modes (numeric / categorical / none) x two muting states (combinedMutedIndices or not) x nested-categorical variant. Any bug fix or property change must be applied in all branches.
@@ -125,15 +133,16 @@
 
 ## Summary by Impact
 
-| Priority | Issue | Est. Impact |
-|----------|-------|-------------|
-| **High** | #1 Trace duplication (maintainability + bug risk) | Code quality |
-| **High** | #2 Unused `text` arrays | Wasted CPU + memory, scales with N |
-| **High** | #3 Full Point3D in customdata | ~2x memory for point data |
-| **High** | #4 Multi-pass array allocations | O(N) wasted work per render |
-| **Medium** | #7 Layout thrashing in nebula | Jank during 3D interaction |
-| **Medium** | #8 Unconditional rAF polling | Battery/CPU when idle |
-| **Medium** | #9 renderLabels cascade | Unnecessary teardown/setup |
-| **Medium** | #10 Full redraw for overlay traces | Slow highlight updates on large data |
-| **Low** | #12 Monolithic component | Maintainability |
-| **Low** | #15-16 Constant/reference instability | Unnecessary memo invalidation |
+| Priority | Issue | Est. Impact | Status |
+|----------|-------|-------------|--------|
+| **High** | #1 Trace duplication | Code quality | Resolved |
+| **High** | #2 Unused `text` arrays | Wasted CPU + memory, scales with N | Resolved |
+| **High** | #3 Full Point3D in customdata | ~2x memory for point data | Resolved |
+| **High** | #4 Multi-pass array allocations | O(N) wasted work per render | Open |
+| **Medium** | #6 Duplicated hideUnclustered | Redundant filtering | Resolved |
+| **Medium** | #7 Layout thrashing in nebula | Jank during 3D interaction | Open |
+| **Medium** | #8 Unconditional rAF polling | Battery/CPU when idle | Open |
+| **Medium** | #9 renderLabels cascade | Unnecessary teardown/setup | Open |
+| **Medium** | #10 Full redraw for overlay traces | Slow highlight updates on large data | Open |
+| **Low** | #12 Monolithic component | Maintainability | Open |
+| **Low** | #15-16 Constant/reference instability | Unnecessary memo invalidation | Open |
