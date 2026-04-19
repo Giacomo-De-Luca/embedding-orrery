@@ -771,13 +771,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       ctx.textAlign = 'center';
 
       // Camera distance → opacity: closer = more opaque, farther = more transparent
-      const camEye = currentCameraRef.current.eye;
-      const camCenter = currentCameraRef.current.center;
-      const camDist = Math.sqrt(
-        (camEye.x - camCenter.x) ** 2 +
-        (camEye.y - camCenter.y) ** 2 +
-        (camEye.z - camCenter.z) ** 2
-      );
+      const camDist: number = glplot.camera.distance;
       // Map: close (≤0.3) → 1.0, far (≥2.0) → 0. Skip drawing entirely below threshold.
       const clusterOpacity = Math.max(0, Math.min(1.0, 1.0 - (camDist - 0.3) * 0.5));
       if (clusterOpacity < 0.25) {
@@ -1032,18 +1026,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     overlayTraceCountRef.current = newCount;
     Plotly.redraw(gd);
 
-    // Defer fly-to by one frame: Plotly.redraw is done (main thread free), and
-    // parent effects (e.g. page.tsx auto-select) have flushed, so pendingFlyToRef
-    // holds the correct selectedPoint even for text-query searches.
-    const rafId = requestAnimationFrame(() => {
-      const flyTarget = pendingFlyToRef.current;
-      if (flyTarget) {
-        pendingFlyToRef.current = null;
-        startFlyTo(flyTarget);
-      }
-    });
-
-    return () => cancelAnimationFrame(rafId);
+    // Start fly-to after Plotly.redraw (main thread is free for animation frames)
+    const flyTarget = pendingFlyToRef.current;
+    if (flyTarget) {
+      pendingFlyToRef.current = null;
+      startFlyTo(flyTarget);
+    }
   }, [overlayTraces, plotReady, startFlyTo]);
 
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);

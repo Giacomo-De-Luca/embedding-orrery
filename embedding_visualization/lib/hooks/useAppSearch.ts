@@ -65,7 +65,14 @@ export function useAppSearch(
     try {
       const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, allFilters);
       if (searchRequestIdRef.current !== requestId) return; // superseded by newer search
-      setSemanticSearchResults(transformSearchResults(results, colorByField));
+      const transformed = transformSearchResults(results, colorByField);
+      // Auto-select first result in the same batch as setSemanticSearchResults so
+      // renderedSelectedPoint captures the correct point when highlightedIndices updates.
+      if (resolvePoint && transformed.length > 0) {
+        const point = resolvePoint(transformed[0].id);
+        if (point) setSelectedPoint(point);
+      }
+      setSemanticSearchResults(transformed);
       setSearchQueryLabel(query);
       setSearchType('text');
     } catch (error) {
@@ -73,7 +80,7 @@ export function useAppSearch(
       if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Search error:', error);
     }
-  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters]);
+  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters, resolvePoint]);
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);

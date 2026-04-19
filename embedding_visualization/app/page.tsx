@@ -132,6 +132,15 @@ export default function Home() {
     data?.metadata?.embedding_prompt,
   );
 
+  const { points2d, points3d } = useVisualizationPoints(data, { method, searchQuery });
+
+  // Resolve a search result ID to its visualization point (used by useAppSearch
+  // to auto-select the first result in the same React batch as setSemanticSearchResults).
+  const resolvePoint = useCallback((id: string) => {
+    const pts = mode === '3d' ? points3d : points2d;
+    return pts.find(p => p.id === id);
+  }, [points2d, points3d, mode]);
+
   // Use the new custom hook for search logic
   const {
     selectedPoint,
@@ -152,10 +161,8 @@ export default function Home() {
     data?.metadata?.embedding_prompt,
     topicSearch.topicFilters,
     temporalRange,
+    resolvePoint,
   );
-
-
-  const { points2d, points3d } = useVisualizationPoints(data, { method, searchQuery });
 
   // Server-side text search
   const {
@@ -173,18 +180,6 @@ export default function Home() {
     );
   }, [textSearchHighlightedIndices, points2d, points3d, mode, temporalRange]);
 
-  // Auto-select first semantic search result when a text-query search completes
-  // This triggers the camera fly-to animation in ScatterPlot3D
-  useEffect(() => {
-    if (semanticSearchResults && semanticSearchResults.length > 0 && searchType === 'text') {
-      const firstResultId = semanticSearchResults[0].id;
-      const pts = mode === '3d' ? points3d : points2d;
-      const matchingPoint = pts.find(p => p.id === firstResultId);
-      if (matchingPoint) {
-        setSelectedPoint(matchingPoint);
-      }
-    }
-  }, [semanticSearchResults, points2d, points3d, mode, setSelectedPoint, searchType]);
 
   // Combine semantic search highlights and topic highlights (text search handled by muting, not glow)
   // Selected point is excluded — it has its own overlay traces in ScatterPlot3D

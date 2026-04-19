@@ -24,6 +24,16 @@ page.tsx (orchestration)
 
 **Test-embed page** (`/test-embed`): Three tabs — HuggingFaceTab, LocalFileTab, CollectionManagerTab (with TopicExtractionCard). Each tab manages own state; shared `useEmbedDataset` hook for GraphQL operations. **ProgressModal** (`test-embed/components/EmbeddingProgressModal.tsx`): Reusable modal with WebSocket subscription, elapsed timer, ETA calculation, configurable `title`/`subtitle`/`itemsLabel` props. Used for embedding progress, topic extraction progress, topic reduction progress, LLM labeling progress (all in TopicExtractionCard), and per-projection progress. ETA shown after 2+ progress data points as "~X:XX remaining". JobsPanel handles `llm_labeling` job type alongside embedding jobs.
 
+## State Management
+
+Visualization state is managed by a **Zustand store** (`lib/stores/useVisualizationStore.ts`) with `subscribeWithSelector` middleware. Components read state via selectors for granular re-renders — no prop drilling of visualization state.
+
+- **Store shape**: `VisualizationStoreState` defines all fields; `VisualizationStoreActions` defines mutations
+- **ColorScale union** (`lib/types/types.ts`): Discriminated union `{ type: 'categorical' } | { type: 'sequential'; scaleName } | { type: 'diverging'; scaleName } | { type: 'monochrome'; baseColor }`. Replaces the old flat fields (`colorScaleType`, `sequentialScaleName`, `divergingScaleName`, `monochromeColor`). `categoricalPalette` stays separate — chart components need it regardless of scale type.
+- **Auto-reset subscription**: Store subscribes to `colorByField` changes and auto-clears `mutedCategories` + `hideUnclustered` (synchronous, no React effect needed)
+- **Self-contained controls**: `ColorScaleSelector` and `VisualizationControls` read/write the store directly with zero props for state
+- **Data stays as props**: Points, search results, topics, and other computed data flow via props (not the store) since they come from GraphQL/hooks
+
 ## Key Patterns
 
 - **Self-contained components**: Each manages its own loading/error/success states
@@ -46,7 +56,8 @@ page.tsx (orchestration)
 
 | Area | Location |
 |------|----------|
-| Types | `lib/types/types.ts` — EmbeddingData, Point2D/3D, VisualizationState, DisplayConfig |
+| Types | `lib/types/types.ts` — EmbeddingData, Point2D/3D, ColorScale, DisplayConfig |
+| State store | `lib/stores/useVisualizationStore.ts` — Zustand store (replaces useState + prop drilling) |
 | Data loading | `lib/hooks/useEmbeddingData.ts` — loads collection, auto-detects display config |
 | Visualization | `lib/hooks/useVisualizationPoints.ts` — transforms data to plot points |
 | Search | `lib/hooks/useAppSearch.ts` + `useSemanticSearch.ts` + `useHighlightedIndices.ts` + `useTopicSearch.ts` + `useTextSearch.ts` |
