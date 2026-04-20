@@ -12,7 +12,7 @@ import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { useCameraFlyTo, type Bounds3D } from '../../lib/hooks/cameraAnimation';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
-import { computeMVP, buildDataToSceneMatrix, projectToScreen } from '../utils/labelPlacement';
+import { computeMVP, buildDataToSceneMatrix, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
 
@@ -668,7 +668,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   // --- Cluster label data for canvas overlay ---
   const clusterLabelDataRef = useRef<{
-    labels: { x: number; y: number; z: number; label: string; color: string }[];
+    labels: { x: number; y: number; z: number; label: string; color: string; pointCount: number }[];
   } | null>(null);
 
   useEffect(() => {
@@ -676,7 +676,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       clusterLabelDataRef.current = null;
       return;
     }
-    const labels: { x: number; y: number; z: number; label: string; color: string }[] = [];
+    const labels: { x: number; y: number; z: number; label: string; color: string; pointCount: number }[] = [];
     for (const [key, cluster] of clusterDataMap) {
       labels.push({
         x: cluster.centroid.x,
@@ -684,6 +684,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         z: cluster.centroid.z,
         label: key,
         color: cluster.color,
+        pointCount: cluster.points.length,
       });
     }
     clusterLabelDataRef.current = { labels };
@@ -770,20 +771,33 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
 
-      // Camera distance → opacity: closer = more opaque, farther = more transparent
-      const camDist: number = glplot.camera.distance;
-      // Map: close (≤0.3) → 1.0, far (≥2.0) → 0. Skip drawing entirely below threshold.
-      const clusterOpacity = Math.max(0, Math.min(1.0, 1.0 - (camDist - 0.3) * 0.5));
-      if (clusterOpacity < 0.25) {
-        // Too far — don't draw cluster labels at all
-      } else for (const cl of clusterData!.labels) {
+      // Sort labels by distance to camera (closest first), size as tiebreaker
+      const camEye = glplot.camera.eye as number[];
+      const sorted = clusterData!.labels
+        .map(cl => {
+          const sp = multiplyMat4Vec4(model, [cl.x, cl.y, cl.z, 1]);
+          const dx = sp[0] - camEye[0], dy = sp[1] - camEye[1], dz = sp[2] - camEye[2];
+          return { ...cl, dist: Math.sqrt(dx * dx + dy * dy + dz * dz) };
+        })
+        .sort((a, b) => a.dist - b.dist || b.pointCount - a.pointCount);
+
+      // Adaptive cap
+      const total = sorted.length;
+      const maxLabels = Math.min(total, Math.max(8, Math.floor(Math.sqrt(total) * 2.5)));
+
+      // Opacity: closest → 1.0, farthest in capped set → 0.5
+      const minD = sorted[0]?.dist ?? 0;
+      const maxD = sorted[Math.min(maxLabels, total) - 1]?.dist ?? 1;
+      const dRange = maxD - minD || 1;
+
+      for (let i = 0; i < maxLabels; i++) {
+        const cl = sorted[i];
         const screen = projectToScreen(cl.x, cl.y, cl.z, mvp, vpW, vpH);
         if (!screen) continue;
 
         const sx = screen.x + glOffsetX;
         const sy = screen.y + glOffsetY;
 
-        // Measure text and build bounding box with 4px padding
         const textWidth = ctx.measureText(cl.label).width;
         const pad = 4;
         const realBox: BoundingBox = {
@@ -794,15 +808,15 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         };
         if (!grid.insert(realBox)) continue;
 
-        // Draw cluster label with stroke outline for contrast
-        ctx.globalAlpha = clusterOpacity;
+        const labelOpacity = 1.0 - 0.5 * ((cl.dist - minD) / dRange);
+        ctx.globalAlpha = labelOpacity;
         ctx.font = clusterFontStr;
         ctx.textAlign = 'center';
         ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 4;
         ctx.lineJoin = 'round';
         ctx.strokeText(cl.label, sx, sy);
-        ctx.fillStyle = desaturateHex(cl.color, 0.3, isDark);
+        ctx.fillStyle = desaturateHex(cl.color, 0.1, isDark);
         ctx.fillText(cl.label, sx, sy);
       }
     }
