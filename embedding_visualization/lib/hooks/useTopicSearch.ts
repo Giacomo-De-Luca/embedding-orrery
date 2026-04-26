@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
-import type { TopicInfo, EmbeddingData, HighlightMap, FilterInput, DistanceMetric } from '../types/types';
+import type { TopicInfo, FilterInput, DistanceMetric } from '../types/types';
 import { useSemanticSearch } from './useSemanticSearch';
 
 export type TopicSearchMode = 'direct' | 'semantic';
@@ -41,7 +41,6 @@ export interface UseTopicSearchReturn {
  */
 export function useTopicSearch(
   topics: TopicInfo[] | undefined,
-  data: EmbeddingData | null,
   collectionName: string | null,
   distanceMetric: DistanceMetric = 'COSINE',
   queryPromptName?: string | null,
@@ -154,20 +153,6 @@ export function useTopicSearch(
     setSelectedTopicIds(new Set());
   }, []);
 
-  // Build highlight map: points with matching topic_id → score 1.0
-  const topicHighlightMap: HighlightMap | undefined = useMemo(() => {
-    if (selectedTopicIds.size === 0 || !data) return undefined;
-    const map = new Map<number, number>();
-    for (let i = 0; i < data.ids.length; i++) {
-      const meta = data.itemMetadata[i];
-      const topicId = meta?.topic_id as number | undefined;
-      if (topicId !== undefined && selectedTopicIds.has(topicId)) {
-        map.set(i, 1.0);
-      }
-    }
-    return map.size > 0 ? map : undefined;
-  }, [selectedTopicIds, data]);
-
   // Build topic filters for scoped semantic search
   const topicFilters: FilterInput[] | undefined = useMemo(() => {
     if (selectedTopicIds.size === 0) return undefined;
@@ -193,7 +178,6 @@ export function useTopicSearch(
     toggleTopic,
     selectAll,
     clearAll,
-    topicHighlightMap,
     topicFilters,
   };
 }

@@ -125,7 +125,6 @@ export default function Home() {
   // Topic search hook (instantiated before useAppSearch so topicFilters is available)
   const topicSearch = useTopicSearch(
     selectedCollectionTopics,
-    data,
     selectedCollection,
     distanceMetric ?? 'COSINE',
     queryPromptName,
