@@ -74,11 +74,7 @@ function ColorScalePreview({ colorScale }: ColorScalePreviewProps) {
     return (
       <div className="flex gap-0.5">
         {colors.map((color, i) => (
-          <div
-            key={i}
-            className="h-4 w-4 rounded-sm"
-            style={{ backgroundColor: color }}
-          />
+          <div key={i} className="h-4 w-4 rounded-sm" style={{ backgroundColor: color }} />
         ))}
       </div>
     );
@@ -86,10 +82,7 @@ function ColorScalePreview({ colorScale }: ColorScalePreviewProps) {
 
   const gradient = colorScaleGradientCSS(colorScale);
   return (
-    <div
-      className="h-2 w-full rounded-sm"
-      style={{ background: gradient }}
-    />
+    <div className="h-2 w-full rounded-sm" style={{ background: gradient }} />
   );
 }
 
@@ -102,14 +95,8 @@ function CrameriGradientPreview({ name, scaleType = 'sequential' }: { name: stri
     return <div className="h-2 w-full rounded-sm bg-muted animate-pulse" />;
   }
   const gradient = colorScaleGradientCSS({ type: scaleType, scaleName: name } as ColorScale);
-  if (!gradient) {
-    return <div className="h-2 w-full rounded-sm bg-muted animate-pulse" />;
-  }
   return (
-    <div
-      className="h-2 w-full rounded-sm"
-      style={{ background: gradient }}
-    />
+    <div className="h-2 w-full rounded-sm" style={{ background: gradient || undefined }} />
   );
 }
 

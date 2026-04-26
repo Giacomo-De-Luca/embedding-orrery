@@ -236,7 +236,7 @@ export function CategoryBarChart({
               <Bar
                 dataKey={isSearchActive ? 'matches' : 'count'}
                 strokeWidth={2}
-                radius={8}
+                radius={4}
                 activeBar={({ ...props }) => (
                   <Rectangle
                     {...props}

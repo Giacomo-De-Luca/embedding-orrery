@@ -211,21 +211,16 @@ export function generateGradientCSS(
 
 /**
  * Generate a CSS linear-gradient string for any continuous ColorScale.
- * Single source of truth used by both Legend and ColorScaleSelector.
- * Returns empty string for categorical scales.
+ * Single source of truth — used by Legend and ColorScaleSelector.
  */
 export function colorScaleGradientCSS(colorScale: ColorScale, steps: number = 20): string {
   if (colorScale.type === 'categorical') return '';
-
-  // Crameri fast-path (pre-computed arrays)
   const scaleName = (colorScale.type === 'sequential' || colorScale.type === 'diverging')
     ? colorScale.scaleName : undefined;
   if (scaleName && isCrameriScale(scaleName)) {
     const crameri = crameriGradientCSS(scaleName, steps);
     if (crameri) return crameri;
   }
-
-  // D3 / monochrome fallback
   let scaleFunc: (t: number) => string;
   if (colorScale.type === 'monochrome') {
     scaleFunc = getMonochromeScale(colorScale.baseColor, [0, 1]);
@@ -237,6 +232,79 @@ export function colorScaleGradientCSS(colorScale: ColorScale, steps: number = 20
   return generateGradientCSS(scaleFunc, steps);
 }
 
+/**
+ * Get a (t: number) => color interpolator for any continuous ColorScale.
+ * Used by NumericRangeChart to color individual histogram bars.
+ */
+export function colorScaleInterpolator(colorScale: ColorScale): ((t: number) => string) | null {
+  if (colorScale.type === 'categorical') return null;
+  if (colorScale.type === 'monochrome') return getMonochromeScale(colorScale.baseColor, [0, 1]);
+  const name = colorScale.scaleName;
+  if (isCrameriScale(name)) {
+    const interp = makeCrameriInterpolator(name);
+    if (interp) return interp;
+  }
+  if (colorScale.type === 'diverging') return getDivergingScale([0, 0.5, 1], name);
+  return getSequentialScale([0, 1], name);
+}
+
+/**
+ * Generate a CSS linear-gradient string for any continuous ColorScale.
+<<<<<<< HEAD
+ * Single source of truth used by both Legend and ColorScaleSelector.
+ * Returns empty string for categorical scales.
+ */
+export function colorScaleGradientCSS(colorScale: ColorScale, steps: number = 20): string {
+  if (colorScale.type === 'categorical') return '';
+
+  // Crameri fast-path (pre-computed arrays)
+=======
+ * Single source of truth — used by Legend and ColorScaleSelector.
+ */
+export function colorScaleGradientCSS(colorScale: ColorScale, steps: number = 20): string {
+  if (colorScale.type === 'categorical') return '';
+>>>>>>> backendMigration
+  const scaleName = (colorScale.type === 'sequential' || colorScale.type === 'diverging')
+    ? colorScale.scaleName : undefined;
+  if (scaleName && isCrameriScale(scaleName)) {
+    const crameri = crameriGradientCSS(scaleName, steps);
+    if (crameri) return crameri;
+  }
+<<<<<<< HEAD
+
+  // D3 / monochrome fallback
+=======
+>>>>>>> backendMigration
+  let scaleFunc: (t: number) => string;
+  if (colorScale.type === 'monochrome') {
+    scaleFunc = getMonochromeScale(colorScale.baseColor, [0, 1]);
+  } else if (colorScale.type === 'diverging') {
+    scaleFunc = getDivergingScale([0, 0.5, 1], colorScale.scaleName);
+  } else {
+    scaleFunc = getSequentialScale([0, 1], colorScale.scaleName);
+  }
+  return generateGradientCSS(scaleFunc, steps);
+}
+
+<<<<<<< HEAD
+=======
+/**
+ * Get a (t: number) => color interpolator for any continuous ColorScale.
+ * Used by NumericRangeChart to color individual histogram bars.
+ */
+export function colorScaleInterpolator(colorScale: ColorScale): ((t: number) => string) | null {
+  if (colorScale.type === 'categorical') return null;
+  if (colorScale.type === 'monochrome') return getMonochromeScale(colorScale.baseColor, [0, 1]);
+  const name = colorScale.scaleName;
+  if (isCrameriScale(name)) {
+    const interp = makeCrameriInterpolator(name);
+    if (interp) return interp;
+  }
+  if (colorScale.type === 'diverging') return getDivergingScale([0, 0.5, 1], name);
+  return getSequentialScale([0, 1], name);
+}
+
+>>>>>>> backendMigration
 // Re-export palette registry for convenience
 export { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, DEFAULT_PALETTE_KEY, getPaletteColors } from './categoryPalettes';
 export type { CategoricalPalette } from './categoryPalettes';

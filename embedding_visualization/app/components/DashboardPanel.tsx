@@ -268,6 +268,28 @@ export function DashboardPanel({
     return undefined;
   }, [isContinuousScale, colorByField, points]);
 
+  // Compute histogram bins for continuous scale legend
+  const histogramBins = useMemo(() => {
+    if (!numericRange || !colorByField) return undefined;
+    const { min, max } = numericRange;
+    if (min === max) return undefined;
+    const BIN_COUNT = 30;
+    const binWidth = (max - min) / BIN_COUNT;
+    const counts = new Array(BIN_COUNT).fill(0);
+    for (const p of points) {
+      const val = p.metadata?.[colorByField];
+      const num = typeof val === 'number' ? val : parseFloat(String(val));
+      if (isNaN(num)) continue;
+      const idx = Math.min(Math.floor((num - min) / binWidth), BIN_COUNT - 1);
+      counts[idx]++;
+    }
+    return counts.map((count: number, i: number) => ({
+      binStart: min + i * binWidth,
+      binEnd: min + (i + 1) * binWidth,
+      count,
+    }));
+  }, [numericRange, colorByField, points]);
+
   // Select-only handler: click isolates a category, shift+click toggles multi-select
   const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {
     // In topic color mode, delegate to selectedTopicIds (always multi-select toggle;
@@ -469,6 +491,10 @@ export function DashboardPanel({
             onCategoryReset={handleCategoryReset}
             colorScale={colorScale}
             numericRange={numericRange}
+<<<<<<< HEAD
+=======
+            histogramBins={histogramBins}
+>>>>>>> backendMigration
             customNumericRange={customNumericRange}
             onCustomRangeChange={setCustomNumericRange}
             categoricalPalette={categoricalPalette}

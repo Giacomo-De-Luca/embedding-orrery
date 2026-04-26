@@ -10,9 +10,9 @@ import {
 } from '../../lib/utils/categoryColors';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
-import { X, RotateCcw } from 'lucide-react';
-import { useDebounceValue } from '@/lib/hooks/use-debounce-value';
-import type { NestedColorMap, ColorScale, CustomNumericRange } from '../../lib/types/types';
+import { RotateCcw } from 'lucide-react';
+import type { NestedColorMap, ColorScale, HistogramBin, CustomNumericRange } from '../../lib/types/types';
+import { NumericRangeChart } from './charts/NumericRangeChart';
 
 interface LegendProps {
   className?: string;
@@ -24,9 +24,8 @@ interface LegendProps {
   onCategoryReset?: () => void;
   colorScale?: ColorScale;
   numericRange?: { min: number; max: number };
-  /** Custom numeric range overrides (from store) */
+  histogramBins?: HistogramBin[];
   customNumericRange?: CustomNumericRange | null;
-  /** Callback when user edits a range value */
   onCustomRangeChange?: (range: CustomNumericRange | null) => void;
   categoricalPalette?: string;
   nestedColorMap?: NestedColorMap | null;
@@ -135,6 +134,7 @@ export function Legend({
   onCategoryReset,
   colorScale = { type: 'categorical' },
   numericRange,
+  histogramBins,
   customNumericRange,
   onCustomRangeChange,
   categoricalPalette,
@@ -181,69 +181,9 @@ export function Legend({
   // Generate gradient dynamically from the actual scale function
   const gradient = useMemo(() => colorScaleGradientCSS(colorScale), [colorScale]);
 
-  // Default to POS legend if no category info provided
-  const isPosLegend = !categoryField || categoryField === 'pos';
-  const values = categoryValues || (isPosLegend ? ['n', 'v', 'a', 'r', 's', 'unknown'] : []);
-
-  const colorMap = buildCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette);
-
-  // Filter flat category values by display label
-  const filteredValues = useMemo(() => {
-    if (!debouncedFilter.trim()) return values;
-    const q = debouncedFilter.toLowerCase();
-    return values.filter((value) => {
-      const label = getCategoryLabel(categoryField ?? null, value);
-      return String(label).toLowerCase().includes(q);
-    });
-  }, [values, debouncedFilter, categoryField]);
-
-  // Filter nested hierarchy: topic match keeps all subtopics; subtopic match keeps parent + matching subtopics
-  const filteredHierarchy = useMemo(() => {
-    if (!nestedColorMap) return null;
-    if (!debouncedFilter.trim()) return nestedColorMap.hierarchy;
-    const q = debouncedFilter.toLowerCase();
-    const result: Record<string, string[]> = {};
-    for (const [topic, subtopics] of Object.entries(nestedColorMap.hierarchy)) {
-      if (topic.toLowerCase().includes(q)) {
-        result[topic] = subtopics;
-      } else {
-        const matchingSubs = subtopics.filter((sub) => sub.toLowerCase().includes(q));
-        if (matchingSubs.length > 0) {
-          result[topic] = matchingSubs;
-        }
-      }
-    }
-    return result;
-  }, [nestedColorMap, debouncedFilter]);
-
-  // For continuous scales, render a gradient bar with editable range labels
+  // For continuous scales, render histogram range chart or fallback gradient bar
   if (isContinuous && numericRange) {
-    const dataMin = numericRange.min;
-    const dataMax = numericRange.max;
-    const isDiverging = colorScale.type === 'diverging';
-    const hasCustom = customNumericRange != null;
-
-    // Effective values: custom overrides, falling back to data
-    const effMin = customNumericRange?.min ?? dataMin;
-    const effMax = customNumericRange?.max ?? dataMax;
-    const effCenter = isDiverging
-      ? (customNumericRange?.center ?? (dataMin + dataMax) / 2)
-      : (effMin + effMax) / 2;
-
-    const handleRangeEdit = (field: 'min' | 'max' | 'center', value: number) => {
-      // Validate: min < max
-      if (field === 'min' && value >= effMax) return;
-      if (field === 'max' && value <= effMin) return;
-
-      const next: CustomNumericRange = { ...customNumericRange, [field]: value };
-      // If value matches data default, clear the override for that field
-      if (field === 'min' && Math.abs(value - dataMin) < 1e-10) delete next.min;
-      if (field === 'max' && Math.abs(value - dataMax) < 1e-10) delete next.max;
-      if (field === 'center' && Math.abs(value - (dataMin + dataMax) / 2) < 1e-10) delete next.center;
-      // If all fields cleared, set to null
-      const isEmpty = next.min === undefined && next.max === undefined && next.center === undefined;
-      onCustomRangeChange?.(isEmpty ? null : next);
-    };
+    const { min, max } = numericRange;
 
     return (
       <Card
@@ -253,7 +193,7 @@ export function Legend({
         <CardHeader>
           <div className="flex items-center gap-2">
             <CardTitle className="font-mono text-xs flex-1">{getCategoryDisplayName(categoryField ?? 'value')}</CardTitle>
-            {hasCustom && (
+            {customNumericRange != null && (
               <button
                 onClick={() => onCustomRangeChange?.(null)}
                 className="text-muted-foreground/50 hover:text-muted-foreground transition-colors pointer-events-auto"
@@ -265,44 +205,30 @@ export function Legend({
             )}
           </div>
         </CardHeader>
-        <CardContent className="space-y-2 pointer-events-auto">
-          {/* Gradient bar */}
-          <div
-            className="h-2 w-full rounded"
-            style={{ background: gradient }}
-            aria-label={`Color scale from ${effMin} to ${effMax}`}
-          />
-          {/* Editable labels: min, center, max */}
-          <div className="flex justify-between text-xs tabular-nums">
-            <EditableRangeLabel
-              value={effMin}
-              dataValue={dataMin}
-              onCommit={(v) => handleRangeEdit('min', v)}
-              align="left"
+        <CardContent className="space-y-1 pointer-events-auto">
+          {histogramBins && histogramBins.length > 0 ? (
+            <NumericRangeChart
+              bins={histogramBins}
+              dataMin={min}
+              dataMax={max}
+              colorScale={colorScale}
+              customRange={customNumericRange}
+              onRangeChange={onCustomRangeChange}
+              isDiverging={colorScale.type === 'diverging'}
             />
-            {isDiverging ? (
-              <EditableRangeLabel
-                value={effCenter}
-                dataValue={(dataMin + dataMax) / 2}
-                onCommit={(v) => handleRangeEdit('center', v)}
-                align="center"
+          ) : (
+            <>
+              <div
+                className="h-2 w-full rounded"
+                style={{ background: gradient }}
+                aria-label={`Color scale from ${min} to ${max}`}
               />
-            ) : (
-              <span className="text-muted-foreground text-center">{formatNumericValue(effCenter)}</span>
-            )}
-            <EditableRangeLabel
-              value={effMax}
-              dataValue={dataMax}
-              onCommit={(v) => handleRangeEdit('max', v)}
-              align="right"
-            />
-          </div>
-          {/* Data range reference when custom range is active */}
-          {hasCustom && (
-            <div className="text-[10px] text-muted-foreground/40 flex justify-between">
-              <span>data: {formatNumericValue(dataMin)}</span>
-              <span>{formatNumericValue(dataMax)}</span>
-            </div>
+              <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
+                <span>{formatNumericValue(min)}</span>
+                <span>{formatNumericValue((min + max) / 2)}</span>
+                <span>{formatNumericValue(max)}</span>
+              </div>
+            </>
           )}
         </CardContent>
         {dragHandle}

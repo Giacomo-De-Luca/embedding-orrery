@@ -413,7 +413,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (!numericData) return null;
     let effMin = customNumericRange?.min ?? numericData.min;
     let effMax = customNumericRange?.max ?? numericData.max;
-    // For diverging scales with custom center, expand symmetrically so center maps to t=0.5
     if (colorScale.type === 'diverging' && customNumericRange?.center !== undefined) {
       const c = customNumericRange.center;
       const deviation = Math.max(Math.abs(effMax - c), Math.abs(effMin - c));
