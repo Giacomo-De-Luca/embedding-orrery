@@ -188,7 +188,6 @@ export default function Home() {
   const combinedHighlightedIndices: HighlightMap | undefined = useHighlightedIndices(
     semanticSearchResults,
     data,
-    topicSearch.topicHighlightMap,
     semanticSearchResults && semanticSearchResults.length > 0 ? null : textSearchHighlightedIndices,
   );
 

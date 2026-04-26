@@ -2,15 +2,17 @@ import { useMemo } from 'react';
 import type { EmbeddingData, SemanticSearchResult, HighlightMap } from '../types/types';
 
 /**
- * Combines highlighted indices from semantic search, topic selection,
- * and text search.
+ * Combines highlighted indices from semantic search and text search.
  *
  * Returns a Map where:
- * - Keys: point indices to highlight
+ * - Keys: point indices to highlight (glow overlay)
  * - Values: similarity scores (0-1)
  *   - Semantic search results: actual similarity score
- *   - Topic-selected points: 1.0 (membership match)
  *   - Text search results: fixed 0.5 (distinct blue tone)
+ *
+ * Topic selection is handled by the muting system (effectiveMutedCategories),
+ * not by glow overlays. Mixing thousands of topic points into the glow pipeline
+ * causes Plotly freezes when clicking points after cluster zoom.
  *
  * The selected point is NOT included here — it has its own dedicated overlay
  * traces in ScatterPlot3D. Keeping it out prevents premature recomputation
@@ -19,7 +21,6 @@ import type { EmbeddingData, SemanticSearchResult, HighlightMap } from '../types
 export function useHighlightedIndices(
   semanticSearchResults: SemanticSearchResult[] | null,
   data: EmbeddingData | null,
-  topicHighlightMap?: HighlightMap,
   textSearchHighlights?: Set<number> | null,
 ): HighlightMap | undefined {
   // Build id→index lookup once when data loads — O(n) one-time cost
@@ -48,16 +49,6 @@ export function useHighlightedIndices(
       }
     }
 
-    // Merge topic highlights (max-similarity logic)
-    if (topicHighlightMap && topicHighlightMap.size > 0) {
-      topicHighlightMap.forEach((score, index) => {
-        const current = highlightMap.get(index);
-        if (current === undefined || score > current) {
-          highlightMap.set(index, score);
-        }
-      });
-    }
-
     // Merge text search highlights (fixed 0.5 similarity = blue tone).
     // Semantic search results take priority (max-similarity logic preserves them).
     if (textSearchHighlights && textSearchHighlights.size > 0) {
@@ -71,5 +62,5 @@ export function useHighlightedIndices(
 
     // Return undefined if empty for backward compatibility
     return highlightMap.size > 0 ? highlightMap : undefined;
-  }, [semanticSearchResults, idToIndex, topicHighlightMap, textSearchHighlights]);
+  }, [semanticSearchResults, idToIndex, textSearchHighlights]);
 }

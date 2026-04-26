@@ -612,16 +612,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const baseDistance = Math.sqrt(defaultEye.x ** 2 + defaultEye.y ** 2 + defaultEye.z ** 2);
     const factor = Math.max(extentRatio, 0.3);
 
-    const targetEye = {
-      x: defaultEye.x * factor,
-      y: defaultEye.y * factor,
-      z: defaultEye.z * factor,
-    };
-
     const norm = getSceneNormalization(graphDivRef.current, bounds);
     const targetCenter = norm
       ? { x: (cx - norm.centerX) / norm.normRange, y: (cy - norm.centerY) / norm.normRange, z: (cz - norm.centerZ) / norm.normRange }
       : { x: 0, y: 0, z: 0 };
+
+    const targetEye = {
+      x: targetCenter.x + defaultEye.x * factor,
+      y: targetCenter.y + defaultEye.y * factor,
+      z: targetCenter.z + defaultEye.z * factor,
+    };
 
     animateCameraToRegion({
       targetEye, targetCenter, duration: 2000,
@@ -912,7 +912,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         if (!screen) continue;
 
         const sx = screen.x + glOffsetX;
-        const sy = screen.y + glOffsetY;
+        const sy = screen.y + glOffsetY - clusterFontSize * 1.5;
 
         const textWidth = ctx.measureText(cl.label).width;
         const pad = 4;

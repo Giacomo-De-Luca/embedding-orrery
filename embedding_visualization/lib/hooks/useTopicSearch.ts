@@ -32,7 +32,6 @@ export interface UseTopicSearchReturn {
   selectAll: () => void;
   clearAll: () => void;
   // Outputs for integration
-  topicHighlightMap: HighlightMap | undefined;
   topicFilters: FilterInput[] | undefined;
 }
 
