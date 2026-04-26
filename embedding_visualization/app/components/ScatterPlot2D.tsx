@@ -413,14 +413,14 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (!numericData) return null;
     let effMin = customNumericRange?.min ?? numericData.min;
     let effMax = customNumericRange?.max ?? numericData.max;
-    if (colorScale.type === 'diverging' && customNumericRange?.center !== undefined) {
+    if (customNumericRange?.center !== undefined) {
       const c = customNumericRange.center;
       const deviation = Math.max(Math.abs(effMax - c), Math.abs(effMin - c));
       effMin = c - deviation;
       effMax = c + deviation;
     }
     return { min: effMin, max: effMax };
-  }, [numericData, customNumericRange, colorScale.type]);
+  }, [numericData, customNumericRange]);
 
   // Generate Plotly-compatible colorscale array
   const plotlyColorScale = useMemo(() => {

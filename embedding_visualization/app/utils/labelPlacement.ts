@@ -6,16 +6,6 @@
  */
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface DataBounds {
-  minX: number; maxX: number;
-  minY: number; maxY: number;
-  minZ: number; maxZ: number;
-}
-
-// ---------------------------------------------------------------------------
 // Column-major 4x4 matrix math
 // ---------------------------------------------------------------------------
 
@@ -54,37 +44,6 @@ export function computeMVP(
   model: Float32Array,
 ): Float32Array {
   return mat4Multiply(projection, mat4Multiply(view, model));
-}
-
-// ---------------------------------------------------------------------------
-// Model matrix: data coords -> Plotly scene coords
-// ---------------------------------------------------------------------------
-
-/**
- * Build the model matrix that transforms data-space coordinates into the
- * normalized scene coordinates that Plotly's camera operates in.
- *
- * With `aspectmode: 'data'`, Plotly maps:
- *   sceneCoord = (dataCoord - center) / maxRange
- */
-export function buildDataToSceneMatrix(bounds: DataBounds): Float32Array {
-  const cx = (bounds.minX + bounds.maxX) / 2;
-  const cy = (bounds.minY + bounds.maxY) / 2;
-  const cz = (bounds.minZ + bounds.maxZ) / 2;
-  const maxRange = Math.max(
-    bounds.maxX - bounds.minX,
-    bounds.maxY - bounds.minY,
-    bounds.maxZ - bounds.minZ,
-  ) || 1;
-  const s = 1 / maxRange;
-
-  // Column-major 4x4: Scale(s) * Translate(-center)
-  return new Float32Array([
-    s, 0, 0, 0,
-    0, s, 0, 0,
-    0, 0, s, 0,
-    -cx * s, -cy * s, -cz * s, 1,
-  ]);
 }
 
 // ---------------------------------------------------------------------------

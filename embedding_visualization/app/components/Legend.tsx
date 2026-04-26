@@ -10,7 +10,8 @@ import {
 } from '../../lib/utils/categoryColors';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
-import { RotateCcw } from 'lucide-react';
+import { X, RotateCcw } from 'lucide-react';
+import { useDebounceValue } from '@/lib/hooks/use-debounce-value';
 import type { NestedColorMap, ColorScale, HistogramBin, CustomNumericRange } from '../../lib/types/types';
 import { NumericRangeChart } from './charts/NumericRangeChart';
 
@@ -181,6 +182,41 @@ export function Legend({
   // Generate gradient dynamically from the actual scale function
   const gradient = useMemo(() => colorScaleGradientCSS(colorScale), [colorScale]);
 
+  // Default to POS legend if no category info provided
+  const isPosLegend = !categoryField || categoryField === 'pos';
+  const values = categoryValues || (isPosLegend ? ['n', 'v', 'a', 'r', 's', 'unknown'] : []);
+
+  const colorMap = buildCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette);
+
+  // Filter flat category values by display label
+  const filteredValues = useMemo(() => {
+    if (!debouncedFilter.trim()) return values;
+    const q = debouncedFilter.toLowerCase();
+    return values.filter((value) => {
+      const label = getCategoryLabel(categoryField ?? null, value);
+      return String(label).toLowerCase().includes(q);
+    });
+  }, [values, debouncedFilter, categoryField]);
+
+  // Filter nested hierarchy: topic match keeps all subtopics; subtopic match keeps parent + matching subtopics
+  const filteredHierarchy = useMemo(() => {
+    if (!nestedColorMap) return null;
+    if (!debouncedFilter.trim()) return nestedColorMap.hierarchy;
+    const q = debouncedFilter.toLowerCase();
+    const result: Record<string, string[]> = {};
+    for (const [topic, subtopics] of Object.entries(nestedColorMap.hierarchy)) {
+      if (topic.toLowerCase().includes(q)) {
+        result[topic] = subtopics;
+      } else {
+        const matchingSubs = subtopics.filter((sub) => sub.toLowerCase().includes(q));
+        if (matchingSubs.length > 0) {
+          result[topic] = matchingSubs;
+        }
+      }
+    }
+    return result;
+  }, [nestedColorMap, debouncedFilter]);
+
   // For continuous scales, render histogram range chart or fallback gradient bar
   if (isContinuous && numericRange) {
     const { min, max } = numericRange;
@@ -214,7 +250,6 @@ export function Legend({
               colorScale={colorScale}
               customRange={customNumericRange}
               onRangeChange={onCustomRangeChange}
-              isDiverging={colorScale.type === 'diverging'}
             />
           ) : (
             <>

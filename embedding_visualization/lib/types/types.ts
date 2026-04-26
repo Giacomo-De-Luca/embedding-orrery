@@ -168,24 +168,6 @@ export interface HistogramBin {
   count: number;
 }
 
-/**
- * Custom overrides for numeric color scale range (Tableau-style).
- * Undefined fields fall back to auto-detected data range.
- */
-export interface CustomNumericRange {
-  min?: number;
-  max?: number;
-  center?: number;  // midpoint for diverging scales
-}
-
-/** Histogram bin for NumericRangeChart. */
-export interface HistogramBin {
-  binStart: number;
-  binEnd: number;
-  count: number;
-}
-
-
 export interface TemporalRange {
   field: string;         // temporal field name (e.g. "year")
   startPeriod: string;   // inclusive start (e.g. "1990")

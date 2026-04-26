@@ -12,7 +12,6 @@ interface NumericRangeChartProps {
   colorScale: ColorScale;
   customRange?: CustomNumericRange | null;
   onRangeChange?: (range: CustomNumericRange | null) => void;
-  isDiverging?: boolean;
 }
 
 type HandleType = 'min' | 'max' | 'center';
@@ -34,7 +33,6 @@ export function NumericRangeChart({
   colorScale,
   customRange,
   onRangeChange,
-  isDiverging = false,
 }: NumericRangeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -48,9 +46,7 @@ export function NumericRangeChart({
   // Effective values: custom → drag → data
   const effMin = dragMin ?? customRange?.min ?? dataMin;
   const effMax = dragMax ?? customRange?.max ?? dataMax;
-  const effCenter = isDiverging
-    ? (dragCenter ?? customRange?.center ?? (dataMin + dataMax) / 2)
-    : (effMin + effMax) / 2;
+  const effCenter = dragCenter ?? customRange?.center ?? (dataMin + dataMax) / 2;
 
   const hasCustom = customRange != null || isDragging;
   const dataRange = dataMax - dataMin;
@@ -66,8 +62,11 @@ export function NumericRangeChart({
   const onRangeChangeRef = useRef(onRangeChange);
   onRangeChangeRef.current = onRangeChange;
 
-  // Color interpolator for bars
-  const interpolator = useMemo(() => colorScaleInterpolator(colorScale), [colorScale]);
+  // Color interpolator for bars — depend on colorScale identity + scaleName/baseColor for stability
+  const scaleKey = colorScale.type === 'categorical' ? '' :
+    colorScale.type === 'monochrome' ? colorScale.baseColor :
+    colorScale.scaleName;
+  const interpolator = useMemo(() => colorScaleInterpolator(colorScale), [scaleKey, colorScale.type]);
 
   // Max count for bar height normalization
   const maxCount = useMemo(() => Math.max(...bins.map(b => b.count), 1), [bins]);
@@ -108,13 +107,13 @@ export function NumericRangeChart({
     const next: CustomNumericRange = {};
     if (Math.abs(min - dataMin) > dataRange * 0.005) next.min = min;
     if (Math.abs(max - dataMax) > dataRange * 0.005) next.max = max;
-    if (isDiverging && Math.abs(center - (dataMin + dataMax) / 2) > dataRange * 0.005) {
+    if (Math.abs(center - (dataMin + dataMax) / 2) > dataRange * 0.005) {
       next.center = center;
     }
 
     const isEmpty = next.min === undefined && next.max === undefined && next.center === undefined;
     onRangeChangeRef.current?.(isEmpty ? null : next);
-  }, [dataMin, dataMax, dataRange, isDiverging]);
+  }, [dataMin, dataMax, dataRange]);
 
   const handleEnd = useCallback(() => {
     dragRef.current = null;
@@ -194,7 +193,19 @@ export function NumericRangeChart({
           {bins.map((bin, i) => {
             const heightPct = maxCount > 0 ? (bin.count / maxCount) * 100 : 0;
             const binMid = (bin.binStart + bin.binEnd) / 2;
-            const t = dataRange > 0 ? (binMid - dataMin) / dataRange : 0.5;
+            // Piecewise linear: effMin→0, effCenter→0.5, effMax→1
+            // This ensures the center handle visibly shifts the color midpoint
+            let t: number;
+            if (effMax <= effMin) {
+              t = 0.5;
+            } else if (binMid <= effCenter) {
+              const leftRange = effCenter - effMin;
+              t = leftRange > 0 ? 0.5 * (binMid - effMin) / leftRange : 0;
+            } else {
+              const rightRange = effMax - effCenter;
+              t = rightRange > 0 ? 0.5 + 0.5 * (binMid - effCenter) / rightRange : 1;
+            }
+            t = Math.max(0, Math.min(1, t));
             const barColor = interpolator ? interpolator(t) : '#888';
             const isOutside = binMid < effMin || binMid > effMax;
 
@@ -246,17 +257,15 @@ export function NumericRangeChart({
             <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-foreground/60 group-hover:bg-foreground transition-colors rounded-full" />
           </div>
 
-          {/* Center handle (diverging only) */}
-          {isDiverging && (
-            <div
-              className="absolute inset-y-0 w-2 -translate-x-1/2 cursor-ew-resize z-10 group"
-              style={{ left: `${centerPct}%` }}
-              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); startDrag('center', e.clientX); }}
-              onTouchStart={(e) => { e.stopPropagation(); if (e.touches.length === 1) startTouchDrag('center', e.touches[0].clientX); }}
-            >
-              <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-foreground/40 group-hover:bg-foreground border-x border-dashed border-foreground/20 transition-colors" />
-            </div>
-          )}
+          {/* Center handle */}
+          <div
+            className="absolute inset-y-0 w-2 -translate-x-1/2 cursor-ew-resize z-10 group"
+            style={{ left: `${centerPct}%` }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); startDrag('center', e.clientX); }}
+            onTouchStart={(e) => { e.stopPropagation(); if (e.touches.length === 1) startTouchDrag('center', e.touches[0].clientX); }}
+          >
+            <div className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-foreground/40 group-hover:bg-foreground border-x border-dashed border-foreground/20 transition-colors" />
+          </div>
         </div>
       </div>
 
@@ -265,13 +274,9 @@ export function NumericRangeChart({
         <span className={cn("text-muted-foreground", hasCustom && customRange?.min !== undefined && "text-primary font-medium")}>
           {formatValue(effMin)}
         </span>
-        {isDiverging ? (
-          <span className={cn("text-muted-foreground", hasCustom && customRange?.center !== undefined && "text-primary font-medium")}>
-            {formatValue(effCenter)}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{formatValue(effCenter)}</span>
-        )}
+        <span className={cn("text-muted-foreground", hasCustom && customRange?.center !== undefined && "text-primary font-medium")}>
+          {formatValue(effCenter)}
+        </span>
         <span className={cn("text-muted-foreground", hasCustom && customRange?.max !== undefined && "text-primary font-medium")}>
           {formatValue(effMax)}
         </span>

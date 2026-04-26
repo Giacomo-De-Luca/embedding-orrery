@@ -9,15 +9,14 @@ import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crame
 import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
-import { useCameraFlyTo, animateCameraToRegion, type Bounds3D } from '../../lib/hooks/cameraAnimation';
+import { useCameraFlyTo, animateCameraToRegion } from '../../lib/hooks/cameraAnimation';
+import type { DataBounds } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
-import { computeMVP, buildDataToSceneMatrix, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
+import { computeMVP, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
+import { buildDataToSceneMatrix, getSceneNormalization } from '../utils/rendeding';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
-
-// Hoisted identity matrix for haze renderer model matrix fallback (avoids per-frame allocation)
-const GL_IDENTITY_MATRIX = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
 
 type PlotlyData = Partial<PlotData>;
 
@@ -340,14 +339,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (!numericData) return null;
     let effMin = customNumericRange?.min ?? numericData.min;
     let effMax = customNumericRange?.max ?? numericData.max;
-    if (colorScale.type === 'diverging' && customNumericRange?.center !== undefined) {
+    if (customNumericRange?.center !== undefined) {
       const c = customNumericRange.center;
       const deviation = Math.max(Math.abs(effMax - c), Math.abs(effMin - c));
       effMin = c - deviation;
       effMax = c + deviation;
     }
     return { min: effMin, max: effMax };
-  }, [numericData, customNumericRange, colorScale.type]);
+  }, [numericData, customNumericRange]);
 
   // --- 2. GENERATE PLOTLY NATIVE COLORSCALE ---
   // Bridge the ColorScale union to a Plotly array [[0, 'hex'], [1, 'hex']]
@@ -534,7 +533,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   ]);
 
   // Bounds of active (non-muted) points — computed directly from muting state
-  const activeBounds = useMemo<Bounds3D | null>(() => {
+  const activeBounds = useMemo<DataBounds | null>(() => {
     if (!bounds) return null;
     const hasMuting = mutedCategories.length > 0 || (combinedMutedIndices && combinedMutedIndices.size > 0);
     if (!hasMuting) return bounds;
@@ -619,11 +618,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       z: defaultEye.z * factor,
     };
 
-    const targetCenter = {
-      x: fullExtentX > 0 ? (cx - (bounds.minX + bounds.maxX) / 2) / fullExtentX : 0,
-      y: fullExtentY > 0 ? (cy - (bounds.minY + bounds.maxY) / 2) / fullExtentY : 0,
-      z: fullExtentZ > 0 ? (cz - (bounds.minZ + bounds.maxZ) / 2) / fullExtentZ : 0,
-    };
+    const norm = getSceneNormalization(graphDivRef.current, bounds);
+    const targetCenter = norm
+      ? { x: (cx - norm.centerX) / norm.normRange, y: (cy - norm.centerY) / norm.normRange, z: (cz - norm.centerZ) / norm.normRange }
+      : { x: 0, y: 0, z: 0 };
 
     animateCameraToRegion({
       targetEye, targetCenter, duration: 2000,
@@ -850,7 +848,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const view = cameraParams?.view || cameraParams?._view;
     if (!projection || !view) return;
 
-    const model = glplot?.model || buildDataToSceneMatrix(currentBounds);
+    const model = buildDataToSceneMatrix(graphDivRef.current, currentBounds);
     const mvp = computeMVP(projection, view, model);
 
     // Get the actual GL canvas position relative to our overlay container.
@@ -1346,7 +1344,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
       const projection = cameraParams.projection || cameraParams._projection;
       const view = cameraParams.view || cameraParams._view;
-      const model = glplot.model || (boundsRef.current ? buildDataToSceneMatrix(boundsRef.current) : GL_IDENTITY_MATRIX);
+      const model = buildDataToSceneMatrix(graphDivRef.current, boundsRef.current ?? undefined);
       if (!projection || !view) return;
 
       haze.render(projection, view, model);

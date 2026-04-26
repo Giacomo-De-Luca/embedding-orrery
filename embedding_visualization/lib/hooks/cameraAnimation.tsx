@@ -3,13 +3,7 @@
 import { useRef, useCallback, useEffect } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import type { Point3D } from '../types/types';
-import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian } from '../../app/utils/rendeding';
-
-export interface Bounds3D {
-  minX: number; maxX: number;
-  minY: number; maxY: number;
-  minZ: number; maxZ: number;
-}
+import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getSceneNormalization, type DataBounds } from '../../app/utils/rendeding';
 
 interface CameraState {
   eye: { x: number; y: number; z: number };
@@ -21,7 +15,7 @@ interface CameraState {
  * Owns animation frame and isAnimating state; shared refs are passed in.
  */
 export function useCameraFlyTo(
-  bounds: Bounds3D | null,
+  bounds: DataBounds | null,
   graphDivRef: MutableRefObject<any>,
   currentCameraRef: MutableRefObject<CameraState>,
   plotlyLibRef: MutableRefObject<any>,
@@ -44,14 +38,12 @@ export function useCameraFlyTo(
     if (!bounds || !graphDivRef.current) return;
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 
-    const dataCenterX = (bounds.minX + bounds.maxX) / 2;
-    const dataCenterY = (bounds.minY + bounds.maxY) / 2;
-    const dataCenterZ = (bounds.minZ + bounds.maxZ) / 2;
-    const maxRange = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) || 1;
+    const norm = getSceneNormalization(graphDivRef.current, bounds);
+    if (!norm) return;
 
-    const targetCenterX = (target.x - dataCenterX) / maxRange;
-    const targetCenterY = (target.y - dataCenterY) / maxRange;
-    const targetCenterZ = (target.z - dataCenterZ) / maxRange;
+    const targetCenterX = (target.x - norm.centerX) / norm.normRange;
+    const targetCenterY = (target.y - norm.centerY) / norm.normRange;
+    const targetCenterZ = (target.z - norm.centerZ) / norm.normRange;
 
     const targetR = 0.15;
     const targetPhi = 1.3;
