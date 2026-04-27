@@ -75,7 +75,7 @@ Data Sources → Embedding Providers → DuckDB (docs/metadata) + ChromaDB (vect
                                    Topic Extraction (reads projections from DuckDB, embeddings from ChromaDB)
 ```
 
-**Dual-database design**: DuckDB (`resources/main.duckdb`) is the central orchestrator storing documents, metadata, projections (native FLOAT[] arrays), and topic data (normalized tables). ChromaDB (`resources/vector_db/`) stores only IDs + dense embedding vectors. One dataset in DuckDB can have multiple `vector_collections` (different embedding models, dense/sparse). See `documentation/DUCKDB_MIGRATION_PLAN.md` for full schema and migration details.
+**Dual-database design**: DuckDB (`resources/main.duckdb`) is the central orchestrator storing documents, metadata, projections (native FLOAT[] arrays), and topic data (normalized tables). ChromaDB (`resources/vector_db/`) stores only IDs + dense embedding vectors. One dataset in DuckDB can have multiple `vector_collections` (different embedding models, dense/sparse). Items are stored in **per-dataset tables** (`items_{name}`) for isolation and per-dataset FTS indexes. See `documentation/DATABASE_ARCHITECTURE.md` for full schema, API reference, and data flow diagrams.
 
 **Embedding providers**: SentenceTransformers (default, local), OpenAI, Cohere, Ollama (local), HuggingFace API, Gemini, QWEN (local), BGE (local). Model names are free-form; dimensions auto-detected. Hardware auto-detects MPS → CUDA → CPU.
 

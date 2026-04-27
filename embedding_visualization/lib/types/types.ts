@@ -159,6 +159,7 @@ export interface CustomNumericRange {
   min?: number;
   max?: number;
   center?: number;  // midpoint for diverging scales
+  logScale?: boolean;  // when true, map values through log10 before coloring
 }
 
 /** Histogram bin for NumericRangeChart. */

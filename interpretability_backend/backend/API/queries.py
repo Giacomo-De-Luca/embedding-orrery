@@ -24,7 +24,6 @@ from .types import (
     TextSearchResponse,
     TopicInfo,
     TopicKeyword,
-    build_where_clause,
 )
 
 # Import clients at module level
@@ -267,9 +266,9 @@ class Query:
             if ds is None:
                 return None
             # Load items directly
+            items_table = db._items_table(name)
             rows = db._conn.execute(
-                "SELECT id, document, metadata FROM items WHERE dataset_id = ? ORDER BY row_index",
-                [ds["id"]]
+                f"SELECT id, document, metadata FROM {items_table} ORDER BY row_index",
             ).fetchall()
             if not rows:
                 return None
@@ -460,16 +459,24 @@ class Query:
         client = get_chromadb_client()
         db = get_duckdb_client()
 
-        # Build where clause
-        where = build_where_clause(filters)
+        # Pre-filter via DuckDB if filters provided (ChromaDB has no metadata)
+        allowed_ids = None
+        if filters:
+            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
+                           for f in filters]
+            filtered = db.get_filtered_items(collection_name, filter_dicts, limit=100000)
+            allowed_ids = {item["id"] for item in filtered}
+            if not allowed_ids:
+                return []
 
-        # ChromaDB: vector similarity search (IDs + distances)
+        # ChromaDB: vector similarity search (no where clause — metadata not in ChromaDB)
+        # Over-fetch when filtering to ensure enough results survive post-filter
+        fetch_n = n_results * 5 if allowed_ids else n_results
         results = client.semantic_search(
             collection_name=collection_name,
             query_texts=[query] if query else None,
             query_embeddings=[query_embedding] if query_embedding else None,
-            n_results=n_results,
-            where=where,
+            n_results=fetch_n,
             distance_metric=similarity_measure.value,
             query_prompt=query_prompt
         )
@@ -485,9 +492,12 @@ class Query:
         for item in enriched:
             items_by_id[item["id"]] = item
 
-        # Build results in ChromaDB's ranked order
+        # Build results in ChromaDB's ranked order, post-filtering if needed
         search_results = []
         for i, item_id in enumerate(result_ids):
+            if allowed_ids is not None and item_id not in allowed_ids:
+                continue
+
             distance = results["distances"][0][i]
             similarity = results["similarities"][0][i]
             enriched_item = items_by_id.get(item_id, {})
@@ -504,6 +514,8 @@ class Query:
                 result.embedding = results["embeddings"][0][i]
 
             search_results.append(result)
+            if len(search_results) >= n_results:
+                break
 
         return search_results
 
@@ -545,15 +557,24 @@ class Query:
             return []
 
         query_embedding = item_data["embeddings"][0]
-        where = build_where_clause(filters)
 
-        # ChromaDB: vector similarity search
+        # Pre-filter via DuckDB if filters provided
+        allowed_ids = None
+        if filters:
+            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
+                           for f in filters]
+            filtered = db.get_filtered_items(collection_name, filter_dicts, limit=100000)
+            allowed_ids = {item["id"] for item in filtered}
+            if not allowed_ids:
+                return []
+
+        # ChromaDB: vector similarity search (no where clause)
+        fetch_n = n_results * 5 if allowed_ids else n_results
         results = client.semantic_search(
             collection_name=collection_name,
             query_texts=None,
             query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where,
+            n_results=fetch_n,
             distance_metric=similarity_measure.value
         )
 
@@ -570,6 +591,8 @@ class Query:
 
         search_results = []
         for i, result_id in enumerate(result_ids):
+            if allowed_ids is not None and result_id not in allowed_ids:
+                continue
             enriched_item = items_by_id.get(result_id, {})
             search_results.append(SemanticSearchResult(
                 id=result_id,
@@ -578,6 +601,8 @@ class Query:
                 distance=results["distances"][0][i],
                 similarity=results["similarities"][0][i],
             ))
+            if len(search_results) >= n_results:
+                break
 
         return search_results
 

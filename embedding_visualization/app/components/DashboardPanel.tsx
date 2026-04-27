@@ -269,11 +269,36 @@ export function DashboardPanel({
   }, [isContinuousScale, colorByField, points]);
 
   // Compute histogram bins for continuous scale legend
+  const isLogScale = customNumericRange?.logScale === true;
   const histogramBins = useMemo(() => {
     if (!numericRange || !colorByField) return undefined;
     const { min, max } = numericRange;
     if (min === max) return undefined;
     const BIN_COUNT = 30;
+
+    if (isLogScale) {
+      // Log-space binning: equal-width bins in log10 space, edges in linear space
+      const offset = min <= 0 ? Math.abs(min) + 1 : 0;
+      const logMin = Math.log10(min + offset + 1e-10);
+      const logMax = Math.log10(max + offset);
+      const logBinWidth = (logMax - logMin) / BIN_COUNT;
+      const counts = new Array(BIN_COUNT).fill(0);
+      for (const p of points) {
+        const val = p.metadata?.[colorByField];
+        const num = typeof val === 'number' ? val : parseFloat(String(val));
+        if (isNaN(num)) continue;
+        const logVal = Math.log10(num + offset + 1e-10);
+        const idx = Math.min(Math.floor((logVal - logMin) / logBinWidth), BIN_COUNT - 1);
+        counts[idx]++;
+      }
+      return counts.map((count: number, i: number) => ({
+        binStart: Math.pow(10, logMin + i * logBinWidth) - offset,
+        binEnd: Math.pow(10, logMin + (i + 1) * logBinWidth) - offset,
+        count,
+      }));
+    }
+
+    // Linear binning
     const binWidth = (max - min) / BIN_COUNT;
     const counts = new Array(BIN_COUNT).fill(0);
     for (const p of points) {
@@ -288,7 +313,7 @@ export function DashboardPanel({
       binEnd: min + (i + 1) * binWidth,
       count,
     }));
-  }, [numericRange, colorByField, points]);
+  }, [numericRange, colorByField, points, isLogScale]);
 
   // Select-only handler: click isolates a category, shift+click toggles multi-select
   const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {

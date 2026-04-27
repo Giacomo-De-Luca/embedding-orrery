@@ -50,6 +50,8 @@ export function NumericRangeChart({
 
   const hasCustom = customRange != null || isDragging;
   const dataRange = dataMax - dataMin;
+  const isLog = customRange?.logScale === true;
+  const logOffset = dataMin <= 0 ? Math.abs(dataMin) + 1 : 0;
 
   // Stable refs for drag callbacks
   const effMinRef = useRef(effMin);
@@ -61,6 +63,8 @@ export function NumericRangeChart({
 
   const onRangeChangeRef = useRef(onRangeChange);
   onRangeChangeRef.current = onRangeChange;
+  const customRangeRef = useRef(customRange);
+  customRangeRef.current = customRange;
 
   // Color interpolator for bars — depend on colorScale identity + scaleName/baseColor for stability
   const scaleKey = colorScale.type === 'categorical' ? '' :
@@ -71,18 +75,29 @@ export function NumericRangeChart({
   // Max count for bar height normalization
   const maxCount = useMemo(() => Math.max(...bins.map(b => b.count), 1), [bins]);
 
-  // --- Value ↔ Percentage mapping ---
+  // --- Value ↔ Percentage mapping (log-aware) ---
   const valueToPct = useCallback((v: number) => {
     if (dataRange === 0) return 50;
+    if (isLog) {
+      const logMin = Math.log10(dataMin + logOffset + 1e-10);
+      const logMax = Math.log10(dataMax + logOffset);
+      const logRange = logMax - logMin;
+      return logRange > 0 ? ((Math.log10(v + logOffset + 1e-10) - logMin) / logRange) * 100 : 50;
+    }
     return ((v - dataMin) / dataRange) * 100;
-  }, [dataMin, dataRange]);
+  }, [dataMin, dataMax, dataRange, isLog, logOffset]);
 
   const clientXToValue = useCallback((clientX: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect || dataRange === 0) return dataMin;
     const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    if (isLog) {
+      const logMin = Math.log10(dataMin + logOffset + 1e-10);
+      const logMax = Math.log10(dataMax + logOffset);
+      return Math.pow(10, logMin + frac * (logMax - logMin)) - logOffset;
+    }
     return dataMin + frac * dataRange;
-  }, [dataMin, dataRange]);
+  }, [dataMin, dataMax, dataRange, isLog, logOffset]);
 
   // --- Drag handlers (adapted from TemporalFilterChart) ---
   const handleMove = useCallback((clientX: number) => {
@@ -104,15 +119,15 @@ export function NumericRangeChart({
     const max = effMaxRef.current;
     const center = effCenterRef.current;
 
-    const next: CustomNumericRange = {};
-    if (Math.abs(min - dataMin) > dataRange * 0.005) next.min = min;
-    if (Math.abs(max - dataMax) > dataRange * 0.005) next.max = max;
-    if (Math.abs(center - (dataMin + dataMax) / 2) > dataRange * 0.005) {
-      next.center = center;
-    }
+    // Preserve existing fields (e.g. logScale) while updating handle values
+    const next: CustomNumericRange = { ...customRangeRef.current };
+    // Set or clear each handle field
+    if (Math.abs(min - dataMin) > dataRange * 0.005) next.min = min; else delete next.min;
+    if (Math.abs(max - dataMax) > dataRange * 0.005) next.max = max; else delete next.max;
+    if (Math.abs(center - (dataMin + dataMax) / 2) > dataRange * 0.005) next.center = center; else delete next.center;
 
-    const isEmpty = next.min === undefined && next.max === undefined && next.center === undefined;
-    onRangeChangeRef.current?.(isEmpty ? null : next);
+    const hasOverrides = next.min !== undefined || next.max !== undefined || next.center !== undefined || next.logScale;
+    onRangeChangeRef.current?.(hasOverrides ? next : null);
   }, [dataMin, dataMax, dataRange]);
 
   const handleEnd = useCallback(() => {
@@ -193,17 +208,20 @@ export function NumericRangeChart({
           {bins.map((bin, i) => {
             const heightPct = maxCount > 0 ? (bin.count / maxCount) * 100 : 0;
             const binMid = (bin.binStart + bin.binEnd) / 2;
-            // Piecewise linear: effMin→0, effCenter→0.5, effMax→1
-            // This ensures the center handle visibly shifts the color midpoint
+            // Piecewise: effMin→0, effCenter→0.5, effMax→1 (in log space when active)
+            const bv = isLog ? Math.log10(binMid + logOffset + 1e-10) : binMid;
+            const eMin = isLog ? Math.log10(effMin + logOffset + 1e-10) : effMin;
+            const eMax = isLog ? Math.log10(effMax + logOffset) : effMax;
+            const eCtr = isLog ? Math.log10(effCenter + logOffset + 1e-10) : effCenter;
             let t: number;
-            if (effMax <= effMin) {
+            if (eMax <= eMin) {
               t = 0.5;
-            } else if (binMid <= effCenter) {
-              const leftRange = effCenter - effMin;
-              t = leftRange > 0 ? 0.5 * (binMid - effMin) / leftRange : 0;
+            } else if (bv <= eCtr) {
+              const leftRange = eCtr - eMin;
+              t = leftRange > 0 ? 0.5 * (bv - eMin) / leftRange : 0;
             } else {
-              const rightRange = effMax - effCenter;
-              t = rightRange > 0 ? 0.5 + 0.5 * (binMid - effCenter) / rightRange : 1;
+              const rightRange = eMax - eCtr;
+              t = rightRange > 0 ? 0.5 + 0.5 * (bv - eCtr) / rightRange : 1;
             }
             t = Math.max(0, Math.min(1, t));
             const barColor = interpolator ? interpolator(t) : '#888';

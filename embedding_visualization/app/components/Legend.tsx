@@ -229,6 +229,27 @@ export function Legend({
         <CardHeader>
           <div className="flex items-center gap-2">
             <CardTitle className="font-mono text-xs flex-1">{getCategoryDisplayName(categoryField ?? 'value')}</CardTitle>
+            <button
+              onClick={() => {
+                const wasLog = customNumericRange?.logScale;
+                if (wasLog) {
+                  // Toggle off: clear everything
+                  onCustomRangeChange?.(null);
+                } else {
+                  // Toggle on: clear linear handles, set logScale
+                  onCustomRangeChange?.({ logScale: true });
+                }
+              }}
+              className={cn(
+                "text-xs px-1 rounded transition-colors pointer-events-auto",
+                customNumericRange?.logScale
+                  ? "text-primary font-medium bg-accent"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              )}
+              title="Toggle logarithmic scale"
+            >
+              log
+            </button>
             {customNumericRange != null && (
               <button
                 onClick={() => onCustomRangeChange?.(null)}

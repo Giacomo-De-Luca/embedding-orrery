@@ -57,12 +57,10 @@ def compute_projections_for_collection(
 
         # DuckDB: resolve vector_collection for storing projections
         duckdb = _get_duckdb()
-        vc = duckdb.get_vector_collection_by_name(collection_name) if duckdb else None
+        vc = duckdb.get_vector_collection(collection_name) if duckdb else None
         if not vc:
             print(f"Warning: vector collection {collection_name!r} not found in DuckDB")
             return False
-        vc_id = vc["id"]
-        ds_id = vc["dataset_id"]
 
         # Load embeddings in batches from ChromaDB
         print(f"Loading embeddings from {collection_name}...")
@@ -115,8 +113,8 @@ def compute_projections_for_collection(
             coords = pca_2d.fit_transform(embeddings)
             pca_2d_variance = pca_2d.explained_variance_ratio_.tolist()
 
-            duckdb.insert_projections_batch(vc_id, ds_id, ids, "pca_2d", coords.tolist())
-            duckdb.upsert_projection_metadata(vc_id, "pca_2d", variance=pca_2d_variance)
+            duckdb.insert_projections_batch(collection_name, ids, "pca_2d", coords.tolist())
+            duckdb.upsert_projection_metadata(collection_name, "pca_2d", variance=pca_2d_variance)
             del coords
             print("PCA 2D complete")
             _emit_done("PCA 2D")
@@ -128,8 +126,8 @@ def compute_projections_for_collection(
             coords = pca_3d.fit_transform(embeddings)
             pca_3d_variance = pca_3d.explained_variance_ratio_.tolist()
 
-            duckdb.insert_projections_batch(vc_id, ds_id, ids, "pca_3d", coords.tolist())
-            duckdb.upsert_projection_metadata(vc_id, "pca_3d", variance=pca_3d_variance)
+            duckdb.insert_projections_batch(collection_name, ids, "pca_3d", coords.tolist())
+            duckdb.upsert_projection_metadata(collection_name, "pca_3d", variance=pca_3d_variance)
             del coords
             print("PCA 3D complete")
             _emit_done("PCA 3D")
@@ -141,8 +139,8 @@ def compute_projections_for_collection(
                                 metric="cosine", random_state=42, verbose=False)
             coords = reducer.fit_transform(embeddings)
 
-            duckdb.insert_projections_batch(vc_id, ds_id, ids, "umap_2d", coords.tolist())
-            duckdb.upsert_projection_metadata(vc_id, "umap_2d")
+            duckdb.insert_projections_batch(collection_name, ids, "umap_2d", coords.tolist())
+            duckdb.upsert_projection_metadata(collection_name, "umap_2d")
             del coords
             print("UMAP 2D complete")
             _emit_done("UMAP 2D")
@@ -154,8 +152,8 @@ def compute_projections_for_collection(
                                 metric="cosine", random_state=42, verbose=False)
             coords = reducer.fit_transform(embeddings)
 
-            duckdb.insert_projections_batch(vc_id, ds_id, ids, "umap_3d", coords.tolist())
-            duckdb.upsert_projection_metadata(vc_id, "umap_3d")
+            duckdb.insert_projections_batch(collection_name, ids, "umap_3d", coords.tolist())
+            duckdb.upsert_projection_metadata(collection_name, "umap_3d")
             del coords
             print("UMAP 3D complete")
             _emit_done("UMAP 3D")

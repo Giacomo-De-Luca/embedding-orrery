@@ -246,11 +246,10 @@ def embed_huggingface_dataset(
             print(f"Created collection: {config.collection_name}")
 
         # DuckDB dual-write: create dataset + register vector collection
-        _duckdb_ids = sync_dataset_and_collection(
+        _duckdb_dataset_name = sync_dataset_and_collection(
             config.collection_name, collection_metadata,
             model_config=model_config, embedding_dim=embedding_dim,
         )
-        _duckdb_dataset_id = _duckdb_ids[0] if _duckdb_ids else None
 
         # Determine metadata columns (default to all non-embedded columns)
         metadata_columns = config.metadata_columns
@@ -338,8 +337,8 @@ def embed_huggingface_dataset(
                 )
 
                 # DuckDB: documents + metadata
-                if _duckdb_dataset_id:
-                    sync_items(_duckdb_dataset_id, ids, documents, metadatas)
+                if _duckdb_dataset_name:
+                    sync_items(_duckdb_dataset_name, ids, documents, metadatas)
 
                 total_embedded += len(ids)
                 new_embedded += len(ids)

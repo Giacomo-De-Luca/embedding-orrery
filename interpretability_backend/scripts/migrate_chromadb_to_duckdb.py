@@ -83,7 +83,7 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         except (json.JSONDecodeError, TypeError):
             pass
 
-    dataset_id = db.create_dataset(
+    db.create_dataset(
         collection_name,
         description=meta.get("description"),
         source_type=source_type,
@@ -104,8 +104,8 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         except (ValueError, TypeError):
             embedding_dim = None
 
-    vc_id = db.register_vector_collection(
-        dataset_id, "chromadb", collection_name, "dense",
+    db.register_vector_collection(
+        collection_name, "chromadb", collection_name, "dense",
         embedding_provider=meta.get("embedding_provider"),
         embedding_model=meta.get("embedding_model"),
         embedding_dim=embedding_dim,
@@ -137,6 +137,8 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         all_docs.extend(batch_docs)
 
         for item_id, item_meta in zip(batch_ids, batch_metas):
+            if item_meta is None:
+                item_meta = {}
             # Extract projections (JSON strings -> float lists)
             for ptype in PROJECTION_KEYS:
                 raw = item_meta.get(ptype)
@@ -169,12 +171,12 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
 
     # ---- 4. Bulk insert items ----
     if all_ids:
-        db.insert_items_batch(dataset_id, all_ids, all_docs, all_metas)
+        db.insert_items_batch(collection_name, all_ids, all_docs, all_metas)
         stats["items"] = len(all_ids)
 
     # ---- 5. Bulk insert projections per type ----
     for ptype, (item_ids, coords) in proj_data.items():
-        db.insert_projections_batch(vc_id, dataset_id, item_ids, ptype, coords)
+        db.insert_projections_batch(collection_name, item_ids, ptype, coords)
         stats["projections"][ptype] = len(item_ids)
 
     # ---- 6. Projection metadata (variance) ----
@@ -183,19 +185,19 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
     if pca_2d_var:
         try:
             variance = json.loads(pca_2d_var) if isinstance(pca_2d_var, str) else pca_2d_var
-            db.upsert_projection_metadata(vc_id, "pca_2d", variance=variance)
+            db.upsert_projection_metadata(collection_name, "pca_2d", variance=variance)
         except (json.JSONDecodeError, TypeError):
             pass
     if pca_3d_var:
         try:
             variance = json.loads(pca_3d_var) if isinstance(pca_3d_var, str) else pca_3d_var
-            db.upsert_projection_metadata(vc_id, "pca_3d", variance=variance)
+            db.upsert_projection_metadata(collection_name, "pca_3d", variance=variance)
         except (json.JSONDecodeError, TypeError):
             pass
 
     if proj_data:
         db._conn.execute(
-            "UPDATE vector_collections SET has_projections = TRUE WHERE id = ?", [vc_id]
+            "UPDATE vector_collections SET has_projections = TRUE WHERE collection_name = ?", [collection_name]
         )
 
     # ---- 7. Topics ----
@@ -226,7 +228,7 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
                 pass
 
         # Create topic extraction record
-        ext_id = db.create_topic_extraction(vc_id, dataset_id, config=topic_config)
+        ext_id = db.create_topic_extraction(collection_name, collection_name, config=topic_config)
 
         # Update extraction with reduction info if present
         if meta.get("reduction_applied"):
@@ -269,11 +271,11 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
             stats["topics"] = len(topic_info_records)
 
         # Insert topic assignments
-        db.insert_topic_assignments_batch(ext_id, dataset_id, topic_item_data)
+        db.insert_topic_assignments_batch(ext_id, topic_item_data)
         stats["topic_assignments"] = len(topic_item_data)
 
         db._conn.execute(
-            "UPDATE vector_collections SET has_topics = TRUE WHERE id = ?", [vc_id]
+            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?", [collection_name]
         )
 
     return stats

@@ -95,10 +95,12 @@ def _sync_topics_to_duckdb(
         return
 
     try:
-        vc = db.get_vector_collection_by_name(collection_name)
+        vc = db.get_vector_collection(collection_name)
         if not vc:
             logger.warning("DuckDB: vector collection %r not found, skipping topic sync", collection_name)
             return
+
+        dataset_name = vc["dataset_name"]
 
         # Build extraction config snapshot
         extraction_config = None
@@ -111,7 +113,7 @@ def _sync_topics_to_duckdb(
             }
 
         ext_id = db.create_topic_extraction(
-            vc["id"], vc["dataset_id"], config=extraction_config,
+            collection_name, dataset_name, config=extraction_config,
         )
 
         # Store reduction metadata if applicable
@@ -164,11 +166,11 @@ def _sync_topics_to_duckdb(
                 record["subtopic_id"] = sub_id
                 record["subtopic_label"] = subtopic_labels.get(sub_id, "Unclustered")
             assignment_records.append(record)
-        db.insert_topic_assignments_batch(ext_id, vc["dataset_id"], assignment_records)
+        db.insert_topic_assignments_batch(ext_id, assignment_records)
 
         # Update vector collection flag
         db._conn.execute(
-            "UPDATE vector_collections SET has_topics = TRUE WHERE id = ?", [vc["id"]]
+            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?", [collection_name]
         )
 
         logger.info("DuckDB: synced %d topics, %d assignments for %s",
@@ -582,10 +584,9 @@ def reduce_existing_topics(
         extraction_id = active_topics["id"]
 
         # Step 2: Load items + topic assignments from DuckDB
-        ds = duckdb.get_dataset(collection_name)
+        items_table = duckdb._items_table(collection_name)
         items_rows = duckdb._conn.execute(
-            "SELECT id, document FROM items WHERE dataset_id = ? ORDER BY row_index",
-            [ds["id"]],
+            f"SELECT id, document FROM {items_table} ORDER BY row_index",
         ).fetchall()
         ids = [r[0] for r in items_rows]
         documents = [r[1] or "" for r in items_rows]
@@ -936,10 +937,9 @@ def generate_llm_labels_for_collection(
         has_hierarchy = bool(active_topics.get("topic_hierarchy"))
 
         # Load items from DuckDB
-        ds = duckdb.get_dataset(collection_name)
+        items_table = duckdb._items_table(collection_name)
         items_rows = duckdb._conn.execute(
-            "SELECT id, document FROM items WHERE dataset_id = ? ORDER BY row_index",
-            [ds["id"]],
+            f"SELECT id, document FROM {items_table} ORDER BY row_index",
         ).fetchall()
         all_ids = [r[0] for r in items_rows]
         all_documents = [r[1] or "" for r in items_rows]

@@ -136,7 +136,8 @@ Storage:
 - **`topic_extractions`** — extraction config snapshots, reduction metadata, `is_active` flag for history
 - **`topic_info`** — per-topic keywords, labels, counts
 - **`topic_assignments`** — per-item topic_id/label + subtopic_id/label
-- Schema: `documentation/DUCKDB_MIGRATION_PLAN.md`
+- Full schema, API, data flows: `documentation/DATABASE_ARCHITECTURE.md`
+- Migration plan: `documentation/DUCKDB_MIGRATION_PLAN.md`
 - Migration script: `scripts/migrate_chromadb_to_duckdb.py`
 
 ### ChromaDB (`resources/vector_db/`) — Vectors only

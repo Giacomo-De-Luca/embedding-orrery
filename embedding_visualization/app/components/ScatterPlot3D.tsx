@@ -334,19 +334,39 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     };
   }, [colorScale.type, categoryField, points]);
 
+  // Log transform: when logScale is active, transform cleanValues through log10
+  const logData = useMemo(() => {
+    if (!numericData || !customNumericRange?.logScale) return null;
+    const offset = numericData.min <= 0 ? Math.abs(numericData.min) + 1 : 0;
+    const toLog = (v: number) => Math.log10(v + offset + 1e-10);
+    return {
+      ...numericData,
+      cleanValues: numericData.cleanValues.map(v => isNaN(v) ? NaN : toLog(v)),
+      min: toLog(numericData.min),
+      max: Math.log10(numericData.max + offset),
+      toLog,
+    };
+  }, [numericData, customNumericRange?.logScale]);
+  const activeNumericData = logData ?? numericData;
+
   // Merge custom range overrides with auto-detected data range
   const effectiveRange = useMemo(() => {
-    if (!numericData) return null;
-    let effMin = customNumericRange?.min ?? numericData.min;
-    let effMax = customNumericRange?.max ?? numericData.max;
+    if (!activeNumericData) return null;
+    const toLog = logData?.toLog;
+    let effMin = customNumericRange?.min != null
+      ? (toLog ? toLog(customNumericRange.min) : customNumericRange.min)
+      : activeNumericData.min;
+    let effMax = customNumericRange?.max != null
+      ? (toLog ? toLog(customNumericRange.max) : customNumericRange.max)
+      : activeNumericData.max;
     if (customNumericRange?.center !== undefined) {
-      const c = customNumericRange.center;
+      const c = toLog ? toLog(customNumericRange.center) : customNumericRange.center;
       const deviation = Math.max(Math.abs(effMax - c), Math.abs(effMin - c));
       effMin = c - deviation;
       effMax = c + deviation;
     }
     return { min: effMin, max: effMax };
-  }, [numericData, customNumericRange]);
+  }, [activeNumericData, logData, customNumericRange]);
 
   // --- 2. GENERATE PLOTLY NATIVE COLORSCALE ---
   // Bridge the ColorScale union to a Plotly array [[0, 'hex'], [1, 'hex']]
@@ -436,7 +456,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       }
     };
 
-    if (numericData && plotlyColorScale) {
+    if (activeNumericData && plotlyColorScale) {
       // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
       const csOpts = { colorscale: plotlyColorScale as any, cmin: effectiveRange!.min, cmax: effectiveRange!.max };
       const n = displayPoints.length;
@@ -462,7 +482,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         if (activeIdx.length > 0) {
           traces.push(buildIndexedScatter3dTrace(allX, allY, allZ, activeIdx, pointIndices, {
             name: 'Data', size: dimSize,
-            color: activeIdx.map(i => numericData.cleanValues[i]),
+            color: activeIdx.map(i => activeNumericData.cleanValues[i]),
             opacity: dimOpacity, colorscaleOpts: csOpts,
           }));
         }
@@ -477,7 +497,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           mode: 'markers', type: 'scatter3d', name: 'Data',
           marker: {
             sizemode: 'diameter', size: dimSize,
-            color: numericData.cleanValues as any,
+            color: activeNumericData.cleanValues as any,
             colorscale: csOpts.colorscale, cmin: csOpts.cmin, cmax: csOpts.cmax,
             opacity: dimOpacity, showscale: false,
           },
@@ -528,7 +548,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     return traces;
   }, [
     displayPoints, markerStyle, showOnlyHighlighted,
-    categoryValues, colorMap, numericData, effectiveRange, plotlyColorScale, categoryField,
+    categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, categoryField,
     mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity
   ]);
 

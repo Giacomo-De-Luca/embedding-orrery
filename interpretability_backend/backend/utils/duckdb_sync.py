@@ -1,7 +1,6 @@
 """
-DuckDB dual-write helpers for the embedding pipelines.
+DuckDB write helpers for the embedding pipelines.
 
-Called alongside ChromaDB writes during Phase 1 (shadow mode).
 Each function is a no-op if DuckDB is unavailable.
 """
 
@@ -17,7 +16,7 @@ def _get_db():
         from ..API.duckdb_instance import get_duckdb_client
         return get_duckdb_client()
     except Exception as e:
-        logger.warning("DuckDB not available for dual-write: %s", e)
+        logger.warning("DuckDB not available: %s", e)
         return None
 
 
@@ -26,10 +25,10 @@ def sync_dataset_and_collection(
     collection_metadata: Dict,
     model_config=None,
     embedding_dim: int = None,
-) -> Optional[tuple]:
+) -> Optional[str]:
     """Create dataset + register vector collection in DuckDB.
 
-    Returns (dataset_id, vector_collection_id) or None on failure.
+    Returns the dataset_name (= collection_name) or None on failure.
     """
     db = _get_db()
     if not db:
@@ -38,10 +37,8 @@ def sync_dataset_and_collection(
     try:
         # Check if dataset already exists (resume case)
         existing = db.get_dataset(collection_name)
-        if existing:
-            dataset_id = existing["id"]
-        else:
-            dataset_id = db.create_dataset(
+        if not existing:
+            db.create_dataset(
                 collection_name,
                 description=collection_metadata.get("description"),
                 source_type="huggingface" if collection_metadata.get("source_dataset") else "local_file",
@@ -56,10 +53,8 @@ def sync_dataset_and_collection(
             )
 
         # Check if vector collection already registered
-        existing_vc = db.get_vector_collection_by_name(collection_name)
-        if existing_vc:
-            vc_id = existing_vc["id"]
-        else:
+        existing_vc = db.get_vector_collection(collection_name)
+        if not existing_vc:
             provider = None
             model = None
             dim = embedding_dim
@@ -74,7 +69,6 @@ def sync_dataset_and_collection(
                 task_type = model_config.task_type
                 prompt = model_config.prompt
 
-            # Fallback to collection_metadata
             if not provider:
                 provider = collection_metadata.get("embedding_provider")
             if not model:
@@ -82,8 +76,8 @@ def sync_dataset_and_collection(
             if not dim:
                 dim = collection_metadata.get("embedding_dim")
 
-            vc_id = db.register_vector_collection(
-                dataset_id, "chromadb", collection_name, "dense",
+            db.register_vector_collection(
+                collection_name, "chromadb", collection_name, "dense",
                 embedding_provider=provider,
                 embedding_model=model,
                 embedding_dim=dim,
@@ -92,8 +86,8 @@ def sync_dataset_and_collection(
                 embedding_prompt=prompt,
             )
 
-        logger.info("DuckDB sync: dataset=%s, vc=%s for %s", dataset_id, vc_id, collection_name)
-        return dataset_id, vc_id
+        logger.info("DuckDB sync: dataset+vc for %s", collection_name)
+        return collection_name
 
     except Exception as e:
         logger.error("DuckDB sync_dataset_and_collection failed: %s", e)
@@ -101,7 +95,7 @@ def sync_dataset_and_collection(
 
 
 def sync_items(
-    dataset_id: str,
+    dataset_name: str,
     ids: List[str],
     documents: List[Optional[str]],
     metadatas: List[Optional[Dict]],
@@ -112,7 +106,7 @@ def sync_items(
         return 0
 
     try:
-        return db.insert_items_batch(dataset_id, ids, documents, metadatas)
+        return db.insert_items_batch(dataset_name, ids, documents, metadatas)
     except Exception as e:
         logger.error("DuckDB sync_items failed: %s", e)
         return 0

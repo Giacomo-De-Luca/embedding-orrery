@@ -408,19 +408,39 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     };
   }, [colorScale.type, categoryField, points]);
 
+  // Log transform: when logScale is active, transform cleanValues through log10
+  const logData = useMemo(() => {
+    if (!numericData || !customNumericRange?.logScale) return null;
+    const offset = numericData.min <= 0 ? Math.abs(numericData.min) + 1 : 0;
+    const toLog = (v: number) => Math.log10(v + offset + 1e-10);
+    return {
+      ...numericData,
+      cleanValues: numericData.cleanValues.map(v => isNaN(v) ? NaN : toLog(v)),
+      min: toLog(numericData.min),
+      max: Math.log10(numericData.max + offset),
+      toLog,  // expose for effectiveRange
+    };
+  }, [numericData, customNumericRange?.logScale]);
+  const activeNumericData = logData ?? numericData;
+
   // Merge custom range overrides with auto-detected data range
   const effectiveRange = useMemo(() => {
-    if (!numericData) return null;
-    let effMin = customNumericRange?.min ?? numericData.min;
-    let effMax = customNumericRange?.max ?? numericData.max;
+    if (!activeNumericData) return null;
+    const toLog = logData?.toLog;
+    let effMin = customNumericRange?.min != null
+      ? (toLog ? toLog(customNumericRange.min) : customNumericRange.min)
+      : activeNumericData.min;
+    let effMax = customNumericRange?.max != null
+      ? (toLog ? toLog(customNumericRange.max) : customNumericRange.max)
+      : activeNumericData.max;
     if (customNumericRange?.center !== undefined) {
-      const c = customNumericRange.center;
+      const c = toLog ? toLog(customNumericRange.center) : customNumericRange.center;
       const deviation = Math.max(Math.abs(effMax - c), Math.abs(effMin - c));
       effMin = c - deviation;
       effMax = c + deviation;
     }
     return { min: effMin, max: effMax };
-  }, [numericData, customNumericRange]);
+  }, [activeNumericData, logData, customNumericRange]);
 
   // Generate Plotly-compatible colorscale array
   const plotlyColorScale = useMemo(() => {
@@ -507,9 +527,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         const dimOpacity = markerStyle.opacity * 0.3; // Consistent dim factor
         const mutedOp = dimOpacity * (mutedPointOpacity ?? 0.20);
 
-        if (numericData && plotlyColorScale) {
+        if (activeNumericData && plotlyColorScale) {
           // MODE: NATIVE COLORSCALE (GPU ACCELERATED) - preserve colors with dimming
-          const unhighlightedNumericValues = filteredUnhighlightedPoints.map(p => numericData.cleanValues[p.index]);
+          const unhighlightedNumericValues = filteredUnhighlightedPoints.map(p => activeNumericData.cleanValues[p.index]);
           traces.push({
             x: filteredUnhighlightedPoints.map(p => p.x),
             y: filteredUnhighlightedPoints.map(p => p.y),
@@ -941,7 +961,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
       const mutedOp = markerStyle.opacity * (mutedPointOpacity ?? 0.20);
 
-      if (numericData && plotlyColorScale) {
+      if (activeNumericData && plotlyColorScale) {
         // MODE: NATIVE COLORSCALE (GPU ACCELERATED)
         if (combinedMutedIndices && combinedMutedIndices.size > 0) {
           const activePoints = displayPoints.filter(p => !combinedMutedIndices.has(p.index));
@@ -955,7 +975,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
               name: 'Data',
               marker: {
                 size: markerStyle.size,
-                color: activePoints.map(p => numericData.cleanValues[p.index]),
+                color: activePoints.map(p => activeNumericData.cleanValues[p.index]),
                 colorscale: plotlyColorScale as any,
                 cmin: numericData.min,
                 cmax: numericData.max,
@@ -994,7 +1014,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             name: 'Data',
             marker: {
               size: markerStyle.size,
-              color: displayPoints.map(p => numericData.cleanValues[p.index]),
+              color: displayPoints.map(p => activeNumericData.cleanValues[p.index]),
               colorscale: plotlyColorScale as any,
               cmin: effectiveRange!.min,
               cmax: effectiveRange!.max,
@@ -1261,7 +1281,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, categoryField, categoryValues, colorMap, numericData, effectiveRange, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
+  }, [points, categoryField, categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
