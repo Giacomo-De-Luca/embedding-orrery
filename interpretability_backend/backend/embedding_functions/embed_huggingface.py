@@ -328,17 +328,21 @@ def embed_huggingface_dataset(
                 metadatas.append(metadata)
 
             if ids:
+                # Compute embeddings explicitly
+                batch_embeddings = embedding_func(documents)
+
+                # ChromaDB: vectors only
                 collection.add(
                     ids=ids,
-                    documents=documents,
-                    metadatas=metadatas
+                    embeddings=batch_embeddings,
                 )
-                total_embedded += len(ids)
-                new_embedded += len(ids)
 
-                # DuckDB dual-write: insert items
+                # DuckDB: documents + metadata
                 if _duckdb_dataset_id:
                     sync_items(_duckdb_dataset_id, ids, documents, metadatas)
+
+                total_embedded += len(ids)
+                new_embedded += len(ids)
 
             batches_completed += 1
 

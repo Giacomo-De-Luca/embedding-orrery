@@ -25,13 +25,13 @@
 
 ## Project Overview
 
-Embedding analysis platform: embed data from any source (HuggingFace datasets, local files, images, pre-computed vectors), store in ChromaDB, visualize interactively with topic extraction and semantic search.
+Embedding analysis platform: embed data from any source (HuggingFace datasets, local files, images, pre-computed vectors), visualize interactively with topic extraction and semantic search. Uses a **dual-database architecture**: DuckDB as the central orchestrator (documents, metadata, projections, topics) and ChromaDB for dense vector storage and similarity search only.
 
 ## Directory Structure
 
 - **`interpretability_backend/`** — Python backend (FastAPI + Strawberry GraphQL). Has its own `CLAUDE.md`.
   - `backend/API/` — GraphQL queries, mutations, subscriptions, types
-  - `backend/clients/` — ChromaDB, HuggingFace, local file clients
+  - `backend/clients/` — DuckDB (orchestrator), ChromaDB (vectors only), HuggingFace, local file clients
   - `backend/embedding_functions/` — Multi-provider embedding infrastructure
   - `backend/services/` — Topic extraction, progress emission, job state
   - `backend/topic_extraction/` — HDBSCAN clustering, c-TF-IDF, LLM labeling, reduction
@@ -70,8 +70,12 @@ cd interpretability_backend/interpretability_experiments/WordNet && python embed
 ## Architecture Overview
 
 ```
-Data Sources → Embedding Providers → ChromaDB → Topic Extraction (optional) → GraphQL API → Frontend
+Data Sources → Embedding Providers → DuckDB (docs/metadata) + ChromaDB (vectors) → GraphQL API → Frontend
+                                          ↓
+                                   Topic Extraction (reads projections from DuckDB, embeddings from ChromaDB)
 ```
+
+**Dual-database design**: DuckDB (`resources/main.duckdb`) is the central orchestrator storing documents, metadata, projections (native FLOAT[] arrays), and topic data (normalized tables). ChromaDB (`resources/vector_db/`) stores only IDs + dense embedding vectors. One dataset in DuckDB can have multiple `vector_collections` (different embedding models, dense/sparse). See `documentation/DUCKDB_MIGRATION_PLAN.md` for full schema and migration details.
 
 **Embedding providers**: SentenceTransformers (default, local), OpenAI, Cohere, Ollama (local), HuggingFace API, Gemini, QWEN (local), BGE (local). Model names are free-form; dimensions auto-detected. Hardware auto-detects MPS → CUDA → CPU.
 
@@ -93,7 +97,7 @@ Data Sources → Embedding Providers → ChromaDB → Topic Extraction (optional
 
 **Analytics bar chart** (Analytics sidebar): `CategoryBarChart` shows category distribution with independent field selection via dropdown (categorical fields from `colorFieldOptions`), defaulting to the active color field. When a text search is active, bars show search match counts overlaid on faded total-count background bars, sorted by matches descending. Category name filter input appears when there are more than 15 categories. `AnalyticsSidebar` computes `searchMatchCounts` from `textSearchHighlights` and manages `analysisField` state independently of `colorByField`.
 
-**Text search as filter**: Text search is **server-side** via the `textSearch` GraphQL query backed by ChromaDB's native `where_document` (with `$regex`/`$contains`) for document search and Python filtering for metadata fields. The `useTextSearch` hook (`lib/hooks/useTextSearch.ts`) fires the query and maps returned IDs to point indices. `SearchSidebar` exposes field selection (which metadata columns to search), match mode (contains/exact), and case-sensitivity controls in the Advanced section. Default: document-only, contains, case-insensitive. Text search muting (`searchMutedIndices`) and temporal muting (`temporallyMutedIndices`) are combined into `combinedMutedIndices` in both scatter plots. Semantic search results retain the glow overlay. Both muting sources stack: a point must match the text query AND be in the temporal range to render normally.
+**Text search as filter**: Text search is **server-side** via the `textSearch` GraphQL query backed by DuckDB's `ILIKE` for document/metadata substring search (vectorized columnar scan). FTS extension available for BM25 word-level search. The `useTextSearch` hook (`lib/hooks/useTextSearch.ts`) fires the query and maps returned IDs to point indices. `SearchSidebar` exposes field selection (which metadata columns to search), match mode (contains/exact), and case-sensitivity controls in the Advanced section. Default: document-only, contains, case-insensitive. Text search muting (`searchMutedIndices`) and temporal muting (`temporallyMutedIndices`) are combined into `combinedMutedIndices` in both scatter plots. Semantic search results retain the glow overlay. Both muting sources stack: a point must match the text query AND be in the temporal range to render normally.
 
 **Filtered point controls**: `hideFilteredPoints` (boolean) removes muted points entirely from the plot instead of graying them out. `mutedPointOpacity` (0–1, default 0.20) is a **multiplier** applied to the current base opacity (not an absolute value) — muted opacity = base opacity × multiplier. This scales properly with point count since base opacity already decreases for large datasets. Both fields live on the Zustand store and are exposed via toggle + slider in VisualizationControls. Reset on collection change.
 
@@ -103,10 +107,12 @@ Data Sources → Embedding Providers → ChromaDB → Topic Extraction (optional
 
 ## Cross-Cutting Concerns
 
-- **ChromaDB path**: `interpretability_backend/resources/vector_db/` (persistent storage)
+- **DuckDB path**: `interpretability_backend/resources/main.duckdb` (documents, metadata, projections, topics)
+- **ChromaDB path**: `interpretability_backend/resources/vector_db/` (dense vectors only)
 - **Similarity metric**: ChromaDB uses cosine distance; similarity = 1 - distance
-- **Batch processing**: 1,000-item embedding batches, 10,000-item ChromaDB reads (prevents OOM)
-- **ChromaDB metadata**: Only supports str/int/float/bool — lists/dicts must be JSON-serialized, no None values
+- **Batch processing**: Embedding pipelines use configurable batch sizes. DuckDB bulk inserts via pandas DataFrames. ChromaDB reads embeddings in 5k batches for projection computation.
+- **DuckDB metadata**: JSON column with no type restrictions (native lists, dicts, nulls). Replaces ChromaDB's str/int/float/bool limitation.
+- **One dataset, many embeddings**: `vector_collections` table links one dataset to multiple ChromaDB collections (different models). Each has independent projections and topic extractions.
 - **WordNet XML** (102MB) downloaded by `embed_wordnet.py`, not in repo
 - **Color column preprocessing**: When a dataset has a `colour_code` (or similar) hex column, embedding auto-detects it and adds `mapped_colour` (float 0-1) + `mapped_colour_scale` (strip name) to metadata. The float maps to a pre-built colorscale strip (Hilbert RGB, hue-sat, XKCD, or rainbow). Strips generated by `interpretability_backend/scripts/generate_color_strips.py` as Crameri-format JSONs in `embedding_visualization/lib/colorMaps/colormaps/`. Frontend treats `mapped_colour` as a standard numeric field with the matching colorscale.
 

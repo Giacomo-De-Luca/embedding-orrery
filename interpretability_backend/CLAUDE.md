@@ -23,16 +23,27 @@ API Layer (queries.py, mutations.py, subscriptions.py, upload.py)
     ↓
 Services (topic_extraction_service, progress_emitter, job_state)
     ↓
-Clients (chromadb_client, huggingface_client, local_data_client)
+Clients:
+  ├── duckdb_client (orchestrator: docs, metadata, projections, topics)
+  ├── chromadb_client (dense vectors only: IDs + embeddings)
+  ├── huggingface_client, local_data_client (data source loading)
     ↓
 Embedding Functions (create_embedding_function → specific providers)
     ↓
-ChromaDB (persistent vector storage)
+Storage:
+  ├── DuckDB (resources/main.duckdb) — documents, metadata, projections, topics
+  └── ChromaDB (resources/vector_db/) — dense embedding vectors only
 ```
 
 ### Key Design Patterns
 
-**Lazy embedding function loading**: `ChromaDBClient.get_collection(load_embedding_function=False)` is the default. Only text-query semantic search sets `True`. This avoids loading 100MB+ models for read-only operations.
+**Dual-database architecture**: DuckDB is the central orchestrator. All reads (collection listing, projection data, text search, item metadata) go through `DuckDBClient`. ChromaDB is used only for dense vector storage and semantic similarity search. Embedding pipelines write documents+metadata to DuckDB and vectors-only to ChromaDB.
+
+**One dataset, many embeddings**: The `vector_collections` table links one dataset to multiple vector stores. Each vector_collection has its own projections and topic extractions. Schema supports future Qdrant sparse vector collections.
+
+**DuckDB bulk insertion**: Uses pandas DataFrames for fast columnar inserts (153k items in ~28s vs 40min with row-at-a-time). FTS extension available for BM25 word-level search.
+
+**Lazy embedding function loading**: `ChromaDBClient.get_collection(load_embedding_function=False)` is the default. Only text-query semantic search sets `True`. This avoids loading 100MB+ models for read-only operations. EF config is currently reconstructed from ChromaDB collection metadata (future: read from DuckDB `vector_collections` table).
 
 **Provider factory**: `create_embedding_function(config, device)` maps `EmbeddingProvider` enum to the correct embedding function. Adding a new provider requires:
 1. Add to `EmbeddingProvider` enum in `config.py`
@@ -45,7 +56,7 @@ ChromaDB (persistent vector storage)
 
 **Progress emission**: `services/progress_emitter.py` provides an in-memory event bus. Embedding functions call `emit_progress_sync()` (thread-safe). Subscriptions in `API/subscriptions.py` register queues and yield events via WebSocket.
 
-**Job state persistence**: `services/job_state.py` writes to `resources/job_state.json`. On startup, marks "running" jobs as "interrupted". Resume works by loading existing IDs from ChromaDB and skipping them.
+**Job state persistence**: `services/job_state.py` writes to `resources/job_state.json`. On startup, marks "running" jobs as "interrupted". Resume works by loading existing IDs from DuckDB and skipping them.
 
 ## Module Reference
 
@@ -55,24 +66,32 @@ ChromaDB (persistent vector storage)
 - **`mutations.py`** - Write operations. `Mutation` class with `@strawberry.mutation` methods. Embedding mutations use `asyncio.to_thread()` to run in background threads while the event loop handles WebSocket progress.
 - **`subscriptions.py`** - `Subscription.embedding_progress(job_id)` async generator. Registers queue with progress_emitter, yields JobProgress events.
 - **`chromadb_instance.py`** - Lazy singleton `get_chromadb_client()`.
+- **`duckdb_instance.py`** - Lazy singleton `get_duckdb_client()`.
 - **`upload.py`** - REST `POST /upload` endpoint saving files to `resources/uploads/`.
 
 ### Clients (`backend/clients/`)
-- **`chromadb_client.py`** - Core wrapper. Key methods:
+- **`duckdb_client.py`** - Central orchestrator. Key methods:
+  - `create_dataset()`, `list_datasets()`, `get_dataset()`, `delete_dataset()` - Dataset CRUD
+  - `insert_items_batch()` - Bulk item insert via pandas DataFrame
+  - `get_filtered_items(dataset, filters, limit, offset)` - JSON metadata filtering ($eq/$ne/$gt/$gte/$lt/$lte/$in/$nin)
+  - `get_items_by_ids()` - Enrich search results with documents + metadata
+  - `register_vector_collection()`, `get_vector_collections()` - Vector collection registry
+  - `insert_projections_batch()`, `get_projection_data(collection, type)` - Per-type projection storage/retrieval
+  - `text_search(dataset, query, fields, mode)` - SQL-based text search (ILIKE for substring, json_extract for metadata)
+  - `text_search_bm25(dataset, query)` - FTS extension BM25 search (known issue: needs debugging)
+  - `create_topic_extraction()`, `insert_topic_info_batch()`, `insert_topic_assignments_batch()` - Topic storage
+  - `get_active_topics()`, `update_topic_label()`, `update_subtopic_label()` - Topic reads/updates
+- **`chromadb_client.py`** - Vector-only wrapper (~170 lines, stripped from ~610). Key methods:
   - `get_collection(name, load_embedding_function, for_query, query_prompt)` - Lazy EF loading
-  - `semantic_search(...)` - Query with distance → similarity conversion
-  - `get_projection_data(name)` - Extracts projections from item metadata (JSON-encoded)
-  - `get_all_items(...)` - Filtered item retrieval
-  - `text_search(collection_name, query, fields, mode, case_sensitive)` - Full-text search via `where_document` (native `$regex`/`$contains`) for documents; Python filter for metadata fields. Returns matching IDs with snippets.
-  - `update_collection_metadata(...)` - Merge metadata updates
+  - `semantic_search(...)` - Vector similarity search, returns IDs + distances (no documents/metadata)
 - **`huggingface_client.py`** - Dataset info/preview via `datasets` library, portion loading (FIRST_N, RANDOM_SAMPLE, ROW_RANGE, ALL)
 - **`local_data_client.py`** - File loading via pandas/pyarrow. Optimized: parquet reads metadata without loading data, CSV reads only headers for info.
 
 ### Embedding Functions (`backend/embedding_functions/`)
 - **`config.py`** - `DB_PATH`, `EmbeddingProvider`, `EmbeddingModelConfig`, `EmbeddingConfig`, `LocalFileEmbeddingConfig`, `EmbeddingResult`. The `BaseConfig` dataclass uses `kw_only=True`.
 - **`create_embedding_function.py`** - Factory pattern. Returns `(EmbeddingFunction, dimension)`. Loads from `.env` via python-dotenv. HuggingFace login happens here if `HUGGINGFACE_API_KEY` is set.
-- **`embed_huggingface.py`** - Full HF embedding pipeline: load portion → sort by length → batch embed → ChromaDB. Supports resume via existing ID check.
-- **`embed_local_file.py`** - Dispatches to `embed_text_from_local()`, `embed_images()`, or `embed_vectors()` based on `DataType`.
+- **`embed_huggingface.py`** - Full HF embedding pipeline: load portion → sort by length → explicit embed → DuckDB (docs+metadata) + ChromaDB (vectors only). Resume via DuckDB ID check.
+- **`embed_local_file.py`** - Dispatches to `embed_text_from_local()`, `embed_images()`, or `embed_vectors()` based on `DataType`. Same dual-write pattern.
 - **`embed_images.py`** - ViT pipeline (`transformers.pipeline("image-feature-extraction")`). Handles bytes, dicts with "bytes" key, or file paths.
 - **`embed_vectors.py`** - Direct vector ingestion (no model needed). Auto-detects vector column.
 
@@ -97,8 +116,9 @@ ChromaDB (persistent vector storage)
 - **`extract_topics.py`** and **`_representation_utils.py`** - BERTopic reference implementations (not used directly by the service).
 
 ### Utils (`backend/utils/`)
-- **`compute_projections.py`** - `compute_projections_for_collection(name, projection_type, job_id)`. Loads embeddings in 5k batches, computes PCA/UMAP, stores as JSON strings in item metadata, updates collection metadata with variance ratios. When `job_id` is provided, emits per-projection progress (25% increments) via `emit_progress`.
-- **`text_processing.py`** - `format_text_for_embedding(row, columns, template)` supports template strings with `{column}` placeholders. `extract_metadata(row, columns)` converts to ChromaDB-compatible types (str/int/float/bool, lists→JSON).
+- **`compute_projections.py`** - `compute_projections_for_collection(name, projection_type, job_id)`. Loads embeddings from ChromaDB in 5k batches, computes PCA/UMAP, stores projections as native FLOAT[] arrays in DuckDB. When `job_id` is provided, emits per-projection progress via `emit_progress`.
+- **`duckdb_sync.py`** - Helper functions for dual-write during embedding: `sync_dataset_and_collection()`, `sync_items()`. Called from embedding pipelines.
+- **`text_processing.py`** - `format_text_for_embedding(row, columns, template)` supports template strings with `{column}` placeholders. `extract_metadata(row, columns)` prepares metadata for storage.
 - **`color_preprocessing.py`** - Auto-detects hex color columns (`colour_code`, `color_code`, etc.) and maps each color to a float 0-1 position on a pre-built colorscale strip (Hilbert RGB, hue-sat, XKCD, or rainbow). Adds `mapped_colour` and `mapped_colour_scale` to item metadata. Called from `embed_local_file.py` and `embed_huggingface.py` after `extract_metadata()`. Strips generated by `scripts/generate_color_strips.py`.
 - **`batch_utils.py`** - `sort_items_by_length()` sorts by text length descending for efficient transformer batching (reduces padding waste).
 - **`id_utils.py`** - `IDDeduplicator` always appends `_N` suffix (1-based) for uniqueness.
@@ -107,11 +127,23 @@ ChromaDB (persistent vector storage)
 
 ## Data Storage
 
-### ChromaDB (`resources/vector_db/`)
+### DuckDB (`resources/main.duckdb`) — Primary data store
+- **`datasets`** — one row per dataset (name, description, source info)
+- **`items`** — documents + JSON metadata per item, keyed by (dataset_id, id)
+- **`vector_collections`** — links datasets to ChromaDB collections (embedding model info, one-to-many)
+- **`projections`** — native FLOAT[] coordinate arrays, per (vector_collection, item, projection_type)
+- **`projection_metadata`** — PCA variance ratios, timestamps per projection type
+- **`topic_extractions`** — extraction config snapshots, reduction metadata, `is_active` flag for history
+- **`topic_info`** — per-topic keywords, labels, counts
+- **`topic_assignments`** — per-item topic_id/label + subtopic_id/label
+- Schema: `documentation/DUCKDB_MIGRATION_PLAN.md`
+- Migration script: `scripts/migrate_chromadb_to_duckdb.py`
+
+### ChromaDB (`resources/vector_db/`) — Vectors only
 - Persistent SQLite-backed HNSW index
-- Projections stored as JSON strings in per-item metadata: `pca_2d`, `pca_3d`, `umap_2d`, `umap_3d`
-- Topic assignments in per-item metadata: `topic_id`, `topic_label` (and `subtopic_id`, `subtopic_label` when reduction is applied)
-- Collection-level metadata: embedding model info, projection variance, topic summary, `topic_hierarchy` (JSON: reduced label → subtopic labels)
+- Stores only IDs + dense embedding vectors (no documents, no metadata)
+- Used for semantic similarity search and raw embedding reads (projection computation, topic reduction)
+- Legacy collections may still contain documents/metadata from before migration
 
 ### Job State (`resources/job_state.json`)
 - JSON dict of `{collection_name: JobState}` entries
@@ -134,14 +166,15 @@ ChromaDB (persistent vector storage)
 
 ### Adding metadata fields to collections
 1. Add field to `CollectionMetadata` in `API/types.py`
-2. Add to projection data extraction in `chromadb_client.py:get_projection_data()`
-3. Store in collection metadata during embedding in `embed_huggingface.py` / `embed_local_file.py`
+2. Add to metadata dict construction in `queries.py:collection()` resolver
+3. Store in DuckDB `datasets` or `vector_collections` table (update schema in `duckdb_client.py:_ensure_schema()`)
 
 ## Key Gotchas
 
-- **ChromaDB metadata values cannot be None** - always filter out None values before storing
-- **ChromaDB metadata supports only str, int, float, bool** - lists/dicts must be JSON-serialized
-- **Projections are stored as JSON strings in per-item metadata**, not as separate fields
-- **`embed_dataset.py`** is a facade that re-exports from `embedding_functions/` - don't add logic here
-- **SentenceTransformer models use a class-level cache** - first load is slow, subsequent calls reuse the cached model
+- **DuckDB is single-writer** — only one process can write at a time (multiple readers OK). Matches the existing single-user deployment model.
+- **DuckDB datetime values** — DuckDB returns `datetime` objects that aren't JSON-serializable. Use `_sanitize_for_json()` from `duckdb_client.py` at API boundaries where dicts go into Strawberry `JSON` fields.
+- **ChromaDB still stores embedding function config** — `get_collection(load_embedding_function=True)` reconstructs the EF from ChromaDB collection metadata. This is a legacy coupling that should eventually read from DuckDB's `vector_collections` table.
+- **Filtered semantic search broken for new collections** — `semantic_search()` passes `where` clauses to ChromaDB, but new collections have no metadata in ChromaDB. Needs pre-filtering via DuckDB IDs.
+- **BM25 FTS returns 0 results** — the FTS index + `dataset_id` filtering interaction needs debugging.
+- **SentenceTransformer models use a class-level cache** — first load is slow, subsequent calls reuse the cached model
 - **The `for_query` flag on `get_collection()`** affects QWEN (adds instruction prefix) and Gemini (maps RETRIEVAL_DOCUMENT → RETRIEVAL_QUERY)

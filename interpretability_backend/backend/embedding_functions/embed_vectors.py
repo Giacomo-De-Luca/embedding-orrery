@@ -199,17 +199,14 @@ def embed_vectors(
             metadatas.append(metadata)
 
         if ids:
-            collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas
-            )
-            total_embedded += len(ids)
+            # ChromaDB: vectors only
+            collection.add(ids=ids, embeddings=embeddings)
 
-            # DuckDB dual-write: insert items
+            # DuckDB: documents + metadata
             if _duckdb_dataset_id:
                 sync_items(_duckdb_dataset_id, ids, documents, metadatas)
+
+            total_embedded += len(ids)
 
         if progress_callback:
             progress_callback(min(batch_start + EMBEDDING_BATCH_SIZE, len(rows)), len(rows))

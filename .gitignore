@@ -13,6 +13,8 @@ test*.ipynb
 
 ## test datasets
 interpretability_backend/resources/uploads/*
+interpretability_backend/resources/main.duckdb
+interpretability_backend/resources/main.duckdb.wal
 
 
 ### interrupted progress

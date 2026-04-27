@@ -77,8 +77,19 @@ def _sync_topics_to_duckdb(
     topic_assignments: Dict[str, int],
     topic_labels: Dict[int, str],
     config=None,
+    subtopic_assignments: Optional[Dict[str, int]] = None,
+    subtopic_labels: Optional[Dict[int, str]] = None,
+    reduction_applied: bool = False,
+    num_topics_before_reduction: Optional[int] = None,
+    reduction_method: Optional[str] = None,
+    reduction_target: Optional[int] = None,
+    topic_hierarchy: Optional[Dict] = None,
 ) -> None:
-    """DuckDB dual-write: create topic extraction + info + assignments."""
+    """Store topic extraction results in DuckDB.
+
+    Creates a new topic_extraction record, inserts topic_info and
+    topic_assignments (with optional subtopic fields for reduction).
+    """
     db = _get_duckdb()
     if not db:
         return
@@ -89,19 +100,44 @@ def _sync_topics_to_duckdb(
             logger.warning("DuckDB: vector collection %r not found, skipping topic sync", collection_name)
             return
 
-        # Create extraction record
+        # Build extraction config snapshot
         extraction_config = None
         if config:
             extraction_config = {
-                "min_topic_size": config.min_topic_size,
-                "n_keywords": config.n_keywords,
-                "projection_type": config.projection_type,
-                "used_llm": config.use_llm_labels,
+                "min_topic_size": getattr(config, "min_topic_size", None),
+                "n_keywords": getattr(config, "n_keywords", None),
+                "projection_type": getattr(config, "projection_type", None),
+                "used_llm": getattr(config, "use_llm_labels", None),
             }
 
         ext_id = db.create_topic_extraction(
             vc["id"], vc["dataset_id"], config=extraction_config,
         )
+
+        # Store reduction metadata if applicable
+        if reduction_applied:
+            db._conn.execute("""
+                UPDATE topic_extractions SET
+                    reduction_applied = TRUE,
+                    reduction_method = ?,
+                    reduction_target = ?,
+                    num_topics_before_reduction = ?,
+                    topic_hierarchy = ?,
+                    topic_count = ?
+                WHERE id = ?
+            """, [
+                reduction_method,
+                reduction_target,
+                num_topics_before_reduction,
+                json.dumps(topic_hierarchy) if topic_hierarchy else None,
+                len([t for t in topic_infos if t.topic_id != -1]),
+                ext_id,
+            ])
+        else:
+            db._conn.execute(
+                "UPDATE topic_extractions SET topic_count = ? WHERE id = ?",
+                [len([t for t in topic_infos if t.topic_id != -1]), ext_id],
+            )
 
         # Insert topic info
         topic_info_records = []
@@ -115,14 +151,19 @@ def _sync_topics_to_duckdb(
             })
         db.insert_topic_info_batch(ext_id, topic_info_records)
 
-        # Insert topic assignments
+        # Insert topic assignments (with subtopics if reduction was applied)
         assignment_records = []
         for item_id, topic_id in topic_assignments.items():
-            assignment_records.append({
+            record = {
                 "item_id": item_id,
                 "topic_id": topic_id,
                 "topic_label": topic_labels.get(topic_id, "Unclustered"),
-            })
+            }
+            if subtopic_assignments is not None and subtopic_labels is not None:
+                sub_id = subtopic_assignments.get(item_id, -1)
+                record["subtopic_id"] = sub_id
+                record["subtopic_label"] = subtopic_labels.get(sub_id, "Unclustered")
+            assignment_records.append(record)
         db.insert_topic_assignments_batch(ext_id, vc["dataset_id"], assignment_records)
 
         # Update vector collection flag
@@ -158,7 +199,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
     job_id = config.collection_name
 
     try:
-        # Step 1: Load projection data
+        # Step 1: Load projection data from DuckDB
         emit_progress(
             job_id=job_id, status="running",
             items_processed=0, total_items=0,
@@ -167,6 +208,27 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         )
         logger.info(f"Loading projection data for {config.collection_name}")
 
+        # DuckDB: load items + projections
+        duckdb = _get_duckdb()
+        projection_data = duckdb.get_projection_data(config.collection_name, config.projection_type)
+
+        if not projection_data:
+            return TopicExtractionResult(
+                collection_name=config.collection_name,
+                num_topics=0, num_noise_points=0, topics=[],
+                duration_seconds=time.time() - start_time,
+                error=f"No projection data found for {config.collection_name} ({config.projection_type})"
+            )
+
+        ids = projection_data["ids"]
+        documents = projection_data["documents"] or [""] * len(ids)
+        raw_metadatas = projection_data["item_metadata"] or [{}] * len(ids)
+        coords = projection_data["coordinates"]
+
+        total_items = len(ids)
+        logger.info(f"Loaded {total_items} items from DuckDB")
+
+        # ChromaDB client still needed for topic_reducer semantic embeddings
         db_path = str(DB_PATH.resolve())
         client = chromadb.PersistentClient(
             path=db_path,
@@ -176,26 +238,6 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             name=config.collection_name,
             embedding_function=None
         )
-
-        # Get all items with metadata and documents
-        results = collection.get(include=["metadatas", "documents"])
-        ids = results["ids"]
-        documents = results["documents"] or [""] * len(ids)
-        raw_metadatas = results["metadatas"] or [{}] * len(ids)
-
-        total_items = len(ids)
-        logger.info(f"Loaded {total_items} items")
-
-        # Extract projection coordinates
-        projection_key = config.projection_type  # e.g., "umap_2d"
-        coords = []
-        for metadata in raw_metadatas:
-            try:
-                coord = json.loads(metadata.get(projection_key, "[0, 0]"))
-                coords.append(coord)
-            except (json.JSONDecodeError, TypeError):
-                dims = 3 if "3d" in projection_key else 2
-                coords.append([0.0] * dims)
 
         reduced_embeddings = np.array(coords, dtype=np.float64)
 
@@ -388,14 +430,14 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                         info.subtopics = subtopic_label_list
                         break
 
-        # Step 5: Update ChromaDB metadata
+        # Step 5: Store topic assignments in DuckDB
         emit_progress(
             job_id=job_id, status="running",
             items_processed=0, total_items=total_items,
             current_batch=4, total_batches=5,
             message="Updating metadata..."
         )
-        logger.info("Updating item metadata with topic assignments")
+        logger.info("Storing topic assignments in DuckDB")
 
         # Map document IDs to topic assignments
         topic_assignments = {}
@@ -405,26 +447,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             item_id = ids[doc_idx]
             topic_assignments[item_id] = topic_id
 
-        _batch_update_topic_metadata(
-            collection=collection,
-            ids=ids,
-            raw_metadatas=raw_metadatas,
-            topic_assignments=topic_assignments,
-            topic_labels=topic_labels,
-            subtopic_assignments=pre_reduction_assignments if reduction_result else None,
-            subtopic_labels=pre_reduction_labels if reduction_result else None
-        )
-
-        # Update collection-level metadata
-        _update_collection_topic_metadata(
-            collection=collection,
-            topic_infos=topic_infos,
-            config=config,
-            num_topics_before_reduction=num_topics_before_reduction,
-            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None
-        )
-
-        # DuckDB dual-write: sync topic extraction results
+        # DuckDB: sole destination for topic data
         _sync_topics_to_duckdb(
             collection_name=config.collection_name,
             topic_infos=topic_infos,
@@ -432,6 +455,13 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             topic_assignments=topic_assignments,
             topic_labels=topic_labels,
             config=config,
+            subtopic_assignments=pre_reduction_assignments if reduction_result else None,
+            subtopic_labels=pre_reduction_labels if reduction_result else None,
+            reduction_applied=bool(reduction_result),
+            num_topics_before_reduction=num_topics_before_reduction,
+            reduction_method=config.reduction_method if config.reduce_topics else None,
+            reduction_target=config.nr_topics if config.reduce_topics else None,
+            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
         )
 
         duration = time.time() - start_time
@@ -478,113 +508,6 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             error=str(e)
         )
 
-
-def _batch_update_topic_metadata(
-    collection,
-    ids: List[str],
-    raw_metadatas: List[dict],
-    topic_assignments: Dict[str, int],
-    topic_labels: Dict[int, str],
-    batch_size: int = 1000,
-    subtopic_assignments: Optional[Dict[str, int]] = None,
-    subtopic_labels: Optional[Dict[int, str]] = None
-) -> None:
-    """Update item metadata with topic_id and topic_label in batches.
-
-    Args:
-        collection: ChromaDB collection
-        ids: All item IDs
-        raw_metadatas: Current metadata for each item
-        topic_assignments: Mapping of item ID -> topic_id
-        topic_labels: Mapping of topic_id -> label
-        batch_size: Items per batch
-        subtopic_assignments: Mapping of item ID -> original topic_id (pre-reduction)
-        subtopic_labels: Mapping of original topic_id -> label (pre-reduction)
-    """
-    for i in range(0, len(ids), batch_size):
-        batch_ids = ids[i:i + batch_size]
-        batch_metadatas = []
-
-        for j, item_id in enumerate(batch_ids):
-            meta = raw_metadatas[i + j].copy()
-            topic_id = topic_assignments.get(item_id, -1)
-            meta["topic_id"] = str(topic_id)
-            meta["topic_label"] = topic_labels.get(topic_id, "Unclustered")
-
-            # Store pre-reduction topic as subtopic if reduction was applied
-            if subtopic_assignments is not None and subtopic_labels is not None:
-                subtopic_id = subtopic_assignments.get(item_id, -1)
-                meta["subtopic_id"] = str(subtopic_id)
-                meta["subtopic_label"] = subtopic_labels.get(subtopic_id, "Unclustered")
-
-            batch_metadatas.append(meta)
-
-        collection.update(ids=batch_ids, metadatas=batch_metadatas)
-
-    logger.info(f"Updated {len(ids)} items with topic metadata")
-
-
-def _update_collection_topic_metadata(
-    collection,
-    topic_infos: List[TopicInfoResult],
-    config: TopicExtractionConfig,
-    num_topics_before_reduction: Optional[int] = None,
-    topic_hierarchy: Optional[Dict[str, List[str]]] = None
-) -> None:
-    """Update collection-level metadata with topic summary.
-
-    Args:
-        collection: ChromaDB collection
-        topic_infos: List of topic information
-        config: Topic extraction configuration
-        num_topics_before_reduction: Number of topics before reduction (if applied)
-        topic_hierarchy: Mapping of reduced topic label -> list of original subtopic labels
-    """
-    # Build topic summary for collection metadata
-    topic_summary = []
-    for info in topic_infos:
-        entry = {
-            "topic_id": info.topic_id,
-            "label": info.label,
-            "count": info.count,
-            "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:5]]
-        }
-        if info.subtopics:
-            entry["subtopics"] = info.subtopics
-        topic_summary.append(entry)
-
-    current_metadata = collection.metadata or {}
-    current_metadata.update({
-        "has_topics": True,
-        "topics_extracted_at": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "topic_count": len([t for t in topic_infos if t.topic_id != -1]),
-        "topic_config": json.dumps({
-            "min_topic_size": config.min_topic_size,
-            "n_keywords": config.n_keywords,
-            "projection_type": config.projection_type,
-            "used_llm": config.use_llm_labels,
-        }),
-        "topic_summary": json.dumps(topic_summary),
-    })
-    # Invalidate cached field analysis — topic extraction adds/changes topic_id and
-    # topic_label fields, so the frontend must re-analyze field metadata on next load.
-    current_metadata.pop("field_analysis", None)
-
-    # Add reduction info if applied
-    if config.reduce_topics and num_topics_before_reduction is not None:
-        current_metadata.update({
-            "reduction_applied": True,
-            "num_topics_before_reduction": num_topics_before_reduction,
-            "reduction_method": config.reduction_method,
-            "reduction_target": config.nr_topics,
-        })
-
-    # Store topic hierarchy if provided
-    if topic_hierarchy:
-        current_metadata["topic_hierarchy"] = json.dumps(topic_hierarchy)
-
-    collection.modify(metadata=current_metadata)
-    logger.info("Updated collection metadata with topic summary")
 
 
 
@@ -637,6 +560,10 @@ def reduce_existing_topics(
         )
         logger.info(f"Reducing topics for collection: {collection_name}")
 
+        # DuckDB: load items and topic data
+        duckdb = _get_duckdb()
+
+        # ChromaDB client still needed for topic_reducer semantic embeddings
         db_path = str(DB_PATH.resolve())
         client = chromadb.PersistentClient(
             path=db_path,
@@ -647,19 +574,31 @@ def reduce_existing_topics(
             embedding_function=None
         )
 
-        # Validate has_topics
-        metadata = collection.metadata or {}
-        if not metadata.get("has_topics", False):
+        # Validate has_topics via DuckDB
+        active_topics = duckdb.get_active_topics(collection_name)
+        if not active_topics:
             raise ValueError(f"Collection '{collection_name}' has no topics. Run extractTopics first.")
 
-        # Step 2: Load all items
-        results = collection.get(include=["metadatas", "documents"])
-        ids = results["ids"]
-        documents = results["documents"] or [""] * len(ids)
-        raw_metadatas = results["metadatas"] or [{}] * len(ids)
+        extraction_id = active_topics["id"]
+
+        # Step 2: Load items + topic assignments from DuckDB
+        ds = duckdb.get_dataset(collection_name)
+        items_rows = duckdb._conn.execute(
+            "SELECT id, document FROM items WHERE dataset_id = ? ORDER BY row_index",
+            [ds["id"]],
+        ).fetchall()
+        ids = [r[0] for r in items_rows]
+        documents = [r[1] or "" for r in items_rows]
+
+        # Load topic assignments
+        assign_rows = duckdb._conn.execute(
+            "SELECT item_id, topic_id FROM topic_assignments WHERE extraction_id = ?",
+            [extraction_id],
+        ).fetchall()
+        assign_map = {r[0]: r[1] for r in assign_rows}
 
         total_items = len(ids)
-        logger.info(f"Loaded {total_items} items")
+        logger.info(f"Loaded {total_items} items from DuckDB")
 
         # Step 3: Reconstruct documents_df
         emit_progress(
@@ -673,10 +612,10 @@ def reduce_existing_topics(
         doc_texts = []
         doc_topics = []
 
-        for idx, (doc, meta) in enumerate(zip(documents, raw_metadatas)):
+        for idx, (item_id, doc) in enumerate(zip(ids, documents)):
             doc_ids.append(idx)
             doc_texts.append(doc)
-            topic_id = int(meta.get("topic_id", -1))
+            topic_id = assign_map.get(item_id, -1)
             doc_topics.append(topic_id)
 
         import pandas as pd
@@ -686,9 +625,8 @@ def reduce_existing_topics(
             "Topic": doc_topics
         })
 
-        # Step 4: Reconstruct topics_data from metadata
-        topic_summary_json = metadata.get("topic_summary", "[]")
-        topic_summary = json.loads(topic_summary_json)
+        # Step 4: Reconstruct topics_data from DuckDB topic_info
+        topic_summary = active_topics.get("topics", [])
 
         topics_data = {}
         for topic_info in topic_summary:
@@ -724,15 +662,17 @@ def reduce_existing_topics(
         num_topics_before = len([t for t in topics_data.keys() if t != -1])
         logger.info(f"Running reduction: method={method}, use_ctfidf={use_ctfidf}")
 
-        # Capture pre-reduction labels and assignments from existing metadata
+        # Capture pre-reduction labels and assignments from DuckDB
         pre_reduction_labels: Dict[int, str] = {}
         pre_reduction_assignments: Dict[str, int] = {}
 
-        for idx, (item_id, meta) in enumerate(zip(ids, raw_metadatas)):
-            orig_topic_id = int(meta.get("topic_id", -1))
-            pre_reduction_assignments[item_id] = orig_topic_id
-            if orig_topic_id not in pre_reduction_labels:
-                pre_reduction_labels[orig_topic_id] = meta.get("topic_label", "Unclustered")
+        # Build label map from topic_info
+        for t in topic_summary:
+            pre_reduction_labels[t["topic_id"]] = t.get("label", "Unclustered")
+
+        # Assignments already loaded from DuckDB
+        for item_id, topic_id in assign_map.items():
+            pre_reduction_assignments[item_id] = topic_id
 
         from ..topic_extraction.topic_reducer import TopicReducer
         reducer = TopicReducer(
@@ -838,7 +778,7 @@ def reduce_existing_topics(
             message="Updating metadata..."
         )
 
-        # Update item metadata
+        # Build topic assignments
         topic_assignments = {}
         for _, row in documents_df.iterrows():
             doc_idx = int(row["Document_ID"])
@@ -846,31 +786,20 @@ def reduce_existing_topics(
             item_id = ids[doc_idx]
             topic_assignments[item_id] = topic_id
 
-        _batch_update_topic_metadata(
-            collection=collection,
+        # DuckDB: store reduced topics (with subtopic data from pre-reduction)
+        _sync_topics_to_duckdb(
+            collection_name=collection_name,
+            topic_infos=topic_infos,
             ids=ids,
-            raw_metadatas=raw_metadatas,
             topic_assignments=topic_assignments,
             topic_labels=topic_labels,
             subtopic_assignments=pre_reduction_assignments,
-            subtopic_labels=pre_reduction_labels
-        )
-
-        # Update collection metadata (with reduction info)
-        topic_config = TopicExtractionConfig(
-            collection_name=collection_name,
-            reduce_topics=True,
-            reduction_method=method,
-            nr_topics=n_topics,
-            use_ctfidf_for_reduction=use_ctfidf
-        )
-
-        _update_collection_topic_metadata(
-            collection=collection,
-            topic_infos=topic_infos,
-            config=topic_config,
+            subtopic_labels=pre_reduction_labels,
+            reduction_applied=True,
             num_topics_before_reduction=num_topics_before,
-            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None
+            reduction_method=method,
+            reduction_target=n_topics,
+            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
         )
 
         duration = time.time() - start_time
@@ -942,69 +871,6 @@ def _is_keyword_label(label: str) -> bool:
     return bool(_KEYWORD_LABEL_PATTERN.match(label))
 
 
-def _update_label_for_group(
-    collection,
-    all_ids: List[str],
-    all_metadatas: List[dict],
-    group_id: int,
-    new_label: str,
-    id_field: str = "topic_id",
-    label_field: str = "topic_label",
-    batch_size: int = 1000,
-) -> None:
-    """Update label for all items belonging to a specific topic/subtopic group."""
-    ids_to_update = []
-    metas_to_update = []
-    for item_id, meta in zip(all_ids, all_metadatas):
-        if int(meta.get(id_field, -1)) == group_id:
-            updated = meta.copy()
-            updated[label_field] = new_label
-            ids_to_update.append(item_id)
-            metas_to_update.append(updated)
-
-    for i in range(0, len(ids_to_update), batch_size):
-        collection.update(
-            ids=ids_to_update[i:i + batch_size],
-            metadatas=metas_to_update[i:i + batch_size],
-        )
-
-
-def _update_topic_summary_label(collection, topic_id: int, new_label: str) -> None:
-    """Update one topic's label in the collection-level topic_summary JSON."""
-    metadata = collection.metadata or {}
-    summary = json.loads(metadata.get("topic_summary", "[]"))
-    for entry in summary:
-        if entry["topic_id"] == topic_id:
-            entry["label"] = new_label
-            break
-    metadata["topic_summary"] = json.dumps(summary)
-    collection.modify(metadata=metadata)
-
-
-def _update_subtopic_label_in_hierarchy(collection, old_label: str, new_label: str) -> None:
-    """Update a subtopic label in the topic_hierarchy JSON and topic_summary subtopics."""
-    metadata = collection.metadata or {}
-
-    # Update topic_hierarchy
-    hierarchy_json = metadata.get("topic_hierarchy")
-    if hierarchy_json:
-        hierarchy = json.loads(hierarchy_json)
-        for parent_label, subtopic_list in hierarchy.items():
-            hierarchy[parent_label] = [
-                new_label if s == old_label else s for s in subtopic_list
-            ]
-        metadata["topic_hierarchy"] = json.dumps(hierarchy)
-
-    # Update subtopics lists in topic_summary
-    summary = json.loads(metadata.get("topic_summary", "[]"))
-    for entry in summary:
-        if "subtopics" in entry:
-            entry["subtopics"] = [
-                new_label if s == old_label else s for s in entry["subtopics"]
-            ]
-    metadata["topic_summary"] = json.dumps(summary)
-
-    collection.modify(metadata=metadata)
 
 
 def generate_llm_labels_for_collection(
@@ -1059,28 +925,33 @@ def generate_llm_labels_for_collection(
         )
         logger.info(f"LLM labeling for collection: {collection_name}")
 
-        db_path = str(DB_PATH.resolve())
-        client = chromadb.PersistentClient(
-            path=db_path,
-            settings=Settings(anonymized_telemetry=False)
-        )
-        collection = client.get_collection(
-            name=collection_name,
-            embedding_function=None
-        )
-
-        metadata = collection.metadata or {}
-        if not metadata.get("has_topics", False):
+        # DuckDB: load items and topic data
+        duckdb = _get_duckdb()
+        active_topics = duckdb.get_active_topics(collection_name)
+        if not active_topics:
             raise ValueError(f"Collection '{collection_name}' has no topics. Run extractTopics first.")
 
-        # Step 2: Load items and topic summary
-        results = collection.get(include=["metadatas", "documents"])
-        all_ids = results["ids"]
-        all_documents = results["documents"] or [""] * len(all_ids)
-        all_metadatas = results["metadatas"] or [{}] * len(all_ids)
+        extraction_id = active_topics["id"]
+        topic_summary = active_topics.get("topics", [])
+        has_hierarchy = bool(active_topics.get("topic_hierarchy"))
 
-        topic_summary = json.loads(metadata.get("topic_summary", "[]"))
-        has_hierarchy = bool(metadata.get("topic_hierarchy"))
+        # Load items from DuckDB
+        ds = duckdb.get_dataset(collection_name)
+        items_rows = duckdb._conn.execute(
+            "SELECT id, document FROM items WHERE dataset_id = ? ORDER BY row_index",
+            [ds["id"]],
+        ).fetchall()
+        all_ids = [r[0] for r in items_rows]
+        all_documents = [r[1] or "" for r in items_rows]
+
+        # Load topic + subtopic assignments from DuckDB
+        assign_rows = duckdb._conn.execute(
+            "SELECT item_id, topic_id, topic_label, subtopic_id, subtopic_label FROM topic_assignments WHERE extraction_id = ?",
+            [extraction_id],
+        ).fetchall()
+        assign_map = {}
+        for r in assign_rows:
+            assign_map[r[0]] = {"topic_id": r[1], "topic_label": r[2], "subtopic_id": r[3], "subtopic_label": r[4]}
 
         # Build topics_data from summary
         topics_data: Dict[int, List[Tuple[str, float]]] = {}
@@ -1097,15 +968,15 @@ def generate_llm_labels_for_collection(
         # Build documents grouped by topic for sample retrieval
         topic_docs: Dict[int, List[str]] = {}
         subtopic_docs: Dict[int, List[str]] = {}
-        for doc, meta in zip(all_documents, all_metadatas):
-            tid = int(meta.get("topic_id", -1))
+        for item_id, doc in zip(all_ids, all_documents):
+            a = assign_map.get(item_id, {})
+            tid = a.get("topic_id", -1)
             if tid not in topic_docs:
                 topic_docs[tid] = []
             topic_docs[tid].append(doc)
 
-            stid_raw = meta.get("subtopic_id")
-            if stid_raw is not None:
-                stid = int(stid_raw)
+            stid = a.get("subtopic_id")
+            if stid is not None:
                 if stid not in subtopic_docs:
                     subtopic_docs[stid] = []
                 subtopic_docs[stid].append(doc)
@@ -1118,13 +989,13 @@ def generate_llm_labels_for_collection(
         subtopic_labels_map: Dict[int, str] = {}
         subtopic_keywords: Dict[int, List[Tuple[str, float]]] = {}
         if has_hierarchy and label_scope in ("both", "subtopics_only"):
-            # Collect unique subtopics from item metadata
-            for meta in all_metadatas:
-                stid_raw = meta.get("subtopic_id")
-                if stid_raw is not None:
-                    stid = int(stid_raw)
+            # Collect unique subtopics from assignments
+            for a in assign_map.values():
+                stid = a.get("subtopic_id")
+                if stid is not None:
+                    stid = int(stid)
                     if stid != -1 and stid not in subtopic_labels_map:
-                        subtopic_labels_map[stid] = meta.get("subtopic_label", "")
+                        subtopic_labels_map[stid] = a.get("subtopic_label", "")
 
             # Extract subtopic keywords via c-TF-IDF
             if subtopic_docs and subtopic_labels_map:
@@ -1135,8 +1006,9 @@ def generate_llm_labels_for_collection(
                 sub_doc_ids = []
                 sub_doc_texts = []
                 sub_doc_topics = []
-                for idx, (doc, meta) in enumerate(zip(all_documents, all_metadatas)):
-                    stid_raw = meta.get("subtopic_id")
+                for idx, (item_id, doc) in enumerate(zip(all_ids, all_documents)):
+                    a = assign_map.get(item_id, {})
+                    stid_raw = a.get("subtopic_id")
                     if stid_raw is not None:
                         sub_doc_ids.append(idx)
                         sub_doc_texts.append(doc)
@@ -1198,19 +1070,8 @@ def generate_llm_labels_for_collection(
                 )
 
                 if label is not None:
-                    # Incremental save: update items
-                    _update_label_for_group(
-                        collection, all_ids, all_metadatas,
-                        group_id=topic_id, new_label=label,
-                        id_field="topic_id", label_field="topic_label",
-                    )
-                    # Update in-memory metadata to reflect changes for subsequent saves
-                    for meta in all_metadatas:
-                        if int(meta.get("topic_id", -1)) == topic_id:
-                            meta["topic_label"] = label
-
-                    # Incremental save: update topic_summary
-                    _update_topic_summary_label(collection, topic_id, label)
+                    # Incremental save: update DuckDB topic label
+                    duckdb.update_topic_label(extraction_id, topic_id, label)
                     topics_labeled += 1
 
                 progress_idx += 1
@@ -1246,22 +1107,8 @@ def generate_llm_labels_for_collection(
                 )
 
                 if label is not None:
-                    old_label = current_label
-
-                    # Incremental save: update items
-                    _update_label_for_group(
-                        collection, all_ids, all_metadatas,
-                        group_id=sub_id, new_label=label,
-                        id_field="subtopic_id", label_field="subtopic_label",
-                    )
-                    for meta in all_metadatas:
-                        stid_raw = meta.get("subtopic_id")
-                        if stid_raw is not None and int(stid_raw) == sub_id:
-                            meta["subtopic_label"] = label
-
-                    # Incremental save: update hierarchy and summary
-                    if old_label:
-                        _update_subtopic_label_in_hierarchy(collection, old_label, label)
+                    # Incremental save: update DuckDB subtopic label
+                    duckdb.update_subtopic_label(extraction_id, sub_id, label)
                     subtopics_labeled += 1
 
                 progress_idx += 1

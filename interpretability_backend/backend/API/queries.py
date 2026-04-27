@@ -388,71 +388,40 @@ class Query:
         if not ds:
             return []
 
-        # TODO: implement proper filtering via DuckDB JSON queries
-        # For now, use ChromaDB path if filters are provided
+        # Load items from DuckDB (with optional JSON filtering)
         if filters:
-            client = get_chromadb_client()
-            include = []
-            if include_embeddings:
-                include.append("embeddings")
-            if include_documents:
-                include.append("documents")
-            if include_metadata:
-                include.append("metadatas")
-            where = build_where_clause(filters)
-            results = client.get_all_items(
-                collection_name=collection_name,
-                limit=limit, offset=offset,
-                where=where, include=include,
-            )
-            items = []
-            for i, item_id in enumerate(results["ids"]):
-                item = EmbeddingItem(id=item_id)
-                if "embeddings" in results and results["embeddings"]:
-                    item.embedding = results["embeddings"][i]
-                if "documents" in results and results["documents"]:
-                    item.document = results["documents"][i]
-                if "metadatas" in results and results["metadatas"]:
-                    metadata = results["metadatas"][i]
-                    item.word = metadata.get("word")
-                    item.definition = metadata.get("definition")
-                    item.pos = metadata.get("pos")
-                    item.metadata = metadata
-                items.append(item)
-            return items
+            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
+                           for f in filters]
+            rows_data = db.get_filtered_items(collection_name, filter_dicts, limit=limit, offset=offset)
+        else:
+            rows_data = db.get_filtered_items(collection_name, [], limit=limit, offset=offset)
 
-        # No filters: load from DuckDB
-        rows = db._conn.execute(
-            "SELECT id, document, metadata FROM items WHERE dataset_id = ? ORDER BY row_index LIMIT ? OFFSET ?",
-            [ds["id"], limit, offset],
-        ).fetchall()
+        if not rows_data:
+            return []
 
-        import json as json_mod
         # If embeddings requested, fetch from ChromaDB
         embedding_map = {}
-        if include_embeddings and rows:
+        if include_embeddings:
             client = get_chromadb_client()
             collection = client.get_collection(collection_name, load_embedding_function=False)
-            batch_ids = [r[0] for r in rows]
+            batch_ids = [r["id"] for r in rows_data]
             emb_result = collection.get(ids=batch_ids, include=["embeddings"])
             for eid, evec in zip(emb_result["ids"], emb_result["embeddings"]):
                 embedding_map[eid] = evec
 
         items = []
-        for r in rows:
-            item_id, document, meta_raw = r
-            metadata = json_mod.loads(meta_raw) if isinstance(meta_raw, str) and meta_raw else {}
-
-            item = EmbeddingItem(id=item_id)
+        for r in rows_data:
+            metadata = r.get("metadata", {})
+            item = EmbeddingItem(id=r["id"])
             if include_documents:
-                item.document = document
+                item.document = r.get("document")
             if include_metadata:
                 item.word = metadata.get("word")
                 item.definition = metadata.get("definition")
                 item.pos = metadata.get("pos")
                 item.metadata = metadata
-            if include_embeddings and item_id in embedding_map:
-                item.embedding = embedding_map[item_id]
+            if include_embeddings and r["id"] in embedding_map:
+                item.embedding = embedding_map[r["id"]]
             items.append(item)
 
         return items

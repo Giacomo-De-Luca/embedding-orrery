@@ -128,13 +128,6 @@ class Mutation:
             db.update_dataset(collection_name, extra_metadata=metadata)
             ds = db.get_dataset(collection_name)
 
-            # Also update ChromaDB for backward compatibility during migration
-            client = get_chromadb_client()
-            try:
-                client.update_collection_metadata(collection_name, metadata)
-            except Exception:
-                pass
-
             return UpdateCollectionMetadataResult(
                 name=collection_name,
                 metadata=_sanitize_for_json(ds) if ds else {},

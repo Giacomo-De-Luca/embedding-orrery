@@ -389,6 +389,85 @@ class DuckDBClient:
             result.append(item)
         return result
 
+    def get_filtered_items(self, dataset_name: str, filters: List[Dict],
+                           limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get items with JSON metadata filtering.
+
+        Args:
+            dataset_name: dataset name
+            filters: list of {field, operator, value} dicts.
+                     operator: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin
+            limit: max items
+            offset: skip N items
+
+        Returns: list of {id, document, metadata, row_index}
+        """
+        ds = self.get_dataset(dataset_name)
+        if not ds:
+            return []
+
+        where_parts = []
+        params = [ds["id"]]
+
+        for f in filters:
+            field = f["field"]
+            op = f["operator"]
+            value = f["value"]
+            json_path = f"$.{field}"
+
+            # DuckDB json_extract returns typed values; cast to VARCHAR for string ops
+            extract = f"json_extract_string(metadata, ?)"
+            params.append(json_path)
+
+            if op == "$eq":
+                where_parts.append(f"{extract} = ?")
+                params.append(str(value))
+            elif op == "$ne":
+                where_parts.append(f"{extract} != ?")
+                params.append(str(value))
+            elif op == "$gt":
+                where_parts.append(f"CAST({extract} AS DOUBLE) > ?")
+                params.append(float(value))
+            elif op == "$gte":
+                where_parts.append(f"CAST({extract} AS DOUBLE) >= ?")
+                params.append(float(value))
+            elif op == "$lt":
+                where_parts.append(f"CAST({extract} AS DOUBLE) < ?")
+                params.append(float(value))
+            elif op == "$lte":
+                where_parts.append(f"CAST({extract} AS DOUBLE) <= ?")
+                params.append(float(value))
+            elif op == "$in":
+                if isinstance(value, list):
+                    placeholders = ", ".join(["?"] * len(value))
+                    where_parts.append(f"{extract} IN ({placeholders})")
+                    params.extend([str(v) for v in value])
+            elif op == "$nin":
+                if isinstance(value, list):
+                    placeholders = ", ".join(["?"] * len(value))
+                    where_parts.append(f"{extract} NOT IN ({placeholders})")
+                    params.extend([str(v) for v in value])
+
+        where_sql = " AND ".join(where_parts) if where_parts else "TRUE"
+        sql = f"""
+            SELECT id, document, metadata, row_index FROM items
+            WHERE dataset_id = ? AND {where_sql}
+            ORDER BY row_index
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+
+        rows = self._conn.execute(sql, params).fetchall()
+        result = []
+        for r in rows:
+            item = {"id": r[0], "document": r[1], "row_index": r[3]}
+            if r[2]:
+                item["metadata"] = json.loads(r[2]) if isinstance(r[2], str) else r[2]
+            else:
+                item["metadata"] = {}
+            result.append(item)
+        return result
+
     # ------------------------------------------------------------------
     # Vector Collections
     # ------------------------------------------------------------------

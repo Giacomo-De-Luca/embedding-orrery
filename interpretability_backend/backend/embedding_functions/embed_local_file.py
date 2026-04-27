@@ -388,13 +388,18 @@ def embed_text_from_local(
             metadatas.append(metadata)
 
         if ids:
-            collection.add(ids=ids, documents=documents, metadatas=metadatas)
-            total_embedded += len(ids)
-            new_embedded += len(ids)
+            # Compute embeddings explicitly
+            batch_embeddings = embedding_func(documents)
 
-            # DuckDB dual-write: insert items
+            # ChromaDB: vectors only
+            collection.add(ids=ids, embeddings=batch_embeddings)
+
+            # DuckDB: documents + metadata
             if _duckdb_dataset_id:
                 sync_items(_duckdb_dataset_id, ids, documents, metadatas)
+
+            total_embedded += len(ids)
+            new_embedded += len(ids)
 
         batches_completed += 1
 
