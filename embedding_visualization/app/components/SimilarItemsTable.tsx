@@ -30,6 +30,8 @@ interface SimilarItemsTableProps {
   queryLabel: string | null;
   categoryField?: string | null;
   onClose?: () => void;
+  /** When true, column headers adapt for SAE prompt activation results. */
+  isActivationResults?: boolean;
 }
 
 // Fields to exclude from dynamic metadata columns
@@ -60,7 +62,7 @@ function fieldToDisplayName(field: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function SimilarItemsTable({ results, queryLabel, categoryField, onClose }: SimilarItemsTableProps) {
+export function SimilarItemsTable({ results, queryLabel, categoryField, onClose, isActivationResults }: SimilarItemsTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { id: 'similarity', desc: true },
   ]);
@@ -130,7 +132,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose 
               onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
               className="-ml-4"
             >
-              Similarity
+              {isActivationResults ? 'Activation' : 'Similarity'}
               <ArrowUpDown className="ml-2 h-4 w-4" />
             </Button>
           );
@@ -257,10 +259,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose 
   return (
     <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm">
       <CardHeader className="flex flex-row items-center gap-4 shrink-0">
-        <CardTitle>Similar Items</CardTitle>
+        <CardTitle>{isActivationResults ? 'Top Activated Features' : 'Similar Items'}</CardTitle>
         {queryLabel && (
           <CardDescription className="ml-2">
-            Items semantically similar to <span className="font-semibold text-foreground">{queryLabel}</span>
+            {isActivationResults
+              ? <>Features activated by <span className="font-semibold text-foreground">&ldquo;{queryLabel}&rdquo;</span></>
+              : <>Items semantically similar to <span className="font-semibold text-foreground">{queryLabel}</span></>
+            }
           </CardDescription>
         )}
         {onClose && (

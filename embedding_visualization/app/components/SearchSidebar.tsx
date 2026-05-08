@@ -87,6 +87,8 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   promptHighlightActivePrompt?: string | null;
   onPromptHighlightSubmit?: (prompt: string) => void;
   onPromptHighlightClear?: () => void;
+  promptMaxDensity?: number | null;
+  onPromptMaxDensityChange?: (value: number | null) => void;
 }
 
 export function SearchSidebar({
@@ -130,6 +132,8 @@ export function SearchSidebar({
   promptHighlightActivePrompt,
   onPromptHighlightSubmit,
   onPromptHighlightClear,
+  promptMaxDensity,
+  onPromptMaxDensityChange,
   className,
   ...props
 }: SearchSidebarProps) {
@@ -249,6 +253,24 @@ export function SearchSidebar({
                   Run a prompt through the SAE to highlight the top activated features
                 </p>
               )}
+              {/* Max density filter */}
+              <div className="flex items-center gap-2">
+                <Label htmlFor="max-density" className="text-xs whitespace-nowrap">
+                  Max density
+                </Label>
+                <Input
+                  id="max-density"
+                  type="number"
+                  step="any"
+                  placeholder="e.g. 0.01"
+                  value={promptMaxDensity ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onPromptMaxDensityChange?.(val === '' ? null : parseFloat(val));
+                  }}
+                  className="h-7 w-28 text-xs"
+                />
+              </div>
             </div>
           )}
 

@@ -68,6 +68,9 @@ interface DashboardPanelProps {
   promptHighlightActivePrompt?: string | null;
   onPromptHighlightSubmit?: (prompt: string) => void;
   onPromptHighlightClear?: () => void;
+  promptHighlightResults?: SemanticSearchResult[] | null;
+  promptMaxDensity?: number | null;
+  onPromptMaxDensityChange?: (value: number | null) => void;
   // Topic search props (threaded to SearchSidebar)
   topics?: TopicInfo[];
   topicSearchMode?: TopicSearchMode;
@@ -116,6 +119,9 @@ export function DashboardPanel({
   promptHighlightActivePrompt,
   onPromptHighlightSubmit,
   onPromptHighlightClear,
+  promptHighlightResults,
+  promptMaxDensity,
+  onPromptMaxDensityChange,
   // Topic search props
   topics,
   topicSearchMode,
@@ -462,7 +468,11 @@ export function DashboardPanel({
     (categoryValues.length > 0 && !isContinuousScale) ||
     (isContinuousScale && numericRange !== undefined)
   );
-  const showResultsTable = semanticSearchResults && semanticSearchResults.length > 0;
+  const hasSemanticResults = semanticSearchResults && semanticSearchResults.length > 0;
+  const hasPromptResults = promptHighlightResults && promptHighlightResults.length > 0;
+  const showResultsTable = hasSemanticResults || hasPromptResults;
+  const tableResults = hasPromptResults ? promptHighlightResults : semanticSearchResults;
+  const tableQueryLabel = hasPromptResults ? promptHighlightActivePrompt : searchQueryLabel;
 
   // Collapse/expand state for the results panel
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
@@ -634,10 +644,11 @@ export function DashboardPanel({
                 {/* Added background/blur so text is readable over the plot points */}
                 <div className="h-full border rounded-md shadow-lg overflow-hidden">
                   <SimilarItemsTable
-                    results={semanticSearchResults}
-                    queryLabel={searchQueryLabel}
+                    results={tableResults ?? null}
+                    queryLabel={tableQueryLabel ?? null}
                     categoryField={colorByField}
                     onClose={() => setResultsCollapsed(true)}
+                    isActivationResults={!!hasPromptResults}
                   />
                 </div>
               </div>
@@ -735,6 +746,8 @@ export function DashboardPanel({
           promptHighlightActivePrompt={promptHighlightActivePrompt}
           onPromptHighlightSubmit={onPromptHighlightSubmit}
           onPromptHighlightClear={onPromptHighlightClear}
+          promptMaxDensity={promptMaxDensity}
+          onPromptMaxDensityChange={onPromptMaxDensityChange}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",

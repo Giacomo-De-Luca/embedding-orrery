@@ -13,7 +13,7 @@ import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
 import { useTextSearch } from '../lib/hooks/useTextSearch';
-import { usePromptHighlight } from '../lib/hooks/usePromptHighlight';
+import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/usePromptHighlight';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
 import type { HighlightMap } from '../lib/types/types';
@@ -173,7 +173,20 @@ export default function Home() {
 
   // SAE prompt activation highlight
   const saeInfo = getSaeInfo(selectedCollection);
-  const promptHighlight = usePromptHighlight(saeInfo, data?.itemMetadata ?? EMPTY_METADATA);
+  const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(null);
+  const promptHighlight = usePromptHighlight(saeInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
+
+  // Build table-ready results from prompt highlight features
+  const promptHighlightResults = useMemo(() => {
+    if (!data || promptHighlight.topFeatures.length === 0) return null;
+    return buildPromptHighlightResults(
+      promptHighlight.topFeatures,
+      data.ids,
+      data.documents,
+      data.itemMetadata,
+      data.displayConfig.labelField,
+    );
+  }, [promptHighlight.topFeatures, data]);
 
   // Compute text search results from highlighted indices, filtered by temporal range
   const textSearchResults = useMemo(() => {
@@ -289,6 +302,9 @@ export default function Home() {
                   promptHighlightActivePrompt={promptHighlight.activePrompt}
                   onPromptHighlightSubmit={promptHighlight.submit}
                   onPromptHighlightClear={promptHighlight.clear}
+                  promptHighlightResults={promptHighlightResults}
+                  promptMaxDensity={promptMaxDensity}
+                  onPromptMaxDensityChange={setPromptMaxDensity}
                   metadata={{
                     pca_2d_variance: data.metadata.pca_2d_variance,
                     pca_3d_variance: data.metadata.pca_3d_variance,
