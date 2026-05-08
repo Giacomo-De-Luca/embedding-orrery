@@ -550,6 +550,12 @@ export interface PrepareSaeResult {
   error: string | null;
 }
 
+export const DELETE_SAE_DATA = gql`
+  mutation DeleteSaeData($modelId: String!, $saeId: String!) {
+    deleteSaeData(modelId: $modelId, saeId: $saeId)
+  }
+`;
+
 // ========== Model Lifecycle ==========
 
 export const LOAD_MODEL = gql`

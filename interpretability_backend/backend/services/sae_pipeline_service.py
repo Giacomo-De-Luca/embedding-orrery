@@ -93,16 +93,9 @@ def prepare_sae_data(
         "error": None,
     }
 
-    # Check if parquet already exists on disk
-    parquet_path = vectors_parquet_path(sae_config)
-    if not skip_download and parquet_path.exists():
-        result["features_parquet"] = str(parquet_path)
-        result["status"] = "already_downloaded"
-        result["duration_seconds"] = round(time.time() - start, 2)
-        logger.info("SAE %s/%s parquet already exists at %s", model_id, sae_id, parquet_path)
-        return result
-
     # Build progress callback
+    # Note: no early-return for existing files — downloads have resume support
+    # and DuckDB inserts use INSERT OR REPLACE, so re-runs are safe.
     def _progress(stage: str, done: int, total: int) -> None:
         if not job_id:
             return

@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation } from '@apollo/client/react';
-import { Download } from 'lucide-react';
+import { useQuery, useMutation } from '@apollo/client/react';
+import { Download, RefreshCw, Trash2, Check, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Card, CardContent } from '@/lib/ui-primitives/card';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
+import { Separator } from '@/lib/ui-primitives/separator';
 import {
   Select,
   SelectContent,
@@ -15,7 +16,13 @@ import {
   SelectValue,
 } from '@/lib/ui-primitives/select';
 import { ProgressModal } from './EmbeddingProgressModal';
-import { PREPARE_SAE_DATA, type PrepareSaeResult } from '@/lib/graphql/mutations';
+import { GET_SAE_MODELS } from '@/lib/graphql/queries';
+import {
+  PREPARE_SAE_DATA,
+  DELETE_SAE_DATA,
+  type PrepareSaeResult,
+} from '@/lib/graphql/mutations';
+import type { SaeModelInfo } from '@/lib/types/types';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -40,6 +47,12 @@ const ACTIVATION_SIZE: Record<string, string> = {
   '262k': '~5.2 GB',
 };
 
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function SaeTab() {
@@ -53,12 +66,25 @@ export function SaeTab() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<PrepareSaeResult | null>(null);
 
+  // Delete state
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  // SAE models query
+  const {
+    data: modelsData,
+    loading: modelsLoading,
+    refetch: refetchModels,
+  } = useQuery<{ saeModels: SaeModelInfo[] }>(GET_SAE_MODELS);
+  const models = modelsData?.saeModels ?? [];
+
+  // Mutations
   const [prepareSae, { loading: prepareLoading }] = useMutation<{
     prepareSaeData: PrepareSaeResult;
   }>(PREPARE_SAE_DATA, {
     onCompleted: (data) => {
       setLastResult(data.prepareSaeData);
       setActiveJobId(null);
+      refetchModels();
     },
     onError: (err) => {
       setLastResult({
@@ -66,11 +92,23 @@ export function SaeTab() {
         saeId: '',
         featuresParquet: null,
         activationsJsonl: null,
+        featuresInserted: 0,
+        activationsInserted: 0,
         durationSeconds: 0,
         status: 'failed',
         error: err.message,
       });
       setActiveJobId(null);
+    },
+  });
+
+  const [deleteSae] = useMutation(DELETE_SAE_DATA, {
+    onCompleted: () => {
+      setDeleteTarget(null);
+      refetchModels();
+    },
+    onError: () => {
+      setDeleteTarget(null);
     },
   });
 
@@ -80,25 +118,25 @@ export function SaeTab() {
     setLastResult(null);
     prepareSae({
       variables: {
-        input: {
-          layer,
-          width,
-          hookType,
-          includeActivations,
-          skipDownload: false,
-        },
+        input: { layer, width, hookType, includeActivations, skipDownload: false },
       },
     });
   };
 
+  const handleDelete = (modelId: string, saeId: string) => {
+    deleteSae({ variables: { modelId, saeId } });
+  };
+
   return (
     <div className="space-y-6">
+      {/* Download form */}
       <Card>
         <CardContent className="pt-6 space-y-4">
           <h3 className="text-sm font-semibold">Download SAE Data</h3>
           <p className="text-xs text-muted-foreground">
-            Download features and decoder vectors from Neuronpedia S3. The output
-            parquet can be imported as a vector collection via the Local Files tab.
+            Download features and decoder vectors from Neuronpedia S3. Features and
+            activations are ingested into DuckDB. The output parquet can also be imported
+            as a vector collection via the Local Files tab for visualization.
           </p>
 
           <div className="flex flex-wrap items-end gap-3">
@@ -179,7 +217,7 @@ export function SaeTab() {
               size="sm"
             >
               <Download className="h-3.5 w-3.5 mr-1.5" />
-              Download
+              Download & Ingest
             </Button>
           </div>
 
@@ -187,6 +225,91 @@ export function SaeTab() {
           {lastResult && <ResultDisplay result={lastResult} />}
         </CardContent>
       </Card>
+
+      <Separator />
+
+      {/* Ingested models table */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">Ingested SAE Models</h3>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refetchModels()}
+            disabled={modelsLoading}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${modelsLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
+
+        {models.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            No SAE models ingested yet.
+          </p>
+        ) : (
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Model</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">SAE ID</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Features</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Activations</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground w-24"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {models.map((m) => {
+                  const key = `${m.modelId}::${m.saeId}`;
+                  const isDeleting = deleteTarget === key;
+
+                  return (
+                    <tr key={key} className="border-t hover:bg-muted/30 transition-colors">
+                      <td className="px-3 py-2 font-mono text-xs">{m.modelId}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{m.saeId}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatCount(m.featureCount)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatCount(m.activationCount)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {isDeleting ? (
+                          <span className="flex items-center justify-end gap-1">
+                            <span className="text-xs text-muted-foreground mr-1">Delete?</span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-destructive"
+                              onClick={() => handleDelete(m.modelId, m.saeId)}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => setDeleteTarget(null)}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </span>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                            onClick={() => setDeleteTarget(key)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Progress Modal */}
       {activeJobId && (
@@ -213,19 +336,11 @@ function ResultDisplay({ result }: { result: PrepareSaeResult }) {
     );
   }
 
-  const isAlready = result.status === 'already_downloaded';
-
   return (
     <div className="rounded-md bg-muted/50 p-3 space-y-1">
       <div className="flex items-center gap-2">
-        <Badge
-          className={
-            isAlready
-              ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 text-xs'
-              : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 text-xs'
-          }
-        >
-          {isAlready ? 'Already downloaded' : `Completed in ${result.durationSeconds.toFixed(1)}s`}
+        <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 text-xs">
+          Completed in {result.durationSeconds.toFixed(1)}s
         </Badge>
         <span className="text-xs text-muted-foreground">
           {result.modelId} / {result.saeId}
