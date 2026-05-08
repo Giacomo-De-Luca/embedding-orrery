@@ -11,6 +11,7 @@ import {
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
 import { cn } from '@/lib/utils/utils';
+import { parseSaeId } from '@/lib/utils/saeCollections';
 import type { SaeFeature, SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
 const DEFAULT_STRENGTH = 800;
@@ -31,12 +32,6 @@ interface SteeringControlsProps {
   currentFeature: SaeFeature | null;
   currentModelId: string | null;
   currentSaeId: string | null;
-}
-
-/** Extract layer index from saeId like "9-gemmascope-2-res-16k" */
-function parseLayerIndex(saeId: string): number {
-  const n = parseInt(saeId.split('-')[0], 10);
-  return Number.isNaN(n) ? 0 : n;
 }
 
 export function SteeringControls({
@@ -63,13 +58,16 @@ export function SteeringControls({
 
   const handleAdd = () => {
     if (!canAdd) return;
+    const parsed = parseSaeId(currentSaeId!);
     onAddFeature({
       modelId: currentModelId!,
       saeId: currentSaeId!,
-      layerIndex: parseLayerIndex(currentSaeId!),
+      layerIndex: parsed.layerIndex,
       featureIndex: currentFeature!.featureIndex,
       strength: DEFAULT_STRENGTH,
       label: currentFeature!.label ?? undefined,
+      hookType: parsed.hookType,
+      width: parsed.width,
     });
   };
 

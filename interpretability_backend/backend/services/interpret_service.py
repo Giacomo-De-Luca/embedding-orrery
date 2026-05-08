@@ -465,11 +465,7 @@ class InterpretService:
         top_p: float = 0.95,
         top_k: int = 64,
         cancel_event: threading.Event | None = None,
-        steering_layer: int | None = None,
-        steering_hook_type: str | None = None,
-        steering_feature_index: int | None = None,
-        steering_width: str | None = None,
-        steering_strength: float | None = None,
+        steering_specs: list[SteeringSpec] | None = None,
     ) -> None:
         """Run streaming chat generation, emitting tokens via token_emitter.
 
@@ -477,45 +473,52 @@ class InterpretService:
         ``asyncio.to_thread()``. The caller (subscription resolver) must
         acquire ``self._lock`` before spawning the thread.
 
-        Optional steering parameters activate SAE-based additive steering
-        on the specified feature during generation (same mechanism as
+        Optional steering_specs activate SAE-based additive steering
+        on one or more features during generation (same mechanism as
         ``generate_steered``).
         """
         wrapper = self._require_model()
-        has_steering = steering_layer is not None and steering_feature_index is not None
 
         try:
             # Build optional HookManager for steering
             manager: HookManager | None = None
-            if has_steering:
-                ht = self._parse_hook_type(steering_hook_type or "resid_post")
-                width = steering_width or "16k"
-                d_sae = WIDTH_TO_D_SAE.get(width)
-                if d_sae is None:
-                    raise ValueError(f"Unknown SAE width '{width}'")
-                if not 0 <= steering_feature_index < d_sae:
-                    raise ValueError(
-                        f"feature_index {steering_feature_index} out of range [0, {d_sae})"
-                    )
-                sae_config = GemmaScopeSAEConfig(
-                    layer_index=steering_layer,
-                    hook_type=ht,
-                    width=width,
-                    device=str(wrapper.device),
-                    read_only=True,
-                )
+            if steering_specs:
+                device = str(wrapper.device)
                 manager = HookManager()
-                manager.add_sae(sae_config)
-                manager.add_steering(
-                    SteeringOp(
-                        layer_index=steering_layer,
-                        mode=SteeringMode.ADDITIVE,
-                        feature_index=steering_feature_index,
-                        strength=steering_strength or 800.0,
-                        normalise=False,
-                        hook_type=ht,
+                seen_sae_keys: set[tuple[int, str, str]] = set()
+
+                for spec in steering_specs:
+                    ht = self._parse_hook_type(spec.hook_type)
+                    width = spec.width
+                    d_sae = WIDTH_TO_D_SAE.get(width)
+                    if d_sae is None:
+                        raise ValueError(f"Unknown SAE width '{width}'")
+                    if not 0 <= spec.feature_index < d_sae:
+                        raise ValueError(
+                            f"feature_index {spec.feature_index} out of range [0, {d_sae})"
+                        )
+
+                    sae_key = (spec.layer, spec.hook_type, width)
+                    if sae_key not in seen_sae_keys:
+                        seen_sae_keys.add(sae_key)
+                        manager.add_sae(GemmaScopeSAEConfig(
+                            layer_index=spec.layer,
+                            hook_type=ht,
+                            width=width,
+                            device=device,
+                            read_only=True,
+                        ))
+
+                    manager.add_steering(
+                        SteeringOp(
+                            layer_index=spec.layer,
+                            mode=SteeringMode.ADDITIVE,
+                            feature_index=spec.feature_index,
+                            strength=spec.strength,
+                            normalise=False,
+                            hook_type=ht,
+                        )
                     )
-                )
 
             def _run_generation():
                 for event in wrapper.generate_chat_stream(

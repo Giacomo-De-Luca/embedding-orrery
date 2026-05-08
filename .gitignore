@@ -16,6 +16,8 @@ interpretability_backend/resources/uploads/*
 interpretability_backend/resources/main.duckdb
 interpretability_backend/resources/main.duckdb.wal
 interpretability_backend/resources/main.duckdb.OLD-PRE-MIGRATION
+interpretability_backend/resources/sae_labels/*
+interpretability_backend/resources/sae_vectors/*
 
 
 ### interrupted progress

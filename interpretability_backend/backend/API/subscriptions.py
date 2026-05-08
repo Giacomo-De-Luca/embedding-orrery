@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator
 
 import strawberry
 
+from ..services.interpret_service import SteeringSpec
 from ..services.progress_emitter import (
     ProgressEvent,
     register_subscriber,
@@ -123,17 +124,19 @@ class Subscription:
         cancel_event = threading.Event()
         task: asyncio.Task | None = None
 
-        # Build optional steering kwargs
-        steering_kwargs: dict = {}
-        if input.steering is not None:
-            s = input.steering
-            steering_kwargs = {
-                "steering_layer": s.layer,
-                "steering_hook_type": s.hook_type.value,
-                "steering_feature_index": s.feature_index,
-                "steering_width": s.width,
-                "steering_strength": s.strength,
-            }
+        # Convert GraphQL SteeringInput list → service SteeringSpec list
+        steering_specs: list[SteeringSpec] | None = None
+        if input.steering:
+            steering_specs = [
+                SteeringSpec(
+                    feature_index=s.feature_index,
+                    layer=s.layer,
+                    hook_type=s.hook_type.value,
+                    width=s.width,
+                    strength=s.strength,
+                )
+                for s in input.steering
+            ]
 
         try:
             async with service._lock:
@@ -147,7 +150,7 @@ class Subscription:
                         input.top_p,
                         input.top_k,
                         cancel_event=cancel_event,
-                        **steering_kwargs,
+                        steering_specs=steering_specs,
                     )
                 )
                 while True:

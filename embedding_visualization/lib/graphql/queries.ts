@@ -475,3 +475,15 @@ export const GENERATE_STREAM = gql`
     }
   }
 `;
+
+// ========== Model Lifecycle ==========
+
+export const MODEL_STATUS = gql`
+  query ModelStatus {
+    modelStatus {
+      loaded
+      modelName
+      device
+    }
+  }
+`;

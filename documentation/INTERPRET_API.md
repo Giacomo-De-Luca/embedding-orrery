@@ -122,10 +122,7 @@ mutation GenerateSteeredResponse($input: GenerateSteeredInput!) {
   generateSteeredResponse(input: $input) {
     baselineText
     steeredText
-    featureIndex
-    layer
-    hookType
-    strength
+    steering { featureIndex layer hookType width strength }
     error
   }
 }
@@ -136,13 +133,21 @@ mutation GenerateSteeredResponse($input: GenerateSteeredInput!) {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `prompt` | `String!` | — | User prompt |
-| `featureIndex` | `Int!` | — | SAE feature index to steer on |
-| `layer` | `Int!` | — | Decoder layer for SAE + steering |
-| `hookType` | `HookTypeEnum!` | `RESID_POST` | Hook site: `RESID_POST`, `MLP_OUT`, `ATTN_OUT` |
-| `width` | `String!` | `"16k"` | SAE width |
-| `strength` | `Float!` | `800.0` | Steering strength (additive coefficient) |
+| `steering` | `[SteeringInput!]!` | — | One or more steering features (see below) |
 | `outputLen` | `Int!` | `128` | Max tokens to generate |
 | `temperature` | `Float` | `null` | Sampling temperature. `null` = greedy decoding |
+
+#### SteeringInput (used by UC2 and UC4)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `featureIndex` | `Int!` | — | SAE feature index (row in `w_dec`) |
+| `layer` | `Int!` | — | Decoder layer |
+| `hookType` | `HookTypeEnum!` | `RESID_POST` | Hook site: `RESID_POST`, `MLP_OUT`, `ATTN_OUT` |
+| `width` | `String!` | `"16k"` | SAE width |
+| `strength` | `Float!` | `800.0` | Additive steering coefficient |
+
+Multiple features compose additively in insertion order. Features can target the same or different layers. One SAE is loaded per unique `(layer, hookType, width)` combination.
 
 #### Strength Guidelines (Gemma3-4b-it)
 
@@ -161,8 +166,8 @@ Negative strengths steer _away_ from the feature direction.
 **Location**: Features page, as a new `SteeringPanel` component.
 
 **UI design**:
-- Pre-fill `featureIndex` and `layer` from the currently viewed feature
-- Strength slider: range -2000 to 2000, default 800. Show numeric input alongside
+- Feature list: add/remove steering features, each with index + layer + strength. Pre-fill from currently viewed feature.
+- Strength slider per feature: range -2000 to 2000, default 800. Show numeric input alongside.
 - Prompt text area
 - Temperature and output length controls (collapsible "Advanced")
 - "Generate" button
@@ -263,17 +268,7 @@ subscription GenerateStream($input: GenerateStreamInput!) {
 | `temperature` | `Float` | `null` | Sampling temperature. `null` = greedy decoding |
 | `topP` | `Float!` | `0.95` | Nucleus sampling threshold |
 | `topK` | `Int!` | `64` | Top-k sampling threshold |
-| `steering` | `SteeringInput` | `null` | Optional SAE steering (see below) |
-
-#### SteeringInput (optional)
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `featureIndex` | `Int!` | — | SAE feature index to steer on |
-| `layer` | `Int!` | — | Decoder layer |
-| `hookType` | `HookTypeEnum!` | `RESID_POST` | Hook site |
-| `width` | `String!` | `"16k"` | SAE width |
-| `strength` | `Float!` | `800.0` | Steering strength |
+| `steering` | `[SteeringInput!]` | `null` | Optional list of SAE steering features (same type as UC2, see above) |
 
 #### ChatTurnInput
 
@@ -378,13 +373,17 @@ input RunPromptActivationsInput {
   topK: Int! = 10
 }
 
-input GenerateSteeredInput {
-  prompt: String!
+input SteeringInput {
   featureIndex: Int!
   layer: Int!
   hookType: HookTypeEnum! = RESID_POST
   width: String! = "16k"
   strength: Float! = 800.0
+}
+
+input GenerateSteeredInput {
+  prompt: String!
+  steering: [SteeringInput!]!
   outputLen: Int! = 128
   temperature: Float
 }
@@ -428,13 +427,18 @@ type PromptActivationsResponse {
   error: String
 }
 
-type SteeredGenerationResponse {
-  baselineText: String!
-  steeredText: String!
+type AppliedSteering {
   featureIndex: Int!
   layer: Int!
   hookType: String!
+  width: String!
   strength: Float!
+}
+
+type SteeredGenerationResponse {
+  baselineText: String!
+  steeredText: String!
+  steering: [AppliedSteering!]!
   error: String
 }
 
@@ -455,21 +459,13 @@ input ChatTurnInput {
   content: String!
 }
 
-input SteeringInput {
-  featureIndex: Int!
-  layer: Int!
-  hookType: HookTypeEnum! = RESID_POST
-  width: String! = "16k"
-  strength: Float! = 800.0
-}
-
 input GenerateStreamInput {
   turns: [ChatTurnInput!]!
   outputLen: Int! = 256
   temperature: Float
   topP: Float! = 0.95
   topK: Int! = 64
-  steering: SteeringInput
+  steering: [SteeringInput!]
 }
 
 type TokenChunk {
@@ -482,15 +478,177 @@ type TokenChunk {
 }
 ```
 
+## Frontend Integration Task List
+
+Everything below is for a future frontend agent. The backend is complete and tested. The GraphQL playground at `http://localhost:8000/graphql` can be used to verify all operations.
+
+### 1. GraphQL operations
+
+**File: `embedding_visualization/lib/graphql/queries.ts`** (append)
+
+```graphql
+query GetModelStatus {
+  modelStatus { loaded modelName device }
+}
+```
+
+**File: `embedding_visualization/lib/graphql/mutations.ts`** (create or append)
+
+```graphql
+mutation LoadModel($checkpoint: String!) {
+  loadModel(checkpoint: $checkpoint) { loaded modelName device }
+}
+
+mutation UnloadModel {
+  unloadModel { loaded modelName device }
+}
+
+mutation RunPromptActivations($input: RunPromptActivationsInput!) {
+  runPromptActivations(input: $input) {
+    prompt tokenStrings
+    layers { layer width tokens { token position features { index activation label density } } }
+    error
+  }
+}
+
+mutation GenerateSteeredResponse($input: GenerateSteeredInput!) {
+  generateSteeredResponse(input: $input) {
+    baselineText steeredText
+    steering { featureIndex layer hookType width strength }
+    error
+  }
+}
+
+mutation RunPromptHighlight($input: RunPromptHighlightInput!) {
+  runPromptHighlight(input: $input) {
+    features { featureIndex activation }
+    error
+  }
+}
+```
+
+**File: `embedding_visualization/lib/graphql/subscriptions.ts`** (create)
+
+```graphql
+subscription GenerateStream($input: GenerateStreamInput!) {
+  generateStream(input: $input) {
+    streamId tokenIndex tokenId text done error
+  }
+}
+```
+
+### 2. TypeScript types
+
+Add to `embedding_visualization/lib/types/types.ts`:
+
+- `ModelStatus { loaded, modelName?, device? }`
+- `InterpretActiveFeature { index, activation, label, density? }`
+- `InterpretTokenFeatures { token, position, features[] }`
+- `InterpretLayerResult { layer, width, tokens[] }`
+- `PromptActivationsResponse { prompt, tokenStrings, layers[], error? }`
+- `SteeringInput { featureIndex, layer, hookType, width, strength }`
+- `AppliedSteering { featureIndex, layer, hookType, width, strength }`
+- `SteeredGenerationResponse { baselineText, steeredText, steering[], error? }`
+- `PromptHighlightFeature { featureIndex, activation }`
+- `TokenChunk { streamId, tokenIndex, tokenId, text, done, error? }`
+
+### 3. Features page: Model status badge
+
+**File: `embedding_visualization/app/features/components/ModelStatusBadge.tsx`** (create)
+
+- Small indicator in `FeatureHeader` showing loaded/unloaded state
+- "Load" / "Unload" button
+- Polls `modelStatus` on mount, updates after load/unload mutations
+- All inference panels should be disabled when model is not loaded
+
+### 4. Features page: Prompt Explorer panel
+
+**File: `embedding_visualization/app/features/components/PromptExplorerPanel.tsx`** (create)
+
+- Text input for prompt
+- Layer multi-select (checkboxes, default `[9, 17, 22, 29]`)
+- "Run" button fires `RunPromptActivations` mutation
+- Results: per-layer sections using existing `TokenStrip` component
+  - Build `tokens[]` and `values[]` from response (top-1 activation per token for the heatmap)
+  - `maxValueTokenIndex` = index of token with highest activation
+- Click on feature index → navigate to feature detail (update URL `?featureIndex=<index>`)
+- Show loading spinner during inference (5-15s)
+
+### 5. Features page: Steering panel
+
+**File: `embedding_visualization/app/features/components/SteeringPanel.tsx`** (create)
+
+- Multi-feature steering list: add/remove entries, each with `featureIndex`, `layer`, `hookType`, `width`, `strength`
+- Pre-fill first entry from currently viewed feature
+- Strength slider per entry: range -2000 to 2000, default 800
+- Prompt text area + output length + temperature (collapsible "Advanced")
+- "Generate" button fires `GenerateSteeredResponse` mutation
+- Results: side-by-side "Baseline" vs "Steered" text comparison
+- Loading state (5-30s depending on output length and number of features)
+
+### 6. Features page: Wire `useSteeringChat` to streaming subscription
+
+**File: `embedding_visualization/lib/hooks/useSteeringChat.ts`** (modify)
+
+The hook currently has a stub `fetchSteeringChat()` that returns a hardcoded response after 1500ms. Replace with:
+
+1. Apollo `useSubscription(GENERATE_STREAM_SUBSCRIPTION)` or manual `client.subscribe()`
+2. Convert chat messages to `ChatTurnInput[]` (note: frontend uses `role: 'assistant'`, backend expects `role: 'model'`)
+3. On each `TokenChunk`: append `text` delta to the last assistant message's `content`
+4. On `done: true`: set status to `'idle'`
+5. On `error`: set status to `'error'`, show error message
+6. Stop button: unsubscribe from WebSocket (triggers abort on backend)
+7. Pass `steering` list from `SteeringConfig` if features are configured
+
+### 7. Main page: Prompt highlight input
+
+**File: `embedding_visualization/app/components/PromptHighlightInput.tsx`** (create)
+
+- Only visible when `getSaeInfo(selectedCollection)` returns non-null
+- Text input + "Highlight" button
+- Parse `layer` and `width` from `saeId` (e.g. `"9-gemmascope-2-res-16k"` → `layer=9, width="16k"`)
+- Fire `RunPromptHighlight` mutation
+- Convert result to `HighlightMap`:
+  - Pre-build `featureIndex → pointIndex` lookup from `data.item_metadata[i].index`
+  - Normalize activations to 0-1 by dividing by max
+- Feed into existing `highlightedIndices` pipeline in `page.tsx`
+
+### 8. Wire into page layouts
+
+**`embedding_visualization/app/features/page.tsx`** (modify):
+- Import and render `ModelStatusBadge` in `FeatureHeader` area
+- Import and render `PromptExplorerPanel` after `ActivationExamples`
+- Import and render `SteeringPanel` after `PromptExplorerPanel`
+- Pass `modelId`, `saeId`, `featureIndex`, `currentFeature` as needed
+
+**`embedding_visualization/app/page.tsx`** (modify):
+- Import and render `PromptHighlightInput` in the search sidebar area
+- Merge its `HighlightMap` output with `combinedHighlightedIndices`
+
+### Dependency order
+
+```
+1. GraphQL operations + types (foundation for everything)
+2. ModelStatusBadge (gates all inference panels)
+3. PromptExplorerPanel (standalone, no dependencies beyond model status)
+4. SteeringPanel (standalone, pre-fills from current feature)
+5. useSteeringChat wiring (depends on streaming subscription + SteeringPanel config)
+6. PromptHighlightInput (standalone, main page integration)
+```
+
+Steps 3-6 are independent of each other and can be built in parallel.
+
 ## Key References
 
 - **SAE collection mapping**: `embedding_visualization/lib/utils/saeCollections.ts`
 - **Highlight pipeline**: `embedding_visualization/lib/hooks/useHighlightedIndices.ts`
 - **Token strip component**: `embedding_visualization/app/features/components/TokenStrip.tsx`
+- **Chat interface**: `embedding_visualization/app/features/components/ChatInterface/` (ChatPanel, ChatMessage, ChatInput, ChatGreeting)
+- **Chat hook (stub)**: `embedding_visualization/lib/hooks/useSteeringChat.ts` (replace `fetchSteeringChat()`)
+- **Scroll hook**: `embedding_visualization/lib/hooks/useScrollToBottom.ts`
 - **Features page**: `embedding_visualization/app/features/page.tsx`
+- **Apollo client**: `embedding_visualization/lib/utils/apollo-client.ts` (WebSocket already configured)
 - **Backend service**: `interpretability_backend/backend/services/interpret_service.py`
 - **Backend mutations**: `interpretability_backend/backend/API/mutations.py` (search for "Interpret")
 - **Backend subscription**: `interpretability_backend/backend/API/subscriptions.py` (search for "generate_stream")
 - **Token event bus**: `interpretability_backend/backend/services/token_emitter.py`
-- **Gemma streaming generator**: `interpretability_backend/interpret/forked/gemma_pytorch/gemma/gemma3_model.py` (search for "generate_stream")
-- **Wrapper streaming + delta decode**: `interpretability_backend/interpret/inference/gemma_pytorch.py` (search for "generate_chat_stream")

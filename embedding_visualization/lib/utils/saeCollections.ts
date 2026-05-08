@@ -61,3 +61,34 @@ export function getSemanticCollectionName(modelSaeKey: string): string | null {
 
 /** The metadata field on SAE collection items that holds the feature index */
 export const SAE_FEATURE_INDEX_FIELD = 'index';
+
+// ── saeId parsing ──────────────────────────────────────────────────
+
+export type HookType = 'RESID_POST' | 'MLP_OUT' | 'ATTN_OUT';
+
+export interface ParsedSaeId {
+  layerIndex: number;
+  hookType: HookType;
+  width: string;
+}
+
+/** Inverts the backend's HOOK_TO_NEURONPEDIA mapping (interpret/sae/source_ids.py). */
+const NEURONPEDIA_TO_HOOK: Record<string, HookType> = {
+  res: 'RESID_POST',
+  mlp: 'MLP_OUT',
+  att: 'ATTN_OUT',
+};
+
+/**
+ * Parse a Neuronpedia-format saeId into its structured components.
+ * Format: "{layer}-gemmascope-{version}-{hookAbbrev}-{width}"
+ * Example: "9-gemmascope-2-res-16k" → { layerIndex: 9, hookType: 'RESID_POST', width: '16k' }
+ */
+export function parseSaeId(saeId: string): ParsedSaeId {
+  const parts = saeId.split('-');
+  const layerIndex = parseInt(parts[0], 10) || 0;
+  const hookAbbrev = parts[3] ?? 'res';
+  const width = parts[4] ?? '16k';
+  const hookType = NEURONPEDIA_TO_HOOK[hookAbbrev] ?? 'RESID_POST';
+  return { layerIndex, hookType, width };
+}

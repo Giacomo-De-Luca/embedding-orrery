@@ -49,41 +49,47 @@ export function useCameraFlyTo(
     const targetPhi = 1.3;
     const duration = 2000;
 
-    let startEye: any, startCenter: any, startSpherical: any, targetSpherical: any, startTime: number;
+    // Capture the live glplot camera EAGERLY — the caller must have already
+    // synced gd.layout.scene.camera so the async Plotly.redraw won't clobber
+    // glplot between now and the first animation frame.
+    let startEye: { x: number; y: number; z: number };
+    let startCenter: { x: number; y: number; z: number };
+
+    {
+      const scene = graphDivRef.current._fullLayout?.scene;
+      const glplot = scene?._scene?.glplot as any;
+      const liveCamera = glplot?.camera;
+
+      if (liveCamera?.eye) {
+        if (Array.isArray(liveCamera.eye)) {
+          startEye = { x: liveCamera.eye[0], y: liveCamera.eye[1], z: liveCamera.eye[2] };
+          const c = liveCamera.center || [0, 0, 0];
+          startCenter = { x: c[0], y: c[1], z: c[2] };
+        } else {
+          startEye = { x: liveCamera.eye.x, y: liveCamera.eye.y, z: liveCamera.eye.z };
+          startCenter = liveCamera.center
+            ? { x: liveCamera.center.x, y: liveCamera.center.y, z: liveCamera.center.z }
+            : { x: 0, y: 0, z: 0 };
+        }
+      } else {
+        startEye = { ...currentCameraRef.current.eye };
+        startCenter = { ...currentCameraRef.current.center };
+      }
+    }
+
+    const startSpherical = cartesianToSpherical(
+      startEye.x - startCenter.x,
+      startEye.y - startCenter.y,
+      startEye.z - startCenter.z
+    );
+    const targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
+    let startTime: number;
     let initialized = false;
 
     const animate = (currentTime: number) => {
       if (!isAnimatingRef.current || !graphDivRef.current) return;
 
       if (!initialized) {
-        // Read the live glplot camera directly — _fullLayout.scene.camera is only
-        // updated on Plotly.relayout calls and goes stale during interactive
-        // zoom/pan/rotate, causing a 1-frame jump back to the old position.
-        const scene = graphDivRef.current._fullLayout?.scene;
-        const glplot = scene?._scene?.glplot as any;
-        const liveCamera = glplot?.camera;
-
-        if (liveCamera?.eye) {
-          if (Array.isArray(liveCamera.eye)) {
-            startEye = { x: liveCamera.eye[0], y: liveCamera.eye[1], z: liveCamera.eye[2] };
-            const c = liveCamera.center || [0, 0, 0];
-            startCenter = { x: c[0], y: c[1], z: c[2] };
-          } else {
-            startEye = { x: liveCamera.eye.x, y: liveCamera.eye.y, z: liveCamera.eye.z };
-            startCenter = liveCamera.center
-              ? { x: liveCamera.center.x, y: liveCamera.center.y, z: liveCamera.center.z }
-              : { x: 0, y: 0, z: 0 };
-          }
-        } else {
-          startEye = { ...currentCameraRef.current.eye };
-          startCenter = { ...currentCameraRef.current.center };
-        }
-        startSpherical = cartesianToSpherical(
-          startEye.x - startCenter.x,
-          startEye.y - startCenter.y,
-          startEye.z - startCenter.z
-        );
-        targetSpherical = { r: targetR, theta: startSpherical.theta + 0.5, phi: targetPhi };
         startTime = currentTime;
         initialized = true;
       }

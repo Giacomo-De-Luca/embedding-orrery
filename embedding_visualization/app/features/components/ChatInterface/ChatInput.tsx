@@ -84,15 +84,14 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled, showSuggesti
       {/* Suggestion pills */}
       {showSuggestions && onSuggest && (
         <div
-          className="mb-2 flex gap-2 overflow-x-auto pb-1"
-          style={{ scrollbarWidth: 'none' }}
+          className="mb-2 flex flex-wrap gap-2"
         >
           {SUGGESTIONS.map((text, i) => (
             <motion.button
               key={text}
               type="button"
               onClick={() => onSuggest(text)}
-              className="shrink-0 rounded-full border border-border/50 bg-card/30 px-4 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground hover:shadow-[var(--shadow-chat-card)]"
+              className="flex-1 rounded-full border border-border/50 bg-card/30 px-4 py-1.5 text-[12px] whitespace-nowrap text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground hover:shadow-[var(--shadow-chat-card)]"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.06 * i, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}

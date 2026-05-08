@@ -707,26 +707,25 @@ class SaeActivationQuantileGroup:
 
 @strawberry.input
 class PrepareSaeInput:
-    """Input for the on-demand SAE download + ingest pipeline."""
+    """Input for the SAE download + extraction pipeline."""
 
     layer: int
     width: str = "16k"
     hook_type: str = "resid_post"
     skip_download: bool = False
-    store_vectors: bool = True
     include_activations: bool = False
 
 
 @strawberry.type
 class PrepareSaeResult:
-    """Result of the SAE pipeline + ingestion."""
+    """Result of the SAE pipeline — output file paths."""
 
     model_id: str
     sae_id: str
-    features_inserted: int
-    activations_inserted: int
-    duration_seconds: float
-    status: str  # "completed", "already_ingested", "failed"
+    features_parquet: str | None = None
+    activations_jsonl: str | None = None
+    duration_seconds: float = 0.0
+    status: str = ""  # "completed", "already_downloaded", "failed"
     error: str | None = None
 
 

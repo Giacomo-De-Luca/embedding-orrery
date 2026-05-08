@@ -365,11 +365,13 @@ export interface SteeringFeature {
   featureIndex: number;
   strength: number;
   label?: string;
+  hookType?: string;   // 'RESID_POST' | 'MLP_OUT' | 'ATTN_OUT'
+  width?: string;      // '16k', '65k', etc.
 }
 
 export interface SteeringConfig {
   features: SteeringFeature[];
 }
 
-export type ChatStatus = 'idle' | 'generating' | 'error';
+export type ChatStatus = 'idle' | 'loading_model' | 'generating' | 'error';
 

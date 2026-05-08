@@ -26,6 +26,7 @@ import gzip
 import json
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -136,6 +137,7 @@ def download_and_index(
     data_dir: str,
     desc: str,
     model_id: str = DEFAULT_MODEL_ID,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> dict[int, dict]:
     """Download all batches for a data_dir, returning {index: first_record}."""
     keys = list_batch_keys(session, source, data_dir, model_id=model_id)
@@ -145,12 +147,14 @@ def download_and_index(
     by_index: dict[int, dict] = {}
     pbar = tqdm(keys, desc=desc, unit="batch", ncols=80, leave=False) if tqdm else None
 
-    for key in pbar or keys:
+    for i, key in enumerate(pbar or keys):
         raw = download_batch(session, key)
         for record in parse_batch(raw):
             idx = int(record["index"])
             if idx not in by_index:
                 by_index[idx] = record
+        if progress_callback:
+            progress_callback(i + 1, len(keys))
 
     if pbar:
         pbar.close()
@@ -207,6 +211,7 @@ def download_activations_raw(
     source: str,
     output_dir: Path,
     model_id: str = DEFAULT_MODEL_ID,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> int:
     """Download activations/ batches as-is into a subdirectory."""
     act_dir = output_dir / "activations" / source
@@ -234,10 +239,12 @@ def download_activations_raw(
         else None
     )
 
-    for key in pbar or to_download:
+    for i, key in enumerate(pbar or to_download):
         raw = download_batch(session, key)
         filename = key.rsplit("/", 1)[-1]
         (act_dir / filename).write_bytes(raw)
+        if progress_callback:
+            progress_callback(i + 1, len(to_download))
 
     if pbar:
         pbar.close()
@@ -253,6 +260,7 @@ def download_source(
     output_dir: Path,
     skip_activations: bool = False,
     model_id: str = DEFAULT_MODEL_ID,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> int:
     """Download all data for one source.
 
@@ -262,6 +270,9 @@ def download_source(
         output_dir: Directory to write JSONL + activation batches into.
         skip_activations: If True, skip the (large) activation download.
         model_id: Neuronpedia model ID (e.g. ``"gemma-3-4b-it"``).
+        progress_callback: ``(stage, done, total)`` progress reporter.
+            Stages: ``"download_features"``, ``"download_explanations"``,
+            ``"download_activations"``.
 
     Returns:
         Number of newly merged feature records.
@@ -280,6 +291,12 @@ def download_source(
         if existing_indices:
             print(f"  {len(existing_indices)} features already merged")
 
+    # Helper to create per-stage progress sub-callbacks
+    def _sub_progress(stage: str) -> Callable[[int, int], None] | None:
+        if progress_callback is None:
+            return None
+        return lambda done, total: progress_callback(stage, done, total)
+
     # Download features/ and explanations/
     print("  Downloading features/...")
     features_by_idx = download_and_index(
@@ -288,6 +305,7 @@ def download_source(
         "features",
         "    features",
         model_id=model_id,
+        progress_callback=_sub_progress("download_features"),
     )
 
     print("  Downloading explanations/...")
@@ -297,6 +315,7 @@ def download_source(
         "explanations",
         "    explanations",
         model_id=model_id,
+        progress_callback=_sub_progress("download_explanations"),
     )
 
     # Merge and write JSONL
@@ -325,6 +344,7 @@ def download_source(
             source,
             output_dir,
             model_id=model_id,
+            progress_callback=_sub_progress("download_activations"),
         )
         print(f"  {n_batches} activation batches stored")
     else:

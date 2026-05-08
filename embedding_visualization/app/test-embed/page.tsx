@@ -13,6 +13,7 @@ import { DataSourceTabs, type DataSourceTab } from './components/DataSourceTabs'
 import { HuggingFaceTab } from './components/HuggingFaceTab';
 import { LocalFileTab } from './components/LocalFileTab';
 import { CollectionManagerTab, type CollectionInfo } from './components/CollectionManagerTab';
+import { SaeTab } from './components/SaeTab';
 
 interface GraphQLCollection {
   name: string;
@@ -178,6 +179,8 @@ export default function TestEmbedPage() {
           fetchCollectionTopics={fetchCollectionTopics}
         />
       )}
+
+      {activeTab === 'sae' && <SaeTab />}
     </div>
   );
 }

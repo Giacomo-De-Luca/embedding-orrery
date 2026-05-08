@@ -40,7 +40,9 @@ export function ChatPanel({
   const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
   const isEmpty = messages.length === 0;
+  const isLoadingModel = status === 'loading_model';
   const isGenerating = status === 'generating';
+  const isBusy = isLoadingModel || isGenerating;
 
   const handleVote = useCallback((messageId: string, isUpvoted: boolean) => {
     setVotes((prev) => {
@@ -122,15 +124,15 @@ export function ChatPanel({
               <ChatMessage
                 key={msg.id}
                 message={msg}
-                isGenerating={isGenerating}
+                isGenerating={isBusy}
                 vote={votes.get(msg.id)}
                 onVote={handleVote}
                 onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
               />
             ))}
 
-            {isGenerating && messages[messages.length - 1]?.content === '' && (
-              <ThinkingIndicator />
+            {isBusy && messages[messages.length - 1]?.content === '' && (
+              <ThinkingIndicator phase={isLoadingModel ? 'loading_model' : 'thinking'} />
             )}
 
             {error && (
@@ -170,7 +172,7 @@ export function ChatPanel({
       <ChatInput
         onSend={send}
         onStop={stop}
-        isGenerating={isGenerating}
+        isGenerating={isBusy}
         showSuggestions={isEmpty}
         onSuggest={send}
       />

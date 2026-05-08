@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { apolloClient } from '@/lib/utils/apollo-client';
-import { GENERATE_STREAM } from '@/lib/graphql/queries';
+import { GENERATE_STREAM, MODEL_STATUS } from '@/lib/graphql/queries';
+import { LOAD_MODEL } from '@/lib/graphql/mutations';
 import type { ChatMessage, ChatStatus, SteeringConfig } from '@/lib/types/types';
 
 export interface UseSteeringChatReturn {
@@ -18,7 +19,7 @@ export interface UseSteeringChatReturn {
 function configKey(config: SteeringConfig): string {
   const sorted = [...config.features]
     .sort((a, b) => a.featureIndex - b.featureIndex)
-    .map((f) => `${f.modelId}/${f.saeId}/${f.featureIndex}:${f.strength}`);
+    .map((f) => `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`);
   return sorted.join(',');
 }
 
@@ -44,9 +45,27 @@ function buildSteeringInputs(config: SteeringConfig) {
     featureIndex: f.featureIndex,
     layer: f.layerIndex,
     strength: f.strength,
-    hookType: 'RESID_POST',
-    width: '16k',
+    hookType: f.hookType ?? 'RESID_POST',
+    width: f.width ?? '16k',
   }));
+}
+
+/** Ensure the Gemma model is loaded, loading it if necessary. */
+async function ensureModelLoaded(): Promise<string | null> {
+  const { data: statusData } = await apolloClient.query<{
+    modelStatus: { loaded: boolean; modelName: string | null; device: string | null };
+  }>({ query: MODEL_STATUS, fetchPolicy: 'network-only' });
+
+  if (statusData?.modelStatus?.loaded) return null;
+
+  const { data: loadData } = await apolloClient.mutate<{
+    loadModel: { loaded: boolean; modelName: string | null; device: string | null };
+  }>({ mutation: LOAD_MODEL });
+
+  if (!loadData?.loadModel?.loaded) {
+    return loadData?.loadModel?.modelName ?? 'Failed to load model';
+  }
+  return null;
 }
 
 export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
@@ -57,6 +76,7 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
   const messagesRef = useRef<ChatMessage[]>(messages);
   const prevKeyRef = useRef<string>(configKey(config));
   const assistantIdRef = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -95,6 +115,7 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
   }, []);
 
   const stop = useCallback(() => {
+    cancelledRef.current = true;
     subscriptionRef.current?.unsubscribe();
     subscriptionRef.current = null;
     setStatus('idle');
@@ -103,7 +124,7 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
   const send = useCallback(
     (content: string) => {
       const trimmed = content.trim();
-      if (!trimmed || status === 'generating') return;
+      if (!trimmed || status !== 'idle') return;
 
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -130,73 +151,104 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
       };
 
       setMessages([...allMessages, assistantMsg]);
-      setStatus('generating');
+      setStatus('loading_model');
       setError(null);
+      cancelledRef.current = false;
 
       const steering = buildSteeringInputs(config);
 
-      // Subscribe to streaming generation
-      const observable = apolloClient.subscribe<TokenChunkData>({
-        query: GENERATE_STREAM,
-        variables: {
-          input: {
-            turns,
-            steering,
-            outputLen: DEFAULT_OUTPUT_LEN,
-            topP: DEFAULT_TOP_P,
-            topK: DEFAULT_TOP_K,
+      /** Remove the empty assistant placeholder on failure. */
+      const removePlaceholder = () => {
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      };
+
+      // Ensure model is loaded, then start streaming
+      const startStreaming = async () => {
+        try {
+          const loadError = await ensureModelLoaded();
+          if (cancelledRef.current) return;
+          if (loadError) {
+            removePlaceholder();
+            setError(loadError);
+            setStatus('error');
+            return;
+          }
+        } catch (err) {
+          if (cancelledRef.current) return;
+          removePlaceholder();
+          setError(err instanceof Error ? err.message : 'Failed to load model');
+          setStatus('error');
+          return;
+        }
+
+        if (cancelledRef.current) return;
+        setStatus('generating');
+
+        // Subscribe to streaming generation
+        const observable = apolloClient.subscribe<TokenChunkData>({
+          query: GENERATE_STREAM,
+          variables: {
+            input: {
+              turns,
+              steering,
+              outputLen: DEFAULT_OUTPUT_LEN,
+              topP: DEFAULT_TOP_P,
+              topK: DEFAULT_TOP_K,
+            },
           },
-        },
-      });
+        });
 
-      const sub = observable.subscribe({
-        next({ data }) {
-          if (!data) return;
-          const chunk = data.generateStream;
+        const sub = observable.subscribe({
+          next({ data }) {
+            if (!data) return;
+            const chunk = data.generateStream;
 
-          if (chunk.error) {
-            setError(chunk.error);
+            if (chunk.error) {
+              setError(chunk.error);
+              setStatus('error');
+              subscriptionRef.current = null;
+              return;
+            }
+
+            if (chunk.done) {
+              setStatus('idle');
+              subscriptionRef.current = null;
+              return;
+            }
+
+            // Append token text to the assistant message
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantIdRef.current
+                  ? { ...m, content: m.content + chunk.text }
+                  : m
+              )
+            );
+          },
+          error(err) {
+            // Don't report errors if we intentionally stopped
+            if (subscriptionRef.current === null) return;
+            setError(err instanceof Error ? err.message : 'Stream error');
             setStatus('error');
             subscriptionRef.current = null;
-            return;
-          }
-
-          if (chunk.done) {
+          },
+          complete() {
             setStatus('idle');
             subscriptionRef.current = null;
-            return;
-          }
+          },
+        });
 
-          // Append token text to the assistant message
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantIdRef.current
-                ? { ...m, content: m.content + chunk.text }
-                : m
-            )
-          );
-        },
-        error(err) {
-          // Don't report errors if we intentionally stopped
-          if (subscriptionRef.current === null) return;
-          setError(err instanceof Error ? err.message : 'Stream error');
-          setStatus('error');
-          subscriptionRef.current = null;
-        },
-        complete() {
-          setStatus('idle');
-          subscriptionRef.current = null;
-        },
-      });
+        subscriptionRef.current = sub;
+      };
 
-      subscriptionRef.current = sub;
+      startStreaming();
     },
     [config, status],
   );
 
   const regenerate = useCallback(
     (assistantIndex: number) => {
-      if (status === 'generating') return;
+      if (status !== 'idle') return;
       // Find the preceding user message
       let userContent: string | null = null;
       for (let i = assistantIndex - 1; i >= 0; i--) {

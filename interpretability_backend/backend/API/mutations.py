@@ -430,33 +430,41 @@ class Mutation:
 
     @strawberry.mutation
     async def prepare_sae_data(self, input: PrepareSaeInput, info=None) -> PrepareSaeResult:
-        """Download, prepare, and ingest SAE data for a specific layer/hook/width.
+        """Download and extract SAE data for a specific layer/hook/width.
 
-        Runs the full pipeline: S3 download -> merge -> extract decoder vectors
-        -> ingest into DuckDB. Skips if data is already ingested.
+        Runs the pipeline: S3 download -> merge activations -> extract decoder
+        vectors into parquet. Returns file paths for manual import.
         """
-        from ..services.sae_pipeline_service import prepare_and_ingest
+        from ..services.sae_pipeline_service import prepare_sae_data as run_pipeline
 
         job_id = f"sae_prepare_{input.layer}_{input.hook_type}_{input.width}"
         result = await asyncio.to_thread(
-            prepare_and_ingest,
+            run_pipeline,
             layer=input.layer,
             width=input.width,
             hook_type=input.hook_type,
             skip_download=input.skip_download,
-            store_vectors=input.store_vectors,
             include_activations=input.include_activations,
             job_id=job_id,
         )
         return PrepareSaeResult(
             model_id=result["model_id"],
             sae_id=result["sae_id"],
-            features_inserted=result["features_inserted"],
-            activations_inserted=result["activations_inserted"],
+            features_parquet=result.get("features_parquet"),
+            activations_jsonl=result.get("activations_jsonl"),
             duration_seconds=result["duration_seconds"],
             status=result["status"],
             error=result.get("error"),
         )
+
+    @strawberry.mutation
+    async def delete_sae_data(self, model_id: str, sae_id: str, info=None) -> bool:
+        """Delete all SAE features and activations for a model/sae pair."""
+        try:
+            db = get_duckdb_client()
+            return await asyncio.to_thread(db.delete_sae_data, model_id, sae_id)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Interpret / SAE inference mutations

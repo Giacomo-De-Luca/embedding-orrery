@@ -1,10 +1,31 @@
 'use client';
 
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { AssistantAvatar } from './AssistantAvatar';
 import { Shimmer } from './Shimmer';
 
-export function ThinkingIndicator() {
+const MODEL_LOADING_PHRASES = [
+  'Roaring the motors...',
+  'Warming up the neurons...',
+  'Loading the brain...',
+  'Dusting off the weights...',
+  'Charging the circuits...',
+];
+
+interface ThinkingIndicatorProps {
+  phase?: 'thinking' | 'loading_model';
+}
+
+export function ThinkingIndicator({ phase = 'thinking' }: ThinkingIndicatorProps) {
+  const [phraseIndex] = useState(() =>
+    Math.floor(Math.random() * MODEL_LOADING_PHRASES.length)
+  );
+
+  const text = phase === 'loading_model'
+    ? MODEL_LOADING_PHRASES[phraseIndex]
+    : 'Thinking...';
+
   return (
     <motion.div
       className="flex w-full items-start gap-3"
@@ -16,8 +37,8 @@ export function ThinkingIndicator() {
         <AssistantAvatar />
       </div>
       <div className="flex h-[calc(13px*1.65)] items-center text-[13px] leading-[1.65]">
-        <Shimmer className="font-medium" duration={1}>
-          Thinking...
+        <Shimmer className="font-medium" duration={phase === 'loading_model' ? 2 : 1}>
+          {text}
         </Shimmer>
       </div>
     </motion.div>

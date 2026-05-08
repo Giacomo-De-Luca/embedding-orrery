@@ -511,3 +511,59 @@ export interface IngestSaeResult {
   durationSeconds: number;
   error: string | null;
 }
+
+// ========== SAE Pipeline (On-Demand Provision) ==========
+
+export const PREPARE_SAE_DATA = gql`
+  mutation PrepareSaeData($input: PrepareSaeInput!) {
+    prepareSaeData(input: $input) {
+      modelId
+      saeId
+      featuresParquet
+      activationsJsonl
+      durationSeconds
+      status
+      error
+    }
+  }
+`;
+
+export interface PrepareSaeInput {
+  layer: number;
+  width?: string;
+  hookType?: string;
+  skipDownload?: boolean;
+  includeActivations?: boolean;
+}
+
+export interface PrepareSaeResult {
+  modelId: string;
+  saeId: string;
+  featuresParquet: string | null;
+  activationsJsonl: string | null;
+  durationSeconds: number;
+  status: string; // "completed" | "already_downloaded" | "failed"
+  error: string | null;
+}
+
+// ========== Model Lifecycle ==========
+
+export const LOAD_MODEL = gql`
+  mutation LoadModel($checkpoint: String) {
+    loadModel(checkpoint: $checkpoint) {
+      loaded
+      modelName
+      device
+    }
+  }
+`;
+
+export const UNLOAD_MODEL = gql`
+  mutation UnloadModel {
+    unloadModel {
+      loaded
+      modelName
+      device
+    }
+  }
+`;
