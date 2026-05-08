@@ -235,9 +235,116 @@ For performance, pre-build a `featureIndex → pointIndex` lookup map once when 
 1. Pass as an additional prop to `DashboardPanel` alongside existing `combinedHighlightedIndices`
 2. Extend `useHighlightedIndices` to accept an optional `promptHighlights` parameter
 
+## Use Case 4: Streaming Chat Generation (WebSocket Subscription)
+
+Stream tokens from the Gemma model one at a time for a chatbot-like interface. Supports multi-turn conversations and optional SAE steering. Uses WebSocket via GraphQL subscription.
+
+### Subscription: `generateStream`
+
+```graphql
+subscription GenerateStream($input: GenerateStreamInput!) {
+  generateStream(input: $input) {
+    streamId
+    tokenIndex
+    tokenId
+    text
+    done
+    error
+  }
+}
+```
+
+#### Input
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `turns` | `[ChatTurnInput!]!` | — | Conversation history: `[{role: "user", content: "..."}, ...]` |
+| `outputLen` | `Int!` | `256` | Maximum tokens to generate |
+| `temperature` | `Float` | `null` | Sampling temperature. `null` = greedy decoding |
+| `topP` | `Float!` | `0.95` | Nucleus sampling threshold |
+| `topK` | `Int!` | `64` | Top-k sampling threshold |
+| `steering` | `SteeringInput` | `null` | Optional SAE steering (see below) |
+
+#### SteeringInput (optional)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `featureIndex` | `Int!` | — | SAE feature index to steer on |
+| `layer` | `Int!` | — | Decoder layer |
+| `hookType` | `HookTypeEnum!` | `RESID_POST` | Hook site |
+| `width` | `String!` | `"16k"` | SAE width |
+| `strength` | `Float!` | `800.0` | Steering strength |
+
+#### ChatTurnInput
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `role` | `String!` | `"user"` or `"model"` |
+| `content` | `String!` | Message content |
+
+#### Response (streamed per-token)
+
+Each `TokenChunk` event contains:
+- `streamId`: UUID identifying this generation session
+- `tokenIndex`: 0-based position in the generated output
+- `tokenId`: Raw SentencePiece token ID
+- `text`: Clean text delta for display — concatenate these for the full response
+- `done`: `true` on the last token (EOS/EOT or output_len reached)
+- `error`: Non-null on failure (model not loaded, timeout, etc.)
+
+#### Architecture
+
+```
+Frontend (WebSocket) ← GraphQL subscription ← asyncio.Queue ← token_emitter.emit_token()
+                                                                        ↑ (thread-safe put_nowait)
+                                                              InterpretService.generate_stream()
+                                                                        ↑ (runs in thread pool)
+                                                              GemmaPytorchInference.generate_chat_stream()
+                                                                        ↑ (sync Python generator)
+                                                              Gemma3ForMultimodalLM.generate_stream()
+                                                                        ↑ (yields per-token from decode loop)
+```
+
+- **Delta decoding**: SentencePiece tokens don't align with character boundaries. The wrapper decodes the full growing token list each step and diffs against the previous output to get clean `text` deltas.
+- **GPU lock**: The subscription acquires `InterpretService._lock` for the entire generation, serialising GPU access.
+- **Abort**: A `threading.Event` is checked per-token in the decode loop. On client disconnect (WebSocket close) or timeout (300s per-token), the event is set and generation stops after the current forward pass.
+- **Steering**: When `SteeringInput` is provided, a `HookManager` with SAE + `SteeringOp` wraps the generation — same mechanism as `generateSteeredResponse`.
+
+#### Frontend Integration
+
+**Components**:
+- Chat message list with streaming text append
+- Input box with multi-turn conversation state
+- Stop button: unsubscribe from the WebSocket (triggers abort via `GeneratorExit`)
+- Optional steering controls (feature index, layer, strength)
+
+**Example (conceptual)**:
+```typescript
+const subscription = client.subscribe({
+  query: GENERATE_STREAM,
+  variables: {
+    input: {
+      turns: [{ role: "user", content: "Explain quantum entanglement" }],
+      outputLen: 256,
+      temperature: 0.7,
+    }
+  }
+});
+
+let fullText = "";
+subscription.subscribe({
+  next: ({ data }) => {
+    const chunk = data.generateStream;
+    fullText += chunk.text;
+    updateUI(fullText);
+    if (chunk.done) closeStream();
+  }
+});
+```
+
 ## Error Handling
 
-All mutations return an `error: String | null` field instead of throwing. The frontend should:
+All mutations return an `error: String | null` field instead of throwing. The streaming subscription includes `error` on the final `TokenChunk` (`done: true`). The frontend should:
 
 1. Check `error` field first — if non-null, show a toast/alert with the message
 2. Common errors:
@@ -340,6 +447,39 @@ type PromptHighlightResponse {
   features: [PromptHighlightFeature!]!
   error: String
 }
+
+# Streaming chat generation (UC4)
+
+input ChatTurnInput {
+  role: String!
+  content: String!
+}
+
+input SteeringInput {
+  featureIndex: Int!
+  layer: Int!
+  hookType: HookTypeEnum! = RESID_POST
+  width: String! = "16k"
+  strength: Float! = 800.0
+}
+
+input GenerateStreamInput {
+  turns: [ChatTurnInput!]!
+  outputLen: Int! = 256
+  temperature: Float
+  topP: Float! = 0.95
+  topK: Int! = 64
+  steering: SteeringInput
+}
+
+type TokenChunk {
+  streamId: String!
+  tokenIndex: Int!
+  tokenId: Int!
+  text: String!
+  done: Boolean!
+  error: String
+}
 ```
 
 ## Key References
@@ -350,3 +490,7 @@ type PromptHighlightResponse {
 - **Features page**: `embedding_visualization/app/features/page.tsx`
 - **Backend service**: `interpretability_backend/backend/services/interpret_service.py`
 - **Backend mutations**: `interpretability_backend/backend/API/mutations.py` (search for "Interpret")
+- **Backend subscription**: `interpretability_backend/backend/API/subscriptions.py` (search for "generate_stream")
+- **Token event bus**: `interpretability_backend/backend/services/token_emitter.py`
+- **Gemma streaming generator**: `interpretability_backend/interpret/forked/gemma_pytorch/gemma/gemma3_model.py` (search for "generate_stream")
+- **Wrapper streaming + delta decode**: `interpretability_backend/interpret/inference/gemma_pytorch.py` (search for "generate_chat_stream")

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { apolloClient } from '@/lib/utils/apollo-client';
+import { GENERATE_STREAM } from '@/lib/graphql/queries';
 import type { ChatMessage, ChatStatus, SteeringConfig } from '@/lib/types/types';
 
 export interface UseSteeringChatReturn {
@@ -9,6 +11,7 @@ export interface UseSteeringChatReturn {
   send: (content: string) => void;
   stop: () => void;
   reset: () => void;
+  regenerate: (assistantIndex: number) => void;
 }
 
 /** Serialise config into a stable key for change detection. */
@@ -19,51 +22,41 @@ function configKey(config: SteeringConfig): string {
   return sorted.join(',');
 }
 
-/**
- * Stub transport — returns a placeholder response.
- * Replace with SSE fetch when the backend endpoint is ready.
- */
-async function fetchSteeringChat(
-  turns: Array<{ role: string; content: string }>,
-  config: SteeringConfig,
-  signal: AbortSignal,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (signal.aborted) {
-        reject(new DOMException('Aborted', 'AbortError'));
-        return;
-      }
-      const n = config.features.length;
-      const featureList =
-        n > 0
-          ? config.features
-              .map((f) => `#${f.featureIndex} (layer ${f.layerIndex}, strength ${f.strength})`)
-              .join(', ')
-          : 'none';
-      resolve(
-        `[Stub] Steering chat is not yet connected to the backend.\n\n` +
-          `Active features: ${featureList}\n` +
-          `Conversation turns: ${turns.length}\n\n` +
-          `When the backend endpoint is ready, this response will be replaced ` +
-          `with real model output from Gemma 3 4b-it.`,
-      );
-    }, 1500);
+interface TokenChunkData {
+  generateStream: {
+    streamId: string;
+    tokenIndex: number;
+    tokenId: number;
+    text: string;
+    done: boolean;
+    error: string | null;
+  };
+}
 
-    signal.addEventListener('abort', () => {
-      clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
-    });
-  });
+const DEFAULT_OUTPUT_LEN = 256;
+const DEFAULT_TOP_P = 0.95;
+const DEFAULT_TOP_K = 64;
+
+/** Map SteeringConfig features to the GraphQL [SteeringInput] list format. */
+function buildSteeringInputs(config: SteeringConfig) {
+  if (config.features.length === 0) return null;
+  return config.features.map((f) => ({
+    featureIndex: f.featureIndex,
+    layer: f.layerIndex,
+    strength: f.strength,
+    hookType: 'RESID_POST',
+    width: '16k',
+  }));
 }
 
 export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
   const messagesRef = useRef<ChatMessage[]>(messages);
   const prevKeyRef = useRef<string>(configKey(config));
+  const assistantIdRef = useRef<string | null>(null);
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -76,7 +69,8 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
     if (key !== prevKeyRef.current) {
       prevKeyRef.current = key;
       if (messagesRef.current.length > 0) {
-        abortRef.current?.abort();
+        subscriptionRef.current?.unsubscribe();
+        subscriptionRef.current = null;
         setMessages([]);
         setStatus('idle');
         setError(null);
@@ -85,15 +79,24 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
     }
   }, [config]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      subscriptionRef.current?.unsubscribe();
+    };
+  }, []);
+
   const reset = useCallback(() => {
-    abortRef.current?.abort();
+    subscriptionRef.current?.unsubscribe();
+    subscriptionRef.current = null;
     setMessages([]);
     setStatus('idle');
     setError(null);
   }, []);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    subscriptionRef.current?.unsubscribe();
+    subscriptionRef.current = null;
     setStatus('idle');
   }, []);
 
@@ -109,42 +112,112 @@ export function useSteeringChat(config: SteeringConfig): UseSteeringChatReturn {
         timestamp: Date.now(),
       };
 
-      // Build turns from current messages + the new user message
+      // Build conversation turns
       const allMessages = [...messagesRef.current, userMsg];
       const turns = allMessages.map((m) => ({
         role: m.role === 'user' ? 'user' : 'model',
         content: m.content,
       }));
 
-      setMessages(allMessages);
+      // Create placeholder assistant message
+      const assistantId = crypto.randomUUID();
+      assistantIdRef.current = assistantId;
+      const assistantMsg: ChatMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+      };
+
+      setMessages([...allMessages, assistantMsg]);
       setStatus('generating');
       setError(null);
 
-      const controller = new AbortController();
-      abortRef.current = controller;
+      const steering = buildSteeringInputs(config);
 
-      fetchSteeringChat(turns, config, controller.signal)
-        .then((response) => {
-          const assistantMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: response,
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-          setStatus('idle');
-        })
-        .catch((err) => {
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            setStatus('idle');
+      // Subscribe to streaming generation
+      const observable = apolloClient.subscribe<TokenChunkData>({
+        query: GENERATE_STREAM,
+        variables: {
+          input: {
+            turns,
+            steering,
+            outputLen: DEFAULT_OUTPUT_LEN,
+            topP: DEFAULT_TOP_P,
+            topK: DEFAULT_TOP_K,
+          },
+        },
+      });
+
+      const sub = observable.subscribe({
+        next({ data }) {
+          if (!data) return;
+          const chunk = data.generateStream;
+
+          if (chunk.error) {
+            setError(chunk.error);
+            setStatus('error');
+            subscriptionRef.current = null;
             return;
           }
-          setError(err instanceof Error ? err.message : 'Unknown error');
+
+          if (chunk.done) {
+            setStatus('idle');
+            subscriptionRef.current = null;
+            return;
+          }
+
+          // Append token text to the assistant message
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantIdRef.current
+                ? { ...m, content: m.content + chunk.text }
+                : m
+            )
+          );
+        },
+        error(err) {
+          // Don't report errors if we intentionally stopped
+          if (subscriptionRef.current === null) return;
+          setError(err instanceof Error ? err.message : 'Stream error');
           setStatus('error');
-        });
+          subscriptionRef.current = null;
+        },
+        complete() {
+          setStatus('idle');
+          subscriptionRef.current = null;
+        },
+      });
+
+      subscriptionRef.current = sub;
     },
     [config, status],
   );
 
-  return { messages, status, error, send, stop, reset };
+  const regenerate = useCallback(
+    (assistantIndex: number) => {
+      if (status === 'generating') return;
+      // Find the preceding user message
+      let userContent: string | null = null;
+      for (let i = assistantIndex - 1; i >= 0; i--) {
+        if (messagesRef.current[i]?.role === 'user') {
+          userContent = messagesRef.current[i].content;
+          break;
+        }
+      }
+      if (!userContent) return;
+
+      // Remove the assistant message and everything after it, then re-send
+      const truncated = messagesRef.current.slice(0, assistantIndex);
+      setMessages(truncated);
+      messagesRef.current = truncated;
+
+      // Use queueMicrotask to ensure state is updated before send reads messagesRef
+      const content = userContent;
+      queueMicrotask(() => send(content));
+    },
+    [status, send],
+  );
+
+  return { messages, status, error, send, stop, reset, regenerate };
 }

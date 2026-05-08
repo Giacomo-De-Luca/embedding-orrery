@@ -746,6 +746,21 @@ class HookTypeEnum(Enum):
 
 
 @strawberry.input
+class SteeringInput:
+    """A single SAE feature steering specification.
+
+    Multiple SteeringInput entries can be combined to steer on several
+    features simultaneously (same or different layers).
+    """
+
+    feature_index: int
+    layer: int
+    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
+    width: str = "16k"
+    strength: float = 800.0
+
+
+@strawberry.input
 class RunPromptActivationsInput:
     """Input for running a prompt through the model with SAE hooks."""
 
@@ -757,14 +772,10 @@ class RunPromptActivationsInput:
 
 @strawberry.input
 class GenerateSteeredInput:
-    """Input for generating baseline vs steered text."""
+    """Input for generating baseline vs steered text with one or more features."""
 
     prompt: str
-    feature_index: int
-    layer: int
-    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
-    width: str = "16k"
-    strength: float = 800.0
+    steering: list[SteeringInput]
     output_len: int = 128
     temperature: float | None = None
 
@@ -830,15 +841,23 @@ class PromptActivationsResponse:
 
 
 @strawberry.type
+class AppliedSteering:
+    """A steering feature that was applied during generation (output type)."""
+
+    feature_index: int
+    layer: int
+    hook_type: str
+    width: str
+    strength: float
+
+
+@strawberry.type
 class SteeredGenerationResponse:
     """Result of baseline vs steered generation."""
 
     baseline_text: str
     steered_text: str
-    feature_index: int
-    layer: int
-    hook_type: str
-    strength: float
+    steering: list[AppliedSteering]
     error: str | None = None
 
 
@@ -872,17 +891,6 @@ class ChatTurnInput:
 
 
 @strawberry.input
-class SteeringInput:
-    """Optional SAE steering configuration for streaming generation."""
-
-    feature_index: int
-    layer: int
-    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
-    width: str = "16k"
-    strength: float = 800.0
-
-
-@strawberry.input
 class GenerateStreamInput:
     """Input for streaming text generation."""
 
@@ -891,7 +899,7 @@ class GenerateStreamInput:
     temperature: float | None = None
     top_p: float = 0.95
     top_k: int = 64
-    steering: SteeringInput | None = None
+    steering: list[SteeringInput] | None = None
 
 
 @strawberry.type

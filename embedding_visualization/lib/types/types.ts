@@ -338,11 +338,24 @@ export interface SaeActivationQuantileGroup {
 
 // ── Chat / Steering types ──────────────────────────────────────────
 
+// Structured message parts (enables reasoning display, future tool output)
+export type ChatMessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string; state?: 'streaming' | 'done' }
+  | { type: 'error'; error: string };
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  parts?: ChatMessagePart[];
+}
+
+// Vote state (local-only for now, ready for GraphQL persistence later)
+export interface MessageVote {
+  messageId: string;
+  isUpvoted: boolean;
 }
 
 export interface SteeringFeature {

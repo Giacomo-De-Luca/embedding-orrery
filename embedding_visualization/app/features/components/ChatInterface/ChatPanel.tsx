@@ -1,12 +1,13 @@
 'use client';
 
-import { ChevronDown, RotateCcw, X } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { motion } from 'motion/react';
+import { ChevronDown, PanelRightIcon, RotateCcw } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
-import { Separator } from '@/lib/ui-primitives/separator';
 import { useScrollToBottom } from '@/lib/hooks/useScrollToBottom';
 import { useSteeringChat } from '@/lib/hooks/useSteeringChat';
 import { cn } from '@/lib/utils/utils';
-import type { SaeFeature, SteeringConfig, SteeringFeature } from '@/lib/types/types';
+import type { SaeFeature, SteeringConfig, SteeringFeature, MessageVote } from '@/lib/types/types';
 import { ChatGreeting } from './ChatGreeting';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
@@ -34,11 +35,36 @@ export function ChatPanel({
   onUpdateStrength,
   onClose,
 }: ChatPanelProps) {
-  const { messages, status, error, send, stop, reset } = useSteeringChat(steeringConfig);
+  const { messages, status, error, send, stop, reset, regenerate } = useSteeringChat(steeringConfig);
   const { containerRef, endRef, isAtBottom, scrollToBottom } = useScrollToBottom();
+  const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
   const isEmpty = messages.length === 0;
   const isGenerating = status === 'generating';
+
+  const handleVote = useCallback((messageId: string, isUpvoted: boolean) => {
+    setVotes((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(messageId);
+      // Toggle off if same vote
+      if (existing?.isUpvoted === isUpvoted) {
+        next.delete(messageId);
+      } else {
+        next.set(messageId, { messageId, isUpvoted });
+      }
+      return next;
+    });
+  }, []);
+
+  const handleRegenerate = useCallback((assistantMessageIndex: number) => {
+    // Find the preceding user message and re-send via the hook's regenerate support
+    for (let i = assistantMessageIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        regenerate(assistantMessageIndex);
+        return;
+      }
+    }
+  }, [messages, regenerate]);
 
   return (
     <div className="flex h-full flex-col">
@@ -64,16 +90,12 @@ export function ChatPanel({
               onClick={onClose}
               className="size-7 text-muted-foreground"
             >
-              <X className="size-3.5" />
+              <PanelRightIcon className="size-3.5" />
               <span className="sr-only">Close chat</span>
             </Button>
           )}
         </div>
       </div>
-      {/* Steering controls *
-      <Separator className="my-2" />
-      */}
-
       {/* Steering controls */}
       <SteeringControls
         config={steeringConfig}
@@ -87,50 +109,60 @@ export function ChatPanel({
 
       {/* Messages area */}
       <div className="relative flex-1 overflow-hidden">
-        {isEmpty ? (
-          <ChatGreeting
-            featureCount={steeringConfig.features.length}
-            onSuggest={send}
-          />
-        ) : (
-          <div
-            ref={containerRef}
-            className="absolute inset-0 overflow-y-auto"
-          >
-            <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
-              {messages.map((msg) => (
-                <ChatMessage key={msg.id} message={msg} />
-              ))}
-
-              {isGenerating && <ThinkingIndicator />}
-
-              {error && (
-                <div className="animate-fade-up rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                  {error}
-                </div>
-              )}
-
-              <div ref={endRef} />
-            </div>
-          </div>
+        {isEmpty && (
+          <ChatGreeting featureCount={steeringConfig.features.length} />
         )}
+
+        <div
+          ref={containerRef}
+          className="absolute inset-0 overflow-y-auto"
+        >
+          <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
+            {messages.map((msg, i) => (
+              <ChatMessage
+                key={msg.id}
+                message={msg}
+                isGenerating={isGenerating}
+                vote={votes.get(msg.id)}
+                onVote={handleVote}
+                onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
+              />
+            ))}
+
+            {isGenerating && messages[messages.length - 1]?.content === '' && (
+              <ThinkingIndicator />
+            )}
+
+            {error && (
+              <motion.div
+                className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              >
+                {error}
+              </motion.div>
+            )}
+
+            <div ref={endRef} />
+          </div>
+        </div>
 
         {/* Scroll-to-bottom button */}
         <button
           onClick={() => scrollToBottom()}
           className={cn(
-            'absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center',
-            'h-7 gap-1 rounded-full border border-border/50 bg-card/90 px-3.5',
-            'text-[10px] text-muted-foreground',
+            'absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center justify-center',
+            'size-7 rounded-full border border-border/50 bg-card/90',
             'shadow-[var(--shadow-float)] backdrop-blur-lg',
             'transition-all duration-200',
             isAtBottom
               ? 'pointer-events-none scale-90 opacity-0'
               : 'pointer-events-auto scale-100 opacity-100',
           )}
+          aria-label="Scroll to bottom"
         >
           <ChevronDown className="size-3 text-muted-foreground" />
-          <span>Scroll to bottom</span>
         </button>
       </div>
 
@@ -139,6 +171,8 @@ export function ChatPanel({
         onSend={send}
         onStop={stop}
         isGenerating={isGenerating}
+        showSuggestions={isEmpty}
+        onSuggest={send}
       />
     </div>
   );

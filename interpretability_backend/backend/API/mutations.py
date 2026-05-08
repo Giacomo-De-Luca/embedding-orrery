@@ -9,6 +9,7 @@ from ..services.embedding_pipeline import (
     HuggingFaceEmbeddingPipeline,
     LocalFileEmbeddingPipeline,
 )
+from ..services.interpret_service import SteeringSpec
 from ..services.topic_extraction_service import (
     extract_topics as do_extract_topics,
 )
@@ -23,6 +24,7 @@ from .duckdb_instance import get_duckdb_client
 from .interpret_instance import get_interpret_service
 from .types import (
     JSON,
+    AppliedSteering,
     EmbedDatasetInput,
     EmbedDatasetResult,
     EmbedLocalFileInput,
@@ -528,20 +530,17 @@ class Mutation:
     async def generate_steered_response(
         self, input: GenerateSteeredInput, info=None
     ) -> SteeredGenerationResponse:
-        """Generate baseline vs steered text for a feature."""
+        """Generate baseline vs steered text with one or more features."""
         service = get_interpret_service()
-        hook_type_str = input.hook_type.value
+        specs = _steering_inputs_to_specs(input.steering)
+        applied = _steering_inputs_to_applied(input.steering)
         try:
             async with service._lock:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
                         service.generate_steered,
                         input.prompt,
-                        input.layer,
-                        hook_type_str,
-                        input.feature_index,
-                        input.width,
-                        input.strength,
+                        specs,
                         input.output_len,
                         input.temperature,
                     ),
@@ -550,29 +549,20 @@ class Mutation:
             return SteeredGenerationResponse(
                 baseline_text=result.baseline_text,
                 steered_text=result.steered_text,
-                feature_index=result.feature_index,
-                layer=result.layer,
-                hook_type=result.hook_type,
-                strength=result.strength,
+                steering=applied,
             )
         except (RuntimeError, ValueError) as e:
             return SteeredGenerationResponse(
                 baseline_text="",
                 steered_text="",
-                feature_index=input.feature_index,
-                layer=input.layer,
-                hook_type=hook_type_str,
-                strength=input.strength,
+                steering=applied,
                 error=str(e),
             )
         except TimeoutError:
             return SteeredGenerationResponse(
                 baseline_text="",
                 steered_text="",
-                feature_index=input.feature_index,
-                layer=input.layer,
-                hook_type=hook_type_str,
-                strength=input.strength,
+                steering=applied,
                 error="Generation timed out after 180s",
             )
 
@@ -611,6 +601,34 @@ class Mutation:
                 features=[],
                 error="Generation timed out after 120s",
             )
+
+
+def _steering_inputs_to_specs(inputs) -> list[SteeringSpec]:
+    """Convert GraphQL SteeringInput list to service SteeringSpec list."""
+    return [
+        SteeringSpec(
+            feature_index=s.feature_index,
+            layer=s.layer,
+            hook_type=s.hook_type.value,
+            width=s.width,
+            strength=s.strength,
+        )
+        for s in inputs
+    ]
+
+
+def _steering_inputs_to_applied(inputs) -> list[AppliedSteering]:
+    """Convert GraphQL SteeringInput list to AppliedSteering output list."""
+    return [
+        AppliedSteering(
+            feature_index=s.feature_index,
+            layer=s.layer,
+            hook_type=s.hook_type.value,
+            width=s.width,
+            strength=s.strength,
+        )
+        for s in inputs
+    ]
 
 
 def _convert_prompt_activations(result) -> PromptActivationsResponse:

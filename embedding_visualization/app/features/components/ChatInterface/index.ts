@@ -6,3 +6,6 @@ export { SteeringControls, steeringFeatureKey } from './SteeringControls';
 export { ThinkingIndicator } from './ThinkingIndicator';
 export { Shimmer } from './Shimmer';
 export { AssistantAvatar } from './AssistantAvatar';
+export { ChatMessageActions } from './ChatMessageActions';
+export { MessageReasoning } from './MessageReasoning';
+export { SteeringSelector } from './SteeringSelector';

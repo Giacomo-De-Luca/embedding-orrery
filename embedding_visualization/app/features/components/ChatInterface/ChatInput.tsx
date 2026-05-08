@@ -1,31 +1,61 @@
 'use client';
 
-import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent } from 'react';
+import { motion } from 'motion/react';
 import { ArrowUp, Paperclip, Square } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
+
+const DRAFT_KEY = 'steering-chat-draft';
+
+const SUGGESTIONS = [
+  'Explain what you see',
+  'Write a poem',
+  'Tell me a story',
+  'Describe your purpose',
+];
 
 interface ChatInputProps {
   onSend: (content: string) => void;
   onStop: () => void;
   isGenerating: boolean;
   disabled?: boolean;
+  showSuggestions?: boolean;
+  onSuggest?: (prompt: string) => void;
 }
 
-export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputProps) {
-  const [input, setInput] = useState('');
+export function ChatInput({ onSend, onStop, isGenerating, disabled, showSuggestions, onSuggest }: ChatInputProps) {
+  const [input, setInput] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(DRAFT_KEY) ?? '';
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
+
+  // Persist draft to localStorage
+  useEffect(() => {
+    if (input) {
+      localStorage.setItem(DRAFT_KEY, input);
+    } else {
+      localStorage.removeItem(DRAFT_KEY);
+    }
+  }, [input]);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
-    if (!trimmed || isGenerating) return;
+    if (!trimmed || isGenerating || disabled) return;
     onSend(trimmed);
     setInput('');
+    localStorage.removeItem(DRAFT_KEY);
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [input, isGenerating, onSend]);
+  }, [input, isGenerating, disabled, onSend]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Don't intercept during IME composition
+      if (isComposingRef.current) return;
+
+      // Enter (no shift) or Cmd/Ctrl+Enter → send
+      if (e.key === 'Enter' && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         handleSend();
       }
@@ -36,17 +66,50 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputP
     [handleSend],
   );
 
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
+    // Strip rich text formatting — insert plain text only
+    const plain = e.clipboardData.getData('text/plain');
+    if (plain && e.clipboardData.types.includes('text/html')) {
+      e.preventDefault();
+      const textarea = e.currentTarget;
+      textarea.setRangeText(plain, textarea.selectionStart, textarea.selectionEnd, 'end');
+      setInput(textarea.value);
+    }
+  }, []);
+
   const canSend = input.trim().length > 0 && !isGenerating && !disabled;
 
   return (
     <div className="px-4 pb-4 pt-2">
+      {/* Suggestion pills */}
+      {showSuggestions && onSuggest && (
+        <div
+          className="mb-2 flex gap-2 overflow-x-auto pb-1"
+          style={{ scrollbarWidth: 'none' }}
+        >
+          {SUGGESTIONS.map((text, i) => (
+            <motion.button
+              key={text}
+              type="button"
+              onClick={() => onSuggest(text)}
+              className="shrink-0 rounded-full border border-border/50 bg-card/30 px-4 py-1.5 text-[13px] whitespace-nowrap text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground hover:shadow-[var(--shadow-chat-card)]"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.06 * i, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {text}
+            </motion.button>
+          ))}
+        </div>
+      )}
+
       <div
         className={cn(
           'relative flex flex-col overflow-hidden rounded-2xl',
           'border border-border/30 bg-card/70',
           'shadow-[var(--shadow-composer)] transition-all duration-300',
           'focus-within:shadow-[var(--shadow-composer-focus)]',
-          'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/20',
+          'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
         )}
       >
         {/* Textarea */}
@@ -55,12 +118,15 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputP
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Send a message..."
+          onPaste={handlePaste}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
+          placeholder="Ask anything..."
           disabled={disabled}
           rows={1}
           className={cn(
             'w-full resize-none border-0 bg-transparent outline-none',
-            'min-h-[80px] max-h-48 px-4 pt-3.5 pb-1.5',
+            'min-h-24 max-h-48 px-4 pt-3.5 pb-1.5',
             'text-[13px] leading-relaxed',
             'placeholder:text-muted-foreground/35',
             'disabled:opacity-50',
@@ -70,7 +136,7 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled }: ChatInputP
 
         {/* Footer bar */}
         <div className="flex items-center justify-between px-3 pb-3">
-          {/* Attach — disabled, faint, no cursor change */}
+          {/* Attach — disabled placeholder */}
           <div
             className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/40 p-1 text-muted-foreground/30"
             aria-hidden="true"

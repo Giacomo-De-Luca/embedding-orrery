@@ -56,11 +56,24 @@ export function useCameraFlyTo(
       if (!isAnimatingRef.current || !graphDivRef.current) return;
 
       if (!initialized) {
+        // Read the live glplot camera directly — _fullLayout.scene.camera is only
+        // updated on Plotly.relayout calls and goes stale during interactive
+        // zoom/pan/rotate, causing a 1-frame jump back to the old position.
         const scene = graphDivRef.current._fullLayout?.scene;
-        const layoutCamera = scene?.camera;
-        if (layoutCamera?.eye) {
-          startEye = { ...layoutCamera.eye };
-          startCenter = layoutCamera.center ? { ...layoutCamera.center } : { x: 0, y: 0, z: 0 };
+        const glplot = scene?._scene?.glplot as any;
+        const liveCamera = glplot?.camera;
+
+        if (liveCamera?.eye) {
+          if (Array.isArray(liveCamera.eye)) {
+            startEye = { x: liveCamera.eye[0], y: liveCamera.eye[1], z: liveCamera.eye[2] };
+            const c = liveCamera.center || [0, 0, 0];
+            startCenter = { x: c[0], y: c[1], z: c[2] };
+          } else {
+            startEye = { x: liveCamera.eye.x, y: liveCamera.eye.y, z: liveCamera.eye.z };
+            startCenter = liveCamera.center
+              ? { x: liveCamera.center.x, y: liveCamera.center.y, z: liveCamera.center.z }
+              : { x: 0, y: 0, z: 0 };
+          }
         } else {
           startEye = { ...currentCameraRef.current.eye };
           startCenter = { ...currentCameraRef.current.center };
@@ -180,15 +193,30 @@ export function animateCameraToRegion(opts: {
   animationFrameRef.current = requestAnimationFrame(() => {
     if (!isAnimatingRef.current || !graphDivRef.current) return;
 
-    // Read live camera state AFTER Plotly.react has completed
+    // Read the live glplot camera directly — _fullLayout.scene.camera can be
+    // stale if no Plotly.relayout has fired since the last user interaction.
     const scene = graphDivRef.current._fullLayout?.scene;
-    const layoutCamera = scene?.camera;
-    const startEye = layoutCamera?.eye
-      ? { ...layoutCamera.eye }
-      : { ...currentCameraRef.current.eye };
-    const startCenter = layoutCamera?.center
-      ? { ...layoutCamera.center }
-      : { ...currentCameraRef.current.center };
+    const glplot = scene?._scene?.glplot as any;
+    const liveCamera = glplot?.camera;
+
+    let startEye: { x: number; y: number; z: number };
+    let startCenter: { x: number; y: number; z: number };
+
+    if (liveCamera?.eye) {
+      if (Array.isArray(liveCamera.eye)) {
+        startEye = { x: liveCamera.eye[0], y: liveCamera.eye[1], z: liveCamera.eye[2] };
+        const c = liveCamera.center || [0, 0, 0];
+        startCenter = { x: c[0], y: c[1], z: c[2] };
+      } else {
+        startEye = { x: liveCamera.eye.x, y: liveCamera.eye.y, z: liveCamera.eye.z };
+        startCenter = liveCamera.center
+          ? { x: liveCamera.center.x, y: liveCamera.center.y, z: liveCamera.center.z }
+          : { x: 0, y: 0, z: 0 };
+      }
+    } else {
+      startEye = { ...currentCameraRef.current.eye };
+      startCenter = { ...currentCameraRef.current.center };
+    }
 
     // Convert start/target eye positions (relative to their centers) to spherical
     const startSpherical = cartesianToSpherical(

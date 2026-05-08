@@ -97,13 +97,21 @@ class PromptActivationsResult:
 
 
 @dataclass
-class SteeredGenerationResult:
-    baseline_text: str
-    steered_text: str
+class SteeringSpec:
+    """A single steering feature specification (service-internal)."""
+
     feature_index: int
     layer: int
     hook_type: str
+    width: str
     strength: float
+
+
+@dataclass
+class SteeredGenerationResult:
+    baseline_text: str
+    steered_text: str
+    steering: list[SteeringSpec]
 
 
 @dataclass
@@ -306,37 +314,32 @@ class InterpretService:
     def generate_steered(
         self,
         prompt: str,
-        layer: int,
-        hook_type: str,
-        feature_index: int,
-        width: str,
-        strength: float,
+        steering_specs: list[SteeringSpec],
         output_len: int,
         temperature: float | None,
     ) -> SteeredGenerationResult:
-        """Generate baseline and steered text for a feature.
+        """Generate baseline and steered text with one or more features.
 
-        The steering direction is resolved from the SAE decoder matrix
-        ``w_dec[feature_index]``.
+        Each steering spec contributes an additive intervention resolved
+        from the SAE decoder matrix ``w_dec[feature_index]``.  Multiple
+        features can target the same or different layers.
         """
         wrapper = self._require_model()
-        ht = self._parse_hook_type(hook_type)
         device = str(wrapper.device)
 
-        sae_config = GemmaScopeSAEConfig(
-            layer_index=layer,
-            hook_type=ht,
-            width=width,
-            device=device,
-            read_only=True,
-        )
+        if not steering_specs:
+            raise ValueError("At least one steering spec is required.")
 
-        # Validate feature index before loading SAE.
-        d_sae = WIDTH_TO_D_SAE.get(width)
-        if d_sae is None:
-            raise ValueError(f"Unknown SAE width '{width}'")
-        if not 0 <= feature_index < d_sae:
-            raise ValueError(f"feature_index {feature_index} out of range [0, {d_sae})")
+        # Validate all specs up-front before any inference.
+        for spec in steering_specs:
+            d_sae = WIDTH_TO_D_SAE.get(spec.width)
+            if d_sae is None:
+                raise ValueError(f"Unknown SAE width '{spec.width}'")
+            if not 0 <= spec.feature_index < d_sae:
+                raise ValueError(
+                    f"feature_index {spec.feature_index} out of range [0, {d_sae})"
+                )
+            self._parse_hook_type(spec.hook_type)  # validate early
 
         # --- Baseline (no steering) ---
         baseline_text = wrapper.generate(
@@ -346,18 +349,29 @@ class InterpretService:
         )
 
         # --- Steered ---
+        # Collect unique (layer, hook_type, width) combos for SAE loading.
         manager = HookManager()
-        manager.add_sae(sae_config)
-        manager.add_steering(
-            SteeringOp(
-                layer_index=layer,
+        seen_sae_keys: set[tuple[int, str, str]] = set()
+        for spec in steering_specs:
+            ht = self._parse_hook_type(spec.hook_type)
+            sae_key = (spec.layer, spec.hook_type, spec.width)
+            if sae_key not in seen_sae_keys:
+                seen_sae_keys.add(sae_key)
+                manager.add_sae(GemmaScopeSAEConfig(
+                    layer_index=spec.layer,
+                    hook_type=ht,
+                    width=spec.width,
+                    device=device,
+                    read_only=True,
+                ))
+            manager.add_steering(SteeringOp(
+                layer_index=spec.layer,
                 mode=SteeringMode.ADDITIVE,
-                feature_index=feature_index,
-                strength=strength,
+                feature_index=spec.feature_index,
+                strength=spec.strength,
                 normalise=False,
                 hook_type=ht,
-            )
-        )
+            ))
 
         with manager.session(wrapper.model.model.layers):
             steered_text = wrapper.generate(
@@ -369,10 +383,7 @@ class InterpretService:
         return SteeredGenerationResult(
             baseline_text=baseline_text,
             steered_text=steered_text,
-            feature_index=feature_index,
-            layer=layer,
-            hook_type=hook_type,
-            strength=strength,
+            steering=steering_specs,
         )
 
     # ------------------------------------------------------------------

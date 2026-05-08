@@ -8,6 +8,8 @@ from .subscriptions import JobProgress, Subscription
 from .types import (
     # Scalars
     JSON,
+    # Interpret / SAE inference types
+    AppliedSteering,
     # Streaming chat generation
     ChatTurnInput,
     Collection,
@@ -24,7 +26,6 @@ from .types import (
     EmbedLocalFileInput,
     FilterInput,
     FilterOperator,
-    # Interpret / SAE inference types
     GenerateSteeredInput,
     GenerateStreamInput,
     HFConfigInfo,

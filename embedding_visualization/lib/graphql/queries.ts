@@ -456,3 +456,22 @@ export const SEARCH_SAE_FEATURES = gql`
     }
   }
 `;
+
+// ========== Streaming Chat Generation ==========
+
+/**
+ * Subscribe to streaming token generation for steered chat.
+ * Backend: subscriptions.py → generate_stream
+ */
+export const GENERATE_STREAM = gql`
+  subscription GenerateStream($input: GenerateStreamInput!) {
+    generateStream(input: $input) {
+      streamId
+      tokenIndex
+      tokenId
+      text
+      done
+      error
+    }
+  }
+`;

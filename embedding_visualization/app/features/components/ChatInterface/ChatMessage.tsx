@@ -1,29 +1,40 @@
 'use client';
 
+import { motion } from 'motion/react';
 import { cn } from '@/lib/utils/utils';
-import type { ChatMessage as ChatMessageType } from '@/lib/types/types';
+import type { ChatMessage as ChatMessageType, MessageVote } from '@/lib/types/types';
 import { AssistantAvatar } from './AssistantAvatar';
+import { MessageResponse } from './ai-elements/message';
+import { MessageReasoning } from './MessageReasoning';
+import { ChatMessageActions } from './ChatMessageActions';
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  isGenerating?: boolean;
+  vote?: MessageVote;
+  onVote?: (messageId: string, isUpvoted: boolean) => void;
+  onEdit?: (message: ChatMessageType) => void;
+  onRegenerate?: () => void;
 }
 
-/**
- * Split text on triple-backtick fences into alternating text / code segments.
- * Even indices are text, odd indices are code.
- */
-function parseContent(content: string) {
-  const parts = content.split(/```(?:\w*\n?)?/);
-  return parts.map((text, i) => ({ text, isCode: i % 2 === 1 }));
-}
-
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({
+  message,
+  isGenerating = false,
+  vote,
+  onVote,
+  onEdit,
+  onRegenerate,
+}: ChatMessageProps) {
   const isUser = message.role === 'user';
-  const segments = parseContent(message.content);
 
   if (isUser) {
     return (
-      <div className="flex w-full animate-[fade-up_0.25s_cubic-bezier(0.22,1,0.36,1)] flex-col items-end gap-2">
+      <motion.div
+        className="group flex w-full flex-col items-end gap-1"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+      >
         <div
           className={cn(
             'w-fit max-w-[min(80%,56ch)] overflow-hidden break-words',
@@ -33,39 +44,76 @@ export function ChatMessage({ message }: ChatMessageProps) {
             'text-[13px] leading-[1.65]',
           )}
         >
-          {segments.map((seg, i) =>
-            seg.isCode ? (
-              <pre key={i} className="my-2 overflow-x-auto rounded-lg bg-background/50 p-3 text-xs font-mono">
-                <code>{seg.text.trim()}</code>
-              </pre>
-            ) : (
-              <span key={i} className="whitespace-pre-wrap">{seg.text}</span>
-            ),
-          )}
+          <MessageResponse>{message.content}</MessageResponse>
         </div>
-      </div>
+        <ChatMessageActions
+          message={message}
+          isGenerating={isGenerating}
+          onEdit={onEdit}
+        />
+      </motion.div>
     );
   }
 
+  // Assistant message
+  const parts = message.parts;
+
   return (
-    <div className="flex w-full animate-[message-in_0.3s_cubic-bezier(0.16,1,0.3,1)] items-start gap-3">
-      {/* Avatar aligned to first line of text */}
+    <motion.div
+      className="group flex w-full items-start gap-3"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+    >
+      {/* Avatar aligned to first line */}
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
         <AssistantAvatar />
       </div>
 
       {/* Content */}
-      <div className="min-w-0 flex-1 text-[13px] leading-[1.65]">
-        {segments.map((seg, i) =>
-          seg.isCode ? (
-            <pre key={i} className="my-2 overflow-x-auto rounded-lg bg-muted/50 p-3 text-xs font-mono">
-              <code>{seg.text.trim()}</code>
-            </pre>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-col gap-2 text-[13px] leading-[1.65]">
+          {parts && parts.length > 0 ? (
+            parts.map((part, i) => {
+              if (part.type === 'reasoning') {
+                return (
+                  <MessageReasoning
+                    key={`reasoning-${i}`}
+                    reasoning={part.text}
+                    isStreaming={part.state === 'streaming'}
+                  />
+                );
+              }
+              if (part.type === 'text') {
+                return <MessageResponse key={`text-${i}`}>{part.text}</MessageResponse>;
+              }
+              if (part.type === 'error') {
+                return (
+                  <div
+                    key={`error-${i}`}
+                    className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                  >
+                    {part.error}
+                  </div>
+                );
+              }
+              return null;
+            })
           ) : (
-            <span key={i} className="whitespace-pre-wrap">{seg.text}</span>
-          ),
-        )}
+            <MessageResponse>{message.content}</MessageResponse>
+          )}
+        </div>
+
+        {/* Actions toolbar */}
+        <ChatMessageActions
+          message={message}
+          isGenerating={isGenerating}
+          vote={vote}
+          onVote={onVote}
+          onRegenerate={onRegenerate}
+          className="mt-2"
+        />
       </div>
-    </div>
+    </motion.div>
   );
 }

@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ImperativePanelHandle } from 'react-resizable-panels';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useQuery, useLazyQuery } from '@apollo/client/react';
 import Link from 'next/link';
-import { ArrowLeft, Sparkles } from 'lucide-react';
+import { ArrowLeft, Sparkles, Sun, Moon } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import {
   GET_SAE_MODELS,
   GET_SAE_FEATURE,
@@ -29,9 +29,27 @@ import { SimilarFeatures } from './components/SimilarFeatures';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Separator } from '@/lib/ui-primitives/separator';
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/lib/ui-primitives/resizable';
 import { SAE_TO_COLLECTION, getSemanticCollectionName } from '@/lib/utils/saeCollections';
 import { ChatPanel, steeringFeatureKey } from './components/ChatInterface';
+
+function ModeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const isDark = (resolvedTheme ?? 'light') === 'dark';
+
+  return (
+    <Button
+      variant="circular"
+      size="icon"
+      className="relative ml-auto"
+      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      suppressHydrationWarning
+    >
+      <Sun className="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
+      <Moon className="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
+    </Button>
+  );
+}
 
 export default function FeaturesPage() {
   const searchParams = useSearchParams();
@@ -54,18 +72,31 @@ export default function FeaturesPage() {
   const [hoveredActivationValue, setHoveredActivationValue] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [steeringConfig, setSteeringConfig] = useState<SteeringConfig>({ features: [] });
-  const chatPanelRef = useRef<ImperativePanelHandle>(null);
+  const [chatWidth, setChatWidth] = useState(448); // 28rem
+  const [isDragging, setIsDragging] = useState(false);
+  const isDraggingRef = useRef(false);
 
-  const openChat = useCallback(() => {
-    setChatOpen(true);
-    // Expand after state update so the panel is collapsible
-    requestAnimationFrame(() => chatPanelRef.current?.expand());
-  }, []);
+  const openChat = useCallback(() => setChatOpen(true), []);
+  const closeChat = useCallback(() => setChatOpen(false), []);
 
-  const closeChat = useCallback(() => {
-    chatPanelRef.current?.collapse();
-    // Wait for the CSS transition to finish before removing open state
-    setTimeout(() => setChatOpen(false), 300);
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    isDraggingRef.current = true;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const newWidth = Math.max(320, Math.min(window.innerWidth * 0.5, window.innerWidth - ev.clientX));
+      setChatWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      isDraggingRef.current = false;
+      setIsDragging(false);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
   }, []);
 
   // Parse selected model/sae
@@ -243,167 +274,173 @@ export default function FeaturesPage() {
   // ---------- Render ----------
 
   return (
-    <div className="flex h-screen bg-background">
-      <ResizablePanelGroup direction="horizontal">
-        <ResizablePanel defaultSize={100} minSize={40}>
-          <div className="flex h-full flex-col">
-            {/* Top nav */}
-            <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
-              <Link
-                href="/"
-                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Visualization
-              </Link>
-              <Separator orientation="vertical" className="h-5" />
-              <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
-            </header>
+    <div
+      className="flex h-screen bg-background"
+      style={{ '--chat-width': `${chatWidth}px` } as React.CSSProperties}
+    >
+      {/* Main content */}
+      <div className="flex h-full flex-1 min-w-0 flex-col">
+        {/* Top nav */}
+        <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
+          <Link
+            href="/"
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Visualization
+          </Link>
+          <Separator orientation="vertical" className="h-5" />
+          <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
+          <ModeToggle />
+        </header>
 
-            <main className="flex-1 overflow-y-auto">
-              <div className="max-w-7xl mx-auto px-4 py-4 space-y-4">
-        {modelsLoading ? (
-          <div className="flex items-center gap-2 py-8 justify-center">
-            <Spinner className="h-5 w-5" />
-            <span className="text-sm text-muted-foreground">Loading SAE models...</span>
-          </div>
-        ) : models.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">No SAE data found. Ingest features first.</p>
-          </div>
-        ) : (
-          <>
-            <FeatureHeader
-              models={models}
-              selectedModelSae={selectedModelSae}
-              onModelSaeChange={handleModelSaeChange}
-              featureIndex={featureIndex}
-              onFeatureIndexChange={handleFeatureIndexChange}
-              searchQuery={searchQuery}
-              onSearchQueryChange={setSearchQuery}
-              onSearch={handleSearch}
-              maxFeatureIndex={maxFeatureIndex}
-              collectionLink={collectionLink}
-              searchMode={searchMode}
-              onSearchModeChange={setSearchMode}
-              hasSemanticSearch={!!semanticCollectionName}
-            />
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Left: Search results */}
-              <div className="lg:col-span-1 space-y-2">
-                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  {hasActiveResults
-                    ? `${isSemanticSearch ? 'Semantic' : 'Search'} Results (${activeResultCount})`
-                    : 'Search Features'}
-                </h3>
-                {activeSearchLoading ? (
-                  <div className="flex justify-center py-4">
-                    <Spinner className="h-4 w-4" />
-                  </div>
-                ) : hasActiveResults ? (
-                  <FeatureSearchResults
-                    results={searchResults}
-                    onSelect={handleSearchSelect}
-                    selectedIndex={featureIndex}
-                    mode={searchMode}
-                    semanticResults={isSemanticSearch ? semanticSearchResults : undefined}
-                  />
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Search by label or browse with the arrow buttons.
-                  </p>
-                )}
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-7xl mx-auto px-4 py-4 space-y-4">
+            {modelsLoading ? (
+              <div className="flex items-center gap-2 py-8 justify-center">
+                <Spinner className="h-5 w-5" />
+                <span className="text-sm text-muted-foreground">Loading SAE models...</span>
               </div>
+            ) : models.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-muted-foreground">No SAE data found. Ingest features first.</p>
+              </div>
+            ) : (
+              <>
+                <FeatureHeader
+                  models={models}
+                  selectedModelSae={selectedModelSae}
+                  onModelSaeChange={handleModelSaeChange}
+                  featureIndex={featureIndex}
+                  onFeatureIndexChange={handleFeatureIndexChange}
+                  searchQuery={searchQuery}
+                  onSearchQueryChange={setSearchQuery}
+                  onSearch={handleSearch}
+                  maxFeatureIndex={maxFeatureIndex}
+                  collectionLink={collectionLink}
+                  searchMode={searchMode}
+                  onSearchModeChange={setSearchMode}
+                  hasSemanticSearch={!!semanticCollectionName}
+                />
 
-              {/* Right: Feature detail + statistics + similar + activations */}
-              <div className="lg:col-span-2 space-y-4">
-                {featureLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Spinner className="h-5 w-5" />
-                  </div>
-                ) : feature ? (
-                  <>
-                    <div className="border rounded-lg p-4 bg-card">
-                      <FeatureDetailCard feature={feature} />
-                    </div>
-
-                    <FeatureStatistics
-                      feature={feature}
-                      activations={activations}
-                      allDensities={allDensities}
-                      densitiesLoading={densitiesLoading}
-                      hoveredActivationValue={hoveredActivationValue}
-                    />
-
-                    {semanticCollectionName && (
-                      <SimilarFeatures
-                        collectionName={semanticCollectionName}
-                        featureIndex={feature.featureIndex}
-                        featureLabel={feature.label}
-                        onSelectFeature={handleSearchSelect}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Left: Search results */}
+                  <div className="lg:col-span-1 space-y-2">
+                    <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      {hasActiveResults
+                        ? `${isSemanticSearch ? 'Semantic' : 'Search'} Results (${activeResultCount})`
+                        : 'Search Features'}
+                    </h3>
+                    {activeSearchLoading ? (
+                      <div className="flex justify-center py-4">
+                        <Spinner className="h-4 w-4" />
+                      </div>
+                    ) : hasActiveResults ? (
+                      <FeatureSearchResults
+                        results={searchResults}
+                        onSelect={handleSearchSelect}
                         selectedIndex={featureIndex}
+                        mode={searchMode}
+                        semanticResults={isSemanticSearch ? semanticSearchResults : undefined}
                       />
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Search by label or browse with the arrow buttons.
+                      </p>
                     )}
+                  </div>
 
-                    <div>
-                      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                        Activations
-                        {activations.length > 0 && (
-                          <span className="ml-1">({activations.length})</span>
-                        )}
-                      </h3>
-                      {activationsLoading ? (
-                        <div className="flex justify-center py-4">
-                          <Spinner className="h-4 w-4" />
+                  {/* Right: Feature detail + statistics + similar + activations */}
+                  <div className="lg:col-span-2 space-y-4">
+                    {featureLoading ? (
+                      <div className="flex justify-center py-8">
+                        <Spinner className="h-5 w-5" />
+                      </div>
+                    ) : feature ? (
+                      <>
+                        <div className="border rounded-lg p-4 bg-card">
+                          <FeatureDetailCard feature={feature} />
                         </div>
-                      ) : (
-                        <ActivationExamples
+
+                        <FeatureStatistics
+                          feature={feature}
                           activations={activations}
-                          quantileGroups={quantileGroups}
-                          quantileLoading={quantilesLoading}
-                          onRequestQuantiles={handleRequestQuantiles}
-                          onHoverActivation={setHoveredActivationValue}
+                          allDensities={allDensities}
+                          densitiesLoading={densitiesLoading}
+                          hoveredActivationValue={hoveredActivationValue}
                         />
-                      )}
-                    </div>
-                  </>
-                ) : featureIndex != null ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    Feature #{featureIndex} not found.
+
+                        {semanticCollectionName && (
+                          <SimilarFeatures
+                            collectionName={semanticCollectionName}
+                            featureIndex={feature.featureIndex}
+                            featureLabel={feature.label}
+                            onSelectFeature={handleSearchSelect}
+                            selectedIndex={featureIndex}
+                          />
+                        )}
+
+                        <div>
+                          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                            Activations
+                            {activations.length > 0 && (
+                              <span className="ml-1">({activations.length})</span>
+                            )}
+                          </h3>
+                          {activationsLoading ? (
+                            <div className="flex justify-center py-4">
+                              <Spinner className="h-4 w-4" />
+                            </div>
+                          ) : (
+                            <ActivationExamples
+                              activations={activations}
+                              quantileGroups={quantileGroups}
+                              quantileLoading={quantilesLoading}
+                              onRequestQuantiles={handleRequestQuantiles}
+                              onHoverActivation={setHoveredActivationValue}
+                            />
+                          )}
+                        </div>
+                      </>
+                    ) : featureIndex != null ? (
+                      <div className="text-center py-8 text-muted-foreground text-sm">
+                        Feature #{featureIndex} not found.
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground text-sm">
+                        Select a feature to view details.
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    Select a feature to view details.
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-              </div>
-            </main>
+                </div>
+              </>
+            )}
           </div>
-        </ResizablePanel>
+        </main>
+      </div>
 
-        {/* Resize handle — only interactive when chat is open */}
-        <ResizableHandle
-          withHandle
-          className={chatOpen ? '' : 'pointer-events-none opacity-0'}
-        />
+      {/* Chat sidebar */}
+      <div
+        className="group/chat"
+        data-state={chatOpen ? 'open' : 'closed'}
+      >
+        {/* Spacer — in document flow, transitions width to push main content */}
+        <div className={`h-full w-(--chat-width) shrink-0 bg-transparent group-data-[state=closed]/chat:w-0 ${isDragging ? '' : 'transition-[width] duration-300 ease-[var(--ease-spring)]'}`} />
 
-        {/* Chat panel — always mounted, collapsible with CSS transition */}
-        <ResizablePanel
-          ref={chatPanelRef}
-          defaultSize={0}
-          minSize={20}
-          maxSize={50}
-          collapsible
-          collapsedSize={0}
-          className="transition-[flex-basis] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
-          onCollapse={() => setChatOpen(false)}
-          onExpand={() => setChatOpen(true)}
+        {/* Container — fixed, slides in from right */}
+        <div
+          className={`fixed inset-y-0 right-0 z-10 w-(--chat-width) group-data-[state=closed]/chat:right-[calc(var(--chat-width)*-1)] ${isDragging ? '' : 'transition-[right] duration-300 ease-[var(--ease-spring)]'}`}
+          aria-hidden={!chatOpen}
         >
+          {/* Resize handle */}
+          <div
+            onMouseDown={handleResizeStart}
+            className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize
+              before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2
+              before:transition-colors before:duration-150
+              before:bg-transparent hover:before:bg-border active:before:bg-primary
+              ${isDragging ? 'before:!bg-primary' : ''}`}
+          />
           <div className="flex h-full flex-col border-l bg-background">
             <ChatPanel
               steeringConfig={steeringConfig}
@@ -416,8 +453,8 @@ export default function FeaturesPage() {
               onClose={closeChat}
             />
           </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        </div>
+      </div>
 
       {/* Floating chat button */}
       {!chatOpen && (

@@ -1213,11 +1213,37 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
     if (oldCount === 0 && newCount === 0) return;
 
+    // Snapshot the live glplot camera BEFORE Plotly.redraw, which resyncs the
+    // glplot camera from the (potentially stale) layout camera and would
+    // teleport back to the previous fly-to destination.
+    const sceneLayout = gd._fullLayout?.scene;
+    const glplot = sceneLayout?._scene?.glplot as any;
+    let savedEye: any, savedCenter: any;
+    if (glplot?.camera?.eye) {
+      const cam = glplot.camera;
+      savedEye = Array.isArray(cam.eye) ? [...cam.eye] : { ...cam.eye };
+      savedCenter = cam.center
+        ? (Array.isArray(cam.center) ? [...cam.center] : { ...cam.center })
+        : null;
+    }
+
     // Splice overlay traces in place and redraw once
     const baseCount = (gd.data?.length ?? 0) - oldCount;
     gd.data?.splice(baseCount, oldCount, ...(overlayTraces as PlotData[]));
     overlayTraceCountRef.current = newCount;
     Plotly.redraw(gd);
+
+    // Restore the live camera position that Plotly.redraw clobbered
+    if (savedEye && glplot?.camera) {
+      if (Array.isArray(glplot.camera.eye)) {
+        glplot.camera.eye = savedEye;
+        if (savedCenter) glplot.camera.center = savedCenter;
+      } else if (glplot.camera.eye && typeof glplot.camera.eye === 'object') {
+        Object.assign(glplot.camera.eye, savedEye);
+        if (savedCenter) Object.assign(glplot.camera.center, savedCenter);
+      }
+      if (typeof glplot.camera.update === 'function') glplot.camera.update();
+    }
 
     // Defer fly-to by one frame: Plotly.redraw is done (main thread free), and
 // parent effects (e.g. page.tsx auto-select) have flushed, so pendingFlyToRef
