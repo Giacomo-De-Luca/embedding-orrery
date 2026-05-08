@@ -2,9 +2,10 @@
 Pytest configuration and fixtures for backend tests.
 """
 
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add the backend directory to the Python path
 backend_dir = Path(__file__).parent.parent
@@ -15,6 +16,7 @@ sys.path.insert(0, str(backend_dir))
 def db():
     """Fresh in-memory DuckDB client for each test."""
     from backend.clients.duckdb_client import DuckDBClient
+
     client = DuckDBClient(db_path=":memory:")
     yield client
     client.close()
@@ -35,6 +37,7 @@ def sample_metadata():
 def sample_embeddings():
     """Sample embedding vectors for testing."""
     import numpy as np
+
     return np.random.rand(4, 384).tolist()
 
 
@@ -55,6 +58,7 @@ def temp_csv_file(tmp_path):
 def temp_json_file(tmp_path):
     """Create a temporary JSON file for testing."""
     import json
+
     data = [
         {"id": 1, "name": "Alice"},
         {"id": 2, "name": "Bob"},

@@ -9,8 +9,8 @@ This package contains specialized embedding implementations:
 """
 
 from .embed_huggingface import embed_huggingface_dataset
-from .embed_local_file import embed_local_file, embed_text_from_local
 from .embed_images import embed_images
+from .embed_local_file import embed_local_file, embed_text_from_local
 from .embed_vectors import embed_vectors
 
 __all__ = [

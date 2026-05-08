@@ -8,6 +8,7 @@ It reads from the precomputed embeddings created by embed_wordnet.py.
 """
 
 import sys
+
 from interpretability.utils.utils import setup_collection
 
 
@@ -21,28 +22,23 @@ def query_wordnet(collection, query_text, n_results=10, show_examples=False):
         n_results: Number of results to return
         show_examples: Whether to show usage examples
     """
-    results = collection.query(
-        query_texts=[query_text],
-        n_results=n_results
-    )
+    results = collection.query(query_texts=[query_text], n_results=n_results)
 
     print(f"\nQuery: '{query_text}'")
     print(f"Top {n_results} results:")
     print("=" * 70)
 
-    for i, (doc_id, doc, distance) in enumerate(zip(
-        results['ids'][0],
-        results['documents'][0],
-        results['distances'][0]
-    ), 1):
-        meta = results['metadatas'][0][i-1]
+    for i, (doc_id, doc, distance) in enumerate(
+        zip(results["ids"][0], results["documents"][0], results["distances"][0]), 1
+    ):
+        meta = results["metadatas"][0][i - 1]
 
         print(f"\n{i}. {meta['word']} ({meta['pos']}) - similarity: {1 - distance:.4f}")
         print(f"   Definition: {meta['definition']}")
 
-        if show_examples and meta.get('examples'):
-            examples = meta['examples'].split(' | ')
-            print(f"   Examples:")
+        if show_examples and meta.get("examples"):
+            examples = meta["examples"].split(" | ")
+            print("   Examples:")
             for ex in examples:
                 print(f"     • {ex}")
 
@@ -70,18 +66,18 @@ def interactive_mode(collection):
             if not query:
                 continue
 
-            if query.lower() in ['quit', 'exit', 'q']:
+            if query.lower() in ["quit", "exit", "q"]:
                 print("Goodbye!")
                 break
 
-            if query.lower() == 'examples':
+            if query.lower() == "examples":
                 show_examples = not show_examples
                 print(f"Examples display: {'ON' if show_examples else 'OFF'}")
                 continue
 
             # Allow user to specify number of results
-            if query.startswith('top '):
-                parts = query.split(' ', 1)
+            if query.startswith("top "):
+                parts = query.split(" ", 1)
                 if len(parts) == 2 and parts[1].isdigit():
                     n_results = int(parts[1])
                     print(f"Set number of results to: {n_results}")
@@ -101,7 +97,7 @@ def main():
     try:
         collection, device = setup_collection()
         count = collection.count()
-        print(f"✓ Connected to WordNet vector database")
+        print("✓ Connected to WordNet vector database")
         print(f"✓ Collection contains {count:,} word definitions")
         print(f"✓ Using device: {device}")
     except Exception as e:
@@ -112,12 +108,12 @@ def main():
 
     # Check if query provided as command line argument
     if len(sys.argv) > 1:
-        query_text = ' '.join(sys.argv[1:])
+        query_text = " ".join(sys.argv[1:])
         query_wordnet(collection, query_text, n_results=10)
     else:
         # Interactive mode
         interactive_mode(collection)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

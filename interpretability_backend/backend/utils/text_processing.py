@@ -5,13 +5,11 @@ Provides functions for formatting text and extracting metadata from rows.
 """
 
 import json
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 
 def format_text_for_embedding(
-    row: Dict[str, Any],
-    columns: List[str],
-    template: Optional[str] = None
+    row: dict[str, Any], columns: list[str], template: str | None = None
 ) -> str:
     """
     Format row data into text for embedding.
@@ -47,10 +45,8 @@ def format_text_for_embedding(
 
 
 def extract_metadata(
-    row: Dict[str, Any],
-    metadata_columns: Optional[List[str]],
-    source_split: Optional[str] = None
-) -> Dict[str, Any]:
+    row: dict[str, Any], metadata_columns: list[str] | None, source_split: str | None = None
+) -> dict[str, Any]:
     """
     Extract metadata from row for storage in ChromaDB.
 

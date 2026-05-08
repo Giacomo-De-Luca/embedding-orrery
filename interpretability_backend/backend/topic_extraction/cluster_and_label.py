@@ -1,16 +1,14 @@
-
-
-from typing import List, Union, Tuple, Dict
-import numpy as np
 import logging
+
+import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from hdbscan import HDBSCAN
-from sklearn.feature_extraction.text import TfidfTransformer, CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.preprocessing import normalize
 from sklearn.utils import check_array
-import scipy.sparse as sp
 
-logger = logging.getLogger('star_map.'+__name__)
+logger = logging.getLogger("star_map." + __name__)
 
 
 class ClassTfidfTransformer(TfidfTransformer):
@@ -46,19 +44,13 @@ class ClassTfidfTransformer(TfidfTransformer):
         bm25_weighting: bool = False,
         reduce_frequent_words: bool = False,
         use_idf: bool = True,
-
     ):
         self.bm25_weighting = bm25_weighting
         self.reduce_frequent_words = reduce_frequent_words
         self.use_idf = use_idf
-        super(ClassTfidfTransformer, self).__init__()
+        super().__init__()
 
-    def fit(
-            self, 
-            X: sp.csr_matrix, 
-            y = None, 
-            multiplier: Union[np.ndarray, None] = None
-            ):
+    def fit(self, X: sp.csr_matrix, y=None, multiplier: np.ndarray | None = None):
         """Learn the idf vector (global term weights).
 
         Arguments:
@@ -71,7 +63,7 @@ class ClassTfidfTransformer(TfidfTransformer):
         dtype = np.float64
 
         if self.use_idf:
-            _, n_features = X.shape 
+            _, n_features = X.shape
 
             # Calculate the frequency of words across all classes
             df = np.squeeze(np.asarray(X.sum(axis=0)))
@@ -123,19 +115,17 @@ class ClassTfidfTransformer(TfidfTransformer):
 
 
 class GenerateTopics:
-
     SUPPORTED_METHODS = ("hdbscan", "kmeans", "gmm", "spectral")
 
     def __init__(
         self,
-        documents: List[str],
+        documents: list[str],
         min_topic_size: int = 10,
-        n_gram_range: Tuple[int, int] = (1, 1),
-        language: Union[str, None] = None,
+        n_gram_range: tuple[int, int] = (1, 1),
+        language: str | None = None,
         clustering_method: str = "hdbscan",
-        n_clusters: Union[int, None] = None,
-
-        ):
+        n_clusters: int | None = None,
+    ):
         self.documents = documents
         self.min_topic_size = min_topic_size
         self.clustering_method = clustering_method
@@ -147,17 +137,15 @@ class GenerateTopics:
                 f"Supported: {self.SUPPORTED_METHODS}"
             )
         if clustering_method != "hdbscan" and n_clusters is None:
-            raise ValueError(
-                f"n_clusters is required when clustering_method='{clustering_method}'"
-            )
+            raise ValueError(f"n_clusters is required when clustering_method='{clustering_method}'")
 
         if clustering_method == "hdbscan":
             self.hdbscan_model = HDBSCAN(
-                    min_cluster_size=self.min_topic_size,
-                    metric="euclidean",
-                    cluster_selection_method="eom",
-                    prediction_data=True,
-                )
+                min_cluster_size=self.min_topic_size,
+                metric="euclidean",
+                cluster_selection_method="eom",
+                prediction_data=True,
+            )
         else:
             self.hdbscan_model = None
         self.docs_id = range(len(self.documents))
@@ -165,10 +153,9 @@ class GenerateTopics:
         self.language = language
 
         # Store c-TF-IDF matrix and words for topic reduction
-        self.ctfidf_matrix: Union[sp.csr_matrix, None] = None
-        self.ctfidf_words: Union[np.ndarray, None] = None
-        
-        
+        self.ctfidf_matrix: sp.csr_matrix | None = None
+        self.ctfidf_words: np.ndarray | None = None
+
     def generate_clusters(self, reduced_embeddings: np.ndarray) -> pd.DataFrame:
         """Cluster reduced embeddings using the configured clustering method.
 
@@ -190,45 +177,47 @@ class GenerateTopics:
             labels = self.hdbscan_model.labels_
         elif self.clustering_method == "kmeans":
             from sklearn.cluster import KMeans
-            labels = KMeans(
-                n_clusters=self.n_clusters, random_state=42, n_init=10
-            ).fit_predict(reduced_embeddings)
+
+            labels = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10).fit_predict(
+                reduced_embeddings
+            )
         elif self.clustering_method == "gmm":
             from sklearn.mixture import GaussianMixture
-            labels = GaussianMixture(
-                n_components=self.n_clusters, random_state=42
-            ).fit_predict(reduced_embeddings)
+
+            labels = GaussianMixture(n_components=self.n_clusters, random_state=42).fit_predict(
+                reduced_embeddings
+            )
         elif self.clustering_method == "spectral":
             from sklearn.cluster import SpectralClustering
+
             labels = SpectralClustering(
-                n_clusters=self.n_clusters, random_state=42,
-                affinity="nearest_neighbors"
+                n_clusters=self.n_clusters, random_state=42, affinity="nearest_neighbors"
             ).fit_predict(reduced_embeddings)
         else:
             raise ValueError(f"Unknown clustering method: {self.clustering_method}")
 
-        documents_df = pd.DataFrame({
-            "Document_ID": self.docs_id,
-            "Document": self.documents,
-            "Topic": labels
-        })
+        documents_df = pd.DataFrame(
+            {"Document_ID": self.docs_id, "Document": self.documents, "Topic": labels}
+        )
         n_clusters = len(set(labels) - {-1})
         n_noise = int((np.array(labels) == -1).sum())
         logger.info(f"Cluster - Completed ✓ ({n_clusters} clusters, {n_noise} noise points)")
 
         return documents_df
 
-    def extract_topics(self, documents_df: pd.DataFrame, n_words: int = 10) -> Dict[int, List[Tuple[str, float]]]:
+    def extract_topics(
+        self, documents_df: pd.DataFrame, n_words: int = 10
+    ) -> dict[int, list[tuple[str, float]]]:
         """Step 2: Extract keywords using c-TF-IDF.
-        
+
         Returns:
             topics: Dict where key is Topic ID and value is list of (word, score) tuples.
         """
         logger.info("Topics - Start extracting topic keywords")
 
         # A. Group documents by Topic (The "Mega-Document" step)
-        docs_per_topic = documents_df.groupby(['Topic'], as_index=False).agg({'Document': ' '.join})
-        
+        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
+
         # B. Count Vectorizer (Bag of Words)
         # We process the grouped text, not the individual documents!
         count_vectorizer = CountVectorizer(stop_words=self.language, ngram_range=self.n_gram_range)
@@ -251,14 +240,13 @@ class GenerateTopics:
             row = ctfidf_matrix.getrow(i).toarray()[0]
             # Sort indices by score (descending) and take top N
             top_indices = row.argsort()[-n_words:][::-1]
-            
+
             # Map indices to words and scores
             topic_keywords = [(words[idx], float(row[idx])) for idx in top_indices]
             topics_data[topic_id] = topic_keywords
 
         logger.info("Topics - Completed \u2713")
         return topics_data
-    
 
     @property
     def c_tf_idf_matrix(self) -> sp.csr_matrix:

@@ -8,14 +8,15 @@ After the DuckDB migration, ChromaDB is used exclusively for:
 All document storage, metadata, projections, and topic data are in DuckDB.
 """
 
+import logging
+from pathlib import Path
+from typing import Any
+
 import chromadb
 from chromadb.config import Settings
-from typing import Optional, Dict, Any, List
-from pathlib import Path
-import logging
 
-from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
 from ..embedding_functions.config import EmbeddingModelConfig, EmbeddingProvider
+from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
 
 logger = logging.getLogger("star_map")
 
@@ -25,7 +26,7 @@ GEMINI_QUERY_TASK_MAP = {
 }
 
 
-def _map_gemini_task_type_for_query(task_type: Optional[str]) -> Optional[str]:
+def _map_gemini_task_type_for_query(task_type: str | None) -> str | None:
     if task_type is None:
         return None
     return GEMINI_QUERY_TASK_MAP.get(task_type, task_type)
@@ -43,8 +44,7 @@ class ChromaDBClient:
 
         self.db_path = db_path.resolve()
         self.client = chromadb.PersistentClient(
-            path=str(self.db_path),
-            settings=Settings(anonymized_telemetry=False)
+            path=str(self.db_path), settings=Settings(anonymized_telemetry=False)
         )
 
     def get_collection(
@@ -52,7 +52,7 @@ class ChromaDBClient:
         name: str,
         load_embedding_function: bool = False,
         for_query: bool = False,
-        query_prompt: Optional[str] = None
+        query_prompt: str | None = None,
     ):
         """Get a collection by name.
 
@@ -91,15 +91,13 @@ class ChromaDBClient:
                         model_name=model_name,
                         task=task,
                         task_type=task_type,
-                        prompt=prompt
+                        prompt=prompt,
                     )
 
                     embedding_dim = metadata.get("embedding_dim")
                     device = get_device()
                     ef, _ = create_embedding_function(
-                        config, device,
-                        known_dimension=embedding_dim,
-                        is_query=for_query
+                        config, device, known_dimension=embedding_dim, is_query=for_query
                     )
 
                     return self.client.get_collection(name=name, embedding_function=ef)
@@ -115,13 +113,13 @@ class ChromaDBClient:
     def semantic_search(
         self,
         collection_name: str,
-        query_texts: Optional[List[str]] = None,
-        query_embeddings: Optional[List[List[float]]] = None,
+        query_texts: list[str] | None = None,
+        query_embeddings: list[list[float]] | None = None,
         n_results: int = 10,
-        where: Optional[Dict[str, Any]] = None,
+        where: dict[str, Any] | None = None,
         distance_metric: str = "cosine",
-        query_prompt: Optional[str] = None
-    ) -> Dict[str, Any]:
+        query_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Perform semantic similarity search.
 
         Returns IDs, distances, and similarities. Documents and metadata
@@ -132,7 +130,7 @@ class ChromaDBClient:
             collection_name,
             load_embedding_function=needs_ef,
             for_query=needs_ef,
-            query_prompt=query_prompt
+            query_prompt=query_prompt,
         )
 
         if query_texts is None and query_embeddings is None:
@@ -145,7 +143,7 @@ class ChromaDBClient:
             query_embeddings=query_embeddings,
             n_results=n_results,
             where=where,
-            include=["distances", "embeddings"]
+            include=["distances", "embeddings"],
         )
 
         # Convert distances to similarities

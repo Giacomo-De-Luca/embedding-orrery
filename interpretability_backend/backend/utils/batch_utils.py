@@ -1,12 +1,13 @@
 """Batch processing utilities for embedding."""
 
-from typing import List, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def sort_items_by_length(
-    items: List[Dict[str, Any]],
-    text_key_fn: Callable[[Dict[str, Any]], str],
-) -> List[Dict[str, Any]]:
+    items: list[dict[str, Any]],
+    text_key_fn: Callable[[dict[str, Any]], str],
+) -> list[dict[str, Any]]:
     """
     Sort items by text length (descending) for efficient batching.
 

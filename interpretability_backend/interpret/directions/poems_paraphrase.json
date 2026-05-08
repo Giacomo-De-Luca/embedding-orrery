@@ -1,0 +1,11 @@
+{
+  "name": "poems_paraphrase",
+  "intermediate": "post_attn",
+  "position": -5,
+  "layer": 11,
+  "coefficient": 1.0,
+  "refusal_score": 4.000402449361439,
+  "kl_score": 0.23558968543571765,
+  "baseline_harmful_refusal_score": 7.475366300480627,
+  "baseline_harmless_refusal_score": -17.991878264735387
+}

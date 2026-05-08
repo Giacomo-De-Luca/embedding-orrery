@@ -9,7 +9,7 @@ can be used with Plotly's native colorscale path for GPU-accelerated rendering.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -19,7 +19,13 @@ logger = logging.getLogger("star_map")
 COLOR_COLUMN_NAMES = {"colour_code", "color_code", "hex_color", "hex_colour", "color_hex"}
 
 # Frontend colormaps directory
-_COLORMAPS_DIR = Path(__file__).resolve().parents[3] / "embedding_visualization" / "lib" / "colorMaps" / "colormaps"
+_COLORMAPS_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "embedding_visualization"
+    / "lib"
+    / "colorMaps"
+    / "colormaps"
+)
 
 # Cache for loaded strips: name -> Nx3 numpy array
 _strip_cache: dict[str, np.ndarray] = {}
@@ -79,6 +85,7 @@ def map_color_to_rainbow(hex_color: str) -> float:
     Lossy: ignores lightness and saturation — white, black, and red all map to 0.
     """
     import colorsys
+
     r, g, b = hex_to_rgb(hex_color)
     h, _, _ = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
     return h
@@ -104,7 +111,7 @@ def preprocess_color_metadata(
         if a color column was found. Unchanged otherwise.
     """
     # Find color column in the row
-    color_value: Optional[str] = None
+    color_value: str | None = None
     for col_name in COLOR_COLUMN_NAMES:
         val = row.get(col_name)
         if val and isinstance(val, str) and val.startswith("#"):

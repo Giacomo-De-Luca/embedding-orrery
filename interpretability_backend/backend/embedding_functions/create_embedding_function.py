@@ -1,23 +1,26 @@
 """
 Factory for creating embedding functions.
 """
-import os
-from typing import Optional, Any
-from chromadb.utils import embedding_functions
 
-from .config import EmbeddingModelConfig, EmbeddingProvider
 import json
+import os
 from pathlib import Path
+from typing import Any
+
+from chromadb.utils import embedding_functions
 from chromadb.utils.embedding_functions import EmbeddingFunction
+from dotenv import load_dotenv
 from huggingface_hub import login
 from huggingface_hub.errors import GatedRepoError
-from dotenv import load_dotenv
+
+from .config import EmbeddingModelConfig, EmbeddingProvider
 
 load_dotenv()
 
 DIMENSIONS_FILE = Path(__file__).parent.parent / "utils" / "known_dimensions.json"
 
 _hf_logged_in = False
+
 
 def _ensure_hf_login():
     """Login to HuggingFace Hub once per process, only if API key is available."""
@@ -35,10 +38,11 @@ def _load_known_dimensions() -> dict[str, int]:
     if not DIMENSIONS_FILE.exists():
         return {}
     try:
-        with open(DIMENSIONS_FILE, "r", encoding="utf-8") as f:
+        with open(DIMENSIONS_FILE, encoding="utf-8") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
+
 
 def _save_known_dimension(model_name: str, dimension: int, current_dims: dict[str, int]) -> None:
     """Update the JSON file with a new model dimension."""
@@ -47,15 +51,15 @@ def _save_known_dimension(model_name: str, dimension: int, current_dims: dict[st
         with open(DIMENSIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(current_dims, f, indent=1, sort_keys=True)
             print(f"Updated known dimensions file with {model_name}: {dimension}")
-    except IOError as e:
+    except OSError as e:
         print(f"Warning: Could not save dimension to file: {e}")
 
 
 def create_embedding_function(
-    config: Optional[EmbeddingModelConfig],
+    config: EmbeddingModelConfig | None,
     device: str,
-    known_dimension: Optional[int] = None,
-    is_query: bool = False
+    known_dimension: int | None = None,
+    is_query: bool = False,
 ) -> tuple[EmbeddingFunction, int]:
     """
     Create an embedding function based on the configuration.
@@ -84,7 +88,7 @@ def create_embedding_function(
         # 1. Use provided dimension (from ChromaDB metadata)
         if known_dimension is not None:
             return known_dimension
-        
+
         known_dimensions = _load_known_dimensions()
 
         # 2. Check local cache
@@ -98,7 +102,10 @@ def create_embedding_function(
         return len(test_embedding[0])
 
     if provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
-        from .specific_functions.embed_sentence_transformer import SentenceTransformerEmbeddingFunction
+        from .specific_functions.embed_sentence_transformer import (
+            SentenceTransformerEmbeddingFunction,
+        )
+
         try:
             ef = SentenceTransformerEmbeddingFunction(
                 model_name=model_name,
@@ -138,49 +145,44 @@ def create_embedding_function(
     elif provider == EmbeddingProvider.OLLAMA:
         # Local Ollama server
         url = config.ollama_url or "http://localhost:11434"
-        ef = embedding_functions.OllamaEmbeddingFunction(
-            url=url,
-            model_name=model_name
-        )
-        dim = get_dimension(ef)  
+        ef = embedding_functions.OllamaEmbeddingFunction(url=url, model_name=model_name)
+        dim = get_dimension(ef)
         return ef, dim
 
     elif provider == EmbeddingProvider.HUGGINGFACE_API:
-
         try:
             ef = embedding_functions.HuggingFaceEmbeddingFunction(
-            model_name=model_name
-            # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
+                model_name=model_name
+                # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
             )
             dim = get_dimension(ef)  # Use helper instead of test embedding
         except GatedRepoError:
             _ensure_hf_login()
             ef = embedding_functions.HuggingFaceEmbeddingFunction(
-            model_name=model_name
-            # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
+                model_name=model_name
+                # api_key read from CHROMA_HUGGINGFACE_API_KEY by default
             )
             dim = get_dimension(ef)  # Use helper instead of test embedding
 
         return ef, dim
-    
+
     elif provider == EmbeddingProvider.GEMINI:
         from .specific_functions.embed_gemini import EmbedTextGemini
 
-        ef = EmbedTextGemini(
-            model=model_name,
-            task_type=config.task_type or "SEMANTIC_SIMILARITY"
-        )
+        ef = EmbedTextGemini(model=model_name, task_type=config.task_type or "SEMANTIC_SIMILARITY")
         dim = get_dimension(ef)
         return ef, dim
 
     elif provider == EmbeddingProvider.BGE:
         from .specific_functions.embed_bge import EmbedTextBGE
+
         ef = EmbedTextBGE(model=model_name)
-        dim = get_dimension(ef) 
+        dim = get_dimension(ef)
         return ef, dim
-    
+
     elif provider == EmbeddingProvider.QWEN:
         from .specific_functions.embed_qwen import EmbedTextQWEN
+
         # Build kwargs - only include task if explicitly set (to preserve default)
         qwen_kwargs = {
             "model": model_name,
@@ -200,6 +202,7 @@ def create_embedding_function(
 def get_device() -> str:
     """Detect and return the best available device for computation."""
     import torch
+
     if torch.backends.mps.is_available():
         return "mps"
     elif torch.cuda.is_available():

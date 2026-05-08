@@ -3,7 +3,8 @@
 import json as json_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -12,22 +13,24 @@ import pyarrow.parquet as pq
 @dataclass
 class LocalFileInfo:
     """Information about a local data file."""
+
     file_path: str
     file_type: str  # parquet, json, jsonl, csv, tsv
-    columns: List[str]
+    columns: list[str]
     num_rows: int
     file_size_bytes: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
 class LocalFilePreview:
     """Preview rows from a local file."""
+
     file_path: str
-    columns: List[str]
-    rows: List[Dict[str, Any]]
+    columns: list[str]
+    rows: list[dict[str, Any]]
     total_rows: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def _detect_file_type(file_path: str) -> str:
@@ -49,14 +52,14 @@ def _detect_file_type(file_path: str) -> str:
 
 def _count_lines(file_path: str) -> int:
     """Count lines in a file efficiently."""
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         return sum(1 for _ in f) - 1  # Subtract header
 
 
-def load_local_dataframe(file_path: str, nrows: Optional[int] = None) -> pd.DataFrame:
+def load_local_dataframe(file_path: str, nrows: int | None = None) -> pd.DataFrame:
     """
     Load data from a local file into a pandas DataFrame.
-    
+
     Supports parquet, JSON, JSONL/NDJSON, CSV and TSV formats.
     Optimized to read only required rows where possible.
     """
@@ -65,18 +68,18 @@ def load_local_dataframe(file_path: str, nrows: Optional[int] = None) -> pd.Data
     if suffix == ".parquet":
         # OPTIMIZATION: Use pyarrow to read only specific rows for preview
         if nrows is not None:
-             # Limit reading to nrows
-             table = pq.read_table(file_path)
-             if len(table) > nrows:
-                 table = table.slice(0, nrows)
-             df = table.to_pandas()
+            # Limit reading to nrows
+            table = pq.read_table(file_path)
+            if len(table) > nrows:
+                table = table.slice(0, nrows)
+            df = table.to_pandas()
         else:
-             df = pd.read_parquet(file_path)
-             
+            df = pd.read_parquet(file_path)
+
     elif suffix == ".json":
         if nrows is not None and nrows <= 100:
             # Optimization: for small previews, avoid full pandas parse of large JSON
-            with open(file_path, 'r') as f:
+            with open(file_path) as f:
                 data = json_module.load(f)
             if isinstance(data, list):
                 data = data[:nrows]
@@ -85,16 +88,16 @@ def load_local_dataframe(file_path: str, nrows: Optional[int] = None) -> pd.Data
             df = pd.read_json(file_path)
             if nrows:
                 df = df.head(nrows)
-            
+
     elif suffix in (".jsonl", ".ndjson"):
         df = pd.read_json(file_path, lines=True, nrows=nrows)
-        
+
     elif suffix == ".csv":
         df = pd.read_csv(file_path, nrows=nrows)
-        
+
     elif suffix == ".tsv":
-        df = pd.read_csv(file_path, sep='\t', nrows=nrows)
-        
+        df = pd.read_csv(file_path, sep="\t", nrows=nrows)
+
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -114,7 +117,7 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             columns=[],
             num_rows=0,
             file_size_bytes=0,
-            error=f"File not found: {file_path}"
+            error=f"File not found: {file_path}",
         )
 
     file_type = _detect_file_type(file_path)
@@ -143,7 +146,7 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
 
         elif file_type == "tsv":
             # OPTIMIZATION: Read only header
-            df_iter = pd.read_csv(file_path, sep='\t', nrows=0)
+            df_iter = pd.read_csv(file_path, sep="\t", nrows=0)
             columns = list(df_iter.columns)
             num_rows = _count_lines(file_path)
 
@@ -151,11 +154,11 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             # OPTIMIZATION: Read first line for columns
             df_head = pd.read_json(file_path, lines=True, nrows=1)
             columns = list(df_head.columns)
-            num_rows = _count_lines(file_path) + 1 # No header in JSONL usually
+            num_rows = _count_lines(file_path) + 1  # No header in JSONL usually
 
         elif file_type == "json":
             # Use stdlib json to avoid heavy pandas DataFrame construction
-            with open(file_path, 'r') as f:
+            with open(file_path) as f:
                 data = json_module.load(f)
             if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
                 columns = list(data[0].keys())
@@ -168,13 +171,13 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
                 num_rows = 0
 
         else:
-             return LocalFileInfo(
+            return LocalFileInfo(
                 file_path=file_path,
                 file_type=file_type,
                 columns=[],
                 num_rows=0,
                 file_size_bytes=file_size,
-                error=f"Unsupported file type: {path.suffix}"
+                error=f"Unsupported file type: {path.suffix}",
             )
 
         return LocalFileInfo(
@@ -182,7 +185,7 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             file_type=file_type,
             columns=columns,
             num_rows=num_rows,
-            file_size_bytes=file_size
+            file_size_bytes=file_size,
         )
 
     except Exception as e:
@@ -192,14 +195,11 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
             columns=[],
             num_rows=0,
             file_size_bytes=file_size,
-            error=str(e)
+            error=str(e),
         )
 
 
-def get_local_file_preview(
-    file_path: str,
-    n_rows: int = 5
-) -> LocalFilePreview:
+def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
     """Get preview rows from a local data file."""
     try:
         # Optimization: Only load necessary rows for preview
@@ -233,41 +233,38 @@ def get_local_file_preview(
             file_path=file_path,
             columns=list(df.columns),
             rows=rows,
-            total_rows=len(df) # Logic might be weird if we only loaded partial. 
+            total_rows=len(df),  # Logic might be weird if we only loaded partial.
             # But Preview doesn't strictly need total_rows if Info provides it.
             # We can leave it as len(df) which is partial.
         )
     except Exception as e:
         return LocalFilePreview(
-            file_path=file_path,
-            columns=[],
-            rows=[],
-            total_rows=0,
-            error=str(e)
+            file_path=file_path, columns=[], rows=[], total_rows=0, error=str(e)
         )
 
 
 def load_local_file_portion(
     file_path: str,
-    n_rows: Optional[int] = None,
-    start_row: Optional[int] = None,
-    end_row: Optional[int] = None,
-    sample_n: Optional[int] = None,
-    sample_seed: int = 42
-) -> tuple[List[Dict[str, Any]], int]:
+    n_rows: int | None = None,
+    start_row: int | None = None,
+    end_row: int | None = None,
+    sample_n: int | None = None,
+    sample_seed: int = 42,
+) -> tuple[list[dict[str, Any]], int]:
     """
     Load a portion of a local data file.
     """
     # For embedding, we likely need to read more.
     # If standard load, it reads all then samples.
     # Future optimization: push down limit to read_parquet/csv
-    
+
     df = load_local_dataframe(file_path)
     total = len(df)
 
     if sample_n is not None:
         # Random sample
         import random
+
         random.seed(sample_seed)
         n = min(sample_n, total)
         df = df.sample(n=n, random_state=sample_seed)
@@ -298,10 +295,9 @@ def load_local_file_portion(
                 row_dict[col] = value
             else:
                 try:
-                    row_dict[col] = value.tolist() if hasattr(value, 'tolist') else str(value)
+                    row_dict[col] = value.tolist() if hasattr(value, "tolist") else str(value)
                 except Exception:
                     row_dict[col] = str(value)
         rows.append(row_dict)
 
     return rows, total
-

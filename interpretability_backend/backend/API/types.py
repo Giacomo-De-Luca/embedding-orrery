@@ -1,12 +1,14 @@
 """GraphQL type definitions for embedding visualization backend."""
 
-import strawberry
-from typing import List, Optional, Dict, Any
 from enum import Enum
+from typing import Any
+
+import strawberry
+
 from ..utils.provider_list import EmbeddingProviderEnum
 
-
 # ========== JSON Scalar ==========
+
 
 @strawberry.scalar(
     serialize=lambda v: v,
@@ -14,61 +16,69 @@ from ..utils.provider_list import EmbeddingProviderEnum
 )
 class JSON:
     """JSON scalar type for flexible metadata."""
+
     __slots__ = ()
 
 
 # ========== HuggingFace Dataset Types ==========
 
+
 @strawberry.type
 class HFSplitInfo:
     """Information about a dataset split."""
+
     name: str
-    num_rows: Optional[int] = None
-    num_bytes: Optional[int] = None
+    num_rows: int | None = None
+    num_bytes: int | None = None
 
 
 @strawberry.type
 class HFFeatureInfo:
     """Information about a dataset feature/column."""
+
     name: str
     dtype: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @strawberry.type
 class HFConfigInfo:
     """Information about a dataset configuration."""
+
     name: str
-    splits: List[HFSplitInfo]
-    features: List[HFFeatureInfo]
+    splits: list[HFSplitInfo]
+    features: list[HFFeatureInfo]
 
 
 @strawberry.type
 class HFDatasetInfo:
     """Complete information about a HuggingFace dataset."""
+
     dataset_id: str
-    description: Optional[str] = None
-    license: Optional[str] = None
-    configs: List[HFConfigInfo]
-    default_config: Optional[str] = None
-    error: Optional[str] = None
+    description: str | None = None
+    license: str | None = None
+    configs: list[HFConfigInfo]
+    default_config: str | None = None
+    error: str | None = None
 
 
 @strawberry.type
 class HFDatasetPreview:
     """Preview rows from a dataset."""
+
     dataset_id: str
-    config: Optional[str] = None
+    config: str | None = None
     split: str
-    columns: List[str]
-    rows: List[JSON]
-    total_rows: Optional[int] = None
-    error: Optional[str] = None
+    columns: list[str]
+    rows: list[JSON]
+    total_rows: int | None = None
+    error: str | None = None
 
 
 @strawberry.enum
 class PortionStrategyEnum(Enum):
     """Strategy for selecting which rows to embed."""
+
     FIRST_N = "first_n"
     RANDOM_SAMPLE = "random_sample"
     ROW_RANGE = "row_range"
@@ -78,13 +88,12 @@ class PortionStrategyEnum(Enum):
 @strawberry.input
 class PortionInput:
     """Input for selecting dataset portion."""
+
     strategy: PortionStrategyEnum
-    n: Optional[int] = None  # For FIRST_N and RANDOM_SAMPLE
-    start: Optional[int] = None  # For ROW_RANGE
-    end: Optional[int] = None  # For ROW_RANGE
+    n: int | None = None  # For FIRST_N and RANDOM_SAMPLE
+    start: int | None = None  # For ROW_RANGE
+    end: int | None = None  # For ROW_RANGE
     seed: int = 42  # For RANDOM_SAMPLE
-
-
 
 
 @strawberry.input
@@ -102,21 +111,28 @@ class EmbeddingModelInput:
     - QWEN: "Qwen/Qwen3-Embedding-0.6B" (supports task instruction for queries)
     - Gemini: "gemini-embedding-001" (supports task_type for embedding optimization)
     """
+
     provider: EmbeddingProviderEnum
     model_name: str
     # Provider-specific options
-    ollama_url: Optional[str] = None  # Ollama: server URL (default: http://localhost:11434)
-    task: Optional[str] = None  # QWEN: Query instruction prefix (used at query time only)
-    task_type: Optional[str] = None  # Gemini: Embedding optimization (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
+    ollama_url: str | None = None  # Ollama: server URL (default: http://localhost:11434)
+    task: str | None = None  # QWEN: Query instruction prefix (used at query time only)
+    task_type: str | None = (
+        None  # Gemini: Embedding optimization (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
+    )
     # SentenceTransformers: Prompt support for models like EmbeddingGemma
-    prompt: Optional[str] = None  # Single field - can be predefined name (e.g., "Retrieval-query") or custom string
+    prompt: str | None = (
+        None  # Single field - can be predefined name (e.g., "Retrieval-query") or custom string
+    )
 
 
 # ========== Topic Extraction Types ==========
 
+
 @strawberry.type
 class TopicKeyword:
     """Keyword extracted for a topic with its c-TF-IDF score."""
+
     word: str
     score: float
 
@@ -124,25 +140,28 @@ class TopicKeyword:
 @strawberry.type
 class TopicInfo:
     """Information about an extracted topic."""
+
     topic_id: int
-    keywords: List[TopicKeyword]
-    label: Optional[str]
+    keywords: list[TopicKeyword]
+    label: str | None
     count: int
-    subtopics: Optional[List[str]] = None
+    subtopics: list[str] | None = None
 
 
 @strawberry.input
 class TopicReductionInput:
     """Configuration for topic reduction."""
+
     enabled: bool = False
     method: str = "auto"  # "auto" or "fixed_n"
-    n_topics: Optional[int] = None  # Required when method="fixed_n"
+    n_topics: int | None = None  # Required when method="fixed_n"
     use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
 
 
 @strawberry.input
 class TopicConfigInput:
     """Topic extraction configuration (shared by standalone and embedded mutations)."""
+
     min_topic_size: int = 10
     n_keywords: int = 10
     use_llm_labels: bool = False
@@ -153,40 +172,43 @@ class TopicConfigInput:
     # Clustering method: "hdbscan" (default), "kmeans", "gmm", "spectral"
     clustering_method: str = "hdbscan"
     # Number of clusters (required for kmeans, gmm, spectral; ignored for hdbscan)
-    n_clusters: Optional[int] = None
+    n_clusters: int | None = None
 
     # Topic reduction config
-    reduction: Optional[TopicReductionInput] = None
+    reduction: TopicReductionInput | None = None
 
 
 @strawberry.input
 class ExtractTopicsInput:
     """Input for standalone topic extraction from an existing collection."""
+
     collection_name: str
-    config: Optional[TopicConfigInput] = None
+    config: TopicConfigInput | None = None
 
 
 @strawberry.type
 class ExtractTopicsResult:
     """Result of topic extraction."""
+
     collection_name: str
     num_topics: int
     num_noise_points: int
-    topics: List[TopicInfo]
+    topics: list[TopicInfo]
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
     # Reduction tracking
-    num_topics_before_reduction: Optional[int] = None
+    num_topics_before_reduction: int | None = None
     reduction_applied: bool = False
 
 
 @strawberry.input
 class ReduceTopicsInput:
     """Input for standalone topic reduction mutation."""
+
     collection_name: str
     method: str = "auto"  # "auto" or "fixed_n"
-    n_topics: Optional[int] = None  # Required when method="fixed_n"
+    n_topics: int | None = None  # Required when method="fixed_n"
     use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
 
     # Re-labeling after reduction
@@ -198,18 +220,20 @@ class ReduceTopicsInput:
 @strawberry.type
 class ReduceTopicsResult:
     """Result of standalone topic reduction."""
+
     collection_name: str
     num_topics_before: int
     num_topics_after: int
-    topics: List[TopicInfo]
+    topics: list[TopicInfo]
     topic_mappings: JSON  # {old_id: new_id}
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.input
 class GenerateLlmLabelsInput:
     """Input for standalone LLM label generation on existing topics."""
+
     collection_name: str
     llm_provider: str = "gemini"
     llm_model: str = "gemini-3-flash-preview"
@@ -220,18 +244,20 @@ class GenerateLlmLabelsInput:
 @strawberry.type
 class GenerateLlmLabelsResult:
     """Result of standalone LLM label generation."""
+
     collection_name: str
     topics_labeled: int
     subtopics_labeled: int
     total_topics: int
     total_subtopics: int
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.input
 class RenameTopicLabelInput:
     """Input for renaming a topic or subtopic label."""
+
     collection_name: str
     topic_id: int
     new_label: str
@@ -241,76 +267,83 @@ class RenameTopicLabelInput:
 @strawberry.type
 class RenameTopicLabelResult:
     """Result of renaming a topic label."""
+
     collection_name: str
     topic_id: int
     new_label: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.input
 class EmbedDatasetInput:
     """Input for embedding a HuggingFace dataset."""
+
     dataset_id: str
     collection_name: str
-    config: Optional[str] = None
+    config: str | None = None
     split: str = "train"
-    columns: Optional[List[str]] = None  # Columns to embed
-    text_template: Optional[str] = None  # Template for combining columns
-    id_column: Optional[str] = None  # Column to use as document ID
-    portion: Optional[PortionInput] = None
-    metadata_columns: Optional[List[str]] = None
+    columns: list[str] | None = None  # Columns to embed
+    text_template: str | None = None  # Template for combining columns
+    id_column: str | None = None  # Column to use as document ID
+    portion: PortionInput | None = None
+    metadata_columns: list[str] | None = None
     compute_projections: bool = True  # Whether to compute PCA/UMAP after embedding
-    batch_size: Optional[int] = 100
+    batch_size: int | None = 100
     # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2)
-    embedding_model: Optional[EmbeddingModelInput] = None
+    embedding_model: EmbeddingModelInput | None = None
     # Resume an interrupted job instead of starting fresh
     resume: bool = False
     # Topic extraction after embedding
     extract_topics: bool = False
-    topic_config: Optional[TopicConfigInput] = None
+    topic_config: TopicConfigInput | None = None
 
 
 @strawberry.type
 class EmbedDatasetResult:
     """Result of embedding a dataset."""
+
     collection_name: str
     total_embedded: int
     embedding_dim: int
     device: str
     duration_seconds: float
     projections_computed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     # Model information
-    embedding_provider: Optional[str] = None
-    embedding_model: Optional[str] = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
 
 
 # ========== Local File Types ==========
 
+
 @strawberry.type
 class LocalFileInfo:
     """Information about a local data file."""
+
     file_path: str
     file_type: str
-    columns: List[str]
+    columns: list[str]
     num_rows: int
     file_size_bytes: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.type
 class LocalFilePreview:
     """Preview rows from a local file."""
+
     file_path: str
-    columns: List[str]
-    rows: List[JSON]
+    columns: list[str]
+    rows: list[JSON]
     total_rows: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.enum
 class DataTypeEnum(Enum):
     """Type of data to embed."""
+
     TEXT = "text"
     IMAGE = "image"
     VECTOR = "vector"
@@ -319,35 +352,38 @@ class DataTypeEnum(Enum):
 @strawberry.input
 class EmbedLocalFileInput:
     """Input for embedding a local file."""
+
     file_path: str
     collection_name: str
     data_type: DataTypeEnum = DataTypeEnum.TEXT
-    columns: Optional[List[str]] = None  # Columns to embed (for text)
-    text_template: Optional[str] = None
-    image_column: Optional[str] = None  # Column containing image data
-    vector_column: Optional[str] = None  # Column containing pre-computed vectors
-    id_column: Optional[str] = None
-    metadata_columns: Optional[List[str]] = None
-    n_rows: Optional[int] = None  # Limit rows
-    sample_n: Optional[int] = None  # Random sample
+    columns: list[str] | None = None  # Columns to embed (for text)
+    text_template: str | None = None
+    image_column: str | None = None  # Column containing image data
+    vector_column: str | None = None  # Column containing pre-computed vectors
+    id_column: str | None = None
+    metadata_columns: list[str] | None = None
+    n_rows: int | None = None  # Limit rows
+    sample_n: int | None = None  # Random sample
     sample_seed: int = 42
     compute_projections: bool = True
-    batch_size: Optional[int] = 100
+    batch_size: int | None = 100
     # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2)
     # Only used for TEXT data_type; IMAGE uses ViT, VECTOR uses pre-computed
-    embedding_model: Optional[EmbeddingModelInput] = None
+    embedding_model: EmbeddingModelInput | None = None
     # Resume an interrupted job instead of starting fresh
     resume: bool = False
     # Topic extraction after embedding
     extract_topics: bool = False
-    topic_config: Optional[TopicConfigInput] = None
+    topic_config: TopicConfigInput | None = None
 
 
 # ========== Text Search Types ==========
 
+
 @strawberry.enum
 class TextSearchMode(Enum):
     """Mode for text search matching."""
+
     CONTAINS = "contains"
     EXACT = "exact"
 
@@ -355,23 +391,27 @@ class TextSearchMode(Enum):
 @strawberry.type
 class TextSearchMatch:
     """A single text search match."""
+
     id: str
     matched_field: str
-    snippet: Optional[str] = None
+    snippet: str | None = None
 
 
 @strawberry.type
 class TextSearchResponse:
     """Result of a text search query."""
-    matches: List[TextSearchMatch]
+
+    matches: list[TextSearchMatch]
     total_matches: int
 
 
 # ========== Search & Filter Types ==========
 
+
 @strawberry.enum
 class SimilarityMeasure(Enum):
     """Similarity/distance metrics supported by ChromaDB."""
+
     COSINE = "cosine"
     L2 = "l2"
     IP = "ip"  # Inner product
@@ -380,6 +420,7 @@ class SimilarityMeasure(Enum):
 @strawberry.enum
 class FilterOperator(Enum):
     """Filter operators for ChromaDB where clauses."""
+
     EQ = "$eq"
     NE = "$ne"
     GT = "$gt"
@@ -393,6 +434,7 @@ class FilterOperator(Enum):
 @strawberry.input
 class FilterInput:
     """Input for filtering collections."""
+
     field: str
     operator: FilterOperator
     value: JSON
@@ -400,72 +442,78 @@ class FilterInput:
 
 # ========== Collection Types ==========
 
+
 @strawberry.type
 class CollectionMetadata:
     """Metadata about a collection."""
-    total_items: Optional[int] = None  # Generic item count
-    total_words: Optional[int] = None  # Legacy: same as total_items
-    embedding_dim: Optional[int] = None
-    embedding_provider: Optional[str] = None
-    embedding_model: Optional[str] = None
-    timestamp: Optional[str] = None
-    pca_2d_variance: Optional[List[float]] = None
-    pca_3d_variance: Optional[List[float]] = None
+
+    total_items: int | None = None  # Generic item count
+    total_words: int | None = None  # Legacy: same as total_items
+    embedding_dim: int | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    timestamp: str | None = None
+    pca_2d_variance: list[float] | None = None
+    pca_3d_variance: list[float] | None = None
     # Source metadata (varies by data source)
-    source_dataset: Optional[str] = None  # HuggingFace dataset ID
-    source_split: Optional[str] = None
-    source_file: Optional[str] = None  # Local file path
-    embedded_columns: Optional[str] = None
-    has_projections: Optional[bool] = None
+    source_dataset: str | None = None  # HuggingFace dataset ID
+    source_split: str | None = None
+    source_file: str | None = None  # Local file path
+    embedded_columns: str | None = None
+    has_projections: bool | None = None
     # Prompt info (for models like Gemma Embedding)
-    embedding_prompt: Optional[str] = None  # Single field - can be predefined name or custom string
+    embedding_prompt: str | None = None  # Single field - can be predefined name or custom string
     # Topic extraction metadata
-    has_topics: Optional[bool] = None
-    topic_count: Optional[int] = None
-    topics_extracted_at: Optional[str] = None
-    topics: Optional[List[TopicInfo]] = None  # Topic summary with keywords
-    topic_hierarchy: Optional[JSON] = None  # {reduced_label: [subtopic_labels]}
+    has_topics: bool | None = None
+    topic_count: int | None = None
+    topics_extracted_at: str | None = None
+    topics: list[TopicInfo] | None = None  # Topic summary with keywords
+    topic_hierarchy: JSON | None = None  # {reduced_label: [subtopic_labels]}
     # Pre-computed field analysis (cached for fast frontend loading)
-    field_analysis: Optional[JSON] = None
+    field_analysis: JSON | None = None
 
 
 @strawberry.type
 class Collection:
     """Information about a collection."""
+
     name: str
-    metadata: Optional[JSON] = None
+    metadata: JSON | None = None
     count: int
 
 
 @strawberry.type
 class UpdateCollectionMetadataResult:
     """Result of updating collection metadata."""
+
     name: str
     metadata: JSON
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.type
 class EmbeddingItem:
     """Single embedding item with all associated data."""
+
     id: str
-    word: Optional[str] = None
-    definition: Optional[str] = None
-    pos: Optional[str] = None
-    embedding: Optional[List[float]] = None
-    document: Optional[str] = None
-    metadata: Optional[JSON] = None
+    word: str | None = None
+    definition: str | None = None
+    pos: str | None = None
+    embedding: list[float] | None = None
+    document: str | None = None
+    metadata: JSON | None = None
 
 
 @strawberry.type
 class SemanticSearchResult:
     """Result from semantic search."""
+
     id: str
-    document: Optional[str] = None
-    metadata: Optional[JSON] = None  # All item metadata
+    document: str | None = None
+    metadata: JSON | None = None  # All item metadata
     distance: float
     similarity: float
-    embedding: Optional[List[float]] = None
+    embedding: list[float] | None = None
 
 
 @strawberry.type
@@ -479,22 +527,24 @@ class ProjectionData:
     - available_fields: list of available metadata field names
     - Projections: PCA and UMAP coordinates
     """
-    ids: List[str]
-    documents: List[str]
-    item_metadata: List[JSON]  # Raw metadata per item - flexible schema
-    available_fields: List[str]  # What metadata fields are available
+
+    ids: list[str]
+    documents: list[str]
+    item_metadata: list[JSON]  # Raw metadata per item - flexible schema
+    available_fields: list[str]  # What metadata fields are available
     # Projections (Optional — only requested types are returned, others are null)
-    pca_2d: Optional[List[List[float]]] = None
-    pca_3d: Optional[List[List[float]]] = None
-    umap_2d: Optional[List[List[float]]] = None
-    umap_3d: Optional[List[List[float]]] = None
+    pca_2d: list[list[float]] | None = None
+    pca_3d: list[list[float]] | None = None
+    umap_2d: list[list[float]] | None = None
+    umap_3d: list[list[float]] | None = None
     # Collection-level metadata
     metadata: CollectionMetadata
 
 
 # ========== Helper Functions ==========
 
-def build_where_clause(filters: Optional[List[FilterInput]]) -> Optional[Dict[str, Any]]:
+
+def build_where_clause(filters: list[FilterInput] | None) -> dict[str, Any] | None:
     """Build ChromaDB where clause from filter inputs.
 
     Uses $and wrapping when there are multiple filters, which is required
@@ -522,9 +572,11 @@ def build_where_clause(filters: Optional[List[FilterInput]]) -> Optional[Dict[st
 
 # ========== Embedding Job Types ==========
 
+
 @strawberry.enum
 class JobStatusEnum(Enum):
     """Status of an embedding job."""
+
     RUNNING = "running"
     INTERRUPTED = "interrupted"
     COMPLETED = "completed"
@@ -533,6 +585,7 @@ class JobStatusEnum(Enum):
 @strawberry.type
 class EmbeddingJob:
     """Information about an embedding job."""
+
     collection_name: str
     status: str  # running, interrupted, completed
     job_type: str  # huggingface, local_file
@@ -546,13 +599,13 @@ class EmbeddingJob:
 
     # Config summary
     source: str  # dataset_id or file_path
-    columns: Optional[List[str]] = None
-    embedding_model: Optional[str] = None
+    columns: list[str] | None = None
+    embedding_model: str | None = None
     batch_size: int = 100
     started_at: str = ""
 
     # Full config for resume verification
-    config: Optional[JSON] = None
+    config: JSON | None = None
 
 
 # JobProgress is defined in subscriptions.py to avoid circular imports
@@ -561,9 +614,11 @@ class EmbeddingJob:
 
 # ========== SAE (Sparse Autoencoder) Types ==========
 
+
 @strawberry.type
 class SaeLogitEntry:
     """A single token/score pair from top or bottom logits."""
+
     token: str
     score: float
 
@@ -571,21 +626,23 @@ class SaeLogitEntry:
 @strawberry.type
 class SaeFeature:
     """SAE feature with metadata, label, and logits."""
+
     model_id: str
     sae_id: str
     feature_index: int
-    density: Optional[float] = None
-    label: Optional[str] = None
-    top_logits: Optional[List[SaeLogitEntry]] = None
-    bottom_logits: Optional[List[SaeLogitEntry]] = None
+    density: float | None = None
+    label: str | None = None
+    top_logits: list[SaeLogitEntry] | None = None
+    bottom_logits: list[SaeLogitEntry] | None = None
 
 
 @strawberry.type
 class SaeActivation:
     """A single top-activating example for a feature."""
+
     id: str
-    tokens: List[str]
-    values: List[float]
+    tokens: list[str]
+    values: list[float]
     max_value: float
     max_value_token_index: int
 
@@ -593,6 +650,7 @@ class SaeActivation:
 @strawberry.type
 class SaeModelInfo:
     """Available SAE model/layer combination with counts."""
+
     model_id: str
     sae_id: str
     feature_count: int
@@ -602,13 +660,15 @@ class SaeModelInfo:
 @strawberry.type
 class SaeFeatureSearchResult:
     """Feature search result with optional activation count."""
+
     feature: SaeFeature
-    activation_count: Optional[int] = None
+    activation_count: int | None = None
 
 
 @strawberry.input
 class IngestSaeFeaturesInput:
     """Input for ingesting SAE feature parquet."""
+
     parquet_path: str
     model_id: str
     sae_id: str
@@ -618,25 +678,28 @@ class IngestSaeFeaturesInput:
 @strawberry.input
 class IngestSaeActivationsInput:
     """Input for ingesting SAE activation JSONL."""
+
     jsonl_path: str
-    model_id: Optional[str] = None
-    sae_id: Optional[str] = None
+    model_id: str | None = None
+    sae_id: str | None = None
 
 
 @strawberry.type
 class IngestSaeResult:
     """Result of SAE data ingestion."""
+
     model_id: str
     sae_id: str
     records_inserted: int
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @strawberry.type
 class SaeActivationQuantileGroup:
     """A quantile bin of activations for a feature."""
+
     quantile: int
     bin_min: float
     bin_max: float
-    activations: List[SaeActivation]
+    activations: list[SaeActivation]

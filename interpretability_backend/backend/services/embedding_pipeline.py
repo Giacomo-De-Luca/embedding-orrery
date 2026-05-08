@@ -8,21 +8,20 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 
 from ..embed_dataset import (
-    EmbeddingResult,
     EmbeddingConfig,
+    EmbeddingResult,
     LocalFileEmbeddingConfig,
+    compute_projections_for_collection,
     embed_huggingface_dataset as do_hf_embed,
     embed_local_file as do_local_embed,
-    compute_projections_for_collection,
 )
-from .progress_emitter import emit_progress_sync
 from .job_state import get_job_state_service
+from .progress_emitter import emit_progress_sync
 from .topic_extraction_service import (
-    extract_topics as do_extract_topics,
     TopicExtractionConfig,
+    extract_topics as do_extract_topics,
 )
 
 logger = logging.getLogger("star_map." + __name__)
@@ -31,6 +30,7 @@ logger = logging.getLogger("star_map." + __name__)
 @dataclass
 class PipelineResult:
     """Result of the full embedding pipeline."""
+
     embedding_result: EmbeddingResult
     projections_computed: bool
 
@@ -47,7 +47,7 @@ class EmbeddingPipeline(ABC):
         collection_name: str,
         compute_projections: bool = True,
         extract_topics: bool = False,
-        topic_config: Optional[TopicExtractionConfig] = None,
+        topic_config: TopicExtractionConfig | None = None,
     ):
         self.collection_name = collection_name
         self.compute_projections = compute_projections
@@ -115,9 +115,7 @@ class EmbeddingPipeline(ABC):
         if self.topic_config is None:
             return False
         try:
-            extraction_result = await asyncio.to_thread(
-                do_extract_topics, self.topic_config
-            )
+            extraction_result = await asyncio.to_thread(do_extract_topics, self.topic_config)
             return extraction_result.error is None
         except Exception as e:
             logger.warning(f"Topic extraction failed: {e}")

@@ -1,7 +1,15 @@
 """Converters between GraphQL types and internal service/config types."""
 
-from typing import Optional
-
+from ..embed_dataset import (
+    DataType,
+    EmbeddingConfig,
+    EmbeddingModelConfig,
+    EmbeddingProvider,
+    LocalFileEmbeddingConfig,
+    PortionConfig,
+    PortionStrategy,
+)
+from ..services.topic_extraction_service import TopicExtractionConfig
 from .types import (
     DataTypeEnum,
     EmbeddingProviderEnum,
@@ -9,17 +17,6 @@ from .types import (
     TopicInfo,
     TopicKeyword,
 )
-from ..embed_dataset import (
-    EmbeddingConfig,
-    LocalFileEmbeddingConfig,
-    DataType,
-    EmbeddingModelConfig,
-    EmbeddingProvider,
-    PortionConfig,
-    PortionStrategy,
-)
-from ..services.topic_extraction_service import TopicExtractionConfig
-
 
 # ========== Enum Maps ==========
 
@@ -33,8 +30,7 @@ PORTION_STRATEGY_MAP = {
 # Auto-generate provider mapping - no manual maintenance needed
 # When a new provider is added to provider_list.py, it automatically appears here
 EMBEDDING_PROVIDER_MAP = {
-    getattr(EmbeddingProviderEnum, member.name): member
-    for member in EmbeddingProvider
+    getattr(EmbeddingProviderEnum, member.name): member for member in EmbeddingProvider
 }
 
 DATA_TYPE_MAP = {
@@ -46,7 +42,8 @@ DATA_TYPE_MAP = {
 
 # ========== Input -> Config Builders ==========
 
-def build_embedding_model_config(input) -> Optional[EmbeddingModelConfig]:
+
+def build_embedding_model_config(input) -> EmbeddingModelConfig | None:
     """Convert GraphQL EmbeddingModelInput to internal EmbeddingModelConfig."""
     if input is None:
         return None
@@ -60,7 +57,7 @@ def build_embedding_model_config(input) -> Optional[EmbeddingModelConfig]:
     )
 
 
-def build_portion_config(input) -> Optional[PortionConfig]:
+def build_portion_config(input) -> PortionConfig | None:
     """Convert GraphQL PortionInput to internal PortionConfig."""
     if input is None:
         return None
@@ -125,7 +122,7 @@ def build_topic_extraction_config(
     nr_topics = None
     use_ctfidf_for_reduction = True
 
-    if tc and getattr(tc, 'reduction', None) and tc.reduction.enabled:
+    if tc and getattr(tc, "reduction", None) and tc.reduction.enabled:
         reduce_topics = True
         reduction_method = tc.reduction.method
         nr_topics = tc.reduction.n_topics
@@ -149,6 +146,7 @@ def build_topic_extraction_config(
 
 
 # ========== Result -> GraphQL Converters ==========
+
 
 def convert_topic_infos(topics) -> list:
     """Convert list of service TopicInfoResult to GraphQL TopicInfo list."""

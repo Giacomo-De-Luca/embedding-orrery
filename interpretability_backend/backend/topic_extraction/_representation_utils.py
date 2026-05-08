@@ -1,9 +1,10 @@
 import random
 import time
-from typing import Union
 
 
-def truncate_document(topic_model, doc_length: Union[int, None], tokenizer: Union[str, callable], document: str) -> str:
+def truncate_document(
+    topic_model, doc_length: int | None, tokenizer: str | callable, document: str
+) -> str:
     """Truncate a document to a certain length.
 
     If you want to add a custom tokenizer, then it will need to have a `decode` and
@@ -59,7 +60,7 @@ def truncate_document(topic_model, doc_length: Union[int, None], tokenizer: Unio
     return document
 
 
-def validate_truncate_document_parameters(tokenizer, doc_length) -> Union[None, ValueError]:
+def validate_truncate_document_parameters(tokenizer, doc_length) -> None | ValueError:
     """Validates parameters that are used in the function `truncate_document`."""
     if tokenizer is None and doc_length is not None:
         raise ValueError(
@@ -68,7 +69,9 @@ def validate_truncate_document_parameters(tokenizer, doc_length) -> Union[None, 
             "If `tokenizer` is of type callable ensure it has methods to encode and decode a document \n"
         )
     elif tokenizer is not None and doc_length is None:
-        raise ValueError("If `tokenizer` is provided, `doc_length` of type int must be provided as well.")
+        raise ValueError(
+            "If `tokenizer` is provided, `doc_length` of type int must be provided as well."
+        )
 
 
 def retry_with_exponential_backoff(

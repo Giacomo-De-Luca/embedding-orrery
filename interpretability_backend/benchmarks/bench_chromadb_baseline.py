@@ -9,10 +9,10 @@ Measures:
 Run: uv run python -m interpretability_backend.benchmarks.bench_chromadb_baseline
 """
 
-import time
 import json
-import tracemalloc
 import statistics
+import time
+import tracemalloc
 from pathlib import Path
 
 import chromadb
@@ -22,8 +22,8 @@ DB_PATH = Path(__file__).parent.parent / "resources" / "vector_db"
 
 # Collections to benchmark (small, medium, large)
 BENCH_COLLECTIONS = {
-    "small": "emotion",           # 1k items
-    "medium": "ag_news",          # 10k items
+    "small": "emotion",  # 1k items
+    "medium": "ag_news",  # 10k items
     "large": "lacan_sentences_gemini_document",  # 153k items
 }
 
@@ -78,7 +78,9 @@ def bench_projection_load(client, collection_name: str, n_runs: int = TIMED_RUNS
     }
 
 
-def bench_text_search_document(client, collection_name: str, query: str = "the", n_runs: int = TIMED_RUNS):
+def bench_text_search_document(
+    client, collection_name: str, query: str = "the", n_runs: int = TIMED_RUNS
+):
     """Benchmark: text search on document field via where_document."""
     collection = client.get_collection(name=collection_name, embedding_function=None)
     count = collection.count()
@@ -109,7 +111,9 @@ def bench_text_search_document(client, collection_name: str, query: str = "the",
     }
 
 
-def bench_text_search_metadata(client, collection_name: str, field: str, query: str, n_runs: int = TIMED_RUNS):
+def bench_text_search_metadata(
+    client, collection_name: str, field: str, query: str, n_runs: int = TIMED_RUNS
+):
     """Benchmark: text search on a metadata field (Python-side filtering)."""
     collection = client.get_collection(name=collection_name, embedding_function=None)
     count = collection.count()
@@ -117,7 +121,7 @@ def bench_text_search_metadata(client, collection_name: str, field: str, query: 
     # Warmup
     for _ in range(WARMUP_RUNS):
         results = collection.get(include=["metadatas"])
-        for meta in (results["metadatas"] or []):
+        for meta in results["metadatas"] or []:
             val = str(meta.get(field, ""))
             if query.lower() in val.lower():
                 pass
@@ -128,7 +132,7 @@ def bench_text_search_metadata(client, collection_name: str, field: str, query: 
         t0 = time.perf_counter()
         results = collection.get(include=["metadatas"])
         matches = 0
-        for meta in (results["metadatas"] or []):
+        for meta in results["metadatas"] or []:
             val = str(meta.get(field, ""))
             if query.lower() in val.lower():
                 matches += 1
@@ -198,8 +202,19 @@ def find_metadata_field(client, collection_name: str) -> str | None:
         return None
     meta = sample["metadatas"][0]
     # Pick first string field that isn't a projection or topic
-    skip = {"pca_2d", "pca_3d", "umap_2d", "umap_3d", "topic_id", "topic_label",
-            "subtopic_id", "subtopic_label", "row_index", "mapped_colour", "mapped_colour_scale"}
+    skip = {
+        "pca_2d",
+        "pca_3d",
+        "umap_2d",
+        "umap_3d",
+        "topic_id",
+        "topic_label",
+        "subtopic_id",
+        "subtopic_label",
+        "row_index",
+        "mapped_colour",
+        "mapped_colour_scale",
+    }
     for key, val in meta.items():
         if key not in skip and isinstance(val, str) and len(val) > 3:
             return key
@@ -218,9 +233,9 @@ def run_benchmarks():
             continue
 
         count = collection.count()
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  {size_label.upper()}: {coll_name} ({count} items)")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # Projection load
         print("  Benchmarking projection load...")
@@ -240,7 +255,9 @@ def run_benchmarks():
             sample = collection.get(limit=1, include=["metadatas"])
             sample_val = str(sample["metadatas"][0].get(meta_field, ""))[:5]
             if len(sample_val) >= 3:
-                print(f"  Benchmarking metadata search (field={meta_field}, query={sample_val!r})...")
+                print(
+                    f"  Benchmarking metadata search (field={meta_field}, query={sample_val!r})..."
+                )
                 r = bench_text_search_metadata(client, coll_name, meta_field, sample_val)
                 results.append(r)
                 print(f"    mean={r['mean_s']}s  matches={r['matches']}")
@@ -252,18 +269,23 @@ def run_benchmarks():
         print(f"    allocated={r['total_allocated_mb']}MB  delta={r['delta_mb']}MB")
 
     # Summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     for r in results:
         if "mean_s" in r:
-            print(f"  [{r['collection'][:30]:30}] {r['operation']:30} {r['mean_s']:>8.4f}s  ({r['item_count']} items)")
+            print(
+                f"  [{r['collection'][:30]:30}] {r['operation']:30} {r['mean_s']:>8.4f}s  ({r['item_count']} items)"
+            )
         else:
-            print(f"  [{r['collection'][:30]:30}] {r['operation']:30} {r['total_allocated_mb']:>8.2f}MB ({r['item_count']} items)")
+            print(
+                f"  [{r['collection'][:30]:30}] {r['operation']:30} {r['total_allocated_mb']:>8.2f}MB ({r['item_count']} items)"
+            )
 
     # Save results as JSON for later comparison
     out_path = Path(__file__).parent / "results_chromadb_baseline.json"
     import json as json_mod
+
     with open(out_path, "w") as f:
         json_mod.dump(results, f, indent=2)
     print(f"\n  Results saved to {out_path}")

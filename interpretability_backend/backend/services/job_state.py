@@ -9,15 +9,16 @@ Provides persistent storage of job state in a JSON file, enabling:
 
 import json
 import threading
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict, List, Any
-from dataclasses import dataclass, asdict
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 
 class JobStatus(Enum):
     """Status of an embedding job."""
+
     RUNNING = "running"
     INTERRUPTED = "interrupted"
     COMPLETED = "completed"
@@ -26,6 +27,7 @@ class JobStatus(Enum):
 @dataclass
 class JobState:
     """State of an embedding job."""
+
     collection_name: str
     status: JobStatus
     job_type: str  # "huggingface" or "local_file"
@@ -37,7 +39,7 @@ class JobState:
     total_batches: int
 
     # Full configuration (stored as dict for flexibility)
-    config: Dict[str, Any]
+    config: dict[str, Any]
 
     started_at: str
 
@@ -53,7 +55,7 @@ class JobState:
         """Extract source (dataset_id or file_path) from config."""
         return self.config.get("dataset_id") or self.config.get("file_path", "")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "collection_name": self.collection_name,
@@ -68,7 +70,7 @@ class JobState:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "JobState":
+    def from_dict(cls, data: dict[str, Any]) -> "JobState":
         """Create JobState from dictionary."""
         return cls(
             collection_name=data["collection_name"],
@@ -94,7 +96,7 @@ class JobStateService:
     On initialization, marks any 'running' jobs as 'interrupted'.
     """
 
-    def __init__(self, state_file: Optional[Path] = None):
+    def __init__(self, state_file: Path | None = None):
         """Initialize the job state service.
 
         Args:
@@ -111,14 +113,14 @@ class JobStateService:
         if not self.state_file.exists():
             self._save({"jobs": {}})
 
-    def _load(self) -> Dict[str, Any]:
+    def _load(self) -> dict[str, Any]:
         """Load state from file."""
         try:
             return json.loads(self.state_file.read_text())
         except (json.JSONDecodeError, FileNotFoundError):
             return {"jobs": {}}
 
-    def _save(self, data: Dict[str, Any]) -> None:
+    def _save(self, data: dict[str, Any]) -> None:
         """Save state to file."""
         self.state_file.write_text(json.dumps(data, indent=2, default=str))
 
@@ -144,7 +146,7 @@ class JobStateService:
         job_type: str,
         total_expected: int,
         total_batches: int,
-        config: Dict[str, Any]
+        config: dict[str, Any],
     ) -> None:
         """Record a new job start with full configuration.
 
@@ -174,7 +176,7 @@ class JobStateService:
         self,
         collection_name: str,
         total_expected: int,
-        total_batches: Optional[int] = None,
+        total_batches: int | None = None,
     ) -> None:
         """Update total_expected (and optionally total_batches) for a job.
 
@@ -194,10 +196,7 @@ class JobStateService:
                 self._save(data)
 
     def update_progress(
-        self,
-        collection_name: str,
-        items_embedded: int,
-        batches_completed: int
+        self, collection_name: str, items_embedded: int, batches_completed: int
     ) -> None:
         """Update progress counters for a job.
 
@@ -229,7 +228,7 @@ class JobStateService:
                     data["jobs"][collection_name]["status"] = JobStatus.COMPLETED.value
                 self._save(data)
 
-    def fail_job(self, collection_name: str, error: Optional[str] = None) -> None:
+    def fail_job(self, collection_name: str, error: str | None = None) -> None:
         """Mark a job as interrupted/failed.
 
         Args:
@@ -244,7 +243,7 @@ class JobStateService:
                     data["jobs"][collection_name]["error"] = error
                 self._save(data)
 
-    def get_job(self, collection_name: str) -> Optional[JobState]:
+    def get_job(self, collection_name: str) -> JobState | None:
         """Get job state by collection name.
 
         Args:
@@ -260,7 +259,7 @@ class JobStateService:
                 return JobState.from_dict(job_data)
             return None
 
-    def list_jobs(self, status: Optional[JobStatus] = None) -> List[JobState]:
+    def list_jobs(self, status: JobStatus | None = None) -> list[JobState]:
         """List all jobs, optionally filtered by status.
 
         Args:
@@ -292,7 +291,7 @@ class JobStateService:
 
 
 # Global singleton instance
-_job_state_service: Optional[JobStateService] = None
+_job_state_service: JobStateService | None = None
 
 
 def get_job_state_service() -> JobStateService:

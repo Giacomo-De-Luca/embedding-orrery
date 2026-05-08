@@ -283,7 +283,7 @@ export const POS_PRESET: CategoryColorPreset = {
  * Fixed color for unclustered/noise points (HDBSCAN label -1).
  * Distinct from topic palette colors, clearly readable as "uncategorized".
  */
-export const UNCLUSTERED_COLOR = '#B878A8';
+export const UNCLUSTERED_COLOR = '#e416be';
 
 /* 
 

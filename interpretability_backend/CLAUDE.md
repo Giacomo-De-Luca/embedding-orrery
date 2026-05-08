@@ -14,6 +14,17 @@ uv run pytest interpretability_backend/unit_tests/
 uv run pytest interpretability_backend/tests/
 ```
 
+## Code Style
+
+Ruff is the lint + format tool of record. Config lives in the root `pyproject.toml` under `[tool.ruff*]`. Run before committing:
+
+```bash
+uv run ruff check interpretability_backend/ --fix    # lint + safe autofixes
+uv run ruff format interpretability_backend/         # formatter
+```
+
+Active rule set: `E`, `F`, `W`, `I` (isort), `B` (bugbear), `UP` (pyupgrade py312), `ASYNC`. Notebooks (`*.ipynb`) and the vendored `gemma_pytorch/` submodule are excluded. Known residual violations (B905, B904, F841, etc.) are documented in `documentation/RUFF_SETUP.md` as a follow-up cleanup queue — not regressions.
+
 ## Architecture Overview
 
 ```

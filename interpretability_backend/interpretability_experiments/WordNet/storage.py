@@ -6,20 +6,21 @@ which natively supports sparse vectors. It also stores dense embeddings
 (MiniLM) for comparison.
 """
 
+import os
+from dataclasses import dataclass
+from typing import Any
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    VectorParams,
-    SparseVectorParams,
     Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
     PointStruct,
     SparseVector,
-    Filter,
-    FieldCondition,
-    MatchValue,
+    SparseVectorParams,
+    VectorParams,
 )
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
-import os
 
 try:
     from .splade_embedder import SparseEmbedding
@@ -30,15 +31,16 @@ except ImportError:
 @dataclass
 class WordEmbeddingRecord:
     """Record for a word embedding with metadata."""
+
     id: str
     word: str
     strategy: str  # "word_level" or "definition"
-    context: str   # The sentence/definition used for embedding
-    synset_id: Optional[str] = None
-    pos: Optional[str] = None
-    sparse_embedding: Optional[SparseEmbedding] = None
-    dense_embedding: Optional[List[float]] = None
-    top_tokens: Optional[List[str]] = None  # Decoded top tokens for quick lookup
+    context: str  # The sentence/definition used for embedding
+    synset_id: str | None = None
+    pos: str | None = None
+    sparse_embedding: SparseEmbedding | None = None
+    dense_embedding: list[float] | None = None
+    top_tokens: list[str] | None = None  # Decoded top tokens for quick lookup
 
 
 class QdrantStorage:
@@ -53,13 +55,9 @@ class QdrantStorage:
     DENSE_DIM = 384  # MiniLM dimension
 
     # Shared client instances per path
-    _clients: Dict[str, QdrantClient] = {}
+    _clients: dict[str, QdrantClient] = {}
 
-    def __init__(
-        self,
-        db_path: Optional[str] = None,
-        collection_name: str = "wordnet_splade"
-    ):
+    def __init__(self, db_path: str | None = None, collection_name: str = "wordnet_splade"):
         """
         Initialize Qdrant storage.
 
@@ -80,11 +78,7 @@ class QdrantStorage:
 
         self.client = QdrantStorage._clients[self.db_path]
 
-    def create_collection(
-        self,
-        recreate: bool = False,
-        dense_dim: int = DENSE_DIM
-    ) -> None:
+    def create_collection(self, recreate: bool = False, dense_dim: int = DENSE_DIM) -> None:
         """
         Create a collection with both dense and sparse vector support.
 
@@ -103,15 +97,8 @@ class QdrantStorage:
         if not exists:
             self.client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config={
-                    "dense": VectorParams(
-                        size=dense_dim,
-                        distance=Distance.COSINE
-                    )
-                },
-                sparse_vectors_config={
-                    "sparse": SparseVectorParams()
-                }
+                vectors_config={"dense": VectorParams(size=dense_dim, distance=Distance.COSINE)},
+                sparse_vectors_config={"sparse": SparseVectorParams()},
             )
             print(f"Created collection: {self.collection_name}")
         else:
@@ -121,7 +108,7 @@ class QdrantStorage:
         """Add a single record to the collection."""
         self.add_records([record])
 
-    def add_records(self, records: List[WordEmbeddingRecord]) -> None:
+    def add_records(self, records: list[WordEmbeddingRecord]) -> None:
         """
         Add multiple records to the collection.
 
@@ -137,8 +124,7 @@ class QdrantStorage:
 
             if record.sparse_embedding is not None:
                 vectors["sparse"] = SparseVector(
-                    indices=record.sparse_embedding.indices,
-                    values=record.sparse_embedding.values
+                    indices=record.sparse_embedding.indices, values=record.sparse_embedding.values
                 )
 
             # Build payload
@@ -157,21 +143,14 @@ class QdrantStorage:
             point = PointStruct(
                 id=hash(record.id) & 0xFFFFFFFFFFFFFFFF,  # Convert to positive int
                 vector=vectors if vectors else {},
-                payload=payload
+                payload=payload,
             )
             points.append(point)
 
         if points:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
+            self.client.upsert(collection_name=self.collection_name, points=points)
 
-    def add_records_batch(
-        self,
-        records: List[WordEmbeddingRecord],
-        batch_size: int = 100
-    ) -> None:
+    def add_records_batch(self, records: list[WordEmbeddingRecord], batch_size: int = 100) -> None:
         """
         Add records in batches.
 
@@ -180,17 +159,14 @@ class QdrantStorage:
             batch_size: Number of records per batch
         """
         for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+            batch = records[i : i + batch_size]
             self.add_records(batch)
             if (i + batch_size) % 1000 == 0:
                 print(f"Added {min(i + batch_size, len(records))}/{len(records)} records")
 
     def get_all_records(
-        self,
-        limit: int = 10000,
-        offset: int = 0,
-        filter_strategy: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, limit: int = 10000, offset: int = 0, filter_strategy: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Retrieve all records from the collection.
 
@@ -205,12 +181,7 @@ class QdrantStorage:
         scroll_filter = None
         if filter_strategy:
             scroll_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="strategy",
-                        match=MatchValue(value=filter_strategy)
-                    )
-                ]
+                must=[FieldCondition(key="strategy", match=MatchValue(value=filter_strategy))]
             )
 
         results, _ = self.client.scroll(
@@ -219,7 +190,7 @@ class QdrantStorage:
             offset=offset,
             with_payload=True,
             with_vectors=True,
-            scroll_filter=scroll_filter
+            scroll_filter=scroll_filter,
         )
 
         records = []
@@ -235,10 +206,8 @@ class QdrantStorage:
         return records
 
     def get_sparse_embeddings(
-        self,
-        filter_strategy: Optional[str] = None,
-        limit: int = 100000
-    ) -> List[Dict[str, Any]]:
+        self, filter_strategy: str | None = None, limit: int = 100000
+    ) -> list[dict[str, Any]]:
         """
         Get all sparse embeddings from the collection.
 
@@ -252,12 +221,7 @@ class QdrantStorage:
         scroll_filter = None
         if filter_strategy:
             scroll_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="strategy",
-                        match=MatchValue(value=filter_strategy)
-                    )
-                ]
+                must=[FieldCondition(key="strategy", match=MatchValue(value=filter_strategy))]
             )
 
         results = []
@@ -270,28 +234,34 @@ class QdrantStorage:
                 offset=offset,
                 with_payload=True,
                 with_vectors=["sparse"],
-                scroll_filter=scroll_filter
+                scroll_filter=scroll_filter,
             )
 
             for point in points:
                 sparse_vec = None
-                if hasattr(point, 'vector') and point.vector:
+                if hasattr(point, "vector") and point.vector:
                     if isinstance(point.vector, dict) and "sparse" in point.vector:
                         sv = point.vector["sparse"]
                         sparse_vec = SparseEmbedding(
-                            indices=list(sv.indices) if hasattr(sv, 'indices') else sv.get('indices', []),
-                            values=list(sv.values) if hasattr(sv, 'values') else sv.get('values', [])
+                            indices=list(sv.indices)
+                            if hasattr(sv, "indices")
+                            else sv.get("indices", []),
+                            values=list(sv.values)
+                            if hasattr(sv, "values")
+                            else sv.get("values", []),
                         )
 
-                results.append({
-                    "word": point.payload.get("word"),
-                    "strategy": point.payload.get("strategy"),
-                    "context": point.payload.get("context"),
-                    "synset_id": point.payload.get("synset_id"),
-                    "pos": point.payload.get("pos"),
-                    "top_tokens": point.payload.get("top_tokens"),
-                    "sparse": sparse_vec
-                })
+                results.append(
+                    {
+                        "word": point.payload.get("word"),
+                        "strategy": point.payload.get("strategy"),
+                        "context": point.payload.get("context"),
+                        "synset_id": point.payload.get("synset_id"),
+                        "pos": point.payload.get("pos"),
+                        "top_tokens": point.payload.get("top_tokens"),
+                        "sparse": sparse_vec,
+                    }
+                )
 
             if offset is None or len(results) >= limit:
                 break
@@ -318,7 +288,7 @@ def test_storage():
     # Create storage with test collection
     storage = QdrantStorage(
         db_path="interpretability/resources/vector_db_qdrant_test",
-        collection_name="test_collection"
+        collection_name="test_collection",
     )
     storage.create_collection(recreate=True)
 
@@ -331,12 +301,9 @@ def test_storage():
             context="cat: a small feline mammal",
             synset_id="oewn-02086723-n",
             pos="n",
-            sparse_embedding=SparseEmbedding(
-                indices=[100, 200, 300],
-                values=[1.5, 2.0, 0.8]
-            ),
+            sparse_embedding=SparseEmbedding(indices=[100, 200, 300], values=[1.5, 2.0, 0.8]),
             dense_embedding=[0.1] * 384,
-            top_tokens=["cat", "feline", "mammal"]
+            top_tokens=["cat", "feline", "mammal"],
         ),
         WordEmbeddingRecord(
             id="cat_word_1",
@@ -345,12 +312,9 @@ def test_storage():
             context="The cat sat on the mat.",
             synset_id="oewn-02086723-n",
             pos="n",
-            sparse_embedding=SparseEmbedding(
-                indices=[100, 150],
-                values=[2.0, 1.2]
-            ),
+            sparse_embedding=SparseEmbedding(indices=[100, 150], values=[2.0, 1.2]),
             dense_embedding=[0.2] * 384,
-            top_tokens=["cat", "cats"]
+            top_tokens=["cat", "cats"],
         ),
     ]
 

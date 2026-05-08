@@ -11,10 +11,12 @@ For EmbeddingGemma and similar models, pass a prompt that can be either:
 
 See: https://huggingface.co/google/gemma-embedding-001
 """
-from chromadb.api.types import EmbeddingFunction, Space, Embeddings, Documents
-from chromadb.utils.embedding_functions.schemas import validate_config_schema
-from typing import List, Dict, Any, Optional
+
+from typing import Any
+
 import numpy as np
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings, Space
+from chromadb.utils.embedding_functions.schemas import validate_config_schema
 
 # Known prompt names that SentenceTransformers recognizes for models like EmbeddingGemma
 KNOWN_PROMPT_NAMES = {
@@ -32,14 +34,14 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
     """Fork of ChromaDB's SentenceTransformerEmbeddingFunction with prompt support."""
 
     # Class-level model cache (shared across all instances, matches ChromaDB)
-    models: Dict[str, Any] = {}
+    models: dict[str, Any] = {}
 
     def __init__(
         self,
         model_name: str = "all-MiniLM-L6-v2",
         device: str = "cpu",
         normalize_embeddings: bool = False,
-        prompt: Optional[str] = None,
+        prompt: str | None = None,
         **kwargs: Any,
     ):
         """Initialize SentenceTransformerEmbeddingFunction.
@@ -88,7 +90,7 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             Embeddings for the documents.
         """
         # Build encode kwargs with prompt support
-        encode_kwargs: Dict[str, Any] = {
+        encode_kwargs: dict[str, Any] = {
             "convert_to_numpy": True,
             "normalize_embeddings": self.normalize_embeddings,
         }
@@ -111,11 +113,11 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         # If normalize_embeddings is True, cosine is equivalent to dot product
         return "cosine"
 
-    def supported_spaces(self) -> List[Space]:
+    def supported_spaces(self) -> list[Space]:
         return ["cosine", "l2", "ip"]
 
     @staticmethod
-    def build_from_config(config: Dict[str, Any]) -> "EmbeddingFunction[Documents]":
+    def build_from_config(config: dict[str, Any]) -> "EmbeddingFunction[Documents]":
         model_name = config.get("model_name")
         device = config.get("device")
         normalize_embeddings = config.get("normalize_embeddings")
@@ -133,7 +135,7 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             **kwargs,
         )
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         return {
             "model_name": self.model_name,
             "device": self.device,
@@ -143,14 +145,14 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         }
 
     def validate_config_update(
-        self, old_config: Dict[str, Any], new_config: Dict[str, Any]
+        self, old_config: dict[str, Any], new_config: dict[str, Any]
     ) -> None:
         # model_name is also used as the identifier for model path if stored locally.
         # Users should be able to change the path if needed, so we should not validate that.
         return
 
     @staticmethod
-    def validate_config(config: Dict[str, Any]) -> None:
+    def validate_config(config: dict[str, Any]) -> None:
         """Validate the configuration using the JSON schema.
 
         Args:

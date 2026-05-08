@@ -1,58 +1,62 @@
 # Requires transformers>=4.51.0
 
+import pickle
+
 import torch
 import torch.nn.functional as F
-
 from torch import Tensor
-from transformers import AutoTokenizer, AutoModel
-import pickle
-import numpy as np
+from transformers import AutoModel, AutoTokenizer
 
-
-MODEL = 'Qwen/Qwen3-Embedding-0.6B'
+MODEL = "Qwen/Qwen3-Embedding-0.6B"
 max_length = 1024
-device = 'mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu'
-precision = torch.float16 if device in ['cuda', 'mps'] else torch.float32
+device = (
+    "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+)
+precision = torch.float16 if device in ["cuda", "mps"] else torch.float32
 
 
 print("Loading data...")
-with open('example_sentence.pickle', 'rb') as handle:
+with open("example_sentence.pickle", "rb") as handle:
     sentences = pickle.load(handle)
 sorted_sentences = sorted(sentences, key=len)
 print(f"Loaded {len(sorted_sentences)} sentences.")
 
 
-def last_token_pool(last_hidden_states: Tensor,
-                 attention_mask: Tensor) -> Tensor:
-    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+    left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
     if left_padding:
         return last_hidden_states[:, -1]
     else:
         sequence_lengths = attention_mask.sum(dim=1) - 1
         batch_size = last_hidden_states.shape[0]
-        return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
+        return last_hidden_states[
+            torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths
+        ]
 
 
 def get_detailed_instruct(task_description: str, query: str) -> str:
-    return f'Instruct: {task_description}\nQuery:{query}'
+    return f"Instruct: {task_description}\nQuery:{query}"
+
 
 # Each query must come with a one-sentence instruction that describes the task
-task = 'Given a web search query, retrieve relevant passages that answer the query'
+task = "Given a web search query, retrieve relevant passages that answer the query"
 
 query = input("Query: ").strip()
 
 # No need to add instruction for retrieval documents
 documents = [
     "The capital of China is Beijing.",
-    "Gravity is a force that attracts two bodies towards each other. It gives weight to physical objects and is responsible for the movement of planets around the sun."
+    "Gravity is a force that attracts two bodies towards each other. It gives weight to physical objects and is responsible for the movement of planets around the sun.",
 ]
 
 input_texts = [get_detailed_instruct(task, query)] + documents
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL, padding_side='left')
+tokenizer = AutoTokenizer.from_pretrained(MODEL, padding_side="left")
 
-if device == 'cuda':
-    model = AutoModel.from_pretrained(MODEL, attn_implementation="flash_attention_2", dtype=torch.float16).cuda()
+if device == "cuda":
+    model = AutoModel.from_pretrained(
+        MODEL, attn_implementation="flash_attention_2", dtype=torch.float16
+    ).cuda()
 else:
     model = AutoModel.from_pretrained(MODEL, dtype=precision).to(device)
 
@@ -66,10 +70,10 @@ batch_dict = tokenizer(
 )
 batch_dict.to(model.device)
 outputs = model(**batch_dict)
-embeddings = last_token_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
+embeddings = last_token_pool(outputs.last_hidden_state, batch_dict["attention_mask"])
 
 # normalize embeddings
 embeddings = F.normalize(embeddings, p=2, dim=1)
-scores = (embeddings[:2] @ embeddings[2:].T)
+scores = embeddings[:2] @ embeddings[2:].T
 print(scores.tolist())
 # [[0.7493016123771667, 0.0750647559762001], [0.08795969933271408, 0.6318399906158447]]

@@ -9,27 +9,29 @@ to avoid circular imports when embedding functions need to emit progress.
 """
 
 import asyncio
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+
 import strawberry
 
 from ..services.progress_emitter import (
+    ProgressEvent,
     register_subscriber,
     unregister_subscriber,
-    ProgressEvent,
 )
 
 
 @strawberry.type
 class JobProgress:
     """Real-time progress update for an embedding job (GraphQL type)."""
+
     job_id: str  # collection_name
     status: str  # "running", "completed", "failed"
     items_processed: int
     total_items: int
     current_batch: int
     total_batches: int
-    error: Optional[str] = None
-    message: Optional[str] = None  # Status message (e.g., "Sorting batches", "Loading model")
+    error: str | None = None
+    message: str | None = None  # Status message (e.g., "Sorting batches", "Loading model")
 
 
 @strawberry.type
@@ -37,10 +39,7 @@ class Subscription:
     """GraphQL subscription root for real-time updates."""
 
     @strawberry.subscription
-    async def embedding_progress(
-        self,
-        job_id: str
-    ) -> AsyncGenerator[JobProgress, None]:
+    async def embedding_progress(self, job_id: str) -> AsyncGenerator[JobProgress, None]:
         """
         Subscribe to real-time progress updates for an embedding job.
 
@@ -73,7 +72,7 @@ class Subscription:
                     current_batch=event.current_batch,
                     total_batches=event.total_batches,
                     error=event.error,
-                    message=event.message
+                    message=event.message,
                 )
                 yield progress
 

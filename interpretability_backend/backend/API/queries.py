@@ -1,8 +1,19 @@
 """GraphQL query resolvers for embedding visualization backend."""
 
 import strawberry
-from typing import List, Optional
 
+# Import clients at module level
+from ..clients.huggingface_client import (
+    get_dataset_info as hf_get_info,
+    get_dataset_preview as hf_get_preview,
+)
+from ..clients.local_data_client import (
+    get_local_file_info as get_local_info,
+    get_local_file_preview as get_local_preview,
+)
+from ..services.job_state import JobStatus, get_job_state_service
+from .chromadb_instance import get_chromadb_client
+from .duckdb_instance import get_duckdb_client
 from .types import (
     Collection,
     CollectionMetadata,
@@ -18,6 +29,13 @@ from .types import (
     LocalFileInfo,
     LocalFilePreview,
     ProjectionData,
+    SaeActivation,
+    SaeActivationQuantileGroup,
+    # SAE types
+    SaeFeature,
+    SaeFeatureSearchResult,
+    SaeLogitEntry,
+    SaeModelInfo,
     SemanticSearchResult,
     SimilarityMeasure,
     TextSearchMatch,
@@ -25,27 +43,7 @@ from .types import (
     TextSearchResponse,
     TopicInfo,
     TopicKeyword,
-    # SAE types
-    SaeFeature,
-    SaeActivation,
-    SaeLogitEntry,
-    SaeModelInfo,
-    SaeFeatureSearchResult,
-    SaeActivationQuantileGroup,
 )
-
-# Import clients at module level
-from ..clients.huggingface_client import (
-    get_dataset_info as hf_get_info,
-    get_dataset_preview as hf_get_preview,
-)
-from ..clients.local_data_client import (
-    get_local_file_info as get_local_info,
-    get_local_file_preview as get_local_preview,
-)
-from .chromadb_instance import get_chromadb_client
-from .duckdb_instance import get_duckdb_client
-from ..services.job_state import get_job_state_service, JobStatus
 
 
 def _dicts_to_topic_infos(topic_dicts: list) -> list:
@@ -54,13 +52,15 @@ def _dicts_to_topic_infos(topic_dicts: list) -> list:
     for t in topic_dicts:
         kw_list = t.get("keywords") or []
         keywords = [TopicKeyword(word=kw["word"], score=kw["score"]) for kw in kw_list]
-        topics.append(TopicInfo(
-            topic_id=t["topic_id"],
-            keywords=keywords,
-            label=t.get("label"),
-            count=t.get("count", 0),
-            subtopics=t.get("subtopics"),
-        ))
+        topics.append(
+            TopicInfo(
+                topic_id=t["topic_id"],
+                keywords=keywords,
+                label=t.get("label"),
+                count=t.get("count", 0),
+                subtopics=t.get("subtopics"),
+            )
+        )
     return topics
 
 
@@ -69,7 +69,7 @@ class Query:
     """GraphQL query root."""
 
     @strawberry.field
-    def collections(self, info) -> List[Collection]:
+    def collections(self, info) -> list[Collection]:
         """List all available collections.
 
         Returns:
@@ -79,16 +79,12 @@ class Query:
         datasets = db.list_datasets()
 
         return [
-            Collection(
-                name=ds["name"],
-                metadata=ds["metadata"],
-                count=ds["count"]
-            )
+            Collection(name=ds["name"], metadata=ds["metadata"], count=ds["count"])
             for ds in datasets
         ]
 
     @strawberry.field
-    def embedding_jobs(self, status: Optional[str] = None, info=None) -> List[EmbeddingJob]:
+    def embedding_jobs(self, status: str | None = None, info=None) -> list[EmbeddingJob]:
         """List embedding jobs with their progress and configuration.
 
         Args:
@@ -124,11 +120,12 @@ class Query:
                 source=job.source,
                 columns=job.config.get("columns"),
                 embedding_model=job.config.get("embedding_model", {}).get("model_name")
-                    if job.config.get("embedding_model") else None,
+                if job.config.get("embedding_model")
+                else None,
                 batch_size=job.config.get("batch_size", 100),
                 started_at=job.started_at,
                 # Full config for resume verification
-                config=job.config
+                config=job.config,
             )
             for job in jobs
         ]
@@ -148,10 +145,14 @@ class Query:
         # Convert dataclass to GraphQL type
         configs = []
         for cfg in result.configs:
-            splits = [HFSplitInfo(name=s.name, num_rows=s.num_rows, num_bytes=s.num_bytes)
-                      for s in cfg.splits]
-            features = [HFFeatureInfo(name=f.name, dtype=f.dtype, description=f.description)
-                        for f in cfg.features]
+            splits = [
+                HFSplitInfo(name=s.name, num_rows=s.num_rows, num_bytes=s.num_bytes)
+                for s in cfg.splits
+            ]
+            features = [
+                HFFeatureInfo(name=f.name, dtype=f.dtype, description=f.description)
+                for f in cfg.features
+            ]
             configs.append(HFConfigInfo(name=cfg.name, splits=splits, features=features))
 
         return HFDatasetInfo(
@@ -160,17 +161,17 @@ class Query:
             license=result.license,
             configs=configs,
             default_config=result.default_config,
-            error=result.error
+            error=result.error,
         )
 
     @strawberry.field
     def huggingface_dataset_preview(
         self,
         dataset_id: str,
-        config: Optional[str] = None,
+        config: str | None = None,
         split: str = "train",
         n_rows: int = 5,
-        info=None
+        info=None,
     ) -> HFDatasetPreview:
         """Get preview rows from a HuggingFace dataset.
 
@@ -192,7 +193,7 @@ class Query:
             columns=result.columns,
             rows=result.rows,
             total_rows=result.total_rows,
-            error=result.error
+            error=result.error,
         )
 
     @strawberry.field
@@ -220,16 +221,11 @@ class Query:
             columns=result.columns,
             num_rows=result.num_rows,
             file_size_bytes=result.file_size_bytes,
-            error=result.error
+            error=result.error,
         )
 
     @strawberry.field
-    def local_file_preview(
-        self,
-        file_path: str,
-        n_rows: int = 5,
-        info=None
-    ) -> LocalFilePreview:
+    def local_file_preview(self, file_path: str, n_rows: int = 5, info=None) -> LocalFilePreview:
         """Get preview rows from a local data file.
 
         Args:
@@ -246,7 +242,7 @@ class Query:
             columns=result.columns,
             rows=result.rows,
             total_rows=result.total_rows,
-            error=result.error
+            error=result.error,
         )
 
     @strawberry.field
@@ -254,8 +250,8 @@ class Query:
         self,
         name: str,
         info,
-        projection_types: Optional[List[str]] = None,
-    ) -> Optional[ProjectionData]:
+        projection_types: list[str] | None = None,
+    ) -> ProjectionData | None:
         """Get complete projection data for a collection.
 
         Args:
@@ -297,10 +293,13 @@ class Query:
             if not rows:
                 return None
             import json as json_mod
+
             items_data = {
                 "ids": [r[0] for r in rows],
                 "documents": [r[1] for r in rows],
-                "item_metadata": [json_mod.loads(r[2]) if isinstance(r[2], str) and r[2] else {} for r in rows],
+                "item_metadata": [
+                    json_mod.loads(r[2]) if isinstance(r[2], str) and r[2] else {} for r in rows
+                ],
                 "available_fields": [],
                 "metadata": {},
             }
@@ -317,7 +316,9 @@ class Query:
         topic_data = db.get_active_topics(name)
         if topic_data and topic_data.get("topics"):
             metadata["has_topics"] = True
-            metadata["topic_count"] = topic_data.get("topic_count") or len([t for t in topic_data["topics"] if t["topic_id"] != -1])
+            metadata["topic_count"] = topic_data.get("topic_count") or len(
+                [t for t in topic_data["topics"] if t["topic_id"] != -1]
+            )
             metadata["topics_extracted_at"] = str(topic_data.get("extracted_at", ""))
 
             metadata["topics"] = _dicts_to_topic_infos(topic_data["topics"])
@@ -325,6 +326,7 @@ class Query:
             # Load topic hierarchy from extraction
             if topic_data.get("topic_hierarchy"):
                 import json as json_mod
+
                 raw = topic_data["topic_hierarchy"]
                 metadata["topic_hierarchy"] = json_mod.loads(raw) if isinstance(raw, str) else raw
 
@@ -333,7 +335,7 @@ class Query:
             ext_id = topic_data["id"]
             assignments = db._conn.execute(
                 "SELECT item_id, topic_id, topic_label, subtopic_id, subtopic_label FROM topic_assignments WHERE extraction_id = ?",
-                [ext_id]
+                [ext_id],
             ).fetchall()
             assign_map = {}
             for row in assignments:
@@ -366,11 +368,11 @@ class Query:
             pca_3d=projections.get("pca_3d"),
             umap_2d=projections.get("umap_2d"),
             umap_3d=projections.get("umap_3d"),
-            metadata=CollectionMetadata(**metadata)
+            metadata=CollectionMetadata(**metadata),
         )
 
     @strawberry.field
-    def collection_topics(self, collection_name: str, info=None) -> Optional[ExtractTopicsResult]:
+    def collection_topics(self, collection_name: str, info=None) -> ExtractTopicsResult | None:
         """Get previously-extracted topics for a collection without re-running extraction."""
         db = get_duckdb_client()
         topic_data = db.get_active_topics(collection_name)
@@ -397,12 +399,12 @@ class Query:
         collection_name: str,
         limit: int = 100,
         offset: int = 0,
-        filters: Optional[List[FilterInput]] = None,
+        filters: list[FilterInput] | None = None,
         include_embeddings: bool = True,
         include_documents: bool = True,
         include_metadata: bool = True,
-        info=None
-    ) -> List[EmbeddingItem]:
+        info=None,
+    ) -> list[EmbeddingItem]:
         """Get embeddings from a collection with optional filtering.
 
         Args:
@@ -424,9 +426,12 @@ class Query:
 
         # Load items from DuckDB (with optional JSON filtering)
         if filters:
-            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
-                           for f in filters]
-            rows_data = db.get_filtered_items(collection_name, filter_dicts, limit=limit, offset=offset)
+            filter_dicts = [
+                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
+            ]
+            rows_data = db.get_filtered_items(
+                collection_name, filter_dicts, limit=limit, offset=offset
+            )
         else:
             rows_data = db.get_filtered_items(collection_name, [], limit=limit, offset=offset)
 
@@ -464,15 +469,15 @@ class Query:
     def semantic_search(
         self,
         collection_name: str,
-        query: Optional[str] = None,
-        query_embedding: Optional[List[float]] = None,
+        query: str | None = None,
+        query_embedding: list[float] | None = None,
         n_results: int = 10,
         similarity_measure: SimilarityMeasure = SimilarityMeasure.COSINE,
-        filters: Optional[List[FilterInput]] = None,
+        filters: list[FilterInput] | None = None,
         include_embeddings: bool = False,
-        query_prompt: Optional[str] = None,
-        info=None
-    ) -> List[SemanticSearchResult]:
+        query_prompt: str | None = None,
+        info=None,
+    ) -> list[SemanticSearchResult]:
         """Perform semantic search on a collection.
 
         ChromaDB handles vector similarity (returns IDs + distances).
@@ -497,8 +502,9 @@ class Query:
         # Pre-filter via DuckDB if filters provided (ChromaDB has no metadata)
         allowed_ids = None
         if filters:
-            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
-                           for f in filters]
+            filter_dicts = [
+                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
+            ]
             filtered = db.get_filtered_items(collection_name, filter_dicts, limit=100000)
             allowed_ids = {item["id"] for item in filtered}
             if not allowed_ids:
@@ -513,7 +519,7 @@ class Query:
             query_embeddings=[query_embedding] if query_embedding else None,
             n_results=fetch_n,
             distance_metric=similarity_measure.value,
-            query_prompt=query_prompt
+            query_prompt=query_prompt,
         )
 
         if not results["ids"]:
@@ -542,7 +548,7 @@ class Query:
                 document=enriched_item.get("document"),
                 metadata=enriched_item.get("metadata", {}),
                 distance=distance,
-                similarity=similarity
+                similarity=similarity,
             )
 
             if include_embeddings and results.get("embeddings"):
@@ -561,9 +567,9 @@ class Query:
         item_id: str,
         n_results: int = 10,
         similarity_measure: SimilarityMeasure = SimilarityMeasure.COSINE,
-        filters: Optional[List[FilterInput]] = None,
-        info=None
-    ) -> List[SemanticSearchResult]:
+        filters: list[FilterInput] | None = None,
+        info=None,
+    ) -> list[SemanticSearchResult]:
         """Find similar items using an existing item's embedding.
 
         ChromaDB: lookup embedding + vector search.
@@ -586,9 +592,7 @@ class Query:
         collection = client.get_collection(collection_name, load_embedding_function=False)
         item_data = collection.get(ids=[item_id], include=["embeddings"])
 
-        if (item_data is None or
-            "embeddings" not in item_data or
-            len(item_data["embeddings"]) == 0):
+        if item_data is None or "embeddings" not in item_data or len(item_data["embeddings"]) == 0:
             return []
 
         query_embedding = item_data["embeddings"][0]
@@ -596,8 +600,9 @@ class Query:
         # Pre-filter via DuckDB if filters provided
         allowed_ids = None
         if filters:
-            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
-                           for f in filters]
+            filter_dicts = [
+                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
+            ]
             filtered = db.get_filtered_items(collection_name, filter_dicts, limit=100000)
             allowed_ids = {item["id"] for item in filtered}
             if not allowed_ids:
@@ -610,7 +615,7 @@ class Query:
             query_texts=None,
             query_embeddings=[query_embedding],
             n_results=fetch_n,
-            distance_metric=similarity_measure.value
+            distance_metric=similarity_measure.value,
         )
 
         if not results["ids"]:
@@ -629,13 +634,15 @@ class Query:
             if allowed_ids is not None and result_id not in allowed_ids:
                 continue
             enriched_item = items_by_id.get(result_id, {})
-            search_results.append(SemanticSearchResult(
-                id=result_id,
-                document=enriched_item.get("document"),
-                metadata=enriched_item.get("metadata", {}),
-                distance=results["distances"][0][i],
-                similarity=results["similarities"][0][i],
-            ))
+            search_results.append(
+                SemanticSearchResult(
+                    id=result_id,
+                    document=enriched_item.get("document"),
+                    metadata=enriched_item.get("metadata", {}),
+                    distance=results["distances"][0][i],
+                    similarity=results["similarities"][0][i],
+                )
+            )
             if len(search_results) >= n_results:
                 break
 
@@ -646,10 +653,10 @@ class Query:
         self,
         collection_name: str,
         query: str,
-        fields: Optional[List[str]] = None,
+        fields: list[str] | None = None,
         mode: TextSearchMode = TextSearchMode.CONTAINS,
         case_sensitive: bool = False,
-        filters: Optional[List[FilterInput]] = None,
+        filters: list[FilterInput] | None = None,
         info=None,
     ) -> TextSearchResponse:
         """Full-text search across document content and/or metadata fields.
@@ -669,8 +676,9 @@ class Query:
         db = get_duckdb_client()
         filter_dicts = None
         if filters:
-            filter_dicts = [{"field": f.field, "operator": f.operator.value, "value": f.value}
-                            for f in filters]
+            filter_dicts = [
+                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
+            ]
         result = db.text_search(
             dataset_name=collection_name,
             query=query,
@@ -699,7 +707,7 @@ class Query:
     # ------------------------------------------------------------------
 
     @strawberry.field
-    def sae_models(self, info) -> List[SaeModelInfo]:
+    def sae_models(self, info) -> list[SaeModelInfo]:
         """List available SAE model/layer combinations with counts."""
         db = get_duckdb_client()
         rows = db.list_sae_models()
@@ -716,7 +724,7 @@ class Query:
     @strawberry.field
     def sae_feature(
         self, model_id: str, sae_id: str, feature_index: int, info=None
-    ) -> Optional[SaeFeature]:
+    ) -> SaeFeature | None:
         """Get a single SAE feature with metadata and logits."""
         db = get_duckdb_client()
         row = db.get_sae_feature(model_id, sae_id, feature_index)
@@ -726,9 +734,13 @@ class Query:
 
     @strawberry.field
     def sae_activations(
-        self, model_id: str, sae_id: str, feature_index: int,
-        limit: int = 20, info=None,
-    ) -> List[SaeActivation]:
+        self,
+        model_id: str,
+        sae_id: str,
+        feature_index: int,
+        limit: int = 20,
+        info=None,
+    ) -> list[SaeActivation]:
         """Get top activations for a feature, ordered by max value."""
         db = get_duckdb_client()
         rows = db.get_sae_activations(model_id, sae_id, feature_index, limit)
@@ -745,43 +757,58 @@ class Query:
 
     @strawberry.field
     def sae_feature_search(
-        self, model_id: str, sae_id: str,
-        query: Optional[str] = None,
-        min_density: Optional[float] = None,
-        max_density: Optional[float] = None,
-        limit: int = 50, offset: int = 0,
+        self,
+        model_id: str,
+        sae_id: str,
+        query: str | None = None,
+        min_density: float | None = None,
+        max_density: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
         info=None,
-    ) -> List[SaeFeatureSearchResult]:
+    ) -> list[SaeFeatureSearchResult]:
         """Search features by label text and/or density range."""
         db = get_duckdb_client()
         features = db.search_sae_features(
-            model_id, sae_id,
-            query=query, min_density=min_density,
-            max_density=max_density, limit=limit, offset=offset,
+            model_id,
+            sae_id,
+            query=query,
+            min_density=min_density,
+            max_density=max_density,
+            limit=limit,
+            offset=offset,
         )
-        return [
-            SaeFeatureSearchResult(feature=_dict_to_sae_feature(f))
-            for f in features
-        ]
+        return [SaeFeatureSearchResult(feature=_dict_to_sae_feature(f)) for f in features]
 
     @strawberry.field
     def sae_feature_densities(
-        self, model_id: str, sae_id: str, info=None,
-    ) -> List[float]:
+        self,
+        model_id: str,
+        sae_id: str,
+        info=None,
+    ) -> list[float]:
         """Return all density values for a model/sae pair (for histogram)."""
         db = get_duckdb_client()
         return db.get_sae_feature_densities(model_id, sae_id)
 
     @strawberry.field
     def sae_activations_by_quantile(
-        self, model_id: str, sae_id: str, feature_index: int,
-        n_quantiles: int = 5, per_quantile_limit: int = 5,
+        self,
+        model_id: str,
+        sae_id: str,
+        feature_index: int,
+        n_quantiles: int = 5,
+        per_quantile_limit: int = 5,
         info=None,
-    ) -> List[SaeActivationQuantileGroup]:
+    ) -> list[SaeActivationQuantileGroup]:
         """Return activations grouped by quantile bins."""
         db = get_duckdb_client()
         groups = db.get_sae_activations_by_quantile(
-            model_id, sae_id, feature_index, n_quantiles, per_quantile_limit,
+            model_id,
+            sae_id,
+            feature_index,
+            n_quantiles,
+            per_quantile_limit,
         )
         return [
             SaeActivationQuantileGroup(
@@ -813,6 +840,10 @@ def _dict_to_sae_feature(d: dict) -> SaeFeature:
         feature_index=d["feature_index"],
         density=d.get("density"),
         label=d.get("label"),
-        top_logits=[SaeLogitEntry(token=e["token"], score=e["score"]) for e in top] if top else None,
-        bottom_logits=[SaeLogitEntry(token=e["token"], score=e["score"]) for e in bottom] if bottom else None,
+        top_logits=[SaeLogitEntry(token=e["token"], score=e["score"]) for e in top]
+        if top
+        else None,
+        bottom_logits=[SaeLogitEntry(token=e["token"], score=e["score"]) for e in bottom]
+        if bottom
+        else None,
     )

@@ -8,9 +8,10 @@ Output format:
     word    pos    synset_id    definition    examples
 """
 
-import csv
 import argparse
+import csv
 import os
+
 from tqdm import tqdm
 
 try:
@@ -55,9 +56,9 @@ def export_wordnet_to_tsv(output_path: str, xml_path: str = WORDNET_XML_PATH):
     print(f"\nExporting to: {output_path}")
 
     row_count = 0
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(['word', 'pos', 'synset_id', 'definition', 'examples'])
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(["word", "pos", "synset_id", "definition", "examples"])
 
         all_words = wn.get_all_words()
         for word in tqdm(all_words, desc="Exporting", unit="word"):
@@ -66,18 +67,20 @@ def export_wordnet_to_tsv(output_path: str, xml_path: str = WORDNET_XML_PATH):
             for word_entry in word_entries:
                 for sense in word_entry.senses:
                     # Join multiple examples with pipe separator
-                    examples_str = ' | '.join(sense.examples) if sense.examples else ''
+                    examples_str = " | ".join(sense.examples) if sense.examples else ""
 
-                    writer.writerow([
-                        word,
-                        sense.part_of_speech,
-                        sense.synset_id,
-                        sense.definition,
-                        examples_str
-                    ])
+                    writer.writerow(
+                        [
+                            word,
+                            sense.part_of_speech,
+                            sense.synset_id,
+                            sense.definition,
+                            examples_str,
+                        ]
+                    )
                     row_count += 1
 
-    print(f"\nExport complete!")
+    print("\nExport complete!")
     print(f"  Total rows: {row_count:,}")
     print(f"  Output file: {output_path}")
 
@@ -91,18 +94,18 @@ def export_wordnet_to_tsv(output_path: str, xml_path: str = WORDNET_XML_PATH):
 
 def main():
     """Main entry point with argument parsing."""
-    parser = argparse.ArgumentParser(
-        description="Export WordNet to TSV file for embedding"
-    )
+    parser = argparse.ArgumentParser(description="Export WordNet to TSV file for embedding")
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         default=DEFAULT_OUTPUT_PATH,
-        help=f"Output TSV file path (default: {DEFAULT_OUTPUT_PATH})"
+        help=f"Output TSV file path (default: {DEFAULT_OUTPUT_PATH})",
     )
     parser.add_argument(
-        "-x", "--xml",
+        "-x",
+        "--xml",
         default=WORDNET_XML_PATH,
-        help=f"WordNet XML file path (default: {WORDNET_XML_PATH})"
+        help=f"WordNet XML file path (default: {WORDNET_XML_PATH})",
     )
 
     args = parser.parse_args()

@@ -6,13 +6,21 @@ into ChromaDB using various embedding providers.
 Supports resume capability for interrupted jobs.
 """
 
+import json
+import time
+from collections.abc import Callable
+
 import chromadb
 from chromadb.config import Settings
-import time
-import json
-from typing import Optional, List, Dict, Callable, Set
 from tqdm import tqdm
 
+from ..services.job_state import get_job_state_service
+from ..services.progress_emitter import emit_progress_sync
+from ..utils.batch_utils import sort_items_by_length
+from ..utils.color_preprocessing import preprocess_color_metadata
+from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.id_utils import IDDeduplicator
+from ..utils.text_processing import extract_metadata, format_text_for_embedding
 from .config import (
     DB_PATH,
     TEXT_EMBEDDING_DIMENSIONS,
@@ -22,16 +30,8 @@ from .config import (
     LocalFileEmbeddingConfig,
 )
 from .create_embedding_function import create_embedding_function, get_device
-from ..utils.text_processing import format_text_for_embedding, extract_metadata
-from ..utils.color_preprocessing import preprocess_color_metadata
-from ..utils.id_utils import IDDeduplicator
-from ..utils.batch_utils import sort_items_by_length
 from .embed_images import embed_images
 from .embed_vectors import embed_vectors
-from ..services.job_state import get_job_state_service, JobStatus
-from ..services.progress_emitter import emit_progress_sync
-from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
-
 
 # Progress update frequency (every N batches)
 PROGRESS_UPDATE_FREQUENCY = 1
@@ -68,8 +68,7 @@ def _config_to_dict(config: LocalFileEmbeddingConfig) -> dict:
 
 
 def embed_local_file(
-    config: LocalFileEmbeddingConfig,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    config: LocalFileEmbeddingConfig, progress_callback: Callable[[int, int], None] | None = None
 ) -> EmbeddingResult:
     """
     Embed a local file (parquet/json/csv/tsv) into ChromaDB.
@@ -98,7 +97,7 @@ def embed_local_file(
             file_path=config.file_path,
             n_rows=config.n_rows,
             sample_n=config.sample_n,
-            sample_seed=config.sample_seed
+            sample_seed=config.sample_seed,
         )
         print(f"Loaded {len(rows)} rows (total in file: {total})")
 
@@ -109,7 +108,7 @@ def embed_local_file(
                 embedding_dim=TEXT_EMBEDDING_DIMENSIONS,
                 device=device,
                 duration_seconds=time.time() - start_time,
-                error="No rows loaded from file"
+                error="No rows loaded from file",
             )
 
         # Initialize ChromaDB
@@ -117,8 +116,7 @@ def embed_local_file(
         DB_PATH.mkdir(parents=True, exist_ok=True)
 
         client = chromadb.PersistentClient(
-            path=db_path,
-            settings=Settings(anonymized_telemetry=False)
+            path=db_path, settings=Settings(anonymized_telemetry=False)
         )
 
         # Handle different data types
@@ -130,9 +128,7 @@ def embed_local_file(
                     print(f"Deleted existing collection: {config.collection_name}")
             except Exception:
                 pass
-            return embed_vectors(
-                client, config, rows, total, device, start_time, progress_callback
-            )
+            return embed_vectors(client, config, rows, total, device, start_time, progress_callback)
         elif config.data_type == DataType.IMAGE:
             # Image embedding doesn't support resume yet (pass through to existing)
             try:
@@ -141,9 +137,7 @@ def embed_local_file(
                     print(f"Deleted existing collection: {config.collection_name}")
             except Exception:
                 pass
-            return embed_images(
-                client, config, rows, total, device, start_time, progress_callback
-            )
+            return embed_images(client, config, rows, total, device, start_time, progress_callback)
         else:  # TEXT
             return embed_text_from_local(
                 client, config, rows, total, device, start_time, progress_callback
@@ -161,7 +155,7 @@ def embed_local_file(
             total_items=0,
             current_batch=0,
             total_batches=0,
-            error=str(e)
+            error=str(e),
         )
 
         return EmbeddingResult(
@@ -170,18 +164,18 @@ def embed_local_file(
             embedding_dim=TEXT_EMBEDDING_DIMENSIONS,
             device=get_device(),
             duration_seconds=time.time() - start_time,
-            error=str(e)
+            error=str(e),
         )
 
 
 def embed_text_from_local(
     client,
     config: LocalFileEmbeddingConfig,
-    rows: List[Dict],
+    rows: list[dict],
     total: int,
     device: str,
     start_time: float,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Callable | None = None,
 ) -> EmbeddingResult:
     """
     Embed text data from local file.
@@ -217,7 +211,7 @@ def embed_text_from_local(
                 duration_seconds=time.time() - start_time,
                 error="No text columns found",
                 embedding_provider=model_config.provider.value,
-                embedding_model=model_config.model_name
+                embedding_model=model_config.model_name,
             )
 
     print(f"Embedding columns: {columns}")
@@ -233,13 +227,12 @@ def embed_text_from_local(
         total_items=len(rows),
         current_batch=0,
         total_batches=total_batches,
-        message="Sorting batches by length..."
+        message="Sorting batches by length...",
     )
 
     # Sort rows by text length for efficient batching (reduces padding waste)
     rows = sort_items_by_length(
-        rows,
-        lambda row: format_text_for_embedding(row, columns, config.text_template)
+        rows, lambda row: format_text_for_embedding(row, columns, config.text_template)
     )
     print(f"Sorted {len(rows)} rows by text length for efficient batching")
 
@@ -251,7 +244,7 @@ def embed_text_from_local(
         total_items=len(rows),
         current_batch=0,
         total_batches=total_batches,
-        message=f"Loading embedding model ({model_config.model_name})..."
+        message=f"Loading embedding model ({model_config.model_name})...",
     )
 
     # Create embedding function using factory
@@ -259,19 +252,18 @@ def embed_text_from_local(
     print(f"Using embedding model: {model_config.provider.value} / {model_config.model_name}")
 
     # Handle existing collection (resume vs overwrite)
-    existing_ids: Set[str] = set()
+    existing_ids: set[str] = set()
     collection = None
 
     try:
         existing_collection = client.get_collection(
-            name=config.collection_name,
-            embedding_function=embedding_func
+            name=config.collection_name, embedding_function=embedding_func
         )
 
         if config.resume:
             # Resume mode: get existing IDs to skip
             result = existing_collection.get(include=[])
-            existing_ids = set(result['ids'])
+            existing_ids = set(result["ids"])
             collection = existing_collection
             print(f"Resuming: found {len(existing_ids)} existing embeddings")
         else:
@@ -296,7 +288,7 @@ def embed_text_from_local(
             "embedding_task_type": model_config.task_type,
             "embedding_prompt": model_config.prompt,
             "total_in_file": total,
-            "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
         # Filter out None values from metadata (ChromaDB doesn't like them)
@@ -305,13 +297,15 @@ def embed_text_from_local(
         collection = client.create_collection(
             name=config.collection_name,
             embedding_function=embedding_func,
-            metadata=collection_metadata
+            metadata=collection_metadata,
         )
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
-        config.collection_name, collection_metadata,
-        model_config=model_config, embedding_dim=embedding_dim,
+        config.collection_name,
+        collection_metadata,
+        model_config=model_config,
+        embedding_dim=embedding_dim,
     )
 
     # Determine metadata columns (exclude embedded columns and id column)
@@ -330,7 +324,7 @@ def embed_text_from_local(
             job_type="local_file",
             total_expected=len(rows),
             total_batches=total_batches,
-            config=_config_to_dict(config)
+            config=_config_to_dict(config),
         )
 
     # Emit initial progress so subscribers know the job has started
@@ -341,7 +335,7 @@ def embed_text_from_local(
         total_items=len(rows),
         current_batch=0,
         total_batches=total_batches,
-        message="Starting embedding..."
+        message="Starting embedding...",
     )
 
     # Process in batches
@@ -350,9 +344,10 @@ def embed_text_from_local(
     id_deduplicator = IDDeduplicator()
     batches_completed = 0
 
-    for batch_start in tqdm(range(0, len(rows), config.batch_size),
-                            desc="Embedding batches", unit="batch"):
-        batch = rows[batch_start:batch_start + config.batch_size]
+    for batch_start in tqdm(
+        range(0, len(rows), config.batch_size), desc="Embedding batches", unit="batch"
+    ):
+        batch = rows[batch_start : batch_start + config.batch_size]
 
         ids = []
         documents = []
@@ -407,7 +402,7 @@ def embed_text_from_local(
             job_state.update_progress(
                 collection_name=config.collection_name,
                 items_embedded=total_embedded,
-                batches_completed=batches_completed
+                batches_completed=batches_completed,
             )
             # Emit progress to WebSocket subscribers
             emit_progress_sync(
@@ -416,13 +411,11 @@ def embed_text_from_local(
                 items_processed=total_embedded,
                 total_items=len(rows),
                 current_batch=batches_completed,
-                total_batches=total_batches
+                total_batches=total_batches,
             )
 
         if progress_callback:
             progress_callback(min(batch_start + config.batch_size, len(rows)), len(rows))
-
-  
 
     # Emit completion event to WebSocket subscribers
     emit_progress_sync(
@@ -431,7 +424,7 @@ def embed_text_from_local(
         items_processed=total_embedded,
         total_items=len(rows),
         current_batch=total_batches,
-        total_batches=total_batches
+        total_batches=total_batches,
     )
 
     duration = time.time() - start_time
@@ -447,5 +440,5 @@ def embed_text_from_local(
         device=device,
         duration_seconds=duration,
         embedding_provider=model_config.provider.value,
-        embedding_model=model_config.model_name
+        embedding_model=model_config.model_name,
     )

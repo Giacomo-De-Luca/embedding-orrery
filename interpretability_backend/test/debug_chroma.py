@@ -1,8 +1,7 @@
+from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
-from pathlib import Path
-import json
 
 # Path to vector db
 db_path = Path("interpretability/resources/vector_db").resolve()
@@ -10,8 +9,7 @@ print(f"Checking database at: {db_path}")
 
 try:
     client = chromadb.PersistentClient(
-        path=str(db_path),
-        settings=Settings(anonymized_telemetry=False)
+        path=str(db_path), settings=Settings(anonymized_telemetry=False)
     )
 
     collections = client.list_collections()
@@ -20,7 +18,7 @@ try:
     for col in collections:
         print(f"\nCollection: {col.name}")
         print(f"Count: {col.count()}")
-        
+
         # Get one item
         results = col.get(limit=1, include=["metadatas"])
         if results["metadatas"]:

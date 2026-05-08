@@ -8,11 +8,11 @@ the same operations.
 Run: uv run python -m interpretability_backend.benchmarks.bench_duckdb_comparison
 """
 
-import time
 import json
-import tracemalloc
 import statistics
 import sys
+import time
+import tracemalloc
 from pathlib import Path
 
 import chromadb
@@ -50,7 +50,10 @@ def populate_duckdb_from_chromadb(db: DuckDBClient, chroma_client, collection_na
 
     # Register vector collection
     vc_id = db.register_vector_collection(
-        ds_id, "chromadb", collection_name, "dense",
+        ds_id,
+        "chromadb",
+        collection_name,
+        "dense",
         embedding_provider=metadata.get("embedding_provider"),
         embedding_model=metadata.get("embedding_model"),
         embedding_dim=metadata.get("embedding_dim"),
@@ -65,7 +68,8 @@ def populate_duckdb_from_chromadb(db: DuckDBClient, chroma_client, collection_na
     batch_size = 5000
     for offset in range(0, count, batch_size):
         results = collection.get(
-            limit=batch_size, offset=offset,
+            limit=batch_size,
+            offset=offset,
             include=["metadatas", "documents"],
         )
         ids = results["ids"]
@@ -98,8 +102,9 @@ def populate_duckdb_from_chromadb(db: DuckDBClient, chroma_client, collection_na
     return ds_id, vc_id
 
 
-def bench_projection_load_duckdb(db: DuckDBClient, collection_name: str,
-                                  item_count: int, n_runs: int = TIMED_RUNS):
+def bench_projection_load_duckdb(
+    db: DuckDBClient, collection_name: str, item_count: int, n_runs: int = TIMED_RUNS
+):
     """Benchmark: load projection data from DuckDB."""
     # Warmup
     for _ in range(WARMUP_RUNS):
@@ -125,9 +130,13 @@ def bench_projection_load_duckdb(db: DuckDBClient, collection_name: str,
     }
 
 
-def bench_text_search_document_duckdb(db: DuckDBClient, collection_name: str,
-                                       item_count: int, query: str = "the",
-                                       n_runs: int = TIMED_RUNS):
+def bench_text_search_document_duckdb(
+    db: DuckDBClient,
+    collection_name: str,
+    item_count: int,
+    query: str = "the",
+    n_runs: int = TIMED_RUNS,
+):
     """Benchmark: text search on document field via DuckDB ILIKE."""
     # Warmup
     for _ in range(WARMUP_RUNS):
@@ -156,9 +165,14 @@ def bench_text_search_document_duckdb(db: DuckDBClient, collection_name: str,
     }
 
 
-def bench_text_search_metadata_duckdb(db: DuckDBClient, collection_name: str,
-                                       item_count: int, field: str, query: str,
-                                       n_runs: int = TIMED_RUNS):
+def bench_text_search_metadata_duckdb(
+    db: DuckDBClient,
+    collection_name: str,
+    item_count: int,
+    field: str,
+    query: str,
+    n_runs: int = TIMED_RUNS,
+):
     """Benchmark: metadata field search via DuckDB json_extract + ILIKE."""
     # Warmup
     for _ in range(WARMUP_RUNS):
@@ -188,9 +202,13 @@ def bench_text_search_metadata_duckdb(db: DuckDBClient, collection_name: str,
     }
 
 
-def bench_bm25_search_duckdb(db: DuckDBClient, collection_name: str,
-                              item_count: int, query: str = "the",
-                              n_runs: int = TIMED_RUNS):
+def bench_bm25_search_duckdb(
+    db: DuckDBClient,
+    collection_name: str,
+    item_count: int,
+    query: str = "the",
+    n_runs: int = TIMED_RUNS,
+):
     """Benchmark: BM25 full-text search via DuckDB FTS extension."""
     # Warmup (also triggers FTS rebuild)
     for _ in range(WARMUP_RUNS):
@@ -217,8 +235,7 @@ def bench_bm25_search_duckdb(db: DuckDBClient, collection_name: str,
     }
 
 
-def bench_memory_projection_load_duckdb(db: DuckDBClient, collection_name: str,
-                                         item_count: int):
+def bench_memory_projection_load_duckdb(db: DuckDBClient, collection_name: str, item_count: int):
     """Benchmark: peak memory for loading projection data from DuckDB."""
     tracemalloc.start()
     snapshot_before = tracemalloc.take_snapshot()
@@ -271,9 +288,9 @@ def run_benchmarks():
             continue
 
         count = collection.count()
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"  {size_label.upper()}: {coll_name} ({count} items)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Populate DuckDB
         print("  Populating DuckDB from ChromaDB...")
@@ -289,7 +306,9 @@ def run_benchmarks():
         chroma_baseline = baseline.get((coll_name, "projection_load"), {})
         chroma_time = chroma_baseline.get("mean_s", 0)
         speedup = chroma_time / r["mean_s"] if r["mean_s"] > 0 else 0
-        print(f"    DuckDB: {r['mean_s']}s  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x {'faster' if speedup > 1 else 'slower'}")
+        print(
+            f"    DuckDB: {r['mean_s']}s  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x {'faster' if speedup > 1 else 'slower'}"
+        )
 
         # Document text search
         print("  Benchmarking document text search (ILIKE)...")
@@ -298,7 +317,9 @@ def run_benchmarks():
         chroma_baseline = baseline.get((coll_name, "text_search_document"), {})
         chroma_time = chroma_baseline.get("mean_s", 0)
         speedup = chroma_time / r["mean_s"] if r["mean_s"] > 0 else 0
-        print(f"    DuckDB: {r['mean_s']}s ({r['matches']} matches)  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x")
+        print(
+            f"    DuckDB: {r['mean_s']}s ({r['matches']} matches)  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x"
+        )
 
         # BM25 search
         print("  Benchmarking BM25 full-text search...")
@@ -316,7 +337,9 @@ def run_benchmarks():
             results.append(r)
             chroma_time = meta_baseline.get("mean_s", 0)
             speedup = chroma_time / r["mean_s"] if r["mean_s"] > 0 else 0
-            print(f"    DuckDB: {r['mean_s']}s ({r['matches']} matches)  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x")
+            print(
+                f"    DuckDB: {r['mean_s']}s ({r['matches']} matches)  |  ChromaDB: {chroma_time}s  |  {speedup:.1f}x"
+            )
 
         # Memory
         print("  Benchmarking memory usage...")
@@ -325,14 +348,16 @@ def run_benchmarks():
         chroma_baseline = baseline.get((coll_name, "memory_projection_load"), {})
         chroma_mb = chroma_baseline.get("total_allocated_mb", 0)
         savings = (1 - r["total_allocated_mb"] / chroma_mb) * 100 if chroma_mb > 0 else 0
-        print(f"    DuckDB: {r['total_allocated_mb']}MB  |  ChromaDB: {chroma_mb}MB  |  {savings:.0f}% {'savings' if savings > 0 else 'more'}")
+        print(
+            f"    DuckDB: {r['total_allocated_mb']}MB  |  ChromaDB: {chroma_mb}MB  |  {savings:.0f}% {'savings' if savings > 0 else 'more'}"
+        )
 
     # Summary
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("  COMPARISON SUMMARY")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  {'Collection':<32} {'Operation':<25} {'DuckDB':>10} {'ChromaDB':>10} {'Speedup':>10}")
-    print(f"  {'-'*32} {'-'*25} {'-'*10} {'-'*10} {'-'*10}")
+    print(f"  {'-' * 32} {'-' * 25} {'-' * 10} {'-' * 10} {'-' * 10}")
     for r in results:
         if "mean_s" in r:
             key = (r["collection"], r["operation"])
@@ -343,12 +368,16 @@ def run_benchmarks():
             else:
                 speedup = "N/A"
                 chroma_time = "N/A"
-            print(f"  {r['collection'][:32]:<32} {r['operation']:<25} {r['mean_s']:>9.4f}s {str(chroma_time):>9}s {speedup:>10}")
+            print(
+                f"  {r['collection'][:32]:<32} {r['operation']:<25} {r['mean_s']:>9.4f}s {str(chroma_time):>9}s {speedup:>10}"
+            )
         else:
             key = (r["collection"], r["operation"])
             chroma_r = baseline.get(key, {})
             chroma_mb = chroma_r.get("total_allocated_mb", "N/A")
-            print(f"  {r['collection'][:32]:<32} {r['operation']:<25} {r['total_allocated_mb']:>8.1f}MB {str(chroma_mb):>8}MB")
+            print(
+                f"  {r['collection'][:32]:<32} {r['operation']:<25} {r['total_allocated_mb']:>8.1f}MB {str(chroma_mb):>8}MB"
+            )
 
     # Save results
     out_path = Path(__file__).parent / "results_duckdb_comparison.json"
@@ -359,6 +388,7 @@ def run_benchmarks():
     # Cleanup temp DB
     db.close()
     import os
+
     try:
         os.remove(bench_db_path)
         os.remove(bench_db_path + ".wal")

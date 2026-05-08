@@ -1,16 +1,18 @@
 import time
+from collections.abc import Callable, Mapping
+from typing import Any
+
 import openai
 import pandas as pd
-from tqdm import tqdm
-from scipy.sparse import csr_matrix
-from typing import Mapping, List, Tuple, Any, Union, Callable
 from bertopic.representation._base import BaseRepresentation
+from scipy.sparse import csr_matrix
+from tqdm import tqdm
+
 from interpretability_backend.backend.topic_extraction._representation_utils import (
     retry_with_exponential_backoff,
     truncate_document,
     validate_truncate_document_parameters,
 )
-
 
 DEFAULT_CHAT_PROMPT = """You will extract a short topic label from given documents and keywords.
 Here are two examples of topics you created before:
@@ -142,7 +144,7 @@ class OpenAI(BaseRepresentation):
         nr_docs: int = 4,
         diversity: float | None = None,
         doc_length: int | None = None,
-        tokenizer: Union[str, Callable] | None = None,
+        tokenizer: str | Callable | None = None,
         **kwargs,
     ):
         self.client = client
@@ -184,8 +186,8 @@ class OpenAI(BaseRepresentation):
         topic_model,
         documents: pd.DataFrame,
         c_tf_idf: csr_matrix,
-        topics: Mapping[str, List[Tuple[str, float]]],
-    ) -> Mapping[str, List[Tuple[str, float]]]:
+        topics: Mapping[str, list[tuple[str, float]]],
+    ) -> Mapping[str, list[tuple[str, float]]]:
         """Extract topics.
 
         Arguments:
@@ -205,7 +207,9 @@ class OpenAI(BaseRepresentation):
         # Generate using OpenAI's Language Model
         updated_topics = {}
         for topic, docs in tqdm(repr_docs_mappings.items(), disable=not topic_model.verbose):
-            truncated_docs = [truncate_document(topic_model, self.doc_length, self.tokenizer, doc) for doc in docs]
+            truncated_docs = [
+                truncate_document(topic_model, self.doc_length, self.tokenizer, doc) for doc in docs
+            ]
             prompt = self._create_prompt(truncated_docs, topic, topics)
             self.prompts_.append(prompt)
 

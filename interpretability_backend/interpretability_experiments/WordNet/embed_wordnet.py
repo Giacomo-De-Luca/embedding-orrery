@@ -9,17 +9,18 @@ Both strategies are designed to find monosemantic interpretable dimensions.
 """
 
 import os
-from typing import List, Dict, Generator, Optional
-from tqdm import tqdm
+from collections.abc import Generator
 from dataclasses import dataclass
 
+from tqdm import tqdm
+
 try:
-    from .wordnet_parser import WordNetParser
-    from .splade_embedder import SPLADEEmbedder, SparseEmbedding
+    from .splade_embedder import SparseEmbedding, SPLADEEmbedder
     from .storage import QdrantStorage, WordEmbeddingRecord
+    from .wordnet_parser import WordNetParser
 except ImportError:
     from interpretability.interpretability_experiments.WordNet.wordnet_parser import WordNetParser
-    from splade_embedder import SPLADEEmbedder, SparseEmbedding
+    from splade_embedder import SparseEmbedding, SPLADEEmbedder
     from storage import QdrantStorage, WordEmbeddingRecord
 
 
@@ -38,19 +39,18 @@ BATCH_SIZE = 100
 @dataclass
 class EmbeddingResult:
     """Result from embedding a word."""
+
     word: str
     strategy: str
     context: str
-    synset_id: Optional[str]
-    pos: Optional[str]
+    synset_id: str | None
+    pos: str | None
     sparse_embedding: SparseEmbedding
-    top_tokens: List[str]
+    top_tokens: list[str]
 
 
 def embed_wordnet_word_level(
-    wn: WordNetParser,
-    splade: SPLADEEmbedder,
-    limit: Optional[int] = None
+    wn: WordNetParser, splade: SPLADEEmbedder, limit: int | None = None
 ) -> Generator[EmbeddingResult, None, None]:
     """
     Strategy A: Word-level extraction from example sentences.
@@ -75,7 +75,7 @@ def embed_wordnet_word_level(
         definitions = wn.get_definitions(word)
 
         for defn in definitions:
-            examples = defn.get('examples', [])
+            examples = defn.get("examples", [])
             if not examples:
                 continue
 
@@ -95,17 +95,15 @@ def embed_wordnet_word_level(
                     word=word,
                     strategy="word_level",
                     context=example,
-                    synset_id=defn.get('synset_id'),
-                    pos=defn.get('part_of_speech'),
+                    synset_id=defn.get("synset_id"),
+                    pos=defn.get("part_of_speech"),
                     sparse_embedding=sparse_emb,
-                    top_tokens=top_tokens
+                    top_tokens=top_tokens,
                 )
 
 
 def embed_wordnet_definition(
-    wn: WordNetParser,
-    splade: SPLADEEmbedder,
-    limit: Optional[int] = None
+    wn: WordNetParser, splade: SPLADEEmbedder, limit: int | None = None
 ) -> Generator[EmbeddingResult, None, None]:
     """
     Strategy B: Sentence-level embedding from definitions.
@@ -146,14 +144,14 @@ def embed_wordnet_definition(
             word=word,
             strategy="definition",
             context=text,
-            synset_id=defn.get('synset_id'),
-            pos=defn.get('part_of_speech'),
+            synset_id=defn.get("synset_id"),
+            pos=defn.get("part_of_speech"),
             sparse_embedding=sparse_emb,
-            top_tokens=top_tokens
+            top_tokens=top_tokens,
         )
 
 
-def results_to_records(results: List[EmbeddingResult]) -> List[WordEmbeddingRecord]:
+def results_to_records(results: list[EmbeddingResult]) -> list[WordEmbeddingRecord]:
     """Convert embedding results to storage records."""
     records = []
     for i, result in enumerate(results):
@@ -165,16 +163,14 @@ def results_to_records(results: List[EmbeddingResult]) -> List[WordEmbeddingReco
             synset_id=result.synset_id,
             pos=result.pos,
             sparse_embedding=result.sparse_embedding,
-            top_tokens=result.top_tokens
+            top_tokens=result.top_tokens,
         )
         records.append(record)
     return records
 
 
 def run_embedding_pipeline(
-    strategy: str = "both",
-    limit: Optional[int] = None,
-    recreate: bool = False
+    strategy: str = "both", limit: int | None = None, recreate: bool = False
 ):
     """
     Run the embedding pipeline for the specified strategy.
@@ -211,15 +207,13 @@ def run_embedding_pipeline(
 
     if strategy in ["word_level", "both"]:
         storage_word_level = QdrantStorage(
-            db_path=QDRANT_DB_PATH,
-            collection_name=COLLECTION_WORD_LEVEL
+            db_path=QDRANT_DB_PATH, collection_name=COLLECTION_WORD_LEVEL
         )
         storage_word_level.create_collection(recreate=recreate, dense_dim=384)
 
     if strategy in ["definition", "both"]:
         storage_definition = QdrantStorage(
-            db_path=QDRANT_DB_PATH,
-            collection_name=COLLECTION_DEFINITION
+            db_path=QDRANT_DB_PATH, collection_name=COLLECTION_DEFINITION
         )
         storage_definition.create_collection(recreate=recreate, dense_dim=384)
 
@@ -286,34 +280,23 @@ def main():
     """Main entry point with argument parsing."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Embed WordNet using SPLADE sparse embeddings"
-    )
+    parser = argparse.ArgumentParser(description="Embed WordNet using SPLADE sparse embeddings")
     parser.add_argument(
         "--strategy",
         choices=["word_level", "definition", "both"],
         default="both",
-        help="Embedding strategy to use"
+        help="Embedding strategy to use",
     )
     parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Limit number of words to process (for testing)"
+        "--limit", type=int, default=None, help="Limit number of words to process (for testing)"
     )
     parser.add_argument(
-        "--recreate",
-        action="store_true",
-        help="Recreate collections (delete existing data)"
+        "--recreate", action="store_true", help="Recreate collections (delete existing data)"
     )
 
     args = parser.parse_args()
 
-    run_embedding_pipeline(
-        strategy=args.strategy,
-        limit=args.limit,
-        recreate=args.recreate
-    )
+    run_embedding_pipeline(strategy=args.strategy, limit=args.limit, recreate=args.recreate)
 
 
 if __name__ == "__main__":

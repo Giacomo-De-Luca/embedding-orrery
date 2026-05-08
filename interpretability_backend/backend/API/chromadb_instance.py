@@ -1,15 +1,14 @@
 """Shared ChromaDB client instance for API layer."""
 
-from typing import Optional
 from ..clients.chromadb_client import ChromaDBClient
 
 # Shared ChromaDB client instance (lazy singleton)
-_chromadb_client: Optional[ChromaDBClient] = None
+_chromadb_client: ChromaDBClient | None = None
 
 
 def get_chromadb_client() -> ChromaDBClient:
     """Get shared ChromaDB client instance.
-    
+
     Returns:
         Singleton ChromaDBClient instance, created on first call.
     """

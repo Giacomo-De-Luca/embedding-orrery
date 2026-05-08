@@ -28,14 +28,20 @@ from chromadb.config import Settings
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.clients.duckdb_client import DuckDBClient
-from backend.embedding_functions.config import DB_PATH, DUCKDB_PATH
+from backend.embedding_functions.config import DB_PATH
 
 # Projection keys stored as JSON strings in ChromaDB per-item metadata
 PROJECTION_KEYS = {"pca_2d", "pca_3d", "umap_2d", "umap_3d"}
 
 # Topic keys stored in ChromaDB per-item metadata
-TOPIC_KEYS = {"topic_id", "topic_label", "subtopic_id", "subtopic_label",
-              "ctfidf_label", "ctfidf_subtopic_map"}
+TOPIC_KEYS = {
+    "topic_id",
+    "topic_label",
+    "subtopic_id",
+    "subtopic_label",
+    "ctfidf_label",
+    "ctfidf_subtopic_map",
+}
 
 
 def get_chromadb_client():
@@ -105,7 +111,10 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
             embedding_dim = None
 
     db.register_vector_collection(
-        collection_name, "chromadb", collection_name, "dense",
+        collection_name,
+        "chromadb",
+        collection_name,
+        "dense",
         embedding_provider=meta.get("embedding_provider"),
         embedding_model=meta.get("embedding_model"),
         embedding_dim=embedding_dim,
@@ -120,13 +129,14 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
     all_ids = []
     all_docs = []
     all_metas = []
-    proj_data = {}       # ptype -> (item_ids[], coordinates[])
-    topic_item_data = [] # [{item_id, topic_id, topic_label, subtopic_id, subtopic_label}]
+    proj_data = {}  # ptype -> (item_ids[], coordinates[])
+    topic_item_data = []  # [{item_id, topic_id, topic_label, subtopic_id, subtopic_label}]
 
     batch_size = 5000
     for offset in range(0, count, batch_size):
         results = collection.get(
-            limit=batch_size, offset=offset,
+            limit=batch_size,
+            offset=offset,
             include=["metadatas", "documents"],
         )
         batch_ids = results["ids"]
@@ -157,13 +167,17 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
             topic_id_raw = item_meta.get("topic_id")
             if topic_id_raw is not None:
                 try:
-                    topic_item_data.append({
-                        "item_id": item_id,
-                        "topic_id": int(topic_id_raw),
-                        "topic_label": item_meta.get("topic_label"),
-                        "subtopic_id": int(item_meta["subtopic_id"]) if item_meta.get("subtopic_id") is not None else None,
-                        "subtopic_label": item_meta.get("subtopic_label"),
-                    })
+                    topic_item_data.append(
+                        {
+                            "item_id": item_id,
+                            "topic_id": int(topic_id_raw),
+                            "topic_label": item_meta.get("topic_label"),
+                            "subtopic_id": int(item_meta["subtopic_id"])
+                            if item_meta.get("subtopic_id") is not None
+                            else None,
+                            "subtopic_label": item_meta.get("subtopic_label"),
+                        }
+                    )
                 except (ValueError, TypeError):
                     pass
 
@@ -197,7 +211,8 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
 
     if proj_data:
         db._conn.execute(
-            "UPDATE vector_collections SET has_projections = TRUE WHERE collection_name = ?", [collection_name]
+            "UPDATE vector_collections SET has_projections = TRUE WHERE collection_name = ?",
+            [collection_name],
         )
 
     # ---- 7. Topics ----
@@ -205,7 +220,11 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         # Parse topic_summary from collection metadata
         topic_summary_raw = meta.get("topic_summary", "[]")
         try:
-            topic_summary = json.loads(topic_summary_raw) if isinstance(topic_summary_raw, str) else topic_summary_raw
+            topic_summary = (
+                json.loads(topic_summary_raw)
+                if isinstance(topic_summary_raw, str)
+                else topic_summary_raw
+            )
         except (json.JSONDecodeError, TypeError):
             topic_summary = []
 
@@ -214,7 +233,11 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         topic_config = None
         if topic_config_raw:
             try:
-                topic_config = json.loads(topic_config_raw) if isinstance(topic_config_raw, str) else topic_config_raw
+                topic_config = (
+                    json.loads(topic_config_raw)
+                    if isinstance(topic_config_raw, str)
+                    else topic_config_raw
+                )
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -223,7 +246,11 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         topic_hierarchy = None
         if topic_hierarchy_raw:
             try:
-                topic_hierarchy = json.loads(topic_hierarchy_raw) if isinstance(topic_hierarchy_raw, str) else topic_hierarchy_raw
+                topic_hierarchy = (
+                    json.loads(topic_hierarchy_raw)
+                    if isinstance(topic_hierarchy_raw, str)
+                    else topic_hierarchy_raw
+                )
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -232,7 +259,8 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
 
         # Update extraction with reduction info if present
         if meta.get("reduction_applied"):
-            db._conn.execute("""
+            db._conn.execute(
+                """
                 UPDATE topic_extractions SET
                     reduction_applied = TRUE,
                     reduction_method = ?,
@@ -241,14 +269,16 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
                     topic_hierarchy = ?,
                     topic_count = ?
                 WHERE id = ?
-            """, [
-                meta.get("reduction_method"),
-                meta.get("reduction_target"),
-                meta.get("num_topics_before_reduction"),
-                json.dumps(topic_hierarchy) if topic_hierarchy else None,
-                meta.get("topic_count"),
-                ext_id,
-            ])
+            """,
+                [
+                    meta.get("reduction_method"),
+                    meta.get("reduction_target"),
+                    meta.get("num_topics_before_reduction"),
+                    json.dumps(topic_hierarchy) if topic_hierarchy else None,
+                    meta.get("topic_count"),
+                    ext_id,
+                ],
+            )
         else:
             db._conn.execute(
                 "UPDATE topic_extractions SET topic_count = ? WHERE id = ?",
@@ -258,14 +288,16 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         # Insert topic info from summary
         topic_info_records = []
         for entry in topic_summary:
-            topic_info_records.append({
-                "topic_id": entry["topic_id"],
-                "label": entry.get("label"),
-                "ctfidf_label": entry.get("ctfidf_label"),
-                "count": entry.get("count", 0),
-                "keywords": entry.get("keywords"),
-                "subtopics": entry.get("subtopics"),
-            })
+            topic_info_records.append(
+                {
+                    "topic_id": entry["topic_id"],
+                    "label": entry.get("label"),
+                    "ctfidf_label": entry.get("ctfidf_label"),
+                    "count": entry.get("count", 0),
+                    "keywords": entry.get("keywords"),
+                    "subtopics": entry.get("subtopics"),
+                }
+            )
         if topic_info_records:
             db.insert_topic_info_batch(ext_id, topic_info_records)
             stats["topics"] = len(topic_info_records)
@@ -275,7 +307,8 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         stats["topic_assignments"] = len(topic_item_data)
 
         db._conn.execute(
-            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?", [collection_name]
+            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?",
+            [collection_name],
         )
 
     return stats
@@ -308,9 +341,13 @@ def verify_migration(db: DuckDBClient, chroma_client, collection_name: str) -> d
 def main():
     parser = argparse.ArgumentParser(description="Migrate ChromaDB collections to DuckDB")
     parser.add_argument("--collection", type=str, help="Migrate a single collection by name")
-    parser.add_argument("--force", action="store_true", help="Re-migrate collections already in DuckDB")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-migrate collections already in DuckDB"
+    )
     parser.add_argument("--verify", action="store_true", help="Verify migration without migrating")
-    parser.add_argument("--db-path", type=str, default=None, help="DuckDB path (default: resources/main.duckdb)")
+    parser.add_argument(
+        "--db-path", type=str, default=None, help="DuckDB path (default: resources/main.duckdb)"
+    )
     args = parser.parse_args()
 
     chroma_client = get_chromadb_client()
@@ -330,7 +367,9 @@ def main():
             status = "OK" if v["match"] else "MISMATCH"
             if not v["match"]:
                 all_ok = False
-            print(f"  [{status:8}] {name:<40} chroma={v['chroma_count']:>8,}  duckdb={v['duckdb_count']:>8,}  missing={v['missing_in_duckdb']}")
+            print(
+                f"  [{status:8}] {name:<40} chroma={v['chroma_count']:>8,}  duckdb={v['duckdb_count']:>8,}  missing={v['missing_in_duckdb']}"
+            )
         print(f"\n{'All collections verified.' if all_ok else 'Some collections have mismatches!'}")
         return
 
@@ -347,10 +386,16 @@ def main():
         # Skip if already in DuckDB (unless --force)
         existing = db.get_dataset(name)
         if existing and not args.force:
-            print(f"  [{i}/{len(collection_names)}] {name:<40} SKIP (already in DuckDB, {existing['count']:,} items)")
+            print(
+                f"  [{i}/{len(collection_names)}] {name:<40} SKIP (already in DuckDB, {existing['count']:,} items)"
+            )
             continue
         elif existing and args.force:
-            print(f"  [{i}/{len(collection_names)}] {name:<40} deleting existing...", end=" ", flush=True)
+            print(
+                f"  [{i}/{len(collection_names)}] {name:<40} deleting existing...",
+                end=" ",
+                flush=True,
+            )
             db.delete_dataset(name)
 
         t0 = time.perf_counter()
@@ -363,31 +408,39 @@ def main():
         else:
             total_items += stats["items"]
             proj_summary = ", ".join(f"{k}={v}" for k, v in stats["projections"].items()) or "none"
-            topic_summary = f"{stats['topics']} topics, {stats['topic_assignments']} assignments" if stats["topics"] else "none"
-            print(f"  [{i}/{len(collection_names)}] {name:<40} {stats['items']:>8,} items  projections=[{proj_summary}]  topics=[{topic_summary}]  {elapsed:.1f}s")
+            topic_summary = (
+                f"{stats['topics']} topics, {stats['topic_assignments']} assignments"
+                if stats["topics"]
+                else "none"
+            )
+            print(
+                f"  [{i}/{len(collection_names)}] {name:<40} {stats['items']:>8,} items  projections=[{proj_summary}]  topics=[{topic_summary}]  {elapsed:.1f}s"
+            )
 
         results.append(stats)
 
     # Verify
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"  Migration complete: {total_items:,} items in {total_time:.1f}s")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
-    print(f"\nVerifying...\n")
+    print("\nVerifying...\n")
     all_ok = True
     for name in collection_names:
         v = verify_migration(db, chroma_client, name)
         status = "OK" if v["match"] else "MISMATCH"
         if not v["match"]:
             all_ok = False
-            print(f"  [{status:8}] {name:<40} chroma={v['chroma_count']:>8,}  duckdb={v['duckdb_count']:>8,}  missing={v['missing_in_duckdb']}")
+            print(
+                f"  [{status:8}] {name:<40} chroma={v['chroma_count']:>8,}  duckdb={v['duckdb_count']:>8,}  missing={v['missing_in_duckdb']}"
+            )
         else:
             print(f"  [{status:8}] {name:<40} {v['duckdb_count']:>8,} items")
 
     if all_ok:
         print(f"\nAll {len(collection_names)} collections verified successfully.")
     else:
-        print(f"\nSome collections have mismatches! Run with --verify for details.")
+        print("\nSome collections have mismatches! Run with --verify for details.")
 
 
 if __name__ == "__main__":

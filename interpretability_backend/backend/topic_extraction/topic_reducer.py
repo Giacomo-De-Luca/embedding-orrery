@@ -9,31 +9,31 @@ Supports both c-TF-IDF and semantic embeddings for topic similarity.
 """
 
 import logging
+from collections import defaultdict
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Union
-from collections import defaultdict
 import scipy.sparse as sp
-
+from hdbscan import HDBSCAN
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
-from sklearn.feature_extraction.text import CountVectorizer
-from hdbscan import HDBSCAN
 
 from .cluster_and_label import ClassTfidfTransformer
 
-logger = logging.getLogger('star_map.' + __name__)
+logger = logging.getLogger("star_map." + __name__)
 
 
 @dataclass
 class TopicReductionResult:
     """Result of topic reduction operation."""
+
     documents_df: pd.DataFrame  # Updated with new topic assignments
-    topics_data: Dict[int, List[Tuple[str, float]]]  # Re-extracted keywords
-    topic_mappings: Dict[int, int]  # old_topic_id -> new_topic_id
-    topic_hierarchy: Dict[int, List[int]]  # new_topic_id -> [old_topic_ids that merged into it]
+    topics_data: dict[int, list[tuple[str, float]]]  # Re-extracted keywords
+    topic_mappings: dict[int, int]  # old_topic_id -> new_topic_id
+    topic_hierarchy: dict[int, list[int]]  # new_topic_id -> [old_topic_ids that merged into it]
     num_topics_before: int
     num_topics_after: int
     reduction_method: str  # "fixed_n" or "auto"
@@ -52,12 +52,12 @@ class TopicReducer:
     def __init__(
         self,
         documents_df: pd.DataFrame,
-        topics_data: Dict[int, List[Tuple[str, float]]],
+        topics_data: dict[int, list[tuple[str, float]]],
         ctfidf_matrix: sp.csr_matrix,
         ctfidf_words: np.ndarray,
-        language: Optional[str] = "english",
-        collection_name: Optional[str] = None,
-        chromadb_client=None
+        language: str | None = "english",
+        collection_name: str | None = None,
+        chromadb_client=None,
     ):
         """Initialize with existing topic extraction results.
 
@@ -112,8 +112,7 @@ class TopicReducer:
 
         # Get collection without loading embedding function
         collection = self.chromadb_client.get_collection(
-            name=self.collection_name,
-            embedding_function=None
+            name=self.collection_name, embedding_function=None
         )
 
         topic_ids = sorted(self.topics_data.keys())
@@ -122,10 +121,7 @@ class TopicReducer:
         for topic_id in topic_ids:
             # Load only embeddings for this topic (memory-efficient!)
             try:
-                results = collection.get(
-                    where={"topic_id": str(topic_id)},
-                    include=["embeddings"]
-                )
+                results = collection.get(where={"topic_id": str(topic_id)}, include=["embeddings"])
 
                 if results["embeddings"] and len(results["embeddings"]) > 0:
                     # Average embeddings for this topic
@@ -153,11 +149,7 @@ class TopicReducer:
 
         return np.array(topic_embeddings)
 
-    def reduce_to_n_topics(
-        self,
-        n_topics: int,
-        use_ctfidf: bool = True
-    ) -> TopicReductionResult:
+    def reduce_to_n_topics(self, n_topics: int, use_ctfidf: bool = True) -> TopicReductionResult:
         """Reduce to a fixed number of topics using AgglomerativeClustering.
 
         Pipeline:
@@ -188,7 +180,9 @@ class TopicReducer:
         if n_topics < 2:
             raise ValueError("n_topics must be >= 2")
         if n_topics >= num_topics_before:
-            logger.warning(f"Target ({n_topics}) >= extracted ({num_topics_before}), no reduction needed")
+            logger.warning(
+                f"Target ({n_topics}) >= extracted ({num_topics_before}), no reduction needed"
+            )
             return TopicReductionResult(
                 documents_df=self.documents_df,
                 topics_data=self.topics_data,
@@ -196,7 +190,7 @@ class TopicReducer:
                 topic_hierarchy={},
                 num_topics_before=num_topics_before,
                 num_topics_after=num_topics_before,
-                reduction_method="fixed_n"
+                reduction_method="fixed_n",
             )
 
         # Create topic distance matrix
@@ -219,9 +213,7 @@ class TopicReducer:
             n_clusters = 1
 
         cluster = AgglomerativeClustering(
-            n_clusters=n_clusters,
-            metric="precomputed",
-            linkage="average"
+            n_clusters=n_clusters, metric="precomputed", linkage="average"
         )
         cluster.fit(distance_matrix)
 
@@ -256,7 +248,7 @@ class TopicReducer:
             topic_hierarchy=dict(topic_hierarchy),
             num_topics_before=num_topics_before,
             num_topics_after=num_topics_after,
-            reduction_method="fixed_n"
+            reduction_method="fixed_n",
         )
 
     def auto_reduce_topics(self, use_ctfidf: bool = True) -> TopicReductionResult:
@@ -299,7 +291,7 @@ class TopicReducer:
                 topic_hierarchy={},
                 num_topics_before=num_topics_before,
                 num_topics_after=num_topics_before,
-                reduction_method="auto"
+                reduction_method="auto",
             )
 
         # Compute and normalize topic embeddings
@@ -314,7 +306,7 @@ class TopicReducer:
             min_cluster_size=2,
             metric="euclidean",
             cluster_selection_method="eom",
-            prediction_data=True
+            prediction_data=True,
         )
         predictions = hdbscan.fit_predict(norm_embeddings)
 
@@ -361,14 +353,12 @@ class TopicReducer:
             topic_hierarchy=dict(topic_hierarchy),
             num_topics_before=num_topics_before,
             num_topics_after=num_topics_after,
-            reduction_method="auto"
+            reduction_method="auto",
         )
 
     def _merge_topics(
-        self,
-        new_topics: List[int],
-        topic_mappings: Dict[int, int]
-    ) -> Tuple[pd.DataFrame, Dict[int, List[Tuple[str, float]]]]:
+        self, new_topics: list[int], topic_mappings: dict[int, int]
+    ) -> tuple[pd.DataFrame, dict[int, list[tuple[str, float]]]]:
         """Apply topic mappings and re-extract keywords.
 
         Args:
@@ -385,15 +375,10 @@ class TopicReducer:
         documents_df["Topic"] = new_topics
 
         # Group documents by new topic (mega-document step)
-        docs_per_topic = documents_df.groupby(['Topic'], as_index=False).agg({
-            'Document': ' '.join
-        })
+        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
 
         # Re-run CountVectorizer + c-TF-IDF on merged documents
-        count_vectorizer = CountVectorizer(
-            stop_words=self.language,
-            ngram_range=(1, 1)
-        )
+        count_vectorizer = CountVectorizer(stop_words=self.language, ngram_range=(1, 1))
         X = count_vectorizer.fit_transform(docs_per_topic.Document.values)
         words = count_vectorizer.get_feature_names_out()
 

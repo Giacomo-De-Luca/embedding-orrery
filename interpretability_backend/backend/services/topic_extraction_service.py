@@ -6,28 +6,32 @@ keyword extraction. Optionally generates human-readable labels via LLM
 (Gemini default, OpenAI supported).
 """
 
-import time
 import json
 import logging
-import numpy as np
+import time
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Optional
 
 import chromadb
+import numpy as np
 from chromadb.config import Settings
 
-from ..topic_extraction.cluster_and_label import GenerateTopics
-from ..topic_extraction.llm_labeling import generate_llm_labels, generate_llm_label_for_topic, _create_labeler
 from ..embedding_functions.config import DB_PATH
-from .progress_emitter import emit_progress
+from ..topic_extraction.cluster_and_label import GenerateTopics
+from ..topic_extraction.llm_labeling import (
+    _create_labeler,
+    generate_llm_label_for_topic,
+    generate_llm_labels,
+)
 from ..utils.duckdb_sync import _get_db as _get_duckdb
+from .progress_emitter import emit_progress
 
-logger = logging.getLogger('star_map.' + __name__)
+logger = logging.getLogger("star_map." + __name__)
 
 
 @dataclass
 class TopicExtractionConfig:
     """Configuration for topic extraction."""
+
     collection_name: str
     min_topic_size: int = 10
     n_keywords: int = 10
@@ -35,59 +39,61 @@ class TopicExtractionConfig:
     llm_provider: str = "gemini"
     llm_model: str = "gemini-3-flash-preview"
     projection_type: str = "umap_2d"  # pca_2d, pca_3d, umap_2d, umap_3d
-    language: Optional[str] = "english"  # Stop words language for CountVectorizer
+    language: str | None = "english"  # Stop words language for CountVectorizer
 
     # Clustering config
     clustering_method: str = "hdbscan"  # hdbscan, kmeans, gmm, spectral
-    n_clusters: Optional[int] = None  # Required for kmeans, gmm, spectral
+    n_clusters: int | None = None  # Required for kmeans, gmm, spectral
 
     # Reduction config
     reduce_topics: bool = False
     reduction_method: str = "auto"  # "auto" or "fixed_n"
-    nr_topics: Optional[int] = None
+    nr_topics: int | None = None
     use_ctfidf_for_reduction: bool = True
 
 
 @dataclass
 class TopicInfoResult:
     """Information about a single extracted topic."""
+
     topic_id: int
-    keywords: List[Tuple[str, float]]
-    label: Optional[str]
+    keywords: list[tuple[str, float]]
+    label: str | None
     count: int
-    subtopics: Optional[List[str]] = None
+    subtopics: list[str] | None = None
 
 
 @dataclass
 class TopicExtractionResult:
     """Result of topic extraction."""
+
     collection_name: str
     num_topics: int
     num_noise_points: int
-    topics: List[TopicInfoResult]
+    topics: list[TopicInfoResult]
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
     # Reduction tracking
-    num_topics_before_reduction: Optional[int] = None
+    num_topics_before_reduction: int | None = None
     reduction_applied: bool = False
-    topic_mappings: Optional[Dict[int, int]] = None
+    topic_mappings: dict[int, int] | None = None
 
 
 def _sync_topics_to_duckdb(
     collection_name: str,
-    topic_infos: List[TopicInfoResult],
-    ids: List[str],
-    topic_assignments: Dict[str, int],
-    topic_labels: Dict[int, str],
+    topic_infos: list[TopicInfoResult],
+    ids: list[str],
+    topic_assignments: dict[str, int],
+    topic_labels: dict[int, str],
     config=None,
-    subtopic_assignments: Optional[Dict[str, int]] = None,
-    subtopic_labels: Optional[Dict[int, str]] = None,
+    subtopic_assignments: dict[str, int] | None = None,
+    subtopic_labels: dict[int, str] | None = None,
     reduction_applied: bool = False,
-    num_topics_before_reduction: Optional[int] = None,
-    reduction_method: Optional[str] = None,
-    reduction_target: Optional[int] = None,
-    topic_hierarchy: Optional[Dict] = None,
+    num_topics_before_reduction: int | None = None,
+    reduction_method: str | None = None,
+    reduction_target: int | None = None,
+    topic_hierarchy: dict | None = None,
 ) -> None:
     """Store topic extraction results in DuckDB.
 
@@ -101,7 +107,9 @@ def _sync_topics_to_duckdb(
     try:
         vc = db.get_vector_collection(collection_name)
         if not vc:
-            logger.warning("DuckDB: vector collection %r not found, skipping topic sync", collection_name)
+            logger.warning(
+                "DuckDB: vector collection %r not found, skipping topic sync", collection_name
+            )
             return
 
         dataset_name = vc["dataset_name"]
@@ -119,12 +127,15 @@ def _sync_topics_to_duckdb(
             }
 
         ext_id = db.create_topic_extraction(
-            collection_name, dataset_name, config=extraction_config,
+            collection_name,
+            dataset_name,
+            config=extraction_config,
         )
 
         # Store reduction metadata if applicable
         if reduction_applied:
-            db._conn.execute("""
+            db._conn.execute(
+                """
                 UPDATE topic_extractions SET
                     reduction_applied = TRUE,
                     reduction_method = ?,
@@ -133,14 +144,16 @@ def _sync_topics_to_duckdb(
                     topic_hierarchy = ?,
                     topic_count = ?
                 WHERE id = ?
-            """, [
-                reduction_method,
-                reduction_target,
-                num_topics_before_reduction,
-                json.dumps(topic_hierarchy) if topic_hierarchy else None,
-                len([t for t in topic_infos if t.topic_id != -1]),
-                ext_id,
-            ])
+            """,
+                [
+                    reduction_method,
+                    reduction_target,
+                    num_topics_before_reduction,
+                    json.dumps(topic_hierarchy) if topic_hierarchy else None,
+                    len([t for t in topic_infos if t.topic_id != -1]),
+                    ext_id,
+                ],
+            )
         else:
             db._conn.execute(
                 "UPDATE topic_extractions SET topic_count = ? WHERE id = ?",
@@ -150,13 +163,15 @@ def _sync_topics_to_duckdb(
         # Insert topic info
         topic_info_records = []
         for info in topic_infos:
-            topic_info_records.append({
-                "topic_id": info.topic_id,
-                "label": info.label,
-                "count": info.count,
-                "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:10]],
-                "subtopics": info.subtopics,
-            })
+            topic_info_records.append(
+                {
+                    "topic_id": info.topic_id,
+                    "label": info.label,
+                    "count": info.count,
+                    "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:10]],
+                    "subtopics": info.subtopics,
+                }
+            )
         db.insert_topic_info_batch(ext_id, topic_info_records)
 
         # Insert topic assignments (with subtopics if reduction was applied)
@@ -176,11 +191,16 @@ def _sync_topics_to_duckdb(
 
         # Update vector collection flag
         db._conn.execute(
-            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?", [collection_name]
+            "UPDATE vector_collections SET has_topics = TRUE WHERE collection_name = ?",
+            [collection_name],
         )
 
-        logger.info("DuckDB: synced %d topics, %d assignments for %s",
-                     len(topic_info_records), len(assignment_records), collection_name)
+        logger.info(
+            "DuckDB: synced %d topics, %d assignments for %s",
+            len(topic_info_records),
+            len(assignment_records),
+            collection_name,
+        )
 
     except Exception as e:
         logger.error("DuckDB topic sync failed: %s", e)
@@ -209,10 +229,13 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
     try:
         # Step 1: Load projection data from DuckDB
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=0,
-            current_batch=0, total_batches=5,
-            message="Loading projection data..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=0,
+            current_batch=0,
+            total_batches=5,
+            message="Loading projection data...",
         )
         logger.info(f"Loading projection data for {config.collection_name}")
 
@@ -223,9 +246,11 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         if not projection_data:
             return TopicExtractionResult(
                 collection_name=config.collection_name,
-                num_topics=0, num_noise_points=0, topics=[],
+                num_topics=0,
+                num_noise_points=0,
+                topics=[],
                 duration_seconds=time.time() - start_time,
-                error=f"No projection data found for {config.collection_name} ({config.projection_type})"
+                error=f"No projection data found for {config.collection_name} ({config.projection_type})",
             )
 
         ids = projection_data["ids"]
@@ -239,13 +264,9 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         # ChromaDB client still needed for topic_reducer semantic embeddings
         db_path = str(DB_PATH.resolve())
         client = chromadb.PersistentClient(
-            path=db_path,
-            settings=Settings(anonymized_telemetry=False)
+            path=db_path, settings=Settings(anonymized_telemetry=False)
         )
-        collection = client.get_collection(
-            name=config.collection_name,
-            embedding_function=None
-        )
+        collection = client.get_collection(name=config.collection_name, embedding_function=None)
 
         reduced_embeddings = np.array(coords, dtype=np.float64)
 
@@ -257,17 +278,22 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 num_noise_points=0,
                 topics=[],
                 duration_seconds=time.time() - start_time,
-                error=f"No {config.projection_type} projections found. Compute projections first."
+                error=f"No {config.projection_type} projections found. Compute projections first.",
             )
 
         # Step 2: Run HDBSCAN clustering
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=1, total_batches=5,
-            message=f"Running {config.clustering_method.upper()} clustering..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=1,
+            total_batches=5,
+            message=f"Running {config.clustering_method.upper()} clustering...",
         )
-        logger.info(f"Clustering with method={config.clustering_method}, min_topic_size={config.min_topic_size}, n_clusters={config.n_clusters}")
+        logger.info(
+            f"Clustering with method={config.clustering_method}, min_topic_size={config.min_topic_size}, n_clusters={config.n_clusters}"
+        )
 
         generator = GenerateTopics(
             documents=documents,
@@ -286,10 +312,13 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         # Step 3: Extract keywords with c-TF-IDF
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=2, total_batches=5,
-            message="Extracting keywords with c-TF-IDF..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=2,
+            total_batches=5,
+            message="Extracting keywords with c-TF-IDF...",
         )
 
         topics_data = generator.extract_topics(documents_df, n_words=config.n_keywords)
@@ -301,12 +330,17 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         pre_reduction_assignments = {}  # item_id -> original topic_id
         if config.reduce_topics:
             emit_progress(
-                job_id=job_id, status="running",
-                items_processed=0, total_items=total_items,
-                current_batch=2.5, total_batches=5,
-                message="Reducing topics..."
+                job_id=job_id,
+                status="running",
+                items_processed=0,
+                total_items=total_items,
+                current_batch=2.5,
+                total_batches=5,
+                message="Reducing topics...",
             )
-            logger.info(f"Running topic reduction: method={config.reduction_method}, target={config.nr_topics}")
+            logger.info(
+                f"Running topic reduction: method={config.reduction_method}, target={config.nr_topics}"
+            )
 
             # Store pre-reduction count
             num_topics_before_reduction = num_topics
@@ -326,6 +360,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
             # Initialize reducer
             from ..topic_extraction.topic_reducer import TopicReducer
+
             reducer = TopicReducer(
                 documents_df=documents_df,
                 topics_data=topics_data,
@@ -333,7 +368,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 ctfidf_words=generator.words,
                 language=config.language,
                 collection_name=config.collection_name,
-                chromadb_client=client
+                chromadb_client=client,
             )
 
             # Run reduction
@@ -341,20 +376,27 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 if config.nr_topics is None:
                     raise ValueError("nr_topics required when reduction_method='fixed_n'")
                 if config.nr_topics >= num_topics + 1:  # +1 for noise
-                    logger.info(f"Target ({config.nr_topics}) >= extracted ({num_topics}), skipping reduction")
+                    logger.info(
+                        f"Target ({config.nr_topics}) >= extracted ({num_topics}), skipping reduction"
+                    )
                 else:
                     reduction_result = reducer.reduce_to_n_topics(
-                        n_topics=config.nr_topics,
-                        use_ctfidf=config.use_ctfidf_for_reduction
+                        n_topics=config.nr_topics, use_ctfidf=config.use_ctfidf_for_reduction
                     )
                     documents_df = reduction_result.documents_df
                     topics_data = reduction_result.topics_data
-                    logger.info(f"Reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics")
+                    logger.info(
+                        f"Reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics"
+                    )
             elif config.reduction_method == "auto":
-                reduction_result = reducer.auto_reduce_topics(use_ctfidf=config.use_ctfidf_for_reduction)
+                reduction_result = reducer.auto_reduce_topics(
+                    use_ctfidf=config.use_ctfidf_for_reduction
+                )
                 documents_df = reduction_result.documents_df
                 topics_data = reduction_result.topics_data
-                logger.info(f"Auto-reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics")
+                logger.info(
+                    f"Auto-reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics"
+                )
             else:
                 raise ValueError(f"Invalid reduction_method: {config.reduction_method}")
 
@@ -371,8 +413,8 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             pass
 
         # Build topic info list
-        topic_labels: Dict[int, str] = {}
-        topic_infos: List[TopicInfoResult] = []
+        topic_labels: dict[int, str] = {}
+        topic_infos: list[TopicInfoResult] = []
 
         for topic_id in sorted(topics_data.keys()):
             keywords = topics_data[topic_id]
@@ -386,28 +428,31 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 label = " | ".join(top_words)
 
             topic_labels[topic_id] = label
-            topic_infos.append(TopicInfoResult(
-                topic_id=int(topic_id),
-                keywords=keywords,
-                label=label,
-                count=count
-            ))
+            topic_infos.append(
+                TopicInfoResult(topic_id=int(topic_id), keywords=keywords, label=label, count=count)
+            )
 
         # Step 4: Optional LLM labeling
         if config.use_llm_labels:
             emit_progress(
-                job_id=job_id, status="running",
-                items_processed=0, total_items=total_items,
-                current_batch=3, total_batches=5,
-                message="Generating LLM labels..."
+                job_id=job_id,
+                status="running",
+                items_processed=0,
+                total_items=total_items,
+                current_batch=3,
+                total_batches=5,
+                message="Generating LLM labels...",
             )
 
             def llm_progress(done, total):
                 emit_progress(
-                    job_id=job_id, status="running",
-                    items_processed=done, total_items=total,
-                    current_batch=3, total_batches=5,
-                    message=f"Generating LLM labels ({done}/{total})..."
+                    job_id=job_id,
+                    status="running",
+                    items_processed=done,
+                    total_items=total,
+                    current_batch=3,
+                    total_batches=5,
+                    message=f"Generating LLM labels ({done}/{total})...",
                 )
 
             llm_labels = generate_llm_labels(
@@ -429,8 +474,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             for new_id, old_ids in reduction_result.topic_hierarchy.items():
                 new_label = topic_labels.get(new_id, f"Topic {new_id}")
                 subtopic_label_list = [
-                    pre_reduction_labels.get(old_id, f"Topic {old_id}")
-                    for old_id in old_ids
+                    pre_reduction_labels.get(old_id, f"Topic {old_id}") for old_id in old_ids
                 ]
                 labeled_hierarchy[new_label] = subtopic_label_list
 
@@ -442,10 +486,13 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         # Step 5: Store topic assignments in DuckDB
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=4, total_batches=5,
-            message="Updating metadata..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=4,
+            total_batches=5,
+            message="Updating metadata...",
         )
         logger.info("Storing topic assignments in DuckDB")
 
@@ -478,10 +525,13 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         # Emit completion
         emit_progress(
-            job_id=job_id, status="completed",
-            items_processed=total_items, total_items=total_items,
-            current_batch=5, total_batches=5,
-            message="Complete!"
+            job_id=job_id,
+            status="completed",
+            items_processed=total_items,
+            total_items=total_items,
+            current_batch=5,
+            total_batches=5,
+            message="Complete!",
         )
 
         logger.info(f"Topic extraction completed in {duration:.1f}s")
@@ -494,7 +544,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             duration_seconds=duration,
             num_topics_before_reduction=num_topics_before_reduction,
             reduction_applied=config.reduce_topics,
-            topic_mappings=reduction_result.topic_mappings if reduction_result else None
+            topic_mappings=reduction_result.topic_mappings if reduction_result else None,
         )
 
     except Exception as e:
@@ -502,11 +552,14 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         logger.error(f"Topic extraction failed: {e}")
 
         emit_progress(
-            job_id=job_id, status="failed",
-            items_processed=0, total_items=0,
-            current_batch=0, total_batches=0,
+            job_id=job_id,
+            status="failed",
+            items_processed=0,
+            total_items=0,
+            current_batch=0,
+            total_batches=0,
             error=str(e),
-            message=f"Failed: {str(e)}"
+            message=f"Failed: {str(e)}",
         )
 
         return TopicExtractionResult(
@@ -515,22 +568,19 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             num_noise_points=0,
             topics=[],
             duration_seconds=duration,
-            error=str(e)
+            error=str(e),
         )
-
-
-
 
 
 def reduce_existing_topics(
     collection_name: str,
     method: str,
-    n_topics: Optional[int],
+    n_topics: int | None,
     use_ctfidf: bool,
     regenerate_labels: bool,
     llm_provider: str,
     llm_model: str,
-    language: str = "english"
+    language: str = "english",
 ) -> TopicExtractionResult:
     """Reduce topics on an existing collection with extracted topics.
 
@@ -563,10 +613,13 @@ def reduce_existing_topics(
     try:
         # Step 1: Load collection and validate
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=0,
-            current_batch=1, total_batches=4,
-            message="Loading existing topics..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=0,
+            current_batch=1,
+            total_batches=4,
+            message="Loading existing topics...",
         )
         logger.info(f"Reducing topics for collection: {collection_name}")
 
@@ -576,18 +629,16 @@ def reduce_existing_topics(
         # ChromaDB client still needed for topic_reducer semantic embeddings
         db_path = str(DB_PATH.resolve())
         client = chromadb.PersistentClient(
-            path=db_path,
-            settings=Settings(anonymized_telemetry=False)
+            path=db_path, settings=Settings(anonymized_telemetry=False)
         )
-        collection = client.get_collection(
-            name=collection_name,
-            embedding_function=None
-        )
+        collection = client.get_collection(name=collection_name, embedding_function=None)
 
         # Validate has_topics via DuckDB
         active_topics = duckdb.get_active_topics(collection_name)
         if not active_topics:
-            raise ValueError(f"Collection '{collection_name}' has no topics. Run extractTopics first.")
+            raise ValueError(
+                f"Collection '{collection_name}' has no topics. Run extractTopics first."
+            )
 
         extraction_id = active_topics["id"]
 
@@ -611,10 +662,13 @@ def reduce_existing_topics(
 
         # Step 3: Reconstruct documents_df
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=2, total_batches=4,
-            message="Reconstructing topic data..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=2,
+            total_batches=4,
+            message="Reconstructing topic data...",
         )
 
         doc_ids = []
@@ -628,11 +682,10 @@ def reduce_existing_topics(
             doc_topics.append(topic_id)
 
         import pandas as pd
-        documents_df = pd.DataFrame({
-            "Document_ID": doc_ids,
-            "Document": doc_texts,
-            "Topic": doc_topics
-        })
+
+        documents_df = pd.DataFrame(
+            {"Document_ID": doc_ids, "Document": doc_texts, "Topic": doc_topics}
+        )
 
         # Step 4: Reconstruct topics_data from DuckDB topic_info
         topic_summary = active_topics.get("topics", [])
@@ -644,14 +697,12 @@ def reduce_existing_topics(
             topics_data[topic_id] = keywords
 
         # Step 5: Reconstruct c-TF-IDF matrix
-        from ..topic_extraction.cluster_and_label import GenerateTopics
         from sklearn.feature_extraction.text import CountVectorizer
+
         from ..topic_extraction.cluster_and_label import ClassTfidfTransformer
 
         # Group documents by topic (mega-document step)
-        docs_per_topic = documents_df.groupby(['Topic'], as_index=False).agg({
-            'Document': ' '.join
-        })
+        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
 
         count_vectorizer = CountVectorizer(stop_words=language, ngram_range=(1, 1))
         X = count_vectorizer.fit_transform(docs_per_topic.Document.values)
@@ -662,18 +713,21 @@ def reduce_existing_topics(
 
         # Step 6: Run reduction
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=3, total_batches=4,
-            message="Reducing topics..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=3,
+            total_batches=4,
+            message="Reducing topics...",
         )
 
         num_topics_before = len([t for t in topics_data.keys() if t != -1])
         logger.info(f"Running reduction: method={method}, use_ctfidf={use_ctfidf}")
 
         # Capture pre-reduction labels and assignments from DuckDB
-        pre_reduction_labels: Dict[int, str] = {}
-        pre_reduction_assignments: Dict[str, int] = {}
+        pre_reduction_labels: dict[int, str] = {}
+        pre_reduction_assignments: dict[str, int] = {}
 
         # Build label map from topic_info
         for t in topic_summary:
@@ -684,6 +738,7 @@ def reduce_existing_topics(
             pre_reduction_assignments[item_id] = topic_id
 
         from ..topic_extraction.topic_reducer import TopicReducer
+
         reducer = TopicReducer(
             documents_df=documents_df,
             topics_data=topics_data,
@@ -691,7 +746,7 @@ def reduce_existing_topics(
             ctfidf_words=words,
             language=language,
             collection_name=collection_name,
-            chromadb_client=client
+            chromadb_client=client,
         )
 
         # Run reduction based on method
@@ -715,8 +770,8 @@ def reduce_existing_topics(
         num_noise = topic_counts.get(-1, 0)
 
         # Build topic info list
-        topic_labels: Dict[int, str] = {}
-        topic_infos: List[TopicInfoResult] = []
+        topic_labels: dict[int, str] = {}
+        topic_infos: list[TopicInfoResult] = []
 
         for topic_id in sorted(topics_data.keys()):
             keywords = topics_data[topic_id]
@@ -730,12 +785,9 @@ def reduce_existing_topics(
                 label = " | ".join(top_words)
 
             topic_labels[topic_id] = label
-            topic_infos.append(TopicInfoResult(
-                topic_id=int(topic_id),
-                keywords=keywords,
-                label=label,
-                count=count
-            ))
+            topic_infos.append(
+                TopicInfoResult(topic_id=int(topic_id), keywords=keywords, label=label, count=count)
+            )
 
         # Step 7: Optional LLM re-labeling
         if regenerate_labels:
@@ -743,10 +795,13 @@ def reduce_existing_topics(
 
             def llm_progress(done, total):
                 emit_progress(
-                    job_id=job_id, status="running",
-                    items_processed=done, total_items=total,
-                    current_batch=3, total_batches=4,
-                    message=f"Generating LLM labels ({done}/{total})..."
+                    job_id=job_id,
+                    status="running",
+                    items_processed=done,
+                    total_items=total,
+                    current_batch=3,
+                    total_batches=4,
+                    message=f"Generating LLM labels ({done}/{total})...",
                 )
 
             llm_labels = generate_llm_labels(
@@ -768,8 +823,7 @@ def reduce_existing_topics(
             for new_id, old_ids in result.topic_hierarchy.items():
                 new_label = topic_labels.get(new_id, f"Topic {new_id}")
                 subtopic_label_list = [
-                    pre_reduction_labels.get(old_id, f"Topic {old_id}")
-                    for old_id in old_ids
+                    pre_reduction_labels.get(old_id, f"Topic {old_id}") for old_id in old_ids
                 ]
                 labeled_hierarchy[new_label] = subtopic_label_list
 
@@ -781,10 +835,13 @@ def reduce_existing_topics(
 
         # Step 8: Update metadata
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=total_items,
-            current_batch=4, total_batches=4,
-            message="Updating metadata..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=4,
+            total_batches=4,
+            message="Updating metadata...",
         )
 
         # Build topic assignments
@@ -815,10 +872,13 @@ def reduce_existing_topics(
 
         # Emit completion
         emit_progress(
-            job_id=job_id, status="completed",
-            items_processed=total_items, total_items=total_items,
-            current_batch=4, total_batches=4,
-            message="Complete!"
+            job_id=job_id,
+            status="completed",
+            items_processed=total_items,
+            total_items=total_items,
+            current_batch=4,
+            total_batches=4,
+            message="Complete!",
         )
 
         logger.info(f"Topic reduction completed in {duration:.1f}s")
@@ -831,7 +891,7 @@ def reduce_existing_topics(
             duration_seconds=duration,
             num_topics_before_reduction=num_topics_before,
             reduction_applied=True,
-            topic_mappings=result.topic_mappings
+            topic_mappings=result.topic_mappings,
         )
 
     except Exception as e:
@@ -839,11 +899,14 @@ def reduce_existing_topics(
         logger.error(f"Topic reduction failed: {e}")
 
         emit_progress(
-            job_id=job_id, status="failed",
-            items_processed=0, total_items=0,
-            current_batch=0, total_batches=0,
+            job_id=job_id,
+            status="failed",
+            items_processed=0,
+            total_items=0,
+            current_batch=0,
+            total_batches=0,
             error=str(e),
-            message=f"Failed: {str(e)}"
+            message=f"Failed: {str(e)}",
         )
 
         return TopicExtractionResult(
@@ -852,7 +915,7 @@ def reduce_existing_topics(
             num_noise_points=0,
             topics=[],
             duration_seconds=duration,
-            error=str(e)
+            error=str(e),
         )
 
 
@@ -860,26 +923,26 @@ def reduce_existing_topics(
 
 import re
 
+
 @dataclass
 class LlmLabelingResult:
     """Result of standalone LLM label generation."""
+
     collection_name: str
     topics_labeled: int
     subtopics_labeled: int
     total_topics: int
     total_subtopics: int
     duration_seconds: float
-    error: Optional[str] = None
+    error: str | None = None
 
 
-_KEYWORD_LABEL_PATTERN = re.compile(r'^[\w\-/]+( \| [\w\-/]+)+$')
+_KEYWORD_LABEL_PATTERN = re.compile(r"^[\w\-/]+( \| [\w\-/]+)+$")
 
 
 def _is_keyword_label(label: str) -> bool:
     """Return True if label looks like a keyword-pattern label 'word | word | word'."""
     return bool(_KEYWORD_LABEL_PATTERN.match(label))
-
-
 
 
 def generate_llm_labels_for_collection(
@@ -911,6 +974,7 @@ def generate_llm_labels_for_collection(
     try:
         # Register job state
         from .job_state import get_job_state_service
+
         job_state_service = get_job_state_service()
         job_state_service.start_job(
             collection_name=job_id,
@@ -927,10 +991,13 @@ def generate_llm_labels_for_collection(
 
         # Step 1: Load collection and validate
         emit_progress(
-            job_id=job_id, status="running",
-            items_processed=0, total_items=0,
-            current_batch=0, total_batches=1,
-            message="Loading collection..."
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=0,
+            current_batch=0,
+            total_batches=1,
+            message="Loading collection...",
         )
         logger.info(f"LLM labeling for collection: {collection_name}")
 
@@ -938,7 +1005,9 @@ def generate_llm_labels_for_collection(
         duckdb = _get_duckdb()
         active_topics = duckdb.get_active_topics(collection_name)
         if not active_topics:
-            raise ValueError(f"Collection '{collection_name}' has no topics. Run extractTopics first.")
+            raise ValueError(
+                f"Collection '{collection_name}' has no topics. Run extractTopics first."
+            )
 
         extraction_id = active_topics["id"]
         topic_summary = active_topics.get("topics", [])
@@ -959,11 +1028,16 @@ def generate_llm_labels_for_collection(
         ).fetchall()
         assign_map = {}
         for r in assign_rows:
-            assign_map[r[0]] = {"topic_id": r[1], "topic_label": r[2], "subtopic_id": r[3], "subtopic_label": r[4]}
+            assign_map[r[0]] = {
+                "topic_id": r[1],
+                "topic_label": r[2],
+                "subtopic_id": r[3],
+                "subtopic_label": r[4],
+            }
 
         # Build topics_data from summary
-        topics_data: Dict[int, List[Tuple[str, float]]] = {}
-        topic_labels_map: Dict[int, str] = {}
+        topics_data: dict[int, list[tuple[str, float]]] = {}
+        topic_labels_map: dict[int, str] = {}
         for entry in topic_summary:
             tid = entry["topic_id"]
             keywords = [(kw["word"], kw["score"]) for kw in entry.get("keywords", [])]
@@ -974,8 +1048,8 @@ def generate_llm_labels_for_collection(
         labeler = _create_labeler(llm_provider, llm_model)
 
         # Build documents grouped by topic for sample retrieval
-        topic_docs: Dict[int, List[str]] = {}
-        subtopic_docs: Dict[int, List[str]] = {}
+        topic_docs: dict[int, list[str]] = {}
+        subtopic_docs: dict[int, list[str]] = {}
         for item_id, doc in zip(all_ids, all_documents):
             a = assign_map.get(item_id, {})
             tid = a.get("topic_id", -1)
@@ -994,8 +1068,8 @@ def generate_llm_labels_for_collection(
         total_topics = len([t for t in topics_data.keys() if t != -1])
 
         # Gather subtopic info
-        subtopic_labels_map: Dict[int, str] = {}
-        subtopic_keywords: Dict[int, List[Tuple[str, float]]] = {}
+        subtopic_labels_map: dict[int, str] = {}
+        subtopic_keywords: dict[int, list[tuple[str, float]]] = {}
         if has_hierarchy and label_scope in ("both", "subtopics_only"):
             # Collect unique subtopics from assignments
             for a in assign_map.values():
@@ -1009,6 +1083,7 @@ def generate_llm_labels_for_collection(
             if subtopic_docs and subtopic_labels_map:
                 import pandas as pd
                 from sklearn.feature_extraction.text import CountVectorizer
+
                 from ..topic_extraction.cluster_and_label import ClassTfidfTransformer
 
                 sub_doc_ids = []
@@ -1022,13 +1097,15 @@ def generate_llm_labels_for_collection(
                         sub_doc_texts.append(doc)
                         sub_doc_topics.append(int(stid_raw))
 
-                sub_df = pd.DataFrame({
-                    "Document_ID": sub_doc_ids,
-                    "Document": sub_doc_texts,
-                    "Topic": sub_doc_topics,
-                })
+                sub_df = pd.DataFrame(
+                    {
+                        "Document_ID": sub_doc_ids,
+                        "Document": sub_doc_texts,
+                        "Topic": sub_doc_topics,
+                    }
+                )
 
-                docs_per_sub = sub_df.groupby(['Topic'], as_index=False).agg({'Document': ' '.join})
+                docs_per_sub = sub_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
                 try:
                     count_vec = CountVectorizer(stop_words="english", ngram_range=(1, 1))
                     X = count_vec.fit_transform(docs_per_sub.Document.values)
@@ -1046,8 +1123,9 @@ def generate_llm_labels_for_collection(
                     logger.warning("Failed to extract subtopic keywords (empty vocabulary)")
 
         total_subtopics = len(subtopic_labels_map)
-        total_work = (total_topics if label_scope in ("both", "topics_only") else 0) + \
-                     (total_subtopics if label_scope in ("both", "subtopics_only") else 0)
+        total_work = (total_topics if label_scope in ("both", "topics_only") else 0) + (
+            total_subtopics if label_scope in ("both", "subtopics_only") else 0
+        )
 
         # Update job state with total count now that we know it
         job_state_service.update_total_expected(job_id, total_expected=total_work, total_batches=1)
@@ -1084,10 +1162,13 @@ def generate_llm_labels_for_collection(
 
                 progress_idx += 1
                 emit_progress(
-                    job_id=job_id, status="running",
-                    items_processed=progress_idx, total_items=total_work,
-                    current_batch=0, total_batches=1,
-                    message=f"Labeling topic {progress_idx}/{total_work}..."
+                    job_id=job_id,
+                    status="running",
+                    items_processed=progress_idx,
+                    total_items=total_work,
+                    current_batch=0,
+                    total_batches=1,
+                    message=f"Labeling topic {progress_idx}/{total_work}...",
                 )
                 job_state_service.update_progress(job_id, progress_idx, 0)
 
@@ -1121,10 +1202,13 @@ def generate_llm_labels_for_collection(
 
                 progress_idx += 1
                 emit_progress(
-                    job_id=job_id, status="running",
-                    items_processed=progress_idx, total_items=total_work,
-                    current_batch=0, total_batches=1,
-                    message=f"Labeling subtopic {progress_idx}/{total_work}..."
+                    job_id=job_id,
+                    status="running",
+                    items_processed=progress_idx,
+                    total_items=total_work,
+                    current_batch=0,
+                    total_batches=1,
+                    message=f"Labeling subtopic {progress_idx}/{total_work}...",
                 )
                 job_state_service.update_progress(job_id, progress_idx, 0)
 
@@ -1133,10 +1217,13 @@ def generate_llm_labels_for_collection(
         # Mark complete
         job_state_service.complete_job(job_id)
         emit_progress(
-            job_id=job_id, status="completed",
-            items_processed=total_work, total_items=total_work,
-            current_batch=1, total_batches=1,
-            message="Complete!"
+            job_id=job_id,
+            status="completed",
+            items_processed=total_work,
+            total_items=total_work,
+            current_batch=1,
+            total_batches=1,
+            message="Complete!",
         )
 
         logger.info(
@@ -1160,11 +1247,14 @@ def generate_llm_labels_for_collection(
             job_state_service.fail_job(job_id, str(e))
 
         emit_progress(
-            job_id=job_id, status="failed",
-            items_processed=0, total_items=0,
-            current_batch=0, total_batches=0,
+            job_id=job_id,
+            status="failed",
+            items_processed=0,
+            total_items=0,
+            current_batch=0,
+            total_batches=0,
             error=str(e),
-            message=f"Failed: {str(e)}"
+            message=f"Failed: {str(e)}",
         )
 
         return LlmLabelingResult(

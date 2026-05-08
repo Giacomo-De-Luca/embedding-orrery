@@ -5,19 +5,20 @@ Supports:
 - GraphQL subscriptions over WebSocket for real-time progress updates
 """
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 from strawberry.subscriptions import GRAPHQL_TRANSPORT_WS_PROTOCOL, GRAPHQL_WS_PROTOCOL
+
 from .API import schema
 from .API.upload import router as upload_router
-
 
 # Create FastAPI app
 app = FastAPI(
     title="Embedding Visualization API",
     description="GraphQL API for exploring word embeddings with ChromaDB",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Configure CORS (including WebSocket origins)
@@ -57,7 +58,7 @@ async def root():
         "message": "Embedding Visualization GraphQL API",
         "graphql_endpoint": "/graphql",
         "graphql_playground": "/graphql (visit in browser)",
-        "version": "1.0.0"
+        "version": "1.0.0",
     }
 
 
@@ -68,9 +69,4 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "interpretability_backend.backend.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
-    )
+    uvicorn.run("interpretability_backend.backend.main:app", host="0.0.0.0", port=8000, reload=True)

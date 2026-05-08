@@ -1,59 +1,65 @@
 """HuggingFace dataset client for fetching dataset information and embedding datasets."""
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
 from enum import Enum
+from typing import Any
 
 
 @dataclass
 class SplitInfo:
     """Information about a dataset split."""
+
     name: str
-    num_rows: Optional[int] = None
-    num_bytes: Optional[int] = None
+    num_rows: int | None = None
+    num_bytes: int | None = None
 
 
 @dataclass
 class FeatureInfo:
     """Information about a dataset feature/column."""
+
     name: str
     dtype: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
 class ConfigInfo:
     """Information about a dataset configuration."""
+
     name: str
-    splits: List[SplitInfo] = field(default_factory=list)
-    features: List[FeatureInfo] = field(default_factory=list)
+    splits: list[SplitInfo] = field(default_factory=list)
+    features: list[FeatureInfo] = field(default_factory=list)
 
 
 @dataclass
 class DatasetInfo:
     """Complete information about a HuggingFace dataset."""
+
     dataset_id: str
-    description: Optional[str] = None
-    license: Optional[str] = None
-    configs: List[ConfigInfo] = field(default_factory=list)
-    default_config: Optional[str] = None
-    error: Optional[str] = None
+    description: str | None = None
+    license: str | None = None
+    configs: list[ConfigInfo] = field(default_factory=list)
+    default_config: str | None = None
+    error: str | None = None
 
 
 @dataclass
 class DatasetPreview:
     """Preview rows from a dataset."""
+
     dataset_id: str
-    config: Optional[str]
+    config: str | None
     split: str
-    columns: List[str]
-    rows: List[Dict[str, Any]]
-    total_rows: Optional[int] = None
-    error: Optional[str] = None
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    total_rows: int | None = None
+    error: str | None = None
 
 
 class PortionStrategy(Enum):
     """Strategy for selecting which rows to embed."""
+
     FIRST_N = "first_n"
     RANDOM_SAMPLE = "random_sample"
     ROW_RANGE = "row_range"
@@ -63,10 +69,11 @@ class PortionStrategy(Enum):
 @dataclass
 class PortionConfig:
     """Configuration for selecting dataset portion."""
+
     strategy: PortionStrategy
-    n: Optional[int] = None  # For FIRST_N and RANDOM_SAMPLE
-    start: Optional[int] = None  # For ROW_RANGE
-    end: Optional[int] = None  # For ROW_RANGE
+    n: int | None = None  # For FIRST_N and RANDOM_SAMPLE
+    start: int | None = None  # For ROW_RANGE
+    end: int | None = None  # For ROW_RANGE
     seed: int = 42  # For RANDOM_SAMPLE
 
 
@@ -75,7 +82,7 @@ def _dtype_to_string(dtype: Any) -> str:
     dtype_str = str(dtype)
 
     if "Value" in dtype_str:
-        if hasattr(dtype, 'dtype'):
+        if hasattr(dtype, "dtype"):
             return str(dtype.dtype)
         return dtype_str
     elif "ClassLabel" in dtype_str:
@@ -103,12 +110,11 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
         DatasetInfo with configs, splits, features, and metadata
     """
     try:
-        from datasets import load_dataset_builder, get_dataset_config_names
+        from datasets import get_dataset_config_names, load_dataset_builder
         from huggingface_hub import dataset_info as hf_dataset_info
     except ImportError:
         return DatasetInfo(
-            dataset_id=dataset_id,
-            error="datasets and huggingface_hub packages are required"
+            dataset_id=dataset_id, error="datasets and huggingface_hub packages are required"
         )
 
     try:
@@ -119,10 +125,10 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
         try:
             hub_info = hf_dataset_info(dataset_id)
             if hub_info.card_data:
-                license_info = getattr(hub_info.card_data, 'license', None)
+                license_info = getattr(hub_info.card_data, "license", None)
                 # Handle case where license is a list
                 if isinstance(license_info, list):
-                    license_info = ', '.join(str(l) for l in license_info) if license_info else None
+                    license_info = ", ".join(str(l) for l in license_info) if license_info else None
             if hub_info.description:
                 description = hub_info.description[:500]
         except Exception:
@@ -144,19 +150,24 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
                 splits = []
                 if builder.info.splits:
                     for split_name, split_info in builder.info.splits.items():
-                        splits.append(SplitInfo(
-                            name=split_name,
-                            num_rows=split_info.num_examples if hasattr(split_info, 'num_examples') else None,
-                            num_bytes=split_info.num_bytes if hasattr(split_info, 'num_bytes') else None
-                        ))
+                        splits.append(
+                            SplitInfo(
+                                name=split_name,
+                                num_rows=split_info.num_examples
+                                if hasattr(split_info, "num_examples")
+                                else None,
+                                num_bytes=split_info.num_bytes
+                                if hasattr(split_info, "num_bytes")
+                                else None,
+                            )
+                        )
 
                 features = []
                 if builder.info.features:
                     for feat_name, feat_type in builder.info.features.items():
-                        features.append(FeatureInfo(
-                            name=feat_name,
-                            dtype=_dtype_to_string(feat_type)
-                        ))
+                        features.append(
+                            FeatureInfo(name=feat_name, dtype=_dtype_to_string(feat_type))
+                        )
 
                 if not description and builder.info.description:
                     description = builder.info.description[:500]
@@ -164,42 +175,30 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
                 if not license_info and builder.info.license:
                     license_info = builder.info.license
 
-                configs.append(ConfigInfo(
-                    name=config_name or "default",
-                    splits=splits,
-                    features=features
-                ))
+                configs.append(
+                    ConfigInfo(name=config_name or "default", splits=splits, features=features)
+                )
 
                 if default_config is None:
                     default_config = config_name or "default"
 
             except Exception:
-                configs.append(ConfigInfo(
-                    name=config_name or "default",
-                    splits=[],
-                    features=[]
-                ))
+                configs.append(ConfigInfo(name=config_name or "default", splits=[], features=[]))
 
         return DatasetInfo(
             dataset_id=dataset_id,
             description=description,
             license=license_info,
             configs=configs,
-            default_config=default_config
+            default_config=default_config,
         )
 
     except Exception as e:
-        return DatasetInfo(
-            dataset_id=dataset_id,
-            error=str(e)
-        )
+        return DatasetInfo(dataset_id=dataset_id, error=str(e))
 
 
 def get_dataset_preview(
-    dataset_id: str,
-    config: Optional[str] = None,
-    split: str = "train",
-    n_rows: int = 5
+    dataset_id: str, config: str | None = None, split: str = "train", n_rows: int = 5
 ) -> DatasetPreview:
     """
     Fetch preview rows from a HuggingFace dataset using streaming.
@@ -222,19 +221,14 @@ def get_dataset_preview(
             split=split,
             columns=[],
             rows=[],
-            error="datasets package is required"
+            error="datasets package is required",
         )
 
     try:
         config_name = config if config and config != "default" else None
-        dataset = load_dataset(
-            dataset_id,
-            name=config_name,
-            split=split,
-            streaming=True
-        )
+        dataset = load_dataset(dataset_id, name=config_name, split=split, streaming=True)
 
-        columns = list(dataset.features.keys()) if hasattr(dataset, 'features') else []
+        columns = list(dataset.features.keys()) if hasattr(dataset, "features") else []
 
         rows = []
         for i, row in enumerate(dataset):
@@ -269,26 +263,21 @@ def get_dataset_preview(
             split=split,
             columns=columns,
             rows=rows,
-            total_rows=total_rows
+            total_rows=total_rows,
         )
 
     except Exception as e:
         return DatasetPreview(
-            dataset_id=dataset_id,
-            config=config,
-            split=split,
-            columns=[],
-            rows=[],
-            error=str(e)
+            dataset_id=dataset_id, config=config, split=split, columns=[], rows=[], error=str(e)
         )
 
 
 def load_dataset_portion(
     dataset_id: str,
-    config: Optional[str] = None,
+    config: str | None = None,
     split: str = "train",
-    portion: Optional[PortionConfig] = None
-) -> tuple[List[Dict[str, Any]], int]:
+    portion: PortionConfig | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     """
     Load a portion of a HuggingFace dataset.
 
@@ -301,8 +290,9 @@ def load_dataset_portion(
     Returns:
         Tuple of (list of row dicts, total rows in split)
     """
-    from datasets import load_dataset
     import random
+
+    from datasets import load_dataset
 
     if portion is None:
         portion = PortionConfig(strategy=PortionStrategy.ALL)
@@ -310,12 +300,7 @@ def load_dataset_portion(
     config_name = config if config and config != "default" else None
 
     if portion.strategy == PortionStrategy.FIRST_N:
-        dataset = load_dataset(
-            dataset_id,
-            name=config_name,
-            split=split,
-            streaming=True
-        )
+        dataset = load_dataset(dataset_id, name=config_name, split=split, streaming=True)
 
         rows = []
         for i, row in enumerate(dataset):
@@ -337,11 +322,7 @@ def load_dataset_portion(
         return rows, total or len(rows)
 
     elif portion.strategy == PortionStrategy.RANDOM_SAMPLE:
-        dataset = load_dataset(
-            dataset_id,
-            name=config_name,
-            split=split
-        )
+        dataset = load_dataset(dataset_id, name=config_name, split=split)
 
         total = len(dataset)
         n = min(portion.n, total)
@@ -353,11 +334,7 @@ def load_dataset_portion(
         return rows, total
 
     elif portion.strategy == PortionStrategy.ROW_RANGE:
-        dataset = load_dataset(
-            dataset_id,
-            name=config_name,
-            split=split
-        )
+        dataset = load_dataset(dataset_id, name=config_name, split=split)
 
         total = len(dataset)
         start = max(0, portion.start or 0)
@@ -367,11 +344,7 @@ def load_dataset_portion(
         return rows, total
 
     else:  # ALL
-        dataset = load_dataset(
-            dataset_id,
-            name=config_name,
-            split=split
-        )
+        dataset = load_dataset(dataset_id, name=config_name, split=split)
 
         total = len(dataset)
         rows = [dict(row) for row in dataset]

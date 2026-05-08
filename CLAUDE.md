@@ -18,6 +18,8 @@
 
 - Never stash changes without being directly asked. 
 
+- For python, never import modules inside function unless strictly necessary. Use imports at the top. 
+
 - For folders with multiple scripts or data files, add a readme explaining both the structure of the folder, the main classes or data structures present there. 
 
 - After finishing a plan, always use the agent: *code-quality-reviewer* to review the quality of the generated code. 

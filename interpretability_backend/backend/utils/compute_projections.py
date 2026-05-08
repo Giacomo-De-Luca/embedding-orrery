@@ -5,12 +5,12 @@ Computes PCA and UMAP projections for embedding collections.
 Reads embeddings from ChromaDB, stores projections in DuckDB.
 """
 
+from typing import Literal
+
 import chromadb
-from chromadb.config import Settings
-import time
 import numpy as np
+from chromadb.config import Settings
 from tqdm import tqdm
-from typing import Optional, List, Literal
 
 from ..embedding_functions.config import DB_PATH
 from ..services.progress_emitter import emit_progress
@@ -19,8 +19,8 @@ from .duckdb_sync import _get_db as _get_duckdb
 
 def compute_projections_for_collection(
     collection_name: str,
-    projection_type: Optional[List[Literal["pca2d", "pca3d", "umap2d", "umap3d"]]] = None,
-    job_id: Optional[str] = None,
+    projection_type: list[Literal["pca2d", "pca3d", "umap2d", "umap3d"]] | None = None,
+    job_id: str | None = None,
 ) -> bool:
     """Compute PCA and UMAP projections for a collection.
 
@@ -42,6 +42,7 @@ def compute_projections_for_collection(
 
         try:
             import umap
+
             has_umap = True
         except ImportError:
             has_umap = False
@@ -97,9 +98,12 @@ def compute_projections_for_collection(
             completed_projections += 1
             if job_id:
                 emit_progress(
-                    job_id=job_id, status="running",
-                    items_processed=completed_projections, total_items=total_projections,
-                    current_batch=0, total_batches=0,
+                    job_id=job_id,
+                    status="running",
+                    items_processed=completed_projections,
+                    total_items=total_projections,
+                    current_batch=0,
+                    total_batches=0,
                     message=f"Projections: {completed_projections}/{total_projections} complete ({name} done)",
                 )
 
@@ -135,8 +139,14 @@ def compute_projections_for_collection(
         # ---- UMAP 2D ----
         if "umap2d" in projection_type and has_umap:
             print("Computing UMAP 2D projections...")
-            reducer = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1,
-                                metric="cosine", random_state=42, verbose=False)
+            reducer = umap.UMAP(
+                n_components=2,
+                n_neighbors=15,
+                min_dist=0.1,
+                metric="cosine",
+                random_state=42,
+                verbose=False,
+            )
             coords = reducer.fit_transform(embeddings)
 
             duckdb.insert_projections_batch(collection_name, ids, "umap_2d", coords.tolist())
@@ -148,8 +158,14 @@ def compute_projections_for_collection(
         # ---- UMAP 3D ----
         if "umap3d" in projection_type and has_umap:
             print("Computing UMAP 3D projections...")
-            reducer = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1,
-                                metric="cosine", random_state=42, verbose=False)
+            reducer = umap.UMAP(
+                n_components=3,
+                n_neighbors=15,
+                min_dist=0.1,
+                metric="cosine",
+                random_state=42,
+                verbose=False,
+            )
             coords = reducer.fit_transform(embeddings)
 
             duckdb.insert_projections_batch(collection_name, ids, "umap_3d", coords.tolist())
@@ -165,5 +181,6 @@ def compute_projections_for_collection(
     except Exception as e:
         print(f"Error computing projections: {e}")
         import traceback
+
         traceback.print_exc()
         return False

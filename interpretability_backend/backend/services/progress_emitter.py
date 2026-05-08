@@ -9,26 +9,26 @@ The subscriptions module will import from here to register subscribers.
 """
 
 import asyncio
-from typing import Optional, Dict
 from dataclasses import dataclass
 
 
 @dataclass
 class ProgressEvent:
     """Progress event data (plain dataclass, not Strawberry type)."""
+
     job_id: str  # collection_name
     status: str  # "running", "completed", "failed"
     items_processed: int
     total_items: int
     current_batch: int
     total_batches: int
-    error: Optional[str] = None
-    message: Optional[str] = None  # Status message (e.g., "Sorting batches", "Loading model")
+    error: str | None = None
+    message: str | None = None  # Status message (e.g., "Sorting batches", "Loading model")
 
 
 # Global event bus for progress subscribers
 # Maps collection_name -> list of subscriber queues
-_progress_subscribers: Dict[str, list] = {}
+_progress_subscribers: dict[str, list] = {}
 _lock = asyncio.Lock()
 
 
@@ -59,8 +59,8 @@ def emit_progress(
     total_items: int,
     current_batch: int,
     total_batches: int,
-    error: Optional[str] = None,
-    message: Optional[str] = None
+    error: str | None = None,
+    message: str | None = None,
 ) -> None:
     """
     Emit a progress update to all subscribers for a job.
@@ -88,7 +88,7 @@ def emit_progress(
         current_batch=current_batch,
         total_batches=total_batches,
         error=error,
-        message=message
+        message=message,
     )
 
     # Broadcast to all subscribers

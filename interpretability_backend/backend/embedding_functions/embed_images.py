@@ -6,29 +6,30 @@ Vision Transformer (ViT) models from HuggingFace transformers.
 """
 
 import time
-from typing import Optional, List, Dict, Callable
+from collections.abc import Callable
+
 from tqdm import tqdm
 
+from ..utils.color_preprocessing import preprocess_color_metadata
+from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.text_processing import extract_metadata, format_text_for_embedding
 from .config import (
-    IMAGE_MODEL_NAME,
-    IMAGE_EMBEDDING_DIMENSIONS,
     IMAGE_BATCH_SIZE,
+    IMAGE_EMBEDDING_DIMENSIONS,
+    IMAGE_MODEL_NAME,
     EmbeddingResult,
     LocalFileEmbeddingConfig,
 )
-from ..utils.text_processing import format_text_for_embedding, extract_metadata
-from ..utils.color_preprocessing import preprocess_color_metadata
-from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
 
 
 def embed_images(
     client,
     config: LocalFileEmbeddingConfig,
-    rows: List[Dict],
+    rows: list[dict],
     total: int,
     device: str,
     start_time: float,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Callable | None = None,
 ) -> EmbeddingResult:
     """
     Embed images using a ViT model.
@@ -50,8 +51,10 @@ def embed_images(
         # Try to find an image column
         first_row = rows[0]
         for k, v in first_row.items():
-            if isinstance(v, (bytes, dict)) or (isinstance(v, str) and
-                any(ext in v.lower() for ext in ['.jpg', '.png', '.jpeg', '.gif', '.webp'])):
+            if isinstance(v, (bytes, dict)) or (
+                isinstance(v, str)
+                and any(ext in v.lower() for ext in [".jpg", ".png", ".jpeg", ".gif", ".webp"])
+            ):
                 image_column = k
                 break
 
@@ -62,13 +65,14 @@ def embed_images(
             embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
             device=device,
             duration_seconds=time.time() - start_time,
-            error="No image column found or specified"
+            error="No image column found or specified",
         )
 
     print(f"Embedding images from column '{image_column}'")
 
     try:
         from io import BytesIO
+
         import torch
         from PIL import Image
         from transformers import pipeline
@@ -79,7 +83,7 @@ def embed_images(
             embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
             device=device,
             duration_seconds=time.time() - start_time,
-            error=f"Missing dependencies for image embedding: {e}"
+            error=f"Missing dependencies for image embedding: {e}",
         )
 
     # Load image embedding model
@@ -107,17 +111,15 @@ def embed_images(
         "embedding_model": IMAGE_MODEL_NAME,
         "embedding_dim": IMAGE_EMBEDDING_DIMENSIONS,
         "total_in_file": total,
-        "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    collection = client.create_collection(
-        name=config.collection_name,
-        metadata=collection_metadata
-    )
+    collection = client.create_collection(name=config.collection_name, metadata=collection_metadata)
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
-        config.collection_name, collection_metadata,
+        config.collection_name,
+        collection_metadata,
         embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
     )
 
@@ -125,8 +127,7 @@ def embed_images(
     text_columns = config.columns or []
     if not text_columns:
         first_row = rows[0]
-        text_columns = [k for k, v in first_row.items()
-                        if isinstance(v, str) and k != image_column]
+        text_columns = [k for k, v in first_row.items() if isinstance(v, str) and k != image_column]
 
     # Determine metadata columns (exclude image column and id column)
     metadata_columns = config.metadata_columns
@@ -141,9 +142,10 @@ def embed_images(
     # Process in batches
     total_embedded = 0
 
-    for batch_start in tqdm(range(0, len(rows), IMAGE_BATCH_SIZE),
-                            desc="Embedding images", unit="batch"):
-        batch = rows[batch_start:batch_start + IMAGE_BATCH_SIZE]
+    for batch_start in tqdm(
+        range(0, len(rows), IMAGE_BATCH_SIZE), desc="Embedding images", unit="batch"
+    ):
+        batch = rows[batch_start : batch_start + IMAGE_BATCH_SIZE]
 
         # Load images for batch
         images = []
@@ -186,7 +188,11 @@ def embed_images(
                 doc_id = f"{config.collection_name}_{row_idx}"
 
             # Create document text
-            doc_text = format_text_for_embedding(row, text_columns, None) if text_columns else f"Image {row_idx}"
+            doc_text = (
+                format_text_for_embedding(row, text_columns, None)
+                if text_columns
+                else f"Image {row_idx}"
+            )
 
             # Extract metadata using shared function
             metadata = extract_metadata(row, metadata_columns)
@@ -219,5 +225,5 @@ def embed_images(
         total_embedded=total_embedded,
         embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
         device=device,
-        duration_seconds=duration
+        duration_seconds=duration,
     )

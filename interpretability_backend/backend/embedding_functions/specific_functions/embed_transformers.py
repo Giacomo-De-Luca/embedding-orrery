@@ -1,19 +1,17 @@
 import importlib
-from typing import Optional, cast
 
 import numpy as np
 import numpy.typing as npt
-from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
-
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
 ## Unused, - an example template found in the ChromaDB documentation
 
 
 class TransformerEmbeddingFunction(EmbeddingFunction[Documents]):
     def __init__(
-            self,
-            model_name: str = "dbmdz/bert-base-turkish-cased",
-            cache_dir: Optional[str] = None,
+        self,
+        model_name: str = "dbmdz/bert-base-turkish-cased",
+        cache_dir: str | None = None,
     ):
         try:
             from transformers import AutoModel, AutoTokenizer
@@ -36,9 +34,7 @@ class TransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         return vector / norm
 
     def __call__(self, input: Documents) -> Embeddings:
-        inputs = self._tokenizer(
-            input, padding=True, truncation=True, return_tensors="pt"
-        )
+        inputs = self._tokenizer(input, padding=True, truncation=True, return_tensors="pt")
         with self._torch.no_grad():
             outputs = self._model(**inputs)
         embeddings = outputs.last_hidden_state.mean(dim=1)  # mean pooling

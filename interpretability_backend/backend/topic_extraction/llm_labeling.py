@@ -7,9 +7,9 @@ from clustered documents and c-TF-IDF keywords.
 import logging
 import os
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
-logger = logging.getLogger('star_map.' + __name__)
+logger = logging.getLogger("star_map." + __name__)
 
 
 DEFAULT_SYSTEM_PROMPT = "You are an assistant that extracts high-level topics from texts."
@@ -52,7 +52,7 @@ class _GeminiLabeler:
 
     def __init__(self, model: str = "gemini-3-flash-preview"):
         from google import genai
-        from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+        from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
@@ -64,14 +64,12 @@ class _GeminiLabeler:
         self.generate_label = retry(
             stop=stop_after_attempt(5),
             wait=wait_exponential(multiplier=1, min=1, max=10),
-            before_sleep=before_sleep_log(logger, logging.WARNING)
+            before_sleep=before_sleep_log(logger, logging.WARNING),
         )(self._generate_label)
 
     def _generate_label(self, prompt: str) -> str:
         response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config={"system_instruction": DEFAULT_SYSTEM_PROMPT}
+            model=self.model, contents=prompt, config={"system_instruction": DEFAULT_SYSTEM_PROMPT}
         )
         text = response.text
         if text is None:
@@ -84,7 +82,7 @@ class _OpenAILabeler:
 
     def __init__(self, model: str = "gpt-4o-mini"):
         import openai
-        from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+        from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
         api_key = os.environ.get("CHROMA_OPENAI_API_KEY")
         if not api_key:
@@ -96,7 +94,7 @@ class _OpenAILabeler:
         self.generate_label = retry(
             stop=stop_after_attempt(5),
             wait=wait_exponential(multiplier=1, min=1, max=10),
-            before_sleep=before_sleep_log(logger, logging.WARNING)
+            before_sleep=before_sleep_log(logger, logging.WARNING),
         )(self._generate_label)
 
     def _generate_label(self, prompt: str) -> str:
@@ -133,8 +131,8 @@ def _create_labeler(provider: str, model: str):
 
 def generate_llm_label_for_topic(
     topic_id: int,
-    keywords: List[Tuple[str, float]],
-    sample_documents: List[str],
+    keywords: list[tuple[str, float]],
+    sample_documents: list[str],
     labeler,
 ) -> str | None:
     """Generate an LLM label for a single topic.
@@ -151,17 +149,14 @@ def generate_llm_label_for_topic(
     keyword_str = ", ".join([w for w, _ in keywords[:10]])
     docs_str = "\n".join([f"- {doc[:200]}" for doc in sample_documents[:4]])
 
-    prompt = DEFAULT_TOPIC_PROMPT.format(
-        documents=docs_str,
-        keywords=keyword_str
-    )
+    prompt = DEFAULT_TOPIC_PROMPT.format(documents=docs_str, keywords=keyword_str)
 
     try:
         call_start = time.time()
         label = labeler.generate_label(prompt)
         call_duration = time.time() - call_start
         label = label.replace("topic: ", "").replace("Topic: ", "")
-        logger.info(f"Topic {topic_id} -> \"{label}\" ({call_duration:.1f}s)")
+        logger.info(f'Topic {topic_id} -> "{label}" ({call_duration:.1f}s)')
         return label
     except Exception as e:
         call_duration = time.time() - call_start
@@ -170,12 +165,12 @@ def generate_llm_label_for_topic(
 
 
 def generate_llm_labels(
-    topics_data: Dict[int, List[Tuple[str, float]]],
+    topics_data: dict[int, list[tuple[str, float]]],
     documents_df,
     llm_provider: str = "gemini",
     llm_model: str = "gemini-3-flash-preview",
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> Dict[int, str]:
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> dict[int, str]:
     """Generate human-readable topic labels using an LLM.
 
     Args:
@@ -220,5 +215,7 @@ def generate_llm_labels(
             progress_callback(call_num, total_calls)
 
     total_duration = time.time() - labeling_start
-    logger.info(f"LLM labeling complete: {len(labels)}/{total_calls} labeled in {total_duration:.1f}s")
+    logger.info(
+        f"LLM labeling complete: {len(labels)}/{total_calls} labeled in {total_duration:.1f}s"
+    )
     return labels

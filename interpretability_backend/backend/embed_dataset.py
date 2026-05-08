@@ -10,22 +10,24 @@ Projection utilities are in utils/compute_projections.
 """
 
 # ========== Re-exports from embedding_functions.config ==========
+# Re-export PortionConfig and PortionStrategy for convenience
+from .clients.huggingface_client import PortionConfig, PortionStrategy
 from .embedding_functions.config import (
     # Constants
     DB_PATH,
-    TEXT_MODEL_NAME,
-    IMAGE_MODEL_NAME,
-    TEXT_EMBEDDING_DIMENSIONS,
-    IMAGE_EMBEDDING_DIMENSIONS,
     EMBEDDING_BATCH_SIZE,
     IMAGE_BATCH_SIZE,
+    IMAGE_EMBEDDING_DIMENSIONS,
+    IMAGE_MODEL_NAME,
+    TEXT_EMBEDDING_DIMENSIONS,
+    TEXT_MODEL_NAME,
     # Enums
     DataType,
-    EmbeddingProvider,
+    EmbeddingConfig,
     # Dataclasses
     EmbeddingModelConfig,
+    EmbeddingProvider,
     EmbeddingResult,
-    EmbeddingConfig,
     LocalFileEmbeddingConfig,
 )
 
@@ -42,14 +44,7 @@ from .embedding_functions.embed_local_file import embed_local_file
 # ========== Re-exports from utils ==========
 from .utils.compute_projections import compute_projections_for_collection
 
-# Re-export PortionConfig and PortionStrategy for convenience
-from .clients.huggingface_client import PortionConfig, PortionStrategy
-
 # Internal functions for backward compatibility
-from .utils.text_processing import (
-    format_text_for_embedding as _format_text_for_embedding,
-    extract_metadata as _extract_metadata,
-)
 
 __all__ = [
     # Constants

@@ -47,4 +47,47 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "ruff>=0.7.0",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["interpretability_backend"]
+extend-exclude = [
+    "interpretability_backend/sae_inference/gemma_pytorch",
+    "interpretability_backend/interpretability_experiments/WordNet/wordnet_data",
+    "embedding-atlas",
+    "tensorboard",
+    "embedding_visualization",
+    "*.ipynb",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "ASYNC",
+]
+ignore = [
+    "E501",
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"unit_tests/**" = ["F401", "F811"]
+"test/**" = ["F401", "F811"]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["interpretability_backend"]
+combine-as-imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = false

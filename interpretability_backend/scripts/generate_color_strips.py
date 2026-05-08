@@ -19,12 +19,19 @@ from pathlib import Path
 from hilbertcurve.hilbertcurve import HilbertCurve
 
 # Output directory: frontend colormaps
-COLORMAPS_DIR = Path(__file__).resolve().parents[2] / "embedding_visualization" / "lib" / "colorMaps" / "colormaps"
+COLORMAPS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "embedding_visualization"
+    / "lib"
+    / "colorMaps"
+    / "colormaps"
+)
 
 
 # ---------------------------------------------------------------------------
 # Colorscale generators
 # ---------------------------------------------------------------------------
+
 
 def rgb_to_plotly_string(r: int, g: int, b: int) -> str:
     return f"rgb({r},{g},{b})"
@@ -116,6 +123,7 @@ def generate_xkcd_strip(csv_path: str) -> list[tuple[int, int, int]]:
 # Index.json updater
 # ---------------------------------------------------------------------------
 
+
 def update_index(names_and_counts: list[tuple[str, int]]) -> None:
     """Add entries to index.json for the generated colormaps."""
     index_path = COLORMAPS_DIR / "index.json"
@@ -133,16 +141,29 @@ def update_index(names_and_counts: list[tuple[str, int]]) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate color strip JSON files for Plotly colorscales")
-    parser.add_argument("--custom-colors", type=str, default=None,
-                        help="Path to CSV with columns: Name,Hex,R,G,B,...")
-    parser.add_argument("--grid-size", type=int, default=8,
-                        help="RGB grid size for Hilbert strip (power of 2, default 8 → 512 colors)")
-    parser.add_argument("--hue-steps", type=int, default=20,
-                        help="Hue steps for hue-sat strip (default 20)")
-    parser.add_argument("--sat-steps", type=int, default=18,
-                        help="Saturation steps for hue-sat strip (default 18)")
+    parser = argparse.ArgumentParser(
+        description="Generate color strip JSON files for Plotly colorscales"
+    )
+    parser.add_argument(
+        "--custom-colors",
+        type=str,
+        default=None,
+        help="Path to CSV with columns: Name,Hex,R,G,B,...",
+    )
+    parser.add_argument(
+        "--grid-size",
+        type=int,
+        default=8,
+        help="RGB grid size for Hilbert strip (power of 2, default 8 → 512 colors)",
+    )
+    parser.add_argument(
+        "--hue-steps", type=int, default=20, help="Hue steps for hue-sat strip (default 20)"
+    )
+    parser.add_argument(
+        "--sat-steps", type=int, default=18, help="Saturation steps for hue-sat strip (default 18)"
+    )
     args = parser.parse_args()
 
     COLORMAPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -159,7 +180,9 @@ def main():
     generated.append(("hilbertColor", len(hilbert_colors)))
 
     # 2. Hue-Saturation strip
-    print(f"Generating hueSatColor ({args.hue_steps}×{args.sat_steps} = {args.hue_steps * args.sat_steps} colors)...")
+    print(
+        f"Generating hueSatColor ({args.hue_steps}×{args.sat_steps} = {args.hue_steps * args.sat_steps} colors)..."
+    )
     huesat_colors = generate_hue_sat(args.hue_steps, args.sat_steps)
     huesat_json = build_crameri_json("hueSatColor", huesat_colors)
     out_path = COLORMAPS_DIR / "hueSatColor.json"
@@ -169,7 +192,9 @@ def main():
     generated.append(("hueSatColor", len(huesat_colors)))
 
     # 3. XKCD color list (if provided or default path exists)
-    xkcd_default = Path(__file__).resolve().parents[1] / "resources" / "uploads" / "xkcd_colours.csv"
+    xkcd_default = (
+        Path(__file__).resolve().parents[1] / "resources" / "uploads" / "xkcd_colours.csv"
+    )
     custom_path = args.custom_colors or (str(xkcd_default) if xkcd_default.exists() else None)
     if custom_path:
         print(f"Generating xkcdColor from {custom_path}...")

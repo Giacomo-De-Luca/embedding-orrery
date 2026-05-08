@@ -1,9 +1,27 @@
 """GraphQL mutation resolvers for embedding visualization backend."""
 
 import asyncio
+
 import strawberry
 
+from ..clients.duckdb_client import _sanitize_for_json
+from ..services.embedding_pipeline import (
+    HuggingFaceEmbeddingPipeline,
+    LocalFileEmbeddingPipeline,
+)
+from ..services.topic_extraction_service import (
+    extract_topics as do_extract_topics,
+)
+from .chromadb_instance import get_chromadb_client
+from .converters import (
+    build_hf_embedding_config,
+    build_local_file_embedding_config,
+    build_topic_extraction_config,
+    convert_topic_infos,
+)
+from .duckdb_instance import get_duckdb_client
 from .types import (
+    JSON,
     EmbedDatasetInput,
     EmbedDatasetResult,
     EmbedLocalFileInput,
@@ -14,28 +32,11 @@ from .types import (
     IngestSaeActivationsInput,
     IngestSaeFeaturesInput,
     IngestSaeResult,
-    JSON,
     ReduceTopicsInput,
     ReduceTopicsResult,
     RenameTopicLabelInput,
     RenameTopicLabelResult,
     UpdateCollectionMetadataResult,
-)
-from .converters import (
-    build_hf_embedding_config,
-    build_local_file_embedding_config,
-    build_topic_extraction_config,
-    convert_topic_infos,
-)
-from .chromadb_instance import get_chromadb_client
-from .duckdb_instance import get_duckdb_client
-from ..clients.duckdb_client import _sanitize_for_json
-from ..services.embedding_pipeline import (
-    HuggingFaceEmbeddingPipeline,
-    LocalFileEmbeddingPipeline,
-)
-from ..services.topic_extraction_service import (
-    extract_topics as do_extract_topics,
 )
 
 
@@ -44,12 +45,16 @@ class Mutation:
     """GraphQL mutation root."""
 
     @strawberry.mutation
-    async def embed_huggingface_dataset(self, input: EmbedDatasetInput, info=None) -> EmbedDatasetResult:
+    async def embed_huggingface_dataset(
+        self, input: EmbedDatasetInput, info=None
+    ) -> EmbedDatasetResult:
         """Embed a HuggingFace dataset into a ChromaDB collection."""
         config = build_hf_embedding_config(input)
-        topic_config = build_topic_extraction_config(
-            input.collection_name, input.topic_config
-        ) if input.extract_topics else None
+        topic_config = (
+            build_topic_extraction_config(input.collection_name, input.topic_config)
+            if input.extract_topics
+            else None
+        )
 
         pipeline = HuggingFaceEmbeddingPipeline(
             config=config,
@@ -76,9 +81,11 @@ class Mutation:
     async def embed_local_file(self, input: EmbedLocalFileInput, info=None) -> EmbedDatasetResult:
         """Embed a local file (parquet/json/csv) into a ChromaDB collection."""
         config = build_local_file_embedding_config(input)
-        topic_config = build_topic_extraction_config(
-            input.collection_name, input.topic_config
-        ) if input.extract_topics else None
+        topic_config = (
+            build_topic_extraction_config(input.collection_name, input.topic_config)
+            if input.extract_topics
+            else None
+        )
 
         pipeline = LocalFileEmbeddingPipeline(
             config=config,
@@ -121,10 +128,7 @@ class Mutation:
 
     @strawberry.mutation
     def update_collection_metadata(
-        self,
-        collection_name: str,
-        metadata: JSON,
-        info=None
+        self, collection_name: str, metadata: JSON, info=None
     ) -> UpdateCollectionMetadataResult:
         """Update metadata for a collection."""
         try:
@@ -138,11 +142,7 @@ class Mutation:
                 metadata=_sanitize_for_json(ds) if ds else {},
             )
         except Exception as e:
-            return UpdateCollectionMetadataResult(
-                name=collection_name,
-                metadata={},
-                error=str(e)
-            )
+            return UpdateCollectionMetadataResult(name=collection_name, metadata={}, error=str(e))
 
     @strawberry.mutation
     async def extract_topics(self, input: ExtractTopicsInput, info=None) -> ExtractTopicsResult:
@@ -190,7 +190,9 @@ class Mutation:
         )
 
     @strawberry.mutation
-    async def generate_llm_labels(self, input: GenerateLlmLabelsInput, info=None) -> GenerateLlmLabelsResult:
+    async def generate_llm_labels(
+        self, input: GenerateLlmLabelsInput, info=None
+    ) -> GenerateLlmLabelsResult:
         """Generate LLM labels for existing topics in a collection."""
         from ..services.topic_extraction_service import generate_llm_labels_for_collection
 
@@ -267,7 +269,9 @@ class Mutation:
         )
 
     @strawberry.mutation
-    async def regenerate_topic_label(self, input: RenameTopicLabelInput, info=None) -> RenameTopicLabelResult:
+    async def regenerate_topic_label(
+        self, input: RenameTopicLabelInput, info=None
+    ) -> RenameTopicLabelResult:
         """Regenerate an LLM label for a single topic using its keywords and sample documents."""
         import asyncio
 
@@ -292,7 +296,9 @@ class Mutation:
         extraction_id = topic_data["id"]
 
         # Find the topic's keywords
-        topic_info = next((t for t in topic_data["topics"] if t["topic_id"] == input.topic_id), None)
+        topic_info = next(
+            (t for t in topic_data["topics"] if t["topic_id"] == input.topic_id), None
+        )
         if not topic_info:
             return RenameTopicLabelResult(
                 collection_name=input.collection_name,
@@ -327,7 +333,11 @@ class Mutation:
             llm_model = parts[1]
 
         def _do_label():
-            from ..topic_extraction.llm_labeling import generate_llm_label_for_topic, _create_labeler
+            from ..topic_extraction.llm_labeling import (
+                _create_labeler,
+                generate_llm_label_for_topic,
+            )
+
             labeler = _create_labeler(llm_provider, llm_model)
             return generate_llm_label_for_topic(
                 topic_id=input.topic_id,

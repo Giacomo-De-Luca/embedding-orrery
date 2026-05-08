@@ -12,10 +12,11 @@ Both share the composite key ``(model_id, sae_id, feature_index)`` for joins.
 """
 
 import json
-import time
 import logging
+import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ VECTOR_BATCH_SIZE = 500
 
 # ── helpers ──────────────────────────────────────────────────────────
 
+
 def _serialize_logits(value) -> str:
     """Convert a logit column value (numpy array of dicts, list, or str) to JSON."""
     if isinstance(value, str):
@@ -37,12 +39,10 @@ def _serialize_logits(value) -> str:
         return "[]"
     if isinstance(value, np.ndarray):
         value = value.tolist()
-    return json.dumps(
-        [{"token": d["token"], "score": float(d["score"])} for d in value]
-    )
+    return json.dumps([{"token": d["token"], "score": float(d["score"])} for d in value])
 
 
-def _parse_vector(value) -> Optional[List[float]]:
+def _parse_vector(value) -> list[float] | None:
     """Convert a vector cell (numpy array, list, or JSON string) to List[float]."""
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -60,13 +60,14 @@ def _parse_vector(value) -> Optional[List[float]]:
 
 # ── feature ingestion ────────────────────────────────────────────────
 
+
 def ingest_sae_features(
     parquet_path: str,
     model_id: str,
     sae_id: str,
     store_vectors: bool = True,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> Dict[str, Any]:
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     """Load SAE feature parquet into DuckDB (+ optional ChromaDB vectors).
 
     Args:
@@ -83,7 +84,7 @@ def ingest_sae_features(
         vectors_stored, duration_seconds, error.
     """
     start = time.time()
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "model_id": model_id,
         "sae_id": sae_id,
         "records_inserted": 0,
@@ -107,16 +108,19 @@ def ingest_sae_features(
     logger.info("Ingesting %d SAE features from %s", total, parquet_path)
 
     # ---- 1. Serialize logit columns to JSON strings ----
-    feature_df = pd.DataFrame({
-        "feature_index": df["index"].astype(int),
-        "density": df["density"].astype(float),
-        "label": df["label"].astype(str),
-        "top_logits": df["top_logits"].apply(_serialize_logits),
-        "bottom_logits": df["bottom_logits"].apply(_serialize_logits),
-    })
+    feature_df = pd.DataFrame(
+        {
+            "feature_index": df["index"].astype(int),
+            "density": df["density"].astype(float),
+            "label": df["label"].astype(str),
+            "top_logits": df["top_logits"].apply(_serialize_logits),
+            "bottom_logits": df["bottom_logits"].apply(_serialize_logits),
+        }
+    )
 
     # ---- 2. Insert into sae_features ----
     from ..API.duckdb_instance import get_duckdb_client
+
     db = get_duckdb_client()
     count = db.insert_sae_features_batch(model_id, sae_id, feature_df)
     result["records_inserted"] = count
@@ -128,26 +132,39 @@ def ingest_sae_features(
     if store_vectors and "vector" in df.columns:
         collection_name = f"sae_{model_id}_{sae_id}".replace("/", "_")
         _store_feature_vectors(
-            db, df, model_id, sae_id, collection_name,
-            parquet_path, progress_callback, total,
+            db,
+            df,
+            model_id,
+            sae_id,
+            collection_name,
+            parquet_path,
+            progress_callback,
+            total,
         )
 
     if progress_callback:
         progress_callback(total, total)
 
     result["duration_seconds"] = round(time.time() - start, 2)
-    logger.info("SAE feature ingestion done in %.1fs — %d features", result["duration_seconds"], count)
+    logger.info(
+        "SAE feature ingestion done in %.1fs — %d features", result["duration_seconds"], count
+    )
     return result
 
 
 def _store_feature_vectors(
-    db, df: pd.DataFrame, model_id: str, sae_id: str,
-    collection_name: str, parquet_path: str,
-    progress_callback, total: int,
+    db,
+    df: pd.DataFrame,
+    model_id: str,
+    sae_id: str,
+    collection_name: str,
+    parquet_path: str,
+    progress_callback,
+    total: int,
 ):
     """Store explanation-embedding vectors in ChromaDB and DuckDB items table."""
-    from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
     from ..API.chromadb_instance import get_chromadb_client
+    from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
 
     chroma = get_chromadb_client()
 
@@ -176,18 +193,22 @@ def _store_feature_vectors(
     except Exception:
         pass
     collection = chroma.client.create_collection(
-        name=collection_name, metadata=collection_metadata,
+        name=collection_name,
+        metadata=collection_metadata,
     )
 
     # Register in DuckDB datasets + vector_collections
     sync_dataset_and_collection(
-        collection_name, collection_metadata, embedding_dim=embedding_dim,
+        collection_name,
+        collection_metadata,
+        embedding_dim=embedding_dim,
     )
 
     # Batch-insert vectors into ChromaDB and items into DuckDB
     for batch_start in tqdm(
         range(0, len(df), VECTOR_BATCH_SIZE),
-        desc="Storing SAE vectors", unit="batch",
+        desc="Storing SAE vectors",
+        unit="batch",
     ):
         batch = df.iloc[batch_start : batch_start + VECTOR_BATCH_SIZE]
 
@@ -203,11 +224,13 @@ def _store_feature_vectors(
             ids.append(str(int(row["index"])))
             embeddings.append(vec)
             documents.append(str(row["label"]) if pd.notna(row["label"]) else "")
-            metadatas.append({
-                "feature_index": int(row["index"]),
-                "density": float(row["density"]),
-                "row_index": int(row["index"]),
-            })
+            metadatas.append(
+                {
+                    "feature_index": int(row["index"]),
+                    "density": float(row["density"]),
+                    "row_index": int(row["index"]),
+                }
+            )
 
         if ids:
             collection.add(ids=ids, embeddings=embeddings)
@@ -220,13 +243,14 @@ def _store_feature_vectors(
 
 # ── activation ingestion ─────────────────────────────────────────────
 
+
 def ingest_sae_activations(
     jsonl_path: str,
-    model_id: Optional[str] = None,
-    sae_id: Optional[str] = None,
+    model_id: str | None = None,
+    sae_id: str | None = None,
     batch_size: int = ACTIVATION_BATCH_SIZE,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> Dict[str, Any]:
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     """Stream SAE activation JSONL into DuckDB.
 
     Args:
@@ -241,7 +265,7 @@ def ingest_sae_activations(
         duration_seconds, error.
     """
     start = time.time()
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "model_id": model_id or "",
         "sae_id": sae_id or "",
         "records_inserted": 0,
@@ -255,19 +279,22 @@ def ingest_sae_activations(
         return result
 
     # Count lines for progress (fast scan)
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         total_lines = sum(1 for _ in f)
     logger.info("Ingesting %d activation records from %s", total_lines, jsonl_path)
 
     from ..API.duckdb_instance import get_duckdb_client
+
     db = get_duckdb_client()
 
     inserted = 0
     skipped = 0
-    batch_rows: List[Dict[str, Any]] = []
+    batch_rows: list[dict[str, Any]] = []
 
-    with open(path, "r", encoding="utf-8") as f:
-        for line_no, line in enumerate(tqdm(f, total=total_lines, desc="SAE activations", unit="rec")):
+    with open(path, encoding="utf-8") as f:
+        for line_no, line in enumerate(
+            tqdm(f, total=total_lines, desc="SAE activations", unit="rec")
+        ):
             try:
                 entry = json.loads(line)
 
@@ -279,18 +306,20 @@ def ingest_sae_activations(
                     result["model_id"] = row_model_id
                     result["sae_id"] = row_sae_id
 
-                batch_rows.append({
-                    "id": entry["id"],
-                    "model_id": row_model_id,
-                    "sae_id": row_sae_id,
-                    "feature_index": int(entry["index"]),
-                    "tokens": json.dumps(entry["tokens"]),
-                    "act_values": json.dumps(entry.get("values", [])),
-                    "max_value": float(entry.get("maxValue", 0)),
-                    "max_value_token_idx": int(entry.get("maxValueTokenIndex", 0)),
-                    "min_value": float(entry.get("minValue", 0)),
-                    "qualifying_token_idx": int(entry.get("qualifyingTokenIndex", 0)),
-                })
+                batch_rows.append(
+                    {
+                        "id": entry["id"],
+                        "model_id": row_model_id,
+                        "sae_id": row_sae_id,
+                        "feature_index": int(entry["index"]),
+                        "tokens": json.dumps(entry["tokens"]),
+                        "act_values": json.dumps(entry.get("values", [])),
+                        "max_value": float(entry.get("maxValue", 0)),
+                        "max_value_token_idx": int(entry.get("maxValueTokenIndex", 0)),
+                        "min_value": float(entry.get("minValue", 0)),
+                        "qualifying_token_idx": int(entry.get("qualifyingTokenIndex", 0)),
+                    }
+                )
             except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
                 skipped += 1
                 if skipped <= 5:
@@ -317,5 +346,7 @@ def ingest_sae_activations(
 
     result["records_inserted"] = inserted
     result["duration_seconds"] = round(time.time() - start, 2)
-    logger.info("SAE activation ingestion done in %.1fs — %d records", result["duration_seconds"], inserted)
+    logger.info(
+        "SAE activation ingestion done in %.1fs — %d records", result["duration_seconds"], inserted
+    )
     return result

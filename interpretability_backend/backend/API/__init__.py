@@ -2,60 +2,60 @@
 
 import strawberry
 
-from .queries import Query
 from .mutations import Mutation
-from .subscriptions import Subscription, JobProgress
+from .queries import Query
+from .subscriptions import JobProgress, Subscription
 from .types import (
     # Scalars
     JSON,
-    # HuggingFace types
-    HFSplitInfo,
-    HFFeatureInfo,
+    Collection,
+    # Collection types
+    CollectionMetadata,
+    DataTypeEnum,
+    EmbedDatasetInput,
+    EmbedDatasetResult,
+    EmbeddingItem,
+    EmbeddingJob,
+    EmbeddingModelInput,
+    # Embedding model types
+    EmbeddingProviderEnum,
+    EmbedLocalFileInput,
+    FilterInput,
+    FilterOperator,
     HFConfigInfo,
     HFDatasetInfo,
     HFDatasetPreview,
-    PortionStrategyEnum,
-    PortionInput,
-    # Embedding model types
-    EmbeddingProviderEnum,
-    EmbeddingModelInput,
-    EmbedDatasetInput,
-    EmbedDatasetResult,
+    HFFeatureInfo,
+    # HuggingFace types
+    HFSplitInfo,
+    IngestSaeActivationsInput,
+    IngestSaeFeaturesInput,
+    IngestSaeResult,
+    # Job types
+    JobStatusEnum,
     # Local file types
     LocalFileInfo,
     LocalFilePreview,
-    DataTypeEnum,
-    EmbedLocalFileInput,
-    # Text search types
-    TextSearchMode,
-    TextSearchMatch,
-    TextSearchResponse,
+    PortionInput,
+    PortionStrategyEnum,
+    ProjectionData,
+    SaeActivation,
+    SaeActivationQuantileGroup,
+    SaeFeature,
+    SaeFeatureSearchResult,
+    # SAE types
+    SaeLogitEntry,
+    SaeModelInfo,
+    SemanticSearchResult,
     # Search & filter types
     SimilarityMeasure,
-    FilterOperator,
-    FilterInput,
-    # Collection types
-    CollectionMetadata,
-    Collection,
-    EmbeddingItem,
-    SemanticSearchResult,
-    ProjectionData,
-    # Job types
-    JobStatusEnum,
-    EmbeddingJob,
+    TextSearchMatch,
+    # Text search types
+    TextSearchMode,
+    TextSearchResponse,
     # Note: JobProgress is imported from subscriptions (not types) to avoid circular imports
     # Helper functions
     build_where_clause,
-    # SAE types
-    SaeLogitEntry,
-    SaeFeature,
-    SaeActivation,
-    SaeModelInfo,
-    SaeFeatureSearchResult,
-    SaeActivationQuantileGroup,
-    IngestSaeFeaturesInput,
-    IngestSaeActivationsInput,
-    IngestSaeResult,
 )
 
 # Create the schema with subscription support

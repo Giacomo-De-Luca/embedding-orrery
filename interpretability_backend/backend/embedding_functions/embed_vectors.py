@@ -4,24 +4,25 @@ Pre-computed vector embedding support.
 This module handles loading and storing pre-computed vector embeddings in ChromaDB.
 """
 
-import time
 import json
+import time
+from collections.abc import Callable
+
 import numpy as np
-from typing import Optional, List, Dict, Callable
 from tqdm import tqdm
 
+from ..utils.color_preprocessing import preprocess_color_metadata
+from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.id_utils import IDDeduplicator
+from ..utils.text_processing import extract_metadata, format_text_for_embedding
 from .config import (
     EMBEDDING_BATCH_SIZE,
     EmbeddingResult,
     LocalFileEmbeddingConfig,
 )
-from ..utils.text_processing import format_text_for_embedding, extract_metadata
-from ..utils.color_preprocessing import preprocess_color_metadata
-from ..utils.id_utils import IDDeduplicator
-from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
 
 
-def _parse_vector(value) -> Optional[List[float]]:
+def _parse_vector(value) -> list[float] | None:
     """Parse a vector value from various formats into a list of floats.
 
     Handles: list, numpy array, or string representation of a JSON array
@@ -34,7 +35,7 @@ def _parse_vector(value) -> Optional[List[float]]:
         return value.tolist()
     if isinstance(value, str):
         value = value.strip()
-        if value.startswith('['):
+        if value.startswith("["):
             try:
                 parsed = json.loads(value)
                 if isinstance(parsed, list):
@@ -50,7 +51,7 @@ def _is_vector_like(value) -> bool:
         return True
     if isinstance(value, str):
         value = value.strip()
-        if value.startswith('[') and len(value) > 10:
+        if value.startswith("[") and len(value) > 10:
             try:
                 parsed = json.loads(value)
                 return isinstance(parsed, list) and len(parsed) >= 3
@@ -62,11 +63,11 @@ def _is_vector_like(value) -> bool:
 def embed_vectors(
     client,
     config: LocalFileEmbeddingConfig,
-    rows: List[Dict],
+    rows: list[dict],
     total: int,
     device: str,
     start_time: float,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Callable | None = None,
 ) -> EmbeddingResult:
     """
     Embed using pre-computed vector embeddings.
@@ -99,7 +100,7 @@ def embed_vectors(
             embedding_dim=0,
             device=device,
             duration_seconds=time.time() - start_time,
-            error="No vector column found or specified"
+            error="No vector column found or specified",
         )
 
     # Get embedding dimension from first row (parse string vectors if needed)
@@ -111,7 +112,7 @@ def embed_vectors(
             embedding_dim=0,
             device=device,
             duration_seconds=time.time() - start_time,
-            error=f"Could not parse vector from column '{vector_column}'. Value: {str(rows[0][vector_column])[:100]}"
+            error=f"Could not parse vector from column '{vector_column}'. Value: {str(rows[0][vector_column])[:100]}",
         )
     embedding_dim = len(first_vector)
 
@@ -125,25 +126,25 @@ def embed_vectors(
         "data_type": "vector",
         "embedding_dim": embedding_dim,
         "total_in_file": total,
-        "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    collection = client.create_collection(
-        name=config.collection_name,
-        metadata=collection_metadata
-    )
+    collection = client.create_collection(name=config.collection_name, metadata=collection_metadata)
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
-        config.collection_name, collection_metadata, embedding_dim=embedding_dim,
+        config.collection_name,
+        collection_metadata,
+        embedding_dim=embedding_dim,
     )
 
     # Determine text columns for document text
     text_columns = config.columns or []
     if not text_columns:
         first_row = rows[0]
-        text_columns = [k for k, v in first_row.items()
-                        if isinstance(v, str) and k != vector_column]
+        text_columns = [
+            k for k, v in first_row.items() if isinstance(v, str) and k != vector_column
+        ]
 
     # Determine metadata columns (exclude vector column and id column)
     metadata_columns = config.metadata_columns
@@ -160,9 +161,10 @@ def embed_vectors(
     total_embedded = 0
     id_deduplicator = IDDeduplicator()
 
-    for batch_start in tqdm(range(0, len(rows), EMBEDDING_BATCH_SIZE),
-                            desc="Adding vectors", unit="batch"):
-        batch = rows[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
+    for batch_start in tqdm(
+        range(0, len(rows), EMBEDDING_BATCH_SIZE), desc="Adding vectors", unit="batch"
+    ):
+        batch = rows[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
 
         ids = []
         embeddings = []
@@ -185,7 +187,11 @@ def embed_vectors(
                 doc_id = f"{config.collection_name}_{row_idx}"
 
             # Create document text
-            doc_text = format_text_for_embedding(row, text_columns, config.text_template) if text_columns else ""
+            doc_text = (
+                format_text_for_embedding(row, text_columns, config.text_template)
+                if text_columns
+                else ""
+            )
 
             # Extract metadata using shared function
             metadata = extract_metadata(row, metadata_columns)
@@ -218,5 +224,5 @@ def embed_vectors(
         total_embedded=total_embedded,
         embedding_dim=embedding_dim,
         device=device,
-        duration_seconds=duration
+        duration_seconds=duration,
     )

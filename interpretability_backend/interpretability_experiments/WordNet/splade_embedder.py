@@ -9,27 +9,27 @@ SPLADE produces 30,522-dimensional sparse vectors where each dimension correspon
 to a BERT vocabulary token, making dimensions directly interpretable.
 """
 
+from dataclasses import dataclass
+
 import torch
 from transformers import AutoModelForMaskedLM, AutoTokenizer
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
-import numpy as np
 
 
 @dataclass
 class SparseEmbedding:
     """Sparse embedding representation with indices and values."""
-    indices: List[int]
-    values: List[float]
 
-    def to_dict(self) -> Dict[str, List]:
+    indices: list[int]
+    values: list[float]
+
+    def to_dict(self) -> dict[str, list]:
         return {"indices": self.indices, "values": self.values}
 
     @classmethod
-    def from_dict(cls, d: Dict) -> "SparseEmbedding":
+    def from_dict(cls, d: dict) -> "SparseEmbedding":
         return cls(indices=d["indices"], values=d["values"])
 
-    def top_k(self, k: int = 50) -> List[Tuple[int, float]]:
+    def top_k(self, k: int = 50) -> list[tuple[int, float]]:
         """Return top k (index, value) pairs sorted by value."""
         pairs = list(zip(self.indices, self.values))
         return sorted(pairs, key=lambda x: x[1], reverse=True)[:k]
@@ -45,9 +45,7 @@ class SPLADEEmbedder:
     """
 
     def __init__(
-        self,
-        model_name: str = "naver/splade-cocondenser-ensembledistil",
-        device: Optional[str] = None
+        self, model_name: str = "naver/splade-cocondenser-ensembledistil", device: str | None = None
     ):
         """
         Initialize the SPLADE embedder.
@@ -80,7 +78,9 @@ class SPLADEEmbedder:
         self.vocab_size = self.tokenizer.vocab_size
         print(f"Vocabulary size: {self.vocab_size}")
 
-    def _compute_sparse_vector(self, logits: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    def _compute_sparse_vector(
+        self, logits: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
         """
         Apply SPLADE transformation: log saturation + ReLU + max pooling.
 
@@ -133,12 +133,9 @@ class SPLADEEmbedder:
         Returns:
             SparseEmbedding for the entire sentence
         """
-        tokens = self.tokenizer(
-            text,
-            return_tensors='pt',
-            truncation=True,
-            max_length=512
-        ).to(self.device)
+        tokens = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(
+            self.device
+        )
 
         with torch.no_grad():
             output = self.model(**tokens)
@@ -149,11 +146,8 @@ class SPLADEEmbedder:
         return self._to_sparse_embedding(sparse.squeeze(0), threshold)
 
     def embed_sentences_batch(
-        self,
-        texts: List[str],
-        batch_size: int = 32,
-        threshold: float = 0.0
-    ) -> List[SparseEmbedding]:
+        self, texts: list[str], batch_size: int = 32, threshold: float = 0.0
+    ) -> list[SparseEmbedding]:
         """
         Batch embed multiple sentences.
 
@@ -168,14 +162,10 @@ class SPLADEEmbedder:
         embeddings = []
 
         for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
+            batch_texts = texts[i : i + batch_size]
 
             tokens = self.tokenizer(
-                batch_texts,
-                return_tensors='pt',
-                truncation=True,
-                max_length=512,
-                padding=True
+                batch_texts, return_tensors="pt", truncation=True, max_length=512, padding=True
             ).to(self.device)
 
             with torch.no_grad():
@@ -189,11 +179,7 @@ class SPLADEEmbedder:
 
         return embeddings
 
-    def _find_word_positions(
-        self,
-        input_ids: torch.Tensor,
-        word_token_ids: List[int]
-    ) -> List[int]:
+    def _find_word_positions(self, input_ids: torch.Tensor, word_token_ids: list[int]) -> list[int]:
         """
         Find the positions of a word's tokens in the input sequence.
 
@@ -209,18 +195,15 @@ class SPLADEEmbedder:
 
         positions = []
         for i in range(len(input_ids) - word_len + 1):
-            if input_ids[i:i + word_len] == word_token_ids:
+            if input_ids[i : i + word_len] == word_token_ids:
                 positions.extend(range(i, i + word_len))
                 break  # Use first occurrence
 
         return positions
 
     def embed_word_in_context(
-        self,
-        sentence: str,
-        target_word: str,
-        threshold: float = 0.0
-    ) -> Optional[SparseEmbedding]:
+        self, sentence: str, target_word: str, threshold: float = 0.0
+    ) -> SparseEmbedding | None:
         """
         Extract sparse vector at target word's token position(s).
 
@@ -236,29 +219,22 @@ class SPLADEEmbedder:
             SparseEmbedding for the target word, or None if word not found
         """
         # Tokenize sentence
-        tokens = self.tokenizer(
-            sentence,
-            return_tensors='pt',
-            truncation=True,
-            max_length=512
-        ).to(self.device)
+        tokens = self.tokenizer(sentence, return_tensors="pt", truncation=True, max_length=512).to(
+            self.device
+        )
 
         # Get token IDs for the target word (without special tokens)
-        word_tokens = self.tokenizer(
-            target_word,
-            add_special_tokens=False
-        )['input_ids']
+        word_tokens = self.tokenizer(target_word, add_special_tokens=False)["input_ids"]
 
         # Find word positions in sentence
-        positions = self._find_word_positions(tokens['input_ids'][0], word_tokens)
+        positions = self._find_word_positions(tokens["input_ids"][0], word_tokens)
 
         if not positions:
             # Word not found as exact token match, try lowercase
-            word_tokens_lower = self.tokenizer(
-                target_word.lower(),
-                add_special_tokens=False
-            )['input_ids']
-            positions = self._find_word_positions(tokens['input_ids'][0], word_tokens_lower)
+            word_tokens_lower = self.tokenizer(target_word.lower(), add_special_tokens=False)[
+                "input_ids"
+            ]
+            positions = self._find_word_positions(tokens["input_ids"][0], word_tokens_lower)
 
         if not positions:
             return None
@@ -282,10 +258,8 @@ class SPLADEEmbedder:
         return self._to_sparse_embedding(sparse, threshold)
 
     def decode_tokens(
-        self,
-        sparse_emb: SparseEmbedding,
-        top_k: int = 50
-    ) -> List[Tuple[str, float]]:
+        self, sparse_emb: SparseEmbedding, top_k: int = 50
+    ) -> list[tuple[str, float]]:
         """
         Convert sparse indices to human-readable tokens.
 
@@ -297,16 +271,13 @@ class SPLADEEmbedder:
             List of (token_string, weight) tuples
         """
         top_items = sparse_emb.top_k(top_k)
-        return [
-            (self.tokenizer.decode([idx]).strip(), weight)
-            for idx, weight in top_items
-        ]
+        return [(self.tokenizer.decode([idx]).strip(), weight) for idx, weight in top_items]
 
     def token_id_to_string(self, token_id: int) -> str:
         """Convert a token ID to its string representation."""
         return self.tokenizer.decode([token_id]).strip()
 
-    def string_to_token_id(self, token_str: str) -> Optional[int]:
+    def string_to_token_id(self, token_str: str) -> int | None:
         """Convert a token string to its ID (if exact match exists)."""
         tokens = self.tokenizer.encode(token_str, add_special_tokens=False)
         if len(tokens) == 1:
