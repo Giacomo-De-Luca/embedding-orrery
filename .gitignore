@@ -6,6 +6,10 @@ dist/
 wheels/
 *.egg-info
 
+# Exception: forked plotly.js needs its build/ dir (contains generated plotcss.js)
+!embedding_visualization/forked/plotly.js/build/
+!embedding_visualization/forked/plotly.js/build/**
+
 ## Random Test Files and notebooks
 test*.py
 test*.ipynb
