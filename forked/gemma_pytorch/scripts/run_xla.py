@@ -17,16 +17,14 @@ import os
 import random
 import socket
 import sys
-from typing import List, Union
 
+import gemma.xla_model_parallel as xla_model_parallel
 import numpy as np
 import torch
 import torch.multiprocessing
-
 from gemma.config import GemmaConfig, get_model_config
 from gemma.model_xla import GemmaForCausalLM
 from gemma.tokenizer import Tokenizer
-import gemma.xla_model_parallel as xla_model_parallel
 
 USE_CUDA = os.environ.get('USE_CUDA', False)
 if not USE_CUDA:
@@ -53,11 +51,11 @@ def generate(
     i: int,
     model_config: GemmaConfig,
     ckpt_path: str,
-    prompts: List[str],
-    output_lens: List[int],
-    temperatures: Union[List[float], None],
-    top_ps: List[float],
-    top_ks: List[int],
+    prompts: list[str],
+    output_lens: list[int],
+    temperatures: list[float] | None,
+    top_ps: list[float],
+    top_ks: list[int],
     seed: int
 ):
     random.seed(seed)

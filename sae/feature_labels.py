@@ -21,13 +21,7 @@ from pathlib import Path
 import torch
 
 from interpret.sae.sae_config import SAEConfig
-
-# Mapping from HookType values to Neuronpedia filename abbreviations
-HOOK_TO_NEURONPEDIA: dict[str, str] = {
-    "resid_post": "res",
-    "mlp_out": "mlp",
-    "attn_out": "att",
-}
+from interpret.sae.source_ids import HOOK_TO_NEURONPEDIA
 
 # Internal key type: (model_id, layer, hook_abbrev, width_str)
 type _Key = tuple[str, int, str, str]
@@ -45,6 +39,7 @@ def _width_as_int(width: int | str) -> int:
     if width in _WIDTH_STR_TO_INT:
         return _WIDTH_STR_TO_INT[width]
     raise ValueError(f"Unknown width string: {width!r}")
+
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS features (
@@ -151,9 +146,7 @@ class FeatureLabelStore:
     def _scan_files(self) -> dict[_Key, Path]:
         """Scan for JSONL files and index by (model_id, layer, hook, width)."""
         available: dict[_Key, Path] = {}
-        pattern = re.compile(
-            r"^(.+)_(\d+)-gemmascope-2-(\w+)-(\w+)_features\.jsonl$"
-        )
+        pattern = re.compile(r"^(.+)_(\d+)-gemmascope-2-(\w+)-(\w+)_features\.jsonl$")
         for f in self._dir.glob("*_features.jsonl"):
             m = pattern.match(f.name)
             if m:
@@ -165,7 +158,11 @@ class FeatureLabelStore:
         return available
 
     def _resolve_key(
-        self, model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> _Key:
         """Convert user-facing params to internal key.
 
@@ -188,9 +185,7 @@ class FeatureLabelStore:
 
         jsonl_path = self._available.get(key)
         if jsonl_path is None:
-            row = conn.execute(
-                "SELECT 1 FROM imports WHERE source = ?", (source,)
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM imports WHERE source = ?", (source,)).fetchone()
             if row:
                 return source
             raise FileNotFoundError(
@@ -201,9 +196,7 @@ class FeatureLabelStore:
 
         current_mtime = jsonl_path.stat().st_mtime
 
-        row = conn.execute(
-            "SELECT mtime FROM imports WHERE source = ?", (source,)
-        ).fetchone()
+        row = conn.execute("SELECT mtime FROM imports WHERE source = ?", (source,)).fetchone()
         if row and row[0] >= current_mtime:
             return source
 
@@ -231,7 +224,7 @@ class FeatureLabelStore:
         count = 0
         seen_indices: set[int] = set()
 
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8") as f:
             for line in f:
                 entry = json.loads(line)
                 idx = int(entry["index"])
@@ -254,9 +247,7 @@ class FeatureLabelStore:
                     # Embeddings
                     embedding = explanations[0].get("embedding")
                     if embedding and len(embedding) == _EMBEDDING_DIM:
-                        batch_embeddings.append(
-                            (source, idx, _pack_embedding(embedding))
-                        )
+                        batch_embeddings.append((source, idx, _pack_embedding(embedding)))
 
                 # Logits
                 for direction, key_name in [("top", "top_logits"), ("bottom", "bottom_logits")]:
@@ -268,13 +259,19 @@ class FeatureLabelStore:
                 count += 1
                 if count % batch_size == 0:
                     self._flush_batches(
-                        conn, batch_features, batch_labels,
-                        batch_embeddings, batch_logits,
+                        conn,
+                        batch_features,
+                        batch_labels,
+                        batch_embeddings,
+                        batch_logits,
                     )
 
         self._flush_batches(
-            conn, batch_features, batch_labels,
-            batch_embeddings, batch_logits,
+            conn,
+            batch_features,
+            batch_labels,
+            batch_embeddings,
+            batch_logits,
         )
 
         conn.execute(
@@ -286,8 +283,10 @@ class FeatureLabelStore:
     @staticmethod
     def _flush_batches(
         conn: sqlite3.Connection,
-        features: list, labels: list,
-        embeddings: list, logits: list,
+        features: list,
+        labels: list,
+        embeddings: list,
+        logits: list,
     ) -> None:
         """Flush all batch lists to the database and clear them."""
         if features:
@@ -318,21 +317,33 @@ class FeatureLabelStore:
     # --- Single lookups ---
 
     def get_label(
-        self, feature_index: int,
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_index: int,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
         method: str = "label",
     ) -> str | None:
         """Get the label for a single feature."""
         source = self._ensure_source(model_id, layer, hook, width)
-        row = self._get_conn().execute(
-            "SELECT text FROM labels WHERE source = ? AND idx = ? AND method = ?",
-            (source, feature_index, method),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT text FROM labels WHERE source = ? AND idx = ? AND method = ?",
+                (source, feature_index, method),
+            )
+            .fetchone()
+        )
         return row[0] if row else None
 
     def get_labels(
-        self, feature_indices: list[int],
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_indices: list[int],
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
         method: str = "label",
     ) -> dict[int, str]:
         """Batch lookup labels for multiple feature indices."""
@@ -340,26 +351,42 @@ class FeatureLabelStore:
             return {}
         source = self._ensure_source(model_id, layer, hook, width)
         placeholders = ",".join("?" * len(feature_indices))
-        rows = self._get_conn().execute(
-            f"SELECT idx, text FROM labels WHERE source = ? AND idx IN ({placeholders}) AND method = ?",
-            [source, *feature_indices, method],
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                f"SELECT idx, text FROM labels WHERE source = ? AND idx IN ({placeholders}) AND method = ?",
+                [source, *feature_indices, method],
+            )
+            .fetchall()
+        )
         return {idx: text for idx, text in rows}
 
     def get_density(
-        self, feature_index: int,
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_index: int,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> float | None:
         """Get the density (activation frequency) for a single feature."""
         source = self._ensure_source(model_id, layer, hook, width)
-        row = self._get_conn().execute(
-            "SELECT density FROM features WHERE source = ? AND idx = ?",
-            (source, feature_index),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT density FROM features WHERE source = ? AND idx = ?",
+                (source, feature_index),
+            )
+            .fetchone()
+        )
         return row[0] if row else None
 
     def get_densities(
-        self, model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> torch.Tensor:
         """Get a tensor of densities for all features.
 
@@ -382,8 +409,12 @@ class FeatureLabelStore:
         return densities
 
     def get_logits(
-        self, feature_index: int,
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_index: int,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> dict[str, list[tuple[str, float]]]:
         """Get top/bottom logits for a feature.
 
@@ -393,18 +424,26 @@ class FeatureLabelStore:
         """
         source = self._ensure_source(model_id, layer, hook, width)
         result: dict[str, list[tuple[str, float]]] = {"top": [], "bottom": []}
-        rows = self._get_conn().execute(
-            "SELECT direction, token, score FROM logits "
-            "WHERE source = ? AND idx = ? ORDER BY score DESC",
-            (source, feature_index),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT direction, token, score FROM logits "
+                "WHERE source = ? AND idx = ? ORDER BY score DESC",
+                (source, feature_index),
+            )
+            .fetchall()
+        )
         for direction, token, score in rows:
             result[direction].append((token, score))
         return result
 
     def get_feature(
-        self, feature_index: int,
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_index: int,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> dict | None:
         """Get a reconstructed feature record from the structured tables.
 
@@ -424,10 +463,13 @@ class FeatureLabelStore:
 
         label = self.get_label(feature_index, model_id, layer, hook, width)
         logits = self.get_logits(feature_index, model_id, layer, hook, width)
-        has_embedding = conn.execute(
-            "SELECT 1 FROM embeddings WHERE source = ? AND idx = ?",
-            (source, feature_index),
-        ).fetchone() is not None
+        has_embedding = (
+            conn.execute(
+                "SELECT 1 FROM embeddings WHERE source = ? AND idx = ?",
+                (source, feature_index),
+            ).fetchone()
+            is not None
+        )
 
         return {
             "index": feature_index,
@@ -441,7 +483,11 @@ class FeatureLabelStore:
     # --- Embeddings ---
 
     def get_embeddings(
-        self, model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
     ) -> tuple[torch.Tensor, list[int]]:
         """Load all explanation embeddings as a matrix.
 
@@ -455,10 +501,14 @@ class FeatureLabelStore:
             return self._embedding_cache[key]
 
         source = self._ensure_source(model_id, layer, hook, width)
-        rows = self._get_conn().execute(
-            "SELECT idx, embedding FROM embeddings WHERE source = ? ORDER BY idx",
-            (source,),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT idx, embedding FROM embeddings WHERE source = ? ORDER BY idx",
+                (source,),
+            )
+            .fetchall()
+        )
 
         if not rows:
             empty = (torch.zeros(0, _EMBEDDING_DIM), [])
@@ -474,8 +524,12 @@ class FeatureLabelStore:
         return result
 
     def find_similar_features(
-        self, feature_index: int,
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        feature_index: int,
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
         k: int = 20,
     ) -> list[tuple[int, float, str]]:
         """Find features with semantically similar explanation labels.
@@ -521,8 +575,12 @@ class FeatureLabelStore:
     # --- Write custom labels ---
 
     def write_labels(
-        self, labels: dict[int, str],
-        model_id: str, layer: int, hook: str, width: int | str,
+        self,
+        labels: dict[int, str],
+        model_id: str,
+        layer: int,
+        hook: str,
+        width: int | str,
         method: str = "label",
     ) -> None:
         """Write or replace labels for a given method.
@@ -582,8 +640,7 @@ class FeatureLabelStore:
         labels_map = self.get_labels(indices, model_id, layer, hook, width, method)
 
         return [
-            (idx, val, labels_map.get(idx, "(unlabelled)"))
-            for idx, val in zip(indices, values)
+            (idx, val, labels_map.get(idx, "(unlabelled)")) for idx, val in zip(indices, values)
         ]
 
     def label_top_k_per_token(

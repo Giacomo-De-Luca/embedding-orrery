@@ -14,10 +14,11 @@
 """Siglip vision model for gemma 3 and paligemma."""
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from . import config as siglip_vision_config
+
 SiglipVisionModelConfig = siglip_vision_config.SiglipVisionModelConfig
 
 class AveragePool2D(nn.Module):

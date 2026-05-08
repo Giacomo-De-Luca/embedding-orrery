@@ -17,16 +17,15 @@ Run: ``uv run python -m interpret.experiments.refusal_directions._inspect``.
 from __future__ import annotations
 
 import contextlib
-from typing import Iterable
+from collections.abc import Iterable
 
 import torch
 
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.experiments.refusal_directions.config import RefusalConfig
 from interpret.experiments.refusal_directions.select_direction import _ablation_ops, _additive_op
 from interpret.experiments.refusal_directions.tokens import format_chat
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.sae import HookManager
-
 
 # ---- Tweak these -----------------------------------------------------------
 

@@ -16,14 +16,11 @@
 import contextlib
 import random
 
-from absl import app
-from absl import flags
 import numpy as np
-from PIL import Image
 import torch
-
-from gemma import config
-from gemma import gemma3_model
+from absl import app, flags
+from gemma import config, gemma3_model
+from PIL import Image
 
 # Define flags
 FLAGS = flags.FLAGS
@@ -100,7 +97,7 @@ def main(_):
     try:
       image[key] = Image.open(image_paths[key]) # Open local file
       image[key].show()
-    except IOError as e:
+    except OSError as e:
       print(f"Error loading image: {e}")
       exit()
 

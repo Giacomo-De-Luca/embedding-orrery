@@ -33,12 +33,11 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.experiments.poetry_directions import PoetryConfig
 from interpret.experiments.refusal_directions.select_direction import _additive_op
 from interpret.experiments.refusal_directions.tokens import format_chat
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.sae import HookManager
-
 
 EXPERIMENT_NAME = "poetry_prose"
 DATASET_PATH = Path("resources/poetry/alignment_dataset_long_clean.tsv")

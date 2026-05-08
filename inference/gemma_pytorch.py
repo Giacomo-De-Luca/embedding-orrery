@@ -40,19 +40,34 @@ import gc
 import json
 import re
 import sys
+import threading
+from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from PIL import Image
-from typing import Literal
+
+if TYPE_CHECKING:
+    import torch
 
 # Add gemma_pytorch fork to import path
 _GEMMA_PYTORCH_ROOT = Path(__file__).resolve().parents[1] / "forked" / "gemma_pytorch"
+
+
+class TokenStreamEvent(NamedTuple):
+    """A single token yielded during streaming generation."""
+
+    token_index: int  # 0-based position in generated output
+    token_id: int  # raw SentencePiece token ID
+    text_delta: str  # clean text chunk for display
+    is_done: bool  # True on the last token
 
 
 @contextlib.contextmanager
 def _set_default_tensor_type(dtype):
     """Temporarily sets the default torch dtype."""
     import torch
+
     torch.set_default_dtype(dtype)
     try:
         yield
@@ -70,18 +85,24 @@ class GemmaPytorchInference:
         device: The torch.device the model runs on (mps).
     """
 
-    def __init__(self, checkpoint_path: str, model_size: str = "4b", precision: Literal["float16", "bfloat16", "float32"] = "bfloat16") -> None:
+    def __init__(
+        self,
+        checkpoint_path: str,
+        model_size: str = "4b",
+        precision: Literal["float16", "bfloat16", "float32"] = "bfloat16",
+    ) -> None:
         import torch
+
         gemma_root = str(_GEMMA_PYTORCH_ROOT)
         if gemma_root not in sys.path:
             sys.path.insert(0, gemma_root)
-        from gemma import config as gemma_config
-        from gemma import gemma3_model
-
+        from gemma import config as gemma_config, gemma3_model
 
         ## this crashes without metal or cuda, - but I honestly don't want it to work on cpu
-        
-        self.device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cuda")
+
+        self.device = (
+            torch.device("mps") if torch.backends.mps.is_available() else torch.device("cuda")
+        )
         self.model_size = model_size
 
         # Resolve HF model ID to local cache path if needed
@@ -132,12 +153,21 @@ class GemmaPytorchInference:
         """
         return self.tokenizer.encode(text, bos=bos)
 
-    
     @staticmethod
     def format_prompt(text: str) -> str:
-        return (
-            f"<start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n"
-        )
+        return f"<start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n"
+
+    @staticmethod
+    def format_chat(turns: list[tuple[str, str]]) -> str:
+        """Format multi-turn conversation into the Gemma chat template."""
+        parts = []
+        for role, content in turns:
+            parts.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
+        if turns[-1][0] != "model":
+            parts.append("<start_of_turn>model")
+        else:
+            parts[-1] = f"<start_of_turn>model\n{turns[-1][1]}"
+        return "".join(parts)
 
     @staticmethod
     def _resolve_checkpoint(checkpoint_path: str) -> str:
@@ -155,6 +185,7 @@ class GemmaPytorchInference:
         if "/" in checkpoint_path:
             try:
                 from huggingface_hub import snapshot_download
+
                 return snapshot_download(checkpoint_path)
             except Exception as e:
                 raise FileNotFoundError(
@@ -188,7 +219,10 @@ class GemmaPytorchInference:
                 Shape will be [B, 1, hidden_size].
         """
         self._gemma_model.configure_cache(
-            layers=layers, intermediates=intermediates, prefill=prefill, last=last,
+            layers=layers,
+            intermediates=intermediates,
+            prefill=prefill,
+            last=last,
         )
 
     def clear_cache(self) -> None:
@@ -208,7 +242,8 @@ class GemmaPytorchInference:
 
     @staticmethod
     def _build_cache_dict(
-        layer_cache: dict, final_norm: "torch.Tensor | None",
+        layer_cache: dict,
+        final_norm: "torch.Tensor | None",
     ) -> dict:
         """Build a cache dict from layer cache and optional final_norm."""
         result = dict(layer_cache)
@@ -258,7 +293,10 @@ class GemmaPytorchInference:
             # cache == {"prefill": {17: {"post_mlp": Tensor}}}
         """
         self.configure_cache(
-            layers=layers, intermediates=intermediates, prefill=prefill, last=last,
+            layers=layers,
+            intermediates=intermediates,
+            prefill=prefill,
+            last=last,
         )
         try:
             yield self.get_cached_activations
@@ -267,7 +305,6 @@ class GemmaPytorchInference:
 
     def _load_weights(self, checkpoint_path: str) -> None:
         """Load weights from checkpoint — supports .pt, .bin shards, and .safetensors."""
-        import torch
 
         ckpt = Path(checkpoint_path)
 
@@ -293,10 +330,9 @@ class GemmaPytorchInference:
 
     def _load_safetensors_hf(self, ckpt_dir: Path, index_path: Path) -> None:
         """Load HuggingFace safetensors weights, mapping keys to reference format."""
-        import torch
         from safetensors.torch import load_file
 
-        with open(index_path, "r", encoding="utf-8") as f:
+        with open(index_path, encoding="utf-8") as f:
             index = json.load(f)
 
         shard_files = sorted(set(index["weight_map"].values()))
@@ -328,9 +364,7 @@ class GemmaPytorchInference:
                 continue
 
             # Detect separate q/k/v projections that need fusing
-            layer_qkv = re.match(
-                r"model\.layers\.(\d+)\.self_attn\.([qkv])_proj\.weight", ref_key
-            )
+            layer_qkv = re.match(r"model\.layers\.(\d+)\.self_attn\.([qkv])_proj\.weight", ref_key)
             if layer_qkv:
                 layer_idx = int(layer_qkv.group(1))
                 proj = layer_qkv.group(2)
@@ -363,9 +397,7 @@ class GemmaPytorchInference:
         """
         # Language model layers: strip "language_model." prefix
         if hf_key.startswith("language_model.model.embed_tokens."):
-            return hf_key.replace(
-                "language_model.model.embed_tokens", "text_token_embedder"
-            )
+            return hf_key.replace("language_model.model.embed_tokens", "text_token_embedder")
         if hf_key.startswith("language_model.model."):
             key = hf_key.replace("language_model.model.", "model.", 1)
             # Rename QK norms
@@ -388,13 +420,9 @@ class GemmaPytorchInference:
 
         # Vision tower
         if hf_key.startswith("vision_tower.vision_model."):
-            key = hf_key.replace(
-                "vision_tower.vision_model.", "siglip_vision_model.", 1
-            )
+            key = hf_key.replace("vision_tower.vision_model.", "siglip_vision_model.", 1)
             # Embeddings prefix
-            key = key.replace(
-                "siglip_vision_model.embeddings.", "siglip_vision_model."
-            )
+            key = key.replace("siglip_vision_model.embeddings.", "siglip_vision_model.")
             # Encoder layers → encoder_blocks
             key = key.replace(
                 "siglip_vision_model.encoder.layers.",
@@ -450,10 +478,7 @@ class GemmaPytorchInference:
         top_k: int = 64,
     ) -> str:
         """Generate a text response from a text-only prompt."""
-        formatted = (
-            f"<start_of_turn>user\n{prompt}<end_of_turn>\n"
-            f"<start_of_turn>model"
-        )
+        formatted = f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
         return self._generate([formatted], output_len, temperature, top_p, top_k)
 
     def generate_from_template(
@@ -498,16 +523,7 @@ class GemmaPytorchInference:
                 ("user", "And grass?"),
             ])
         """
-        parts = []
-        for role, content in turns:
-            parts.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
-        # If the last turn was from the user, open the model turn
-        if turns[-1][0] != "model":
-            parts.append("<start_of_turn>model")
-        else:
-            # Last turn is a model prefill — reopen it without end_of_turn
-            parts[-1] = f"<start_of_turn>model\n{turns[-1][1]}"
-        formatted = "".join(parts)
+        formatted = self.format_chat(turns)
         return self._generate([formatted], output_len, temperature, top_p, top_k)
 
     def generate_with_image(
@@ -535,8 +551,88 @@ class GemmaPytorchInference:
         marker = "<start_of_turn>model"
         idx = text.rfind(marker)
         if idx != -1:
-            return text[idx + len(marker):].strip()
+            return text[idx + len(marker) :].strip()
         return text.strip()
+
+    # ------------------------------------------------------------------
+    # Streaming generation
+    # ------------------------------------------------------------------
+
+    def _generate_stream(
+        self,
+        sequence: list,
+        output_len: int = 256,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        cancel_event: threading.Event | None = None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Yield TokenStreamEvents with clean text deltas via full-sequence decode + diff.
+
+        Uses the diff strategy for correct SentencePiece output: decode the
+        full growing token list each step and yield the new characters.
+        """
+        token_ids: list[int] = []
+        prev_text = ""
+        for idx, token_id, is_done in self.model.generate_stream(
+            sequence,
+            self.device,
+            output_len=output_len,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            cancel_event=cancel_event,
+        ):
+            token_ids.append(token_id)
+            full_text = self.tokenizer.decode(token_ids)
+            text_delta = full_text[len(prev_text) :]
+            prev_text = full_text
+            yield TokenStreamEvent(idx, token_id, text_delta, is_done)
+
+    def generate_stream(
+        self,
+        prompt: str,
+        output_len: int = 256,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        cancel_event: threading.Event | None = None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Stream tokens from a single-turn text prompt."""
+        formatted = f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
+        yield from self._generate_stream(
+            [formatted],
+            output_len,
+            temperature,
+            top_p,
+            top_k,
+            cancel_event=cancel_event,
+        )
+
+    def generate_chat_stream(
+        self,
+        turns: list[tuple[str, str]],
+        output_len: int = 256,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        cancel_event: threading.Event | None = None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Stream tokens from a multi-turn conversation.
+
+        Args:
+            turns: List of (role, content) tuples. Same format as generate_chat().
+            cancel_event: If set, generation stops after the current token.
+        """
+        formatted = self.format_chat(turns)
+        yield from self._generate_stream(
+            [formatted],
+            output_len,
+            temperature,
+            top_p,
+            top_k,
+            cancel_event=cancel_event,
+        )
 
 
 def _resolve_default_checkpoint() -> str | None:
@@ -555,24 +651,31 @@ def main() -> None:
         description="Run Gemma3 4b inference with PyTorch on MPS (bfloat16)"
     )
     parser.add_argument(
-        "--checkpoint", default=default_ckpt,
+        "--checkpoint",
+        default=default_ckpt,
         help="Path to checkpoint directory or single .pt file "
-             f"(default: {default_ckpt or 'none found — required'})",
+        f"(default: {default_ckpt or 'none found — required'})",
     )
     parser.add_argument(
-        "--prompt", required=True,
+        "--prompt",
+        required=True,
         help="Text prompt to send to the model",
     )
     parser.add_argument(
-        "--image", default=None,
+        "--image",
+        default=None,
         help="Optional path to an image file for multimodal queries",
     )
     parser.add_argument(
-        "--output-len", type=int, default=256,
+        "--output-len",
+        type=int,
+        default=256,
         help="Maximum number of tokens to generate (default: 256)",
     )
     parser.add_argument(
-        "--temperature", type=float, default=None,
+        "--temperature",
+        type=float,
+        default=None,
         help="Sampling temperature. Omit for greedy decoding.",
     )
     parser.add_argument("--top-p", type=float, default=0.95)
@@ -592,7 +695,8 @@ def main() -> None:
 
     if args.image:
         result = model.generate_with_image(
-            args.prompt, args.image,
+            args.prompt,
+            args.image,
             output_len=args.output_len,
             temperature=args.temperature,
             top_p=args.top_p,

@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import torch
 
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.experiments.refusal_directions import data
 from interpret.experiments.refusal_directions.config import RefusalConfig
 from interpret.experiments.refusal_directions.select_direction import (
     _kl_div,
     _last_position_logits,
     _make_manager,
-    _refusal_score,
 )
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.sae import HookType, SteeringMode, SteeringOp
 
 

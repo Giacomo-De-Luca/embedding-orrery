@@ -22,9 +22,8 @@ Usage is config-driven: edit the constants in ``main()`` below and run::
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 LABELS_DIR = _REPO_ROOT / "resources/sae_labels/neuronpedia_gemma-3-4b-it"
@@ -183,7 +182,7 @@ class NeuronpediaExplorer:
             raise FileNotFoundError(f"No features file at {path}")
 
         rows: list[_FeatureRow] = []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 entry = json.loads(line)
                 explanations = entry.get("explanations", [])
@@ -255,7 +254,7 @@ class NeuronpediaExplorer:
     # --- feature info ---
 
     def get_feature_info(
-        self, feature_index: int, layer: Optional[int] = None
+        self, feature_index: int, layer: int | None = None
     ) -> FeatureInfo | None:
         """Return density, label, and logits for a single feature."""
 
@@ -279,7 +278,7 @@ class NeuronpediaExplorer:
     def get_top_activations(
         self,
         feature_index: int,
-        layer: Optional[int] = None,
+        layer: int | None = None,
         k: int = 5,
         context_window: int = 5,
     ) -> list[ActivationExample]:
@@ -304,7 +303,7 @@ class NeuronpediaExplorer:
             raise FileNotFoundError(f"No activations file at {path}")
 
         records: list[ActivationExample] = []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 entry = json.loads(line)
                 if int(entry.get("index", -1)) != feature_index:
@@ -391,7 +390,7 @@ def main() -> None:
         print(f"   context: {ex.context!r}")
         top_tokens = ex.top_tokens(INSPECT_TOP_TOKENS_PER_EXAMPLE)
         if top_tokens:
-            print(f"   top tokens in doc:")
+            print("   top tokens in doc:")
             for idx, tok, val in top_tokens:
                 print(f"     tok[{idx}]={tok!r:>20s}  act={val:8.1f}")
         print(f"   full text (first 200 chars): {ex.text[:200]!r}")

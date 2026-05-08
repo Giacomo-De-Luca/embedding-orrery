@@ -13,10 +13,10 @@ are downloaded and loaded.
 """
 
 from interpret.sae.activation_store import ActivationRecord, ActivationStore
+from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig
 from interpret.sae.feature_labels import FeatureLabelStore
 from interpret.sae.hook_manager import HookManager
 from interpret.sae.loading import load_sae
-from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig
 from interpret.sae.sae_config import (
     GemmaScopeSAEConfig,
     HookType,
@@ -24,6 +24,11 @@ from interpret.sae.sae_config import (
     SAEConfig,
 )
 from interpret.sae.sae_model import JumpReLUSAE, SAEBase, TopKSAE
+from interpret.sae.source_ids import (
+    HOOK_TO_NEURONPEDIA,
+    neuronpedia_source_id,
+    neuronpedia_source_id_prefixed,
+)
 from interpret.sae.steering import (
     SteeringMode,
     SteeringOp,
@@ -36,6 +41,7 @@ __all__ = [
     "ActivationStore",
     "FeatureLabelStore",
     "GemmaScopeSAEConfig",
+    "HOOK_TO_NEURONPEDIA",
     "HookManager",
     "HookType",
     "JumpReLUSAE",
@@ -49,5 +55,7 @@ __all__ = [
     "TopKSAE",
     "apply_steering",
     "load_sae",
+    "neuronpedia_source_id",
+    "neuronpedia_source_id_prefixed",
     "resolve_op",
 ]

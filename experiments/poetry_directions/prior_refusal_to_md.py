@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 INPUT_TSV = Path(
     "resources/experiments/poetry_directions/poetry_prose/"
     "prior_refusal_steered_responses.tsv"

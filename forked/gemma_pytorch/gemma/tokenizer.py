@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-from typing import List, Optional
 
 import sentencepiece
+
 
 def _assert_file_exists(model_path: str):
     assert os.path.isfile(model_path), model_path
@@ -26,7 +26,7 @@ _END_OF_TURN_FALLBACK_ID = 107
 
 class Tokenizer:
 
-    def __init__(self, model_path: Optional[str]):
+    def __init__(self, model_path: str | None):
         _assert_file_exists(model_path)
         self.sp_model = sentencepiece.SentencePieceProcessor()
         self.sp_model.Load(model_path)
@@ -42,7 +42,7 @@ class Tokenizer:
         eot_id = self.sp_model.PieceToId(_END_OF_TURN_PIECE)
         self.eot_id: int = eot_id if eot_id != self.sp_model.unk_id() else _END_OF_TURN_FALLBACK_ID
 
-    def encode(self, s: str, bos: bool = True, eos: bool = False) -> List[int]:
+    def encode(self, s: str, bos: bool = True, eos: bool = False) -> list[int]:
         """Converts a string into a list of tokens."""
         assert isinstance(s, str)
         t = self.sp_model.EncodeAsIds(s)
@@ -52,6 +52,6 @@ class Tokenizer:
             t = t + [self.eos_id]
         return t
 
-    def decode(self, t: List[int]) -> str:
+    def decode(self, t: list[int]) -> str:
         """Converts a list of tokens into a string."""
         return self.sp_model.DecodeIds(t)

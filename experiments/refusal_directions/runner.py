@@ -7,7 +7,6 @@ from pathlib import Path
 
 import torch
 
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.experiments.refusal_directions import data
 from interpret.experiments.refusal_directions.config import RefusalConfig
 from interpret.experiments.refusal_directions.evaluate import evaluate_dataset
@@ -17,6 +16,7 @@ from interpret.experiments.refusal_directions.tokens import (
     compute_eoi_token_ids,
     verify_refusal_tokens,
 )
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
 
 
 class RefusalRunner:

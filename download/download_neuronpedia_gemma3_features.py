@@ -31,8 +31,8 @@ import os
 import sys
 import threading
 import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 try:
     import requests
@@ -60,7 +60,7 @@ BASE_URL = "https://neuronpedia.org/api"
 HOOKS = ["res", "att", "mlp"]
 WIDTHS = ["16k"]
 NUM_LAYERS = 34  # Gemma 3 4B has 34 transformer layers
-DEFAULT_OUTPUT_DIR = Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{MODEL_ID}" 
+DEFAULT_OUTPUT_DIR = Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{MODEL_ID}"
 DEFAULT_MAX_FEATURES = 16384  # 16k SAE width
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_WORKERS = 4
@@ -199,7 +199,7 @@ def download_source_features(client, model_id, source, max_features, output_dir,
     existing_count = 0
     existing_indices = set()
     if output_file.exists():
-        with open(output_file, "r") as f:
+        with open(output_file) as f:
             for line in f:
                 try:
                     feat = json.loads(line)
@@ -415,7 +415,7 @@ Examples:
 
         # Quick probe to check source exists
         if not client.probe_source(MODEL_ID, source):
-            print(f"  Source not found, skipping.")
+            print("  Source not found, skipping.")
             continue
 
         count = download_source_features(
@@ -430,10 +430,10 @@ Examples:
 
     # Summary
     print("\n" + "=" * 60)
-    print(f"Download complete!")
+    print("Download complete!")
     print(f"Total features: {total_features}")
     print(f"Output dir:     {output_dir}")
-    print(f"Files:")
+    print("Files:")
     for f in sorted(output_dir.glob("*.jsonl")):
         size_mb = f.stat().st_size / (1024 * 1024)
         print(f"  {f.name} ({size_mb:.1f} MB)")

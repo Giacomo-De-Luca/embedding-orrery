@@ -16,11 +16,11 @@
 
 import dataclasses
 import enum
-import os
-import torch
-from typing import Optional, Sequence
-from .siglip_vision import config as siglip_vision_config
+from collections.abc import Sequence
 
+import torch
+
+from .siglip_vision import config as siglip_vision_config
 
 # Keep a mapping from dtype strings to the supported torch dtypes.
 _STR_DTYPE_TO_TORCH_DTYPE = dict({
@@ -69,20 +69,20 @@ class GemmaConfig:
     # Whether a quantized version of the model is used.
     quant: bool = False
     # The path to the model tokenizer.
-    tokenizer: Optional[str] = (
+    tokenizer: str | None = (
     'tokenizer/tokenizer.model'
     )
     # The types of attention used in the layers of the model.
-    attn_types: Optional[Sequence[AttentionType]] = None
+    attn_types: Sequence[AttentionType] | None = None
     # The size of the sliding window used for local attention.
-    sliding_window_size: Optional[int] = None
+    sliding_window_size: int | None = None
     # If provided, the final logits are softcapped to this value.
-    final_logit_softcapping: Optional[float] = None
+    final_logit_softcapping: float | None = None
     # If provided, the attention logits are softcapped to this value.
-    attn_logit_softcapping: Optional[float] = None
+    attn_logit_softcapping: float | None = None
     # If provided, the query vector is normalized using the
     # inverse square root of this value instead of head_dim.
-    query_pre_attn_scalar: Optional[int] = None
+    query_pre_attn_scalar: int | None = None
     # Whether to use pre mlp normalization.
     use_pre_ffw_norm: bool = False
     # Whether to use post mlp normalization.
@@ -96,7 +96,7 @@ class GemmaConfig:
     # The factor by which the rope wave length is divided for global layers.
     rope_scaling_factor: int| None = None
 
-    def get_dtype(self) -> Optional[torch.dtype]:
+    def get_dtype(self) -> torch.dtype | None:
         """Gets the torch dtype from the config dtype string."""
         return _STR_DTYPE_TO_TORCH_DTYPE.get(self.dtype, None)
 
