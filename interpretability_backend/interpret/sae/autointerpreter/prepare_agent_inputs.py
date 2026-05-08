@@ -54,7 +54,7 @@ class AgentInputWriter:
         if mode == "off":
             return False
         # Deterministic A/B split: half of features see the hint.
-        digest = hashlib.md5(f"{feature_idx}".encode("utf-8")).digest()
+        digest = hashlib.md5(f"{feature_idx}".encode()).digest()
         return digest[0] % 2 == 0
 
     def write_evaluator_inputs(self) -> dict:

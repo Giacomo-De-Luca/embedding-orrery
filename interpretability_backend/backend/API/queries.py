@@ -14,6 +14,7 @@ from ..clients.local_data_client import (
 from ..services.job_state import JobStatus, get_job_state_service
 from .chromadb_instance import get_chromadb_client
 from .duckdb_instance import get_duckdb_client
+from .interpret_instance import get_interpret_service
 from .types import (
     Collection,
     CollectionMetadata,
@@ -28,6 +29,8 @@ from .types import (
     HFSplitInfo,
     LocalFileInfo,
     LocalFilePreview,
+    # Interpret types
+    ModelStatus,
     ProjectionData,
     SaeActivation,
     SaeActivationQuantileGroup,
@@ -828,6 +831,21 @@ class Query:
             )
             for g in groups
         ]
+
+    # ------------------------------------------------------------------
+    # Interpret / SAE inference
+    # ------------------------------------------------------------------
+
+    @strawberry.field
+    def model_status(self, info=None) -> ModelStatus:
+        """Check if the interpretability model is loaded."""
+        service = get_interpret_service()
+        status = service.get_status()
+        return ModelStatus(
+            loaded=status.loaded,
+            model_name=status.model_name,
+            device=status.device,
+        )
 
 
 def _dict_to_sae_feature(d: dict) -> SaeFeature:

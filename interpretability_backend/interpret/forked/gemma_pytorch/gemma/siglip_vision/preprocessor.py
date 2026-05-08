@@ -18,9 +18,9 @@ No neural network is used in the following functions. These are heuristic based.
 
 from collections.abc import Sequence
 
-from PIL import Image
-import torch
 import numpy as np  # Import NumPy
+import torch
+from PIL import Image
 
 _IMAGE_MEAN = [0.5, 0.5, 0.5]  # equivalent to 127.5/255
 _IMAGE_STD = [0.5, 0.5, 0.5]  # equivalent to 127.5/255

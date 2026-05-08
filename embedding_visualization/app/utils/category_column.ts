@@ -38,11 +38,11 @@ export async function makeCategoryColumn(
   if (column == null) {
     return null;
   }
-  let [desc] = Array.from(await coordinator.query(SQL.Query.describe(SQL.Query.from(table).select(column))));
+  const [desc] = Array.from(await coordinator.query(SQL.Query.describe(SQL.Query.from(table).select(column))));
   if (desc == null) {
     return null;
   }
-  let jsType = jsTypeFromDBType(desc.column_type);
+  const jsType = jsTypeFromDBType(desc.column_type);
   if (jsType == "string") {
     return await makeDiscreteCategoryColumn(coordinator, table, column, 10);
   } else if (jsType == "number") {
@@ -58,8 +58,8 @@ async function makeDiscreteCategoryColumn(
   column: string,
   maxCategories: number,
 ): Promise<EmbeddingLegend> {
-  let indexColumnName = `_ev_${column}_id`;
-  let values = Array.from(
+  const indexColumnName = `_ev_${column}_id`;
+  const values = Array.from(
     await coordinator.query(
       SQL.Query.from(table)
         .select({ value: SQL.cast(SQL.column(column), "TEXT"), count: SQL.count() })
@@ -70,7 +70,7 @@ async function makeDiscreteCategoryColumn(
     ),
   ) as { value: string; count: number }[];
 
-  let otherIndex = values.length;
+  const otherIndex = values.length;
   let nullIndex = values.length + 1;
 
   // Add the index column.
@@ -83,23 +83,23 @@ async function makeDiscreteCategoryColumn(
   `);
 
   // Count by index.
-  let counts = Array.from(
+  const counts = Array.from(
     await coordinator.query(
       SQL.Query.from(table)
         .select({ index: SQL.column(indexColumnName), count: SQL.cast(SQL.count(), "INT") })
         .groupby(SQL.column(indexColumnName)),
     ),
   );
-  let countMap = new Map<number, number>();
-  for (let item of counts) {
+  const countMap = new Map<number, number>();
+  for (const item of counts) {
     countMap.set(item.index, item.count);
   }
-  let otherCount = countMap.get(otherIndex) ?? 0;
-  let nullCount = countMap.get(nullIndex) ?? 0;
+  const otherCount = countMap.get(otherIndex) ?? 0;
+  const nullCount = countMap.get(nullIndex) ?? 0;
 
-  let colors = defaultCategoryColors(values.length);
+  const colors = defaultCategoryColors(values.length);
 
-  let legend: EmbeddingLegend["legend"] = values.map(({ value }, i) => ({
+  const legend: EmbeddingLegend["legend"] = values.map(({ value }, i) => ({
     label: value,
     color: colors[i],
     predicate: SQL.eq(SQL.cast(SQL.column(column), "TEXT"), SQL.literal(value)),
@@ -107,7 +107,7 @@ async function makeDiscreteCategoryColumn(
   }));
 
   if (otherCount > 0) {
-    let { otherCategoryCount } = (
+    const { otherCategoryCount } = (
       await coordinator.query(`
         SELECT COUNT(DISTINCT(${SQL.column(column)}::TEXT)) AS otherCategoryCount
         FROM ${table}

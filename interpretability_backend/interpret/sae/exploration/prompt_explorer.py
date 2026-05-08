@@ -237,7 +237,7 @@ class FeatureDetail:
         esc = html_module.escape
         density_str = f"{self.density:.5f}" if self.density is not None else "(unknown)"
         parts = [
-            f"<div style='font-family:sans-serif'>",
+            "<div style='font-family:sans-serif'>",
             f"<h3>Feature {self.index} — Layer {self.layer}</h3>",
             f"<p><b>Label:</b> {esc(self.label or '(none)')}</p>",
             f"<p><b>Density:</b> {density_str}</p>",

@@ -18,9 +18,9 @@ from pathlib import Path
 import torch
 
 from interpret.sae.sae_config import (
+    WIDTH_TO_D_SAE,
     GemmaScopeSAEConfig,
     QwenScopeSAEConfig,
-    WIDTH_TO_D_SAE,
 )
 from interpret.sae.sae_model import JumpReLUSAE, SAEBase, TopKSAE
 

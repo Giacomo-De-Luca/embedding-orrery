@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-import os
-from typing import Callable, List, Optional, Tuple
 
 import torch
 import torch.ao.quantization.fx._decomposed
@@ -92,7 +92,7 @@ def _quantize_to_dtype(
     x: torch.Tensor,
     qconfig: TensorQConfig,
     scale: torch.Tensor,
-    zero_point: Optional[torch.Tensor] = None,
+    zero_point: torch.Tensor | None = None,
 ):
     if zero_point is None:
         zero_point = torch.zeros_like(scale)
@@ -213,7 +213,7 @@ def gather_from_model_parallel_region(input_: torch.Tensor, groups, world_size,
 
 def ensure_divisibility(numerator: int, denominator: int) -> None:
     """Ensure that numerator is divisible by the denominator."""
-    assert numerator % denominator == 0, "{} is not divisible by {}".format(numerator, denominator)
+    assert numerator % denominator == 0, f"{numerator} is not divisible by {denominator}"
 
 
 def divide_and_check_no_remainder(numerator: int, denominator: int) -> int:
@@ -225,7 +225,7 @@ def divide_and_check_no_remainder(numerator: int, denominator: int) -> int:
 
 def split_tensor_along_last_dim(
     tensor: torch.Tensor, num_partitions: int, contiguous_split_chunks: bool = False
-) -> Tuple[torch.Tensor, ...]:
+) -> tuple[torch.Tensor, ...]:
     """Split a tensor along its last dimension.
     Arguments:
         tensor: input tensor.
@@ -319,7 +319,7 @@ def _initialize_affine_weight(
     rank: int,
     stride: int = 1,
     return_master_weight: bool = False,
-) -> Optional[torch.Tensor]:
+) -> torch.Tensor | None:
     """Initialize affine weight for model parallel.
 
     Build the master weight on all processes and scatter
@@ -370,20 +370,20 @@ class ParallelEmbedding(torch.nn.Module):
         self,
         num_embeddings: int,
         embedding_dim: int,
-        padding_idx: Optional[int] = None,
-        max_norm: Optional[float] = None,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
         init_method: Callable[[torch.Tensor],
                               torch.Tensor] = init.xavier_normal_,
         keep_master_weight_for_test: bool = False,
-        world_size: Optional[int] = None,
-        rank: Optional[int] = None,
-        groups: Optional[List] = None,
+        world_size: int | None = None,
+        rank: int | None = None,
+        groups: list | None = None,
         quant: bool = False,
     ) -> None:
-        super(ParallelEmbedding, self).__init__()
+        super().__init__()
 
         if world_size is None:
             self.groups = get_model_parallel_group()
@@ -493,12 +493,12 @@ class ColumnParallelLinear(torch.nn.Module):
                               torch.Tensor] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
-        world_size: Optional[int] = None,
-        rank: Optional[int] = None,
-        groups: Optional[List] = None,
+        world_size: int | None = None,
+        rank: int | None = None,
+        groups: list | None = None,
         quant: bool = False,
     ) -> None:
-        super(ColumnParallelLinear, self).__init__()
+        super().__init__()
 
         if world_size is None:
             self.groups = get_model_parallel_group()
@@ -653,12 +653,12 @@ class RowParallelLinear(torch.nn.Module):
                               torch.Tensor] = init.xavier_normal_,
         stride: int = 1,
         keep_master_weight_for_test: bool = False,
-        world_size: Optional[int] = None,
-        rank: Optional[int] = None,
-        groups: Optional[List] = None,
+        world_size: int | None = None,
+        rank: int | None = None,
+        groups: list | None = None,
         quant: bool = False,
     ):
-        super(RowParallelLinear, self).__init__()
+        super().__init__()
 
         if world_size is None:
             self.groups = get_model_parallel_group()

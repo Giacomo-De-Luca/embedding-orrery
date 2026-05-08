@@ -10,10 +10,10 @@ export class PriorityQueue {
   }
 
   insert(key: number, priority: number) {
-    let heap = this.heap;
+    const heap = this.heap;
     let i = heap.length;
     while (i > 0) {
-      let j = (i - 1) >> 1;
+      const j = (i - 1) >> 1;
       if (priority <= heap[j][0]) {
         break;
       }
@@ -28,16 +28,16 @@ export class PriorityQueue {
   }
 
   _popMax(): number | null {
-    let heap = this.heap;
+    const heap = this.heap;
     if (heap.length == 0) {
       return null;
     }
-    let result = heap[0][1];
-    let value = heap.pop()!;
+    const result = heap[0][1];
+    const value = heap.pop()!;
     if (heap.length == 0) {
       return result;
     }
-    let priority = value[0];
+    const priority = value[0];
     let i = 0;
     while (true) {
       let j = i * 2 + 1;
@@ -56,7 +56,7 @@ export class PriorityQueue {
 
   popMax(): number | null {
     while (true) {
-      let k = this._popMax();
+      const k = this._popMax();
       if (k == null) {
         return null;
       }

@@ -1136,7 +1136,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     margin: { l: 0, r: 0, t: 0, b: 0 },
   }), [axisColor, axisRange, defaultEye, height, paperBg, sceneBg, width]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   const config = useMemo<Partial<Config>>(() => ({
     displayModeBar: true,
     displaylogo: false,

@@ -78,6 +78,7 @@ Storage:
 - **`subscriptions.py`** - `Subscription.embedding_progress(job_id)` async generator. Registers queue with progress_emitter, yields JobProgress events.
 - **`chromadb_instance.py`** - Lazy singleton `get_chromadb_client()`.
 - **`duckdb_instance.py`** - Lazy singleton `get_duckdb_client()`.
+- **`interpret_instance.py`** - Lazy singleton `get_interpret_service()` for SAE inference.
 - **`upload.py`** - REST `POST /upload` endpoint saving files to `resources/uploads/`.
 
 ### Clients (`backend/clients/`)
@@ -130,6 +131,7 @@ Storage:
   - `generate_llm_labels_for_collection(...)` - Standalone: generate LLM labels for existing topics/subtopics with incremental saves, resume support, and `preserve_ctfidf_labels` option (saves original keyword labels as `ctfidf_label` in topic_summary entries and `ctfidf_subtopic_map` in collection metadata)
 - **`progress_emitter.py`** - `emit_progress(job_id, ...)` broadcasts to subscriber queues. Thread-safe (uses `queue.put_nowait`).
 - **`job_state.py`** - `JobStateService` singleton with file-based persistence. Methods: `start_job`, `update_progress`, `update_total_expected`, `complete_job`, `fail_job`, `list_jobs`.
+- **`interpret_service.py`** - `InterpretService` wrapping the `interpret/` toolkit for live SAE inference. Manages Gemma3-4b-it lifecycle (load/unload, `asyncio.Lock` for GPU serialisation). Three methods: `run_prompt_activations()` (per-token top-k features via PromptExplorer), `generate_steered()` (baseline + steered text via HookManager + SteeringOp), `run_prompt_highlight()` (max-pooled feature activations for scatter plot). See `documentation/INTERPRET_API.md`.
 
 ### Topic Extraction (`backend/topic_extraction/`)
 - **`cluster_and_label.py`** - `GenerateTopics` class: HDBSCAN clustering + `ClassTfidfTransformer` (BERTopic-inspired c-TF-IDF). Stores `ctfidf_matrix` and `words` properties for reduction.

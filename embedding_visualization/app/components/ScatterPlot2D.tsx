@@ -1345,7 +1345,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
   );
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   const config = useMemo<Partial<Config>>(() => ({
     displayModeBar: true,
     displaylogo: false,

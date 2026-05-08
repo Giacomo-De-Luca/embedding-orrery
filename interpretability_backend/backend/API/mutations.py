@@ -20,6 +20,7 @@ from .converters import (
     convert_topic_infos,
 )
 from .duckdb_instance import get_duckdb_client
+from .interpret_instance import get_interpret_service
 from .types import (
     JSON,
     EmbedDatasetInput,
@@ -29,13 +30,26 @@ from .types import (
     ExtractTopicsResult,
     GenerateLlmLabelsInput,
     GenerateLlmLabelsResult,
+    GenerateSteeredInput,
     IngestSaeActivationsInput,
     IngestSaeFeaturesInput,
     IngestSaeResult,
+    InterpretActiveFeature,
+    InterpretLayerResult,
+    InterpretTokenFeatures,
+    ModelStatus,
+    PrepareSaeInput,
+    PrepareSaeResult,
+    PromptActivationsResponse,
+    PromptHighlightFeature,
+    PromptHighlightResponse,
     ReduceTopicsInput,
     ReduceTopicsResult,
     RenameTopicLabelInput,
     RenameTopicLabelResult,
+    RunPromptActivationsInput,
+    RunPromptHighlightInput,
+    SteeredGenerationResponse,
     UpdateCollectionMetadataResult,
 )
 
@@ -411,3 +425,221 @@ class Mutation:
             duration_seconds=result["duration_seconds"],
             error=result.get("error"),
         )
+
+    @strawberry.mutation
+    async def prepare_sae_data(self, input: PrepareSaeInput, info=None) -> PrepareSaeResult:
+        """Download, prepare, and ingest SAE data for a specific layer/hook/width.
+
+        Runs the full pipeline: S3 download -> merge -> extract decoder vectors
+        -> ingest into DuckDB. Skips if data is already ingested.
+        """
+        from ..services.sae_pipeline_service import prepare_and_ingest
+
+        job_id = f"sae_prepare_{input.layer}_{input.hook_type}_{input.width}"
+        result = await asyncio.to_thread(
+            prepare_and_ingest,
+            layer=input.layer,
+            width=input.width,
+            hook_type=input.hook_type,
+            skip_download=input.skip_download,
+            store_vectors=input.store_vectors,
+            include_activations=input.include_activations,
+            job_id=job_id,
+        )
+        return PrepareSaeResult(
+            model_id=result["model_id"],
+            sae_id=result["sae_id"],
+            features_inserted=result["features_inserted"],
+            activations_inserted=result["activations_inserted"],
+            duration_seconds=result["duration_seconds"],
+            status=result["status"],
+            error=result.get("error"),
+        )
+
+    # ------------------------------------------------------------------
+    # Interpret / SAE inference mutations
+    # ------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def load_model(self, checkpoint: str = "google/gemma-3-4b-it", info=None) -> ModelStatus:
+        """Load the Gemma interpretability model into GPU memory."""
+        service = get_interpret_service()
+        try:
+            async with service._lock:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(service.load_model, checkpoint),
+                    timeout=300.0,
+                )
+            return ModelStatus(
+                loaded=result.loaded,
+                model_name=result.model_name,
+                device=result.device,
+            )
+        except (TimeoutError, RuntimeError) as e:
+            return ModelStatus(loaded=False, model_name=str(e))
+
+    @strawberry.mutation
+    async def unload_model(self, info=None) -> ModelStatus:
+        """Unload the interpretability model and free GPU memory."""
+        service = get_interpret_service()
+        async with service._lock:
+            result = await asyncio.to_thread(service.unload_model)
+        return ModelStatus(
+            loaded=result.loaded,
+            model_name=result.model_name,
+            device=result.device,
+        )
+
+    @strawberry.mutation
+    async def run_prompt_activations(
+        self, input: RunPromptActivationsInput, info=None
+    ) -> PromptActivationsResponse:
+        """Run a prompt through the model with SAE hooks and return per-token features."""
+        service = get_interpret_service()
+        try:
+            async with service._lock:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        service.run_prompt_activations,
+                        input.prompt,
+                        input.layers,
+                        input.width,
+                        input.top_k,
+                    ),
+                    timeout=120.0,
+                )
+            return _convert_prompt_activations(result)
+        except (RuntimeError, ValueError) as e:
+            return PromptActivationsResponse(
+                prompt=input.prompt,
+                token_strings=[],
+                layers=[],
+                error=str(e),
+            )
+        except TimeoutError:
+            return PromptActivationsResponse(
+                prompt=input.prompt,
+                token_strings=[],
+                layers=[],
+                error="Generation timed out after 120s",
+            )
+
+    @strawberry.mutation
+    async def generate_steered_response(
+        self, input: GenerateSteeredInput, info=None
+    ) -> SteeredGenerationResponse:
+        """Generate baseline vs steered text for a feature."""
+        service = get_interpret_service()
+        hook_type_str = input.hook_type.value
+        try:
+            async with service._lock:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        service.generate_steered,
+                        input.prompt,
+                        input.layer,
+                        hook_type_str,
+                        input.feature_index,
+                        input.width,
+                        input.strength,
+                        input.output_len,
+                        input.temperature,
+                    ),
+                    timeout=180.0,
+                )
+            return SteeredGenerationResponse(
+                baseline_text=result.baseline_text,
+                steered_text=result.steered_text,
+                feature_index=result.feature_index,
+                layer=result.layer,
+                hook_type=result.hook_type,
+                strength=result.strength,
+            )
+        except (RuntimeError, ValueError) as e:
+            return SteeredGenerationResponse(
+                baseline_text="",
+                steered_text="",
+                feature_index=input.feature_index,
+                layer=input.layer,
+                hook_type=hook_type_str,
+                strength=input.strength,
+                error=str(e),
+            )
+        except TimeoutError:
+            return SteeredGenerationResponse(
+                baseline_text="",
+                steered_text="",
+                feature_index=input.feature_index,
+                layer=input.layer,
+                hook_type=hook_type_str,
+                strength=input.strength,
+                error="Generation timed out after 180s",
+            )
+
+    @strawberry.mutation
+    async def run_prompt_highlight(
+        self, input: RunPromptHighlightInput, info=None
+    ) -> PromptHighlightResponse:
+        """Run a prompt and return max-pooled feature activations for scatter plot highlighting."""
+        service = get_interpret_service()
+        hook_type_str = input.hook_type.value
+        try:
+            async with service._lock:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        service.run_prompt_highlight,
+                        input.prompt,
+                        input.layer,
+                        input.width,
+                        hook_type_str,
+                    ),
+                    timeout=120.0,
+                )
+            return PromptHighlightResponse(
+                features=[
+                    PromptHighlightFeature(
+                        feature_index=f.feature_index,
+                        activation=f.activation,
+                    )
+                    for f in result
+                ],
+            )
+        except (RuntimeError, ValueError) as e:
+            return PromptHighlightResponse(features=[], error=str(e))
+        except TimeoutError:
+            return PromptHighlightResponse(
+                features=[],
+                error="Generation timed out after 120s",
+            )
+
+
+def _convert_prompt_activations(result) -> PromptActivationsResponse:
+    """Convert service PromptActivationsResult to GraphQL response type."""
+    layers = [
+        InterpretLayerResult(
+            layer=lr.layer,
+            width=lr.width,
+            tokens=[
+                InterpretTokenFeatures(
+                    token=tf.token,
+                    position=tf.position,
+                    features=[
+                        InterpretActiveFeature(
+                            index=f.index,
+                            activation=f.activation,
+                            label=f.label,
+                            density=f.density,
+                        )
+                        for f in tf.features
+                    ],
+                )
+                for tf in lr.tokens
+            ],
+        )
+        for lr in result.layers
+    ]
+    return PromptActivationsResponse(
+        prompt=result.prompt,
+        token_strings=result.token_strings,
+        layers=layers,
+    )

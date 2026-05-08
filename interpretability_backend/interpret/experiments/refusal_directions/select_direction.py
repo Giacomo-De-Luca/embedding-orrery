@@ -31,7 +31,6 @@ from interpret.experiments.refusal_directions.config import RefusalConfig
 from interpret.experiments.refusal_directions.tokens import format_chat
 from interpret.sae import HookManager, HookType, SteeringMode, SteeringOp
 
-
 _REFUSAL_EPSILON = 1e-8
 _KL_EPSILON = 1e-6
 _ZERO_NORM_TOL = 1e-8

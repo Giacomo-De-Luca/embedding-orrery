@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import sys
 
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.experiments.poetry_directions.config import EXPERIMENTS, PoetryConfig
 from interpret.experiments.poetry_directions.runner import PoetryRunner
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
 
 
 def main() -> None:

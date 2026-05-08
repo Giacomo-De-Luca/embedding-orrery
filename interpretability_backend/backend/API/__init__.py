@@ -8,6 +8,8 @@ from .subscriptions import JobProgress, Subscription
 from .types import (
     # Scalars
     JSON,
+    # Streaming chat generation
+    ChatTurnInput,
     Collection,
     # Collection types
     CollectionMetadata,
@@ -22,23 +24,36 @@ from .types import (
     EmbedLocalFileInput,
     FilterInput,
     FilterOperator,
+    # Interpret / SAE inference types
+    GenerateSteeredInput,
+    GenerateStreamInput,
     HFConfigInfo,
     HFDatasetInfo,
     HFDatasetPreview,
     HFFeatureInfo,
     # HuggingFace types
     HFSplitInfo,
+    HookTypeEnum,
     IngestSaeActivationsInput,
     IngestSaeFeaturesInput,
     IngestSaeResult,
+    InterpretActiveFeature,
+    InterpretLayerResult,
+    InterpretTokenFeatures,
     # Job types
     JobStatusEnum,
     # Local file types
     LocalFileInfo,
     LocalFilePreview,
+    ModelStatus,
     PortionInput,
     PortionStrategyEnum,
     ProjectionData,
+    PromptActivationsResponse,
+    PromptHighlightFeature,
+    PromptHighlightResponse,
+    RunPromptActivationsInput,
+    RunPromptHighlightInput,
     SaeActivation,
     SaeActivationQuantileGroup,
     SaeFeature,
@@ -49,10 +64,13 @@ from .types import (
     SemanticSearchResult,
     # Search & filter types
     SimilarityMeasure,
+    SteeredGenerationResponse,
+    SteeringInput,
     TextSearchMatch,
     # Text search types
     TextSearchMode,
     TextSearchResponse,
+    TokenChunk,
     # Note: JobProgress is imported from subscriptions (not types) to avoid circular imports
     # Helper functions
     build_where_clause,
@@ -110,4 +128,22 @@ __all__ = [
     "IngestSaeFeaturesInput",
     "IngestSaeActivationsInput",
     "IngestSaeResult",
+    # Interpret / SAE inference types
+    "HookTypeEnum",
+    "ModelStatus",
+    "RunPromptActivationsInput",
+    "GenerateSteeredInput",
+    "RunPromptHighlightInput",
+    "InterpretActiveFeature",
+    "InterpretTokenFeatures",
+    "InterpretLayerResult",
+    "PromptActivationsResponse",
+    "SteeredGenerationResponse",
+    "PromptHighlightFeature",
+    "PromptHighlightResponse",
+    # Streaming chat generation
+    "ChatTurnInput",
+    "SteeringInput",
+    "GenerateStreamInput",
+    "TokenChunk",
 ]

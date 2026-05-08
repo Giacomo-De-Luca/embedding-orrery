@@ -13,16 +13,17 @@
 # limitations under the License.
 """Inference-only Gemma model implementation."""
 
-import json
 import gc
+import json
 import os
-import torch
-from torch import nn
-import torch.nn.functional as F
-from typing import Any, List, Optional, Sequence, Tuple, Union, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from gemma import config as gemma_config
-from gemma import tokenizer
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+from gemma import config as gemma_config, tokenizer
 
 
 class Sampler(nn.Module):
@@ -38,11 +39,11 @@ class Sampler(nn.Module):
         embedding: torch.Tensor,
         hidden_states: torch.Tensor,
         output_positions: torch.Tensor,
-        temperatures: Union[torch.Tensor, None],
+        temperatures: torch.Tensor | None,
         top_ps: torch.Tensor,
         top_ks: torch.Tensor,
-        embedding_bias: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        embedding_bias: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # Select the last element for each sequence.
         # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
         hidden_states = hidden_states.index_select(
@@ -265,7 +266,7 @@ class GemmaAttention(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
         local_mask: torch.Tensor = None,
     ) -> torch.Tensor:
@@ -366,7 +367,7 @@ class GemmaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
         local_mask: torch.Tensor,
         **kwargs,
@@ -446,7 +447,7 @@ class Gemma2DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
         local_mask: torch.Tensor,
         activation_cache: dict | None = None,
@@ -597,7 +598,7 @@ class GemmaModel(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: Mapping[gemma_config.AttentionType, torch.Tensor],
         kv_write_indices: torch.Tensor,
-        kv_caches: List[Tuple[torch.Tensor, torch.Tensor]],
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor]],
         mask: torch.Tensor,
         local_mask: torch.Tensor,
     ) -> torch.Tensor:
@@ -693,15 +694,15 @@ class GemmaForCausalLM(nn.Module):
         input_token_ids: torch.Tensor,
         input_positions: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_caches: List[Tuple[torch.Tensor, torch.Tensor]],
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor]],
         mask: torch.Tensor,
         output_positions: torch.Tensor,
-        temperatures: Union[torch.Tensor, None],
+        temperatures: torch.Tensor | None,
         top_ps: torch.Tensor,
         top_ks: torch.Tensor,
         local_mask: torch.Tensor | None = None,
         **kwargs,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
     freqs_cis = {}
 
     if self.config.architecture == gemma_config.Architecture.GEMMA_3:
@@ -753,13 +754,13 @@ class GemmaForCausalLM(nn.Module):
 
   def generate(
         self,
-        prompts: Union[str, Sequence[str]],
+        prompts: str | Sequence[str],
         device: Any,
         output_len: int = 100,
-        temperature: Union[float, None] = 1.0,
+        temperature: float | None = 1.0,
         top_p: float = 0.95,
         top_k: int = 64,
-    ) -> Union[str, Sequence[str]]:
+    ) -> str | Sequence[str]:
     """Generates responses for given prompts using Gemma model."""
     # If a single prompt is provided, treat it as a batch of 1.
     is_str_prompt = isinstance(prompts, str)
@@ -876,7 +877,7 @@ class GemmaForCausalLM(nn.Module):
             )
         else:
             index_path = os.path.join(model_path, 'pytorch_model.bin.index.json')
-            with open(index_path, "r", encoding="utf-8") as f:
+            with open(index_path, encoding="utf-8") as f:
                 index = json.load(f)
             shard_files = list(set(index["weight_map"].values()))
             for shard_file in shard_files:

@@ -29,6 +29,11 @@ class HookType(Enum):
     POST_ATTN = "post_attn"  # residual stream after attn-residual-add, before MLP norm
 
 
+# Reverse lookup: string -> HookType. Used by service layers that accept
+# hook_type as a string parameter.
+HOOK_TYPE_FROM_STR: dict[str, HookType] = {ht.value: ht for ht in HookType}
+
+
 # d_sae value for each width suffix shared across SAE families.
 WIDTH_TO_D_SAE: dict[str, int] = {
     "16k": 16384,
@@ -117,8 +122,7 @@ class QwenScopeSAEConfig:
     def repo_id(self) -> str:
         """HuggingFace repository ID for SAE weights."""
         return (
-            f"Qwen/SAE-Res-Qwen3-{self.model_size}-{self.variant}"
-            f"-W{self.width.upper()}-L0_{self.k}"
+            f"Qwen/SAE-Res-Qwen3-{self.model_size}-{self.variant}-W{self.width.upper()}-L0_{self.k}"
         )
 
     def weights_filename(self, layer: int | None = None) -> str:

@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import io
 import os
-from typing import List
 
 import setuptools
 
@@ -27,10 +25,10 @@ def get_path(*filepath) -> str:
 
 def read_readme() -> str:
     """Read the README file."""
-    return io.open(get_path("README.md"), "r", encoding="utf-8").read()
+    return open(get_path("README.md"), encoding="utf-8").read()
 
 
-def get_requirements() -> List[str]:
+def get_requirements() -> list[str]:
     """Get Python package dependencies from requirements.txt."""
     with open(get_path("requirements.txt")) as f:
         requirements = f.read().strip().split("\n")

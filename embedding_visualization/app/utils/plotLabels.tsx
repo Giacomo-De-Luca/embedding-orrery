@@ -46,7 +46,7 @@ function PointLabel({
   useEffect(() => {
     const svg = select(svgRef.current);
 
-    let sf = 1.25 + (k / maxZoom) * 4;
+    const sf = 1.25 + (k / maxZoom) * 4;
 
     // Remove existing elements
     svg.selectAll('circle.point-label-circle').remove();
@@ -57,7 +57,7 @@ function PointLabel({
     const fontSize = calculateScaledFontSize(width, height) * sf;
 
     // Add circles first (so they appear under text)
-    let circleSel = svg.selectAll('circle.point-label-circle').data(selectedPoints);
+    const circleSel = svg.selectAll('circle.point-label-circle').data(selectedPoints);
 
     circleSel.exit().remove();
 
@@ -80,7 +80,7 @@ function PointLabel({
       .attr('stroke-width', 2);
 
     // Add text labels (same as before)
-    let labelSel = svg.selectAll('text.point-label').data(selectedPoints);
+    const labelSel = svg.selectAll('text.point-label').data(selectedPoints);
 
     labelSel.exit().remove();
 

@@ -51,24 +51,24 @@ export interface Options {
 }
 
 export function dynamicLabelPlacement(labels: Label[], options: Partial<Options> = {}): (Placement | null)[] {
-  let globalMaxScale = options.globalMaxScale ?? 1;
-  let n = labels.length;
+  const globalMaxScale = options.globalMaxScale ?? 1;
+  const n = labels.length;
 
-  let edgeLists: [number, number][][] = [];
+  const edgeLists: [number, number][][] = [];
   for (let i = 0; i < n; i++) {
     edgeLists.push([]);
   }
-  let allLevels = new Set<number>();
+  const allLevels = new Set<number>();
   allLevels.add(0);
   // For each pair of label, compute the scale at which they will touch (transition between overlap and no overlap).
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      let { x: xi, y: yi } = labels[i].locationAtZero;
-      let { x: xj, y: yj } = labels[j].locationAtZero;
-      let bi = labels[i].bounds;
-      let bj = labels[j].bounds;
-      let k1 = xi < xj ? (xi - xj) / (bj.xMin - bi.xMax + xi - xj) : (xi - xj) / (bj.xMax - bi.xMin + xi - xj);
-      let k2 = yi < yj ? (yi - yj) / (bj.yMin - bi.yMax + yi - yj) : (yi - yj) / (bj.yMax - bi.yMin + yi - yj);
+      const { x: xi, y: yi } = labels[i].locationAtZero;
+      const { x: xj, y: yj } = labels[j].locationAtZero;
+      const bi = labels[i].bounds;
+      const bj = labels[j].bounds;
+      const k1 = xi < xj ? (xi - xj) / (bj.xMin - bi.xMax + xi - xj) : (xi - xj) / (bj.xMax - bi.xMin + xi - xj);
+      const k2 = yi < yj ? (yi - yj) / (bj.yMin - bi.yMax + yi - yj) : (yi - yj) / (bj.yMax - bi.yMin + yi - yj);
       let scale = Math.max(k1, k2);
       if (xi == xj && yi == yj) {
         if (bi.xMin < bj.xMax && bi.xMax > bj.xMin && bi.yMin < bj.yMax && bi.yMax > bj.yMin) {
@@ -87,12 +87,12 @@ export function dynamicLabelPlacement(labels: Label[], options: Partial<Options>
       allLevels.add(scale);
     }
   }
-  let offsets: number[] = [];
-  let ranges: [number, number][] = [];
+  const offsets: number[] = [];
+  const ranges: [number, number][] = [];
   for (let i = 0; i < n; i++) {
     edgeLists[i].sort((a, b) => a[1] - b[1]);
     offsets.push(edgeLists[i].length - 1);
-    let range: [number, number] = [
+    const range: [number, number] = [
       Math.min(globalMaxScale, labels[i].minScale ?? 0),
       Math.min(globalMaxScale, labels[i].maxScale ?? globalMaxScale),
     ];
@@ -100,21 +100,21 @@ export function dynamicLabelPlacement(labels: Label[], options: Partial<Options>
     allLevels.add(range[0]);
     allLevels.add(range[1]);
   }
-  let placements: (Placement | null)[] = labels.map(() => null);
-  let sortedLevels = Array.from(allLevels).sort((a, b) => b - a);
+  const placements: (Placement | null)[] = labels.map(() => null);
+  const sortedLevels = Array.from(allLevels).sort((a, b) => b - a);
 
-  let queue = new PriorityQueue();
-  let numConflicts: Set<number>[] = [];
+  const queue = new PriorityQueue();
+  const numConflicts: Set<number>[] = [];
   for (let i = 0; i < n; i++) {
     numConflicts.push(new Set());
   }
-  let inQueue = new Set<number>();
-  let isVisible = new Set<number>();
+  const inQueue = new Set<number>();
+  const isVisible = new Set<number>();
 
-  for (let level of sortedLevels) {
+  for (const level of sortedLevels) {
     for (let i = 0; i < n; i++) {
       while (offsets[i] >= 0 && edgeLists[i][offsets[i]][1] >= level) {
-        let j = edgeLists[i][offsets[i]][0];
+        const j = edgeLists[i][offsets[i]][0];
         numConflicts[i].delete(j);
         offsets[i] -= 1;
       }
@@ -132,14 +132,14 @@ export function dynamicLabelPlacement(labels: Label[], options: Partial<Options>
       }
     }
     while (true) {
-      let i = queue.popMax();
+      const i = queue.popMax();
       if (i == null) {
         break;
       }
       placements[i] = { minScale: ranges[i][0], maxScale: level };
       isVisible.add(i);
       for (let c = 0; c <= offsets[i]; c++) {
-        let j = edgeLists[i][c][0];
+        const j = edgeLists[i][c][0];
         numConflicts[j].add(i);
         if (inQueue.has(j)) {
           queue.delete(j);

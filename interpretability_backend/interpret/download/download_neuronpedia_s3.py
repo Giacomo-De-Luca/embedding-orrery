@@ -42,12 +42,13 @@ except ImportError:
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-MODEL_ID = "gemma-3-4b-it"
+# Default model ID — used by the CLI entry point. Exported functions accept
+# model_id as an explicit parameter so callers are not tied to this default.
+DEFAULT_MODEL_ID = "gemma-3-4b-it"
 S3_BUCKET = "https://neuronpedia-datasets.s3.us-east-1.amazonaws.com"
-S3_PREFIX = f"v1/{MODEL_ID}"
 
 DEFAULT_OUTPUT_DIR = (
-    Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{MODEL_ID}"
+    Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{DEFAULT_MODEL_ID}"
 )
 
 # ── S3 helpers ───────────────────────────────────────────────────────────────
@@ -55,11 +56,20 @@ DEFAULT_OUTPUT_DIR = (
 S3_NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 
 
-def list_sources(session: requests.Session) -> list[str]:
+def _s3_prefix(model_id: str) -> str:
+    """Build the S3 key prefix for a given model."""
+    return f"v1/{model_id}"
+
+
+def list_sources(
+    session: requests.Session,
+    model_id: str = DEFAULT_MODEL_ID,
+) -> list[str]:
     """List available source IDs under the model prefix via S3 ListObjectsV2."""
+    prefix = _s3_prefix(model_id)
     resp = session.get(
         S3_BUCKET,
-        params={"prefix": f"{S3_PREFIX}/", "delimiter": "/", "list-type": "2"},
+        params={"prefix": f"{prefix}/", "delimiter": "/", "list-type": "2"},
         timeout=30,
     )
     resp.raise_for_status()
@@ -71,9 +81,14 @@ def list_sources(session: requests.Session) -> list[str]:
     return sorted(sources)
 
 
-def list_batch_keys(session: requests.Session, source: str, data_dir: str) -> list[str]:
+def list_batch_keys(
+    session: requests.Session,
+    source: str,
+    data_dir: str,
+    model_id: str = DEFAULT_MODEL_ID,
+) -> list[str]:
     """List batch-*.jsonl.gz keys for a source/data_dir combination."""
-    prefix = f"{S3_PREFIX}/{source}/{data_dir}/"
+    prefix = f"{_s3_prefix(model_id)}/{source}/{data_dir}/"
     resp = session.get(
         S3_BUCKET,
         params={"prefix": prefix, "list-type": "2"},
@@ -99,7 +114,7 @@ def download_batch(session: requests.Session, key: str, retries: int = 3) -> byt
             return resp.content
         except requests.RequestException as e:
             if attempt < retries - 1:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"    Retry {attempt + 1}/{retries} for {key}: {e}")
                 time.sleep(wait)
             else:
@@ -114,21 +129,23 @@ def parse_batch(raw_gz: bytes) -> list[dict]:
 
 # ── Merge features + explanations ────────────────────────────────────────────
 
+
 def download_and_index(
     session: requests.Session,
     source: str,
     data_dir: str,
     desc: str,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> dict[int, dict]:
     """Download all batches for a data_dir, returning {index: first_record}."""
-    keys = list_batch_keys(session, source, data_dir)
+    keys = list_batch_keys(session, source, data_dir, model_id=model_id)
     if not keys:
         return {}
 
     by_index: dict[int, dict] = {}
     pbar = tqdm(keys, desc=desc, unit="batch", ncols=80, leave=False) if tqdm else None
 
-    for key in (pbar or keys):
+    for key in pbar or keys:
         raw = download_batch(session, key)
         for record in parse_batch(raw):
             idx = int(record["index"])
@@ -140,7 +157,11 @@ def download_and_index(
     return by_index
 
 
-def merge_feature_record(feature: dict | None, explanation: dict | None) -> dict:
+def merge_feature_record(
+    feature: dict | None,
+    explanation: dict | None,
+    model_id: str = DEFAULT_MODEL_ID,
+) -> dict:
     """Merge a features/ record and an explanations/ record into store format."""
     feat = feature or {}
     expl = explanation or {}
@@ -168,7 +189,7 @@ def merge_feature_record(feature: dict | None, explanation: dict | None) -> dict
         bottom_logits = list(zip(feat["neg_str"], feat.get("neg_values", [])))
 
     return {
-        "model_id": feat.get("modelId", expl.get("modelId", MODEL_ID)),
+        "model_id": feat.get("modelId", expl.get("modelId", model_id)),
         "source": feat.get("layer", expl.get("layer", "")),
         "index": idx,
         "density": feat.get("frac_nonzero", 0.0),
@@ -180,16 +201,18 @@ def merge_feature_record(feature: dict | None, explanation: dict | None) -> dict
 
 # ── Download activations as raw batches ──────────────────────────────────────
 
+
 def download_activations_raw(
     session: requests.Session,
     source: str,
     output_dir: Path,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> int:
     """Download activations/ batches as-is into a subdirectory."""
     act_dir = output_dir / "activations" / source
     act_dir.mkdir(parents=True, exist_ok=True)
 
-    keys = list_batch_keys(session, source, "activations")
+    keys = list_batch_keys(session, source, "activations", model_id=model_id)
     if not keys:
         print("    No activation batches found")
         return 0
@@ -207,10 +230,11 @@ def download_activations_raw(
 
     pbar = (
         tqdm(to_download, desc="    activations", unit="batch", ncols=80, leave=False)
-        if tqdm else None
+        if tqdm
+        else None
     )
 
-    for key in (pbar or to_download):
+    for key in pbar or to_download:
         raw = download_batch(session, key)
         filename = key.rsplit("/", 1)[-1]
         (act_dir / filename).write_bytes(raw)
@@ -222,19 +246,32 @@ def download_activations_raw(
 
 # ── Source-level orchestration ───────────────────────────────────────────────
 
+
 def download_source(
     session: requests.Session,
     source: str,
     output_dir: Path,
     skip_activations: bool = False,
+    model_id: str = DEFAULT_MODEL_ID,
 ) -> int:
-    """Download all data for one source."""
-    output_file = output_dir / f"{MODEL_ID}_{source}_features.jsonl"
+    """Download all data for one source.
+
+    Args:
+        session: HTTP session for S3 requests.
+        source: Neuronpedia source ID (e.g. ``"9-gemmascope-2-res-65k"``).
+        output_dir: Directory to write JSONL + activation batches into.
+        skip_activations: If True, skip the (large) activation download.
+        model_id: Neuronpedia model ID (e.g. ``"gemma-3-4b-it"``).
+
+    Returns:
+        Number of newly merged feature records.
+    """
+    output_file = output_dir / f"{model_id}_{source}_features.jsonl"
 
     # Resume: collect already-merged indices
     existing_indices: set[int] = set()
     if output_file.exists():
-        with open(output_file, "r") as f:
+        with open(output_file) as f:
             for line in f:
                 try:
                     existing_indices.add(json.loads(line)["index"])
@@ -245,10 +282,22 @@ def download_source(
 
     # Download features/ and explanations/
     print("  Downloading features/...")
-    features_by_idx = download_and_index(session, source, "features", "    features")
+    features_by_idx = download_and_index(
+        session,
+        source,
+        "features",
+        "    features",
+        model_id=model_id,
+    )
 
     print("  Downloading explanations/...")
-    explanations_by_idx = download_and_index(session, source, "explanations", "    explanations")
+    explanations_by_idx = download_and_index(
+        session,
+        source,
+        "explanations",
+        "    explanations",
+        model_id=model_id,
+    )
 
     # Merge and write JSONL
     all_indices = sorted(set(features_by_idx) | set(explanations_by_idx))
@@ -261,6 +310,7 @@ def download_source(
             merged = merge_feature_record(
                 feature=features_by_idx.get(idx),
                 explanation=explanations_by_idx.get(idx),
+                model_id=model_id,
             )
             out.write(json.dumps(merged) + "\n")
             new_count += 1
@@ -270,7 +320,12 @@ def download_source(
     # Download activations as raw batches
     if not skip_activations:
         print("  Downloading activations/...")
-        n_batches = download_activations_raw(session, source, output_dir)
+        n_batches = download_activations_raw(
+            session,
+            source,
+            output_dir,
+            model_id=model_id,
+        )
         print(f"  {n_batches} activation batches stored")
     else:
         print("  Skipping activations/")
@@ -280,38 +335,48 @@ def download_source(
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download Neuronpedia SAE features from S3 (bulk, fast)",
     )
     parser.add_argument(
-        "--sources", nargs="+", default=None,
+        "--sources",
+        nargs="+",
+        default=None,
         help="Source IDs to download (e.g. 22-gemmascope-2-res-16k). Default: all.",
     )
     parser.add_argument(
-        "--output-dir", type=str, default=str(DEFAULT_OUTPUT_DIR),
+        "--output-dir",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR),
         help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
-        "--list", action="store_true", dest="list_sources",
+        "--list",
+        action="store_true",
+        dest="list_sources",
         help="List available sources and exit",
     )
     parser.add_argument(
-        "--skip-activations", action="store_true",
+        "--skip-activations",
+        action="store_true",
         help="Skip downloading activations/ (much faster, smaller files)",
     )
     args = parser.parse_args()
+
+    model_id = DEFAULT_MODEL_ID
 
     session = requests.Session()
     session.headers["Accept-Encoding"] = "gzip"
 
     print("=" * 60)
-    print(f"Neuronpedia S3 Bulk Downloader — {MODEL_ID}")
+    print(f"Neuronpedia S3 Bulk Downloader — {model_id}")
     print("=" * 60)
 
     # List mode
     if args.list_sources:
-        sources = list_sources(session)
+        sources = list_sources(session, model_id=model_id)
         print(f"\nAvailable sources ({len(sources)}):")
         for s in sources:
             print(f"  {s}")
@@ -321,7 +386,7 @@ def main():
     if args.sources:
         sources = args.sources
     else:
-        sources = list_sources(session)
+        sources = list_sources(session, model_id=model_id)
         print(f"Found {len(sources)} sources")
 
     output_dir = Path(args.output_dir)
@@ -331,7 +396,13 @@ def main():
     total = 0
     for i, source in enumerate(sources):
         print(f"\n[{i + 1}/{len(sources)}] {source}")
-        count = download_source(session, source, output_dir, args.skip_activations)
+        count = download_source(
+            session,
+            source,
+            output_dir,
+            args.skip_activations,
+            model_id=model_id,
+        )
         total += count
 
     # Summary

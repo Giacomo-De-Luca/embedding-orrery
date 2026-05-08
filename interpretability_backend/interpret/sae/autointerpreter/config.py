@@ -35,7 +35,6 @@ import yaml
 
 from interpret.sae.sae_config import HookType, SAEConfig
 
-
 Aggregation = Literal["last_token", "mean_prefill", "max_prefill"]
 ZeroHintMode = Literal["on", "off", "ab"]
 

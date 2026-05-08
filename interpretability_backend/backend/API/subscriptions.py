@@ -1,14 +1,16 @@
 """
-GraphQL subscriptions for real-time progress updates.
+GraphQL subscriptions for real-time progress and token streaming.
 
 This module provides WebSocket-based subscriptions for monitoring
-embedding job progress in real-time.
+embedding job progress and streaming model generation in real-time.
 
-The actual event bus and emission logic is in services/progress_emitter.py
-to avoid circular imports when embedding functions need to emit progress.
+Event buses live in services/progress_emitter.py and services/token_emitter.py
+to avoid circular imports.
 """
 
 import asyncio
+import threading
+import uuid
 from collections.abc import AsyncGenerator
 
 import strawberry
@@ -18,6 +20,13 @@ from ..services.progress_emitter import (
     register_subscriber,
     unregister_subscriber,
 )
+from ..services.token_emitter import (
+    TokenEvent,
+    register_token_subscriber,
+    unregister_token_subscriber,
+)
+from .interpret_instance import get_interpret_service
+from .types import GenerateStreamInput, TokenChunk
 
 
 @strawberry.type
@@ -82,3 +91,104 @@ class Subscription:
         finally:
             # Always unregister when done
             await unregister_subscriber(job_id, queue)
+
+    @strawberry.subscription
+    async def generate_stream(
+        self,
+        input: GenerateStreamInput,
+    ) -> AsyncGenerator[TokenChunk, None]:
+        """Stream tokens from a multi-turn chat generation via WebSocket.
+
+        The subscription starts generation, acquires the GPU lock for the
+        duration, and yields TokenChunk events until the model produces
+        an EOS/EOT token or reaches output_len.
+        """
+        service = get_interpret_service()
+        stream_id = str(uuid.uuid4())
+        queue: asyncio.Queue[TokenEvent] = asyncio.Queue(maxsize=500)
+        await register_token_subscriber(stream_id, queue)
+
+        if not input.turns:
+            yield TokenChunk(
+                stream_id=stream_id,
+                token_index=0,
+                token_id=0,
+                text="",
+                done=True,
+                error="turns must not be empty",
+            )
+            return
+
+        turns = [(t.role, t.content) for t in input.turns]
+        cancel_event = threading.Event()
+        task: asyncio.Task | None = None
+
+        # Build optional steering kwargs
+        steering_kwargs: dict = {}
+        if input.steering is not None:
+            s = input.steering
+            steering_kwargs = {
+                "steering_layer": s.layer,
+                "steering_hook_type": s.hook_type.value,
+                "steering_feature_index": s.feature_index,
+                "steering_width": s.width,
+                "steering_strength": s.strength,
+            }
+
+        try:
+            async with service._lock:
+                task = asyncio.ensure_future(
+                    asyncio.to_thread(
+                        service.generate_stream,
+                        turns,
+                        stream_id,
+                        input.output_len,
+                        input.temperature,
+                        input.top_p,
+                        input.top_k,
+                        cancel_event=cancel_event,
+                        **steering_kwargs,
+                    )
+                )
+                while True:
+                    # Timeout prevents holding the GPU lock forever
+                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
+                    yield TokenChunk(
+                        stream_id=event.stream_id,
+                        token_index=event.token_index,
+                        token_id=event.token_id,
+                        text=event.text,
+                        done=event.done,
+                        error=event.error,
+                    )
+                    if event.done:
+                        break
+                await task
+        except (asyncio.CancelledError, GeneratorExit):
+            # Signal the model thread to stop after the current token
+            cancel_event.set()
+            # Wait for the GPU thread to finish before releasing the lock
+            if task and not task.done():
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise
+        except TimeoutError:
+            cancel_event.set()
+            yield TokenChunk(
+                stream_id=stream_id,
+                token_index=0,
+                token_id=0,
+                text="",
+                done=True,
+                error="Generation timed out",
+            )
+        finally:
+            # Wait for thread to complete if still running, then unregister
+            if task and not task.done():
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            await unregister_token_subscriber(stream_id, queue)

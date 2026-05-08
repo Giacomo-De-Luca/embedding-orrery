@@ -1,15 +1,40 @@
 # `interpret/sae/pipeline/`
 
-Data preparation pipeline for Gemma-Scope SAEs. Three stages: download from Neuronpedia S3 → merge activation batches → extract decoder vectors + labels into parquet.
+Data preparation pipeline for Gemma-Scope SAEs. Three stages: download from Neuronpedia S3, merge activation batches, extract decoder vectors + labels into parquet.
 
-| File | Class / entry point | Purpose |
-|---|---|---|
-| `prepare_sae_data.py` | `PrepareSAEConfig`, `PrepareSAEItem`, `PrepareSAERunner` | Orchestrates all three stages for a list of SAEs. Config-driven (no CLI) — edit `main()` or import the runner. |
-| `extract_decoder_vectors.py` | `extract_and_merge`, `load_feature_labels` | Loads SAE decoder weights from HuggingFace and merges them with Neuronpedia labels/logits/densities into a per-layer parquet in `resources/sae_vectors/`. |
+## Main API
 
-Run with:
+| Class | Purpose |
+|---|---|
+| `SAEPipelineConfig` | Config: takes a `GemmaScopeSAEConfig` + stage skip flags. All paths/identifiers are derived automatically. |
+| `SAEPipelineRunner` | Orchestrates the three stages, returns `SAEPipelineResult` with output file paths. |
+| `SAEPipelineResult` | Output: paths to features parquet, activations JSONL, features JSONL, plus model/sae IDs. |
 
+Decoder vector extraction logic lives in the parent module: `interpret.sae.extract_decoder_vectors`.
+
+## Usage
+
+```bash
+# Download + extract for layer 9, 16k width (default: skip activations)
+uv run python -m interpret.sae.pipeline.prepare_sae_data --layer 9 --width 16k
+
+# Include activation examples (~336 MB download)
+uv run python -m interpret.sae.pipeline.prepare_sae_data --layer 9 --width 65k --with-activations
+
+# Skip download (use already-downloaded labels)
+uv run python -m interpret.sae.pipeline.prepare_sae_data --layer 9 --width 16k --skip-download
 ```
-uv run python -m interpret.sae.pipeline.prepare_sae_data
-uv run python -m interpret.sae.pipeline.extract_decoder_vectors --layers 9 22
+
+## Programmatic usage
+
+```python
+from interpret.sae.sae_config import GemmaScopeSAEConfig
+from interpret.sae.pipeline import SAEPipelineConfig, SAEPipelineRunner
+
+config = SAEPipelineConfig(
+    sae=GemmaScopeSAEConfig(layer_index=9, width="65k", device="cpu"),
+    skip_activations=True,
+)
+result = SAEPipelineRunner(config).run()
+print(result.features_parquet)  # Path to output parquet
 ```

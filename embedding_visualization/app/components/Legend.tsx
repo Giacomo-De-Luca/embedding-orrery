@@ -225,7 +225,10 @@ export function Legend({
 
   // Default to POS legend if no category info provided
   const isPosLegend = !categoryField || categoryField === 'pos';
-  const values = categoryValues || (isPosLegend ? ['n', 'v', 'a', 'r', 's', 'unknown'] : []);
+  const values = useMemo(
+    () => categoryValues || (isPosLegend ? ['n', 'v', 'a', 'r', 's', 'unknown'] : []),
+    [categoryValues, isPosLegend]
+  );
 
   const colorMap = useMemo(
     () => buildCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette, categoryColorOverrides),

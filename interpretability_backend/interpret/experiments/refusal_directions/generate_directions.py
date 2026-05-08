@@ -10,7 +10,6 @@ activations at the post-instruction positions and accumulate the mean in
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import torch
 from tqdm import tqdm

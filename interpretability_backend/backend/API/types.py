@@ -703,3 +703,204 @@ class SaeActivationQuantileGroup:
     bin_min: float
     bin_max: float
     activations: list[SaeActivation]
+
+
+@strawberry.input
+class PrepareSaeInput:
+    """Input for the on-demand SAE download + ingest pipeline."""
+
+    layer: int
+    width: str = "16k"
+    hook_type: str = "resid_post"
+    skip_download: bool = False
+    store_vectors: bool = True
+    include_activations: bool = False
+
+
+@strawberry.type
+class PrepareSaeResult:
+    """Result of the SAE pipeline + ingestion."""
+
+    model_id: str
+    sae_id: str
+    features_inserted: int
+    activations_inserted: int
+    duration_seconds: float
+    status: str  # "completed", "already_ingested", "failed"
+    error: str | None = None
+
+
+# ========== Interpret / SAE Inference Types ==========
+
+
+@strawberry.enum
+class HookTypeEnum(Enum):
+    """Hook site within a decoder layer for SAE attachment."""
+
+    RESID_POST = "resid_post"
+    MLP_OUT = "mlp_out"
+    ATTN_OUT = "attn_out"
+
+
+# --- Inputs ---
+
+
+@strawberry.input
+class RunPromptActivationsInput:
+    """Input for running a prompt through the model with SAE hooks."""
+
+    prompt: str
+    layers: list[int] | None = None
+    width: str = "16k"
+    top_k: int = 10
+
+
+@strawberry.input
+class GenerateSteeredInput:
+    """Input for generating baseline vs steered text."""
+
+    prompt: str
+    feature_index: int
+    layer: int
+    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
+    width: str = "16k"
+    strength: float = 800.0
+    output_len: int = 128
+    temperature: float | None = None
+
+
+@strawberry.input
+class RunPromptHighlightInput:
+    """Input for running a prompt and returning max-pooled feature activations."""
+
+    prompt: str
+    layer: int
+    width: str = "16k"
+    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
+
+
+# --- Outputs ---
+
+
+@strawberry.type
+class ModelStatus:
+    """Status of the interpretability model."""
+
+    loaded: bool
+    model_name: str | None = None
+    device: str | None = None
+
+
+@strawberry.type
+class InterpretActiveFeature:
+    """A single SAE feature active at a token position (inference result)."""
+
+    index: int
+    activation: float
+    label: str
+    density: float | None = None
+
+
+@strawberry.type
+class InterpretTokenFeatures:
+    """Features active at one token position within a layer."""
+
+    token: str
+    position: int
+    features: list[InterpretActiveFeature]
+
+
+@strawberry.type
+class InterpretLayerResult:
+    """Per-token features for one layer."""
+
+    layer: int
+    width: str
+    tokens: list[InterpretTokenFeatures]
+
+
+@strawberry.type
+class PromptActivationsResponse:
+    """Result of running a prompt through the model with SAE hooks."""
+
+    prompt: str
+    token_strings: list[str]
+    layers: list[InterpretLayerResult]
+    error: str | None = None
+
+
+@strawberry.type
+class SteeredGenerationResponse:
+    """Result of baseline vs steered generation."""
+
+    baseline_text: str
+    steered_text: str
+    feature_index: int
+    layer: int
+    hook_type: str
+    strength: float
+    error: str | None = None
+
+
+@strawberry.type
+class PromptHighlightFeature:
+    """A single feature activation from max-pooled prompt inference."""
+
+    feature_index: int
+    activation: float
+
+
+@strawberry.type
+class PromptHighlightResponse:
+    """Max-pooled feature activations for scatter plot highlighting."""
+
+    features: list[PromptHighlightFeature]
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Streaming chat generation
+# ---------------------------------------------------------------------------
+
+
+@strawberry.input
+class ChatTurnInput:
+    """A single turn in a multi-turn conversation."""
+
+    role: str  # "user" or "model"
+    content: str
+
+
+@strawberry.input
+class SteeringInput:
+    """Optional SAE steering configuration for streaming generation."""
+
+    feature_index: int
+    layer: int
+    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
+    width: str = "16k"
+    strength: float = 800.0
+
+
+@strawberry.input
+class GenerateStreamInput:
+    """Input for streaming text generation."""
+
+    turns: list[ChatTurnInput]
+    output_len: int = 256
+    temperature: float | None = None
+    top_p: float = 0.95
+    top_k: int = 64
+    steering: SteeringInput | None = None
+
+
+@strawberry.type
+class TokenChunk:
+    """A single token emitted during streaming generation."""
+
+    stream_id: str
+    token_index: int
+    token_id: int
+    text: str
+    done: bool
+    error: str | None = None

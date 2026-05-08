@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import warnings
 
-
 EOI_TEMPLATE_SUFFIX = "<end_of_turn>\n<start_of_turn>model\n"
 
 

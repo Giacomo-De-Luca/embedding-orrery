@@ -32,9 +32,9 @@ export class TextSummarizer {
     // Generate key2RegionIndices, a map from xy key to region index
     this.key2RegionIndices = new Map();
     for (let i = 0; i < options.regions.length; i++) {
-      let keys = this.binning.keys(options.regions[i]);
-      for (let k of keys) {
-        let v = this.key2RegionIndices.get(k);
+      const keys = this.binning.keys(options.regions[i]);
+      for (const k of keys) {
+        const v = this.key2RegionIndices.get(k);
         if (v != null) {
           v.push(i);
         } else {
@@ -47,21 +47,21 @@ export class TextSummarizer {
   /** Add data to the summarizer */
   add(data: { x: ArrayLike<number>; y: ArrayLike<number>; text: ArrayLike<string> }) {
     for (let i = 0; i < data.text.length; i++) {
-      let key = this.binning.key(data.x[i], data.y[i]);
-      let indices = this.key2RegionIndices.get(key);
+      const key = this.binning.key(data.x[i], data.y[i]);
+      const indices = this.key2RegionIndices.get(key);
       if (indices == null) {
         continue;
       }
-      let words = [];
-      for (let s of this.segmenter.segment(data.text[i])) {
-        let word = s.segment.trim();
+      const words = [];
+      for (const s of this.segmenter.segment(data.text[i])) {
+        const word = s.segment.trim();
         if (word.length > 1) {
           words.push(word);
         }
       }
-      let inc = 1 / words.length;
-      for (let word of words) {
-        for (let idx of indices) {
+      const inc = 1 / words.length;
+      for (const word of words) {
+        for (const idx of indices) {
           incrementMap(this.frequencyPerClass[idx], word, inc);
         }
         incrementMap(this.frequencyAll, word, inc);
@@ -71,11 +71,11 @@ export class TextSummarizer {
 
   summarize(limit: number = 4): string[][] {
     // Aggregate the frequencies by stemmed words
-    let frequencyAllStem = aggregateByStem(this.frequencyAll, this.stopWords);
-    let frequencyPerClassStem = this.frequencyPerClass.map((m) => aggregateByStem(m, this.stopWords));
+    const frequencyAllStem = aggregateByStem(this.frequencyAll, this.stopWords);
+    const frequencyPerClassStem = this.frequencyPerClass.map((m) => aggregateByStem(m, this.stopWords));
 
     // Average number of words per class
-    let averageWords =
+    const averageWords =
       frequencyPerClassStem.map((x) => x.values().reduce((a, b) => a + b[1], 0)).reduce((a, b) => a + b, 0) /
       frequencyPerClassStem.length;
 
@@ -83,8 +83,8 @@ export class TextSummarizer {
       // Compute TF-IDF
       let entries = Array.from(
         wordMap.entries().map(([key, [word, tf]]) => {
-          let df = frequencyAllStem.get(key)?.[1] ?? 1;
-          let idf = Math.log(1 + averageWords / df);
+          const df = frequencyAllStem.get(key)?.[1] ?? 1;
+          const idf = Math.log(1 + averageWords / df);
           return {
             word: word,
             tf: tf,
@@ -119,8 +119,8 @@ class XYBinning {
     let yMin = Number.POSITIVE_INFINITY;
     let xMax = Number.NEGATIVE_INFINITY;
     let yMax = Number.NEGATIVE_INFINITY;
-    for (let region of regions) {
-      for (let rect of region) {
+    for (const region of regions) {
+      for (const rect of region) {
         if (rect.xMin < xMin) {
           xMin = rect.xMin;
         } else if (rect.xMax > xMax) {
@@ -141,21 +141,21 @@ class XYBinning {
   }
 
   key(x: number, y: number) {
-    let ix = Math.floor((x - this.xMin) / this.xStep);
-    let iy = Math.floor((y - this.yMin) / this.yStep);
+    const ix = Math.floor((x - this.xMin) / this.xStep);
+    const iy = Math.floor((y - this.yMin) / this.yStep);
     return ix + iy * 32768;
   }
 
   keys(rects: Rectangle[]): Set<number> {
-    let keys = new Set<number>();
-    for (let { xMin, yMin, xMax, yMax } of rects) {
-      let xiLowerBound = Math.floor((xMin - this.xMin) / this.xStep);
-      let xiUpperBound = Math.floor((xMax - this.xMin) / this.xStep);
-      let yiLowerBound = Math.floor((yMin - this.yMin) / this.yStep);
-      let yiUpperBound = Math.floor((yMax - this.yMin) / this.yStep);
+    const keys = new Set<number>();
+    for (const { xMin, yMin, xMax, yMax } of rects) {
+      const xiLowerBound = Math.floor((xMin - this.xMin) / this.xStep);
+      const xiUpperBound = Math.floor((xMax - this.xMin) / this.xStep);
+      const yiLowerBound = Math.floor((yMin - this.yMin) / this.yStep);
+      const yiUpperBound = Math.floor((yMax - this.yMin) / this.yStep);
       for (let xi = xiLowerBound; xi <= xiUpperBound; xi++) {
         for (let yi = yiLowerBound; yi <= yiUpperBound; yi++) {
-          let p = yi * 32768 + xi;
+          const p = yi * 32768 + xi;
           keys.add(p);
         }
       }
@@ -165,22 +165,22 @@ class XYBinning {
 }
 
 function incrementMap<K>(map: Map<K, number>, key: K, value: number) {
-  let c = map.get(key) ?? 0;
+  const c = map.get(key) ?? 0;
   map.set(key, c + value);
 }
 
 /** Aggregate words by their stems and track the most frequent version.
  * Returns a map with stemmed words as keys, and the most frequent version and total count as values. */
 function aggregateByStem(inputMap: Map<string, number>, stopWords: Set<string>): Map<string, [string, number]> {
-  let result = new Map();
-  for (let [word, count] of inputMap.entries()) {
-    let lower = word.toLowerCase();
+  const result = new Map();
+  for (const [word, count] of inputMap.entries()) {
+    const lower = word.toLowerCase();
     if (stopWords.has(lower) || /^[0-9]+$/.test(lower)) {
       continue;
     }
-    let s = stemmer(lower);
+    const s = stemmer(lower);
     if (result.has(s)) {
-      let value = result.get(s);
+      const value = result.get(s);
       value[1] += count;
       if ((inputMap.get(value[0]) ?? 0) < count) {
         value[0] = word;

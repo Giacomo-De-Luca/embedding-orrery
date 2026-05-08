@@ -19,9 +19,7 @@ import random
 import numpy as np
 import torch
 from absl import app, flags
-
-from gemma import config
-from gemma import model as gemma_model
+from gemma import config, model as gemma_model
 
 # Define flags
 FLAGS = flags.FLAGS

@@ -14,15 +14,14 @@
 
 """Inference-only Gemma model implementation."""
 
-import json
 import gc
+import json
 import os
 import re
-import torch
-from torch import nn
-import torch.nn.functional as F
-from typing import List, Mapping, Optional, Tuple, Union
+from collections.abc import Mapping
 
+import torch
+import torch.nn.functional as F
 from google3.third_party.open_models_release.gemma_pytorch.gemma import config as gemma_config
 from google3.third_party.open_models_release.gemma_pytorch.gemma.xla_model_parallel import (
     ColumnParallelLinear,
@@ -31,6 +30,7 @@ from google3.third_party.open_models_release.gemma_pytorch.gemma.xla_model_paral
     reduce_from_model_parallel_region,
     scatter_to_model_parallel_region,
 )
+from torch import nn
 
 
 class Sampler(nn.Module):
@@ -49,11 +49,11 @@ class Sampler(nn.Module):
         embedding: torch.Tensor,
         hidden_states: torch.Tensor,
         output_positions: torch.Tensor,
-        temperatures: Union[torch.Tensor, None],
+        temperatures: torch.Tensor | None,
         top_ps: torch.Tensor,
         top_ks: torch.Tensor,
-        embedding_bias: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        embedding_bias: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # Select the last element for each sequence.
         # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
         hidden_states = hidden_states.index_select(
@@ -226,14 +226,14 @@ class GemmaAttention(nn.Module):
         hidden_size: int,
         num_heads: int,
         num_kv_heads: int,
-        attn_logit_softcapping: Optional[float],
-        query_pre_attn_scalar: Optional[int],
+        attn_logit_softcapping: float | None,
+        query_pre_attn_scalar: int | None,
         head_dim: int,
         world_size: int,
         rank: int,
         quant: bool,
         attn_type: gemma_config.AttentionType,
-        sliding_window_size: Optional[int] = None,
+        sliding_window_size: int | None = None,
     ):
         super().__init__()
         self.rank = rank
@@ -299,7 +299,7 @@ class GemmaAttention(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
     ) -> torch.Tensor:
         hidden_states_shape = hidden_states.shape
@@ -408,7 +408,7 @@ class GemmaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
     ) -> torch.Tensor:
         # Self Attention
@@ -483,7 +483,7 @@ class Gemma2DecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_cache: Tuple[torch.Tensor, torch.Tensor],
+        kv_cache: tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
     ) -> torch.Tensor:
         # Self Attention
@@ -545,7 +545,7 @@ class GemmaModel(nn.Module):
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_caches: List[Tuple[torch.Tensor, torch.Tensor]],
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor]],
         mask: torch.Tensor,
     ) -> torch.Tensor:
         for i in range(len(self.layers)):
@@ -610,14 +610,14 @@ class GemmaForCausalLM(nn.Module):
         input_token_ids: torch.Tensor,
         input_positions: torch.Tensor,
         kv_write_indices: torch.Tensor,
-        kv_caches: List[Tuple[torch.Tensor, torch.Tensor]],
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor]],
         mask: torch.Tensor,
         output_positions: torch.Tensor,
-        temperatures: Union[torch.Tensor, None],
+        temperatures: torch.Tensor | None,
         top_ps: torch.Tensor,
         top_ks: torch.Tensor,
         **kwargs,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         freqs_cis = self.freqs_cis.index_select(0, input_positions)
         kv_write_indices = input_positions
 
@@ -713,7 +713,7 @@ class GemmaForCausalLM(nn.Module):
             self._load_weights(model_state_dict)
         else:
             index_path = os.path.join(model_path, 'pytorch_model.bin.index.json')
-            with open(index_path, "r", encoding="utf-8") as f:
+            with open(index_path, encoding="utf-8") as f:
                 index = json.load(f)
             shard_files = list(set(index["weight_map"].values()))
             for shard_file in shard_files:

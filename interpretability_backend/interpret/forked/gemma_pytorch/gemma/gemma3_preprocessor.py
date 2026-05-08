@@ -12,25 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Preprocessor for Gemma3 input."""
-import token
 
-from typing import Union, Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
-from absl import app
 from PIL import Image
-from .siglip_vision import preprocessor as siglip_vision_preprocessor
-from .siglip_vision import pan_and_scan
-from . import tokenizer
-from . import config as gemma_config
+
+from . import config as gemma_config, tokenizer
+from .siglip_vision import pan_and_scan, preprocessor as siglip_vision_preprocessor
 
 CROPPED_IMAGE_PREFIX = "here is the original image"
 CROPPED_IMAGE_FILLER = "and here are some crops to help you see better"
 
 
 def gemma3_input_preprocessor(
-    raw_user_prompt: Sequence[Union[Image.Image, str]],
-) -> Sequence[Union[torch.Tensor, str]]:
+    raw_user_prompt: Sequence[Image.Image | str],
+) -> Sequence[torch.Tensor | str]:
   """Preprocessor for Gemma3 input.
 
   Args:
@@ -39,7 +37,7 @@ def gemma3_input_preprocessor(
   Returns:
     A list of preprocessed images or strings.
   """
-  preprocessed_input: list[Union[torch.Tensor, str]] = []
+  preprocessed_input: list[torch.Tensor | str] = []
   for element in raw_user_prompt:
     if isinstance(element, Image.Image):
       cropped_images = pan_and_scan.pan_and_scan(element)
@@ -60,10 +58,10 @@ def gemma3_input_preprocessor(
   return preprocessed_input
 
 
-def gemma3_batch_input_preprocessor(raw_input: Sequence[Sequence[Union[Image.Image, str]]]):
+def gemma3_batch_input_preprocessor(raw_input: Sequence[Sequence[Image.Image | str]]):
     """Preprocessor for Gemma3 batch input.
     """
-    preprocessed_input: list[Sequence[Union[torch.Tensor, str]]] = []
+    preprocessed_input: list[Sequence[torch.Tensor | str]] = []
     for element in raw_input:
       preprocessed_input.append(gemma3_input_preprocessor(element))
     return preprocessed_input
@@ -71,7 +69,7 @@ def gemma3_batch_input_preprocessor(raw_input: Sequence[Sequence[Union[Image.Ima
 
 def tokenize_raw_input(
         tokenizer_obj: tokenizer.Tokenizer,
-        raw_input: Sequence[Sequence[Union[str, Image.Image]]],
+        raw_input: Sequence[Sequence[str | Image.Image]],
         config: gemma_config.GemmaConfig,
         output_len: int,
         device: Any,

@@ -47,7 +47,7 @@ export function defaultCategoryColors(count: number): string[] {
   } else if (count <= category20.length) {
     return category20.slice(0, count);
   } else {
-    let colors: string[] = [];
+    const colors: string[] = [];
     for (let i = 0; i < count; i++) {
       colors[i] = category20[i % category20.length];
     }
@@ -57,6 +57,6 @@ export function defaultCategoryColors(count: number): string[] {
 
 /** Parse color string into normalized sRGB values (all between 0 and 1). */
 export function parseColorNormalizedRgb(str: string): { r: number; g: number; b: number; a: number } {
-  let { r, g, b, opacity } = rgb(str);
+  const { r, g, b, opacity } = rgb(str);
   return { r: r / 255.0, g: g / 255.0, b: b / 255.0, a: opacity };
 }

@@ -45,6 +45,12 @@
 
 :root {
   --radius: 0.625rem;
+  --shadow-composer: 0 0 0 1px oklch(0 0 0 / 6%), 0 2px 6px oklch(0 0 0 / 5%);
+  --shadow-composer-focus: 0 0 0 1px oklch(0 0 0 / 10%), 0 4px 12px oklch(0 0 0 / 8%);
+  --shadow-chat-card: 0 1px 3px oklch(0 0 0 / 4%), 0 1px 2px oklch(0 0 0 / 6%);
+  --shadow-float: 0 4px 16px oklch(0 0 0 / 10%), 0 2px 4px oklch(0 0 0 / 5%);
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
   --background: oklch(1 0 0);
   --foreground: oklch(0.147 0.004 49.25);
   --card: oklch(1 0 0);
@@ -79,6 +85,10 @@
 }
 
 .dark {
+  --shadow-composer: 0 0 0 1px oklch(1 0 0 / 8%), 0 2px 6px oklch(0 0 0 / 20%);
+  --shadow-composer-focus: 0 0 0 1px oklch(1 0 0 / 15%), 0 4px 12px oklch(0 0 0 / 30%);
+  --shadow-chat-card: 0 1px 3px oklch(0 0 0 / 20%), 0 1px 2px oklch(0 0 0 / 15%);
+  --shadow-float: 0 4px 16px oklch(0 0 0 / 30%), 0 2px 4px oklch(0 0 0 / 15%);
   --background: oklch(0.147 0.004 49.25);
   --foreground: oklch(0.985 0.001 106.423);
   --card: oklch(0.216 0.006 56.043);
@@ -249,3 +259,57 @@
       inset 0 1px 0 rgba(255, 200, 100, 0.1);
     color: #f1f5f9;
   }
+
+/* ── Chat animations ─────────────────────────────────────────────── */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes thinking-dot {
+  0%, 100% { transform: scale(0.5); opacity: 0.4; }
+  50%      { transform: scale(1);   opacity: 1; }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.3s var(--ease-spring) both;
+}
+
+.animate-message-in {
+  animation: message-in 0.35s var(--ease-spring) both;
+}
+
+.animate-shimmer {
+  animation: shimmer 2s linear infinite;
+  background: linear-gradient(90deg, transparent, oklch(1 0 0 / 4%), transparent);
+  background-size: 200% 100%;
+}
+
+.animate-thinking-dot {
+  animation: thinking-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes subtle-lift {
+  from { transform: translateY(0);    box-shadow: var(--shadow-chat-card); }
+  to   { transform: translateY(-1px); box-shadow: var(--shadow-float); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease both;
+}

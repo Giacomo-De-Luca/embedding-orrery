@@ -35,7 +35,6 @@ from interpret.experiments.refusal_directions.select_direction import (
 )
 from interpret.utils.results_io import append_csv
 
-
 _ZERO_NORM_TOL = 1e-8
 
 

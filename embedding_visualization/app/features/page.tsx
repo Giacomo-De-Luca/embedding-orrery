@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ImperativePanelHandle } from 'react-resizable-panels';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useQuery, useLazyQuery } from '@apollo/client/react';
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Sparkles } from 'lucide-react';
 import {
   GET_SAE_MODELS,
   GET_SAE_FEATURE,
@@ -17,6 +18,7 @@ import {
 import type {
   SaeModelInfo, SaeFeature, SaeActivation,
   SaeFeatureSearchResult, SaeActivationQuantileGroup,
+  SteeringConfig, SteeringFeature,
 } from '@/lib/types/types';
 import { FeatureHeader } from './components/FeatureHeader';
 import { FeatureDetailCard } from './components/FeatureDetailCard';
@@ -24,9 +26,12 @@ import { ActivationExamples } from './components/ActivationExamples';
 import { FeatureSearchResults, type SemanticFeatureResult } from './components/FeatureSearchResults';
 import { FeatureStatistics } from './components/FeatureStatistics';
 import { SimilarFeatures } from './components/SimilarFeatures';
+import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Separator } from '@/lib/ui-primitives/separator';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/lib/ui-primitives/resizable';
 import { SAE_TO_COLLECTION, getSemanticCollectionName } from '@/lib/utils/saeCollections';
+import { ChatPanel, steeringFeatureKey } from './components/ChatInterface';
 
 export default function FeaturesPage() {
   const searchParams = useSearchParams();
@@ -47,6 +52,21 @@ export default function FeaturesPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'semantic'>('text');
   const [hoveredActivationValue, setHoveredActivationValue] = useState<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [steeringConfig, setSteeringConfig] = useState<SteeringConfig>({ features: [] });
+  const chatPanelRef = useRef<ImperativePanelHandle>(null);
+
+  const openChat = useCallback(() => {
+    setChatOpen(true);
+    // Expand after state update so the panel is collapsible
+    requestAnimationFrame(() => chatPanelRef.current?.expand());
+  }, []);
+
+  const closeChat = useCallback(() => {
+    chatPanelRef.current?.collapse();
+    // Wait for the CSS transition to finish before removing open state
+    setTimeout(() => setChatOpen(false), 300);
+  }, []);
 
   // Parse selected model/sae
   const [modelId, saeId] = selectedModelSae?.split('::') ?? [null, null];
@@ -182,6 +202,29 @@ export default function FeaturesPage() {
     }
   }, [modelId, saeId, featureIndex, fetchQuantiles]);
 
+  // ---------- Steering handlers ----------
+
+  const handleAddFeature = useCallback((f: SteeringFeature) => {
+    const key = steeringFeatureKey(f);
+    setSteeringConfig((prev) => ({
+      features: [...prev.features.filter((x) => steeringFeatureKey(x) !== key), f],
+    }));
+  }, []);
+
+  const handleRemoveFeature = useCallback((key: string) => {
+    setSteeringConfig((prev) => ({
+      features: prev.features.filter((x) => steeringFeatureKey(x) !== key),
+    }));
+  }, []);
+
+  const handleUpdateStrength = useCallback((key: string, strength: number) => {
+    setSteeringConfig((prev) => ({
+      features: prev.features.map((f) =>
+        steeringFeatureKey(f) === key ? { ...f, strength } : f,
+      ),
+    }));
+  }, []);
+
   // Find max feature count for navigation bounds
   const currentModel = models.find(
     (m: SaeModelInfo) => m.modelId === modelId && m.saeId === saeId,
@@ -200,21 +243,25 @@ export default function FeaturesPage() {
   // ---------- Render ----------
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Top nav */}
-      <header className="border-b px-4 py-3 flex items-center gap-3">
-        <Link
-          href="/"
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Visualization
-        </Link>
-        <Separator orientation="vertical" className="h-5" />
-        <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
-      </header>
+    <div className="flex h-screen bg-background">
+      <ResizablePanelGroup direction="horizontal">
+        <ResizablePanel defaultSize={100} minSize={40}>
+          <div className="flex h-full flex-col">
+            {/* Top nav */}
+            <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
+              <Link
+                href="/"
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Visualization
+              </Link>
+              <Separator orientation="vertical" className="h-5" />
+              <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
+            </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-4 space-y-4">
+            <main className="flex-1 overflow-y-auto">
+              <div className="max-w-7xl mx-auto px-4 py-4 space-y-4">
         {modelsLoading ? (
           <div className="flex items-center gap-2 py-8 justify-center">
             <Spinner className="h-5 w-5" />
@@ -334,7 +381,56 @@ export default function FeaturesPage() {
             </div>
           </>
         )}
-      </main>
+              </div>
+            </main>
+          </div>
+        </ResizablePanel>
+
+        {/* Resize handle — only interactive when chat is open */}
+        <ResizableHandle
+          withHandle
+          className={chatOpen ? '' : 'pointer-events-none opacity-0'}
+        />
+
+        {/* Chat panel — always mounted, collapsible with CSS transition */}
+        <ResizablePanel
+          ref={chatPanelRef}
+          defaultSize={0}
+          minSize={20}
+          maxSize={50}
+          collapsible
+          collapsedSize={0}
+          className="transition-[flex-basis] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          onCollapse={() => setChatOpen(false)}
+          onExpand={() => setChatOpen(true)}
+        >
+          <div className="flex h-full flex-col border-l bg-background">
+            <ChatPanel
+              steeringConfig={steeringConfig}
+              modelId={modelId}
+              saeId={saeId}
+              currentFeature={feature}
+              onAddFeature={handleAddFeature}
+              onRemoveFeature={handleRemoveFeature}
+              onUpdateStrength={handleUpdateStrength}
+              onClose={closeChat}
+            />
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+
+      {/* Floating chat button */}
+      {!chatOpen && (
+        <Button
+          variant="circular"
+          size="icon-lg"
+          onClick={openChat}
+          className="!fixed bottom-6 right-6 z-40 shadow-[var(--shadow-float)]"
+        >
+          <Sparkles className="size-4" />
+          <span className="sr-only">Open steered chat</span>
+        </Button>
+      )}
     </div>
   );
 }

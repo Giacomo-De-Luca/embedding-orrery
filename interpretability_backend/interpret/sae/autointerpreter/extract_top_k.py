@@ -14,7 +14,6 @@ For each SAE feature, writes two JSON files under the run directory:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np

@@ -336,3 +336,27 @@ export interface SaeActivationQuantileGroup {
   activations: SaeActivation[];
 }
 
+// ── Chat / Steering types ──────────────────────────────────────────
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+export interface SteeringFeature {
+  modelId: string;
+  saeId: string;
+  layerIndex: number;
+  featureIndex: number;
+  strength: number;
+  label?: string;
+}
+
+export interface SteeringConfig {
+  features: SteeringFeature[];
+}
+
+export type ChatStatus = 'idle' | 'generating' | 'error';
+
