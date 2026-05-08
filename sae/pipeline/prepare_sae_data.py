@@ -167,8 +167,10 @@ class SAEPipelineRunner:
         output_dir = cfg.resolved_labels_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if progress_callback:
-            progress_callback("download", 0, 1)
+        # Thread per-stage download progress to the pipeline callback
+        def _download_progress(stage: str, done: int, total: int) -> None:
+            if progress_callback:
+                progress_callback(f"download:{stage}", done, total)
 
         download_source(
             self._get_session(),
@@ -176,6 +178,7 @@ class SAEPipelineRunner:
             output_dir,
             skip_activations=cfg.skip_activations,
             model_id=cfg.model_id,
+            progress_callback=_download_progress,
         )
 
         # Record output paths
