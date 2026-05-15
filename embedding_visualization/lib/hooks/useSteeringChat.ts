@@ -13,6 +13,7 @@ export interface UseSteeringChatReturn {
   stop: () => void;
   reset: () => void;
   regenerate: (assistantIndex: number) => void;
+  editAndResend: (messageIndex: number, newContent: string) => void;
 }
 
 /** Serialise config into a stable key for change detection. */
@@ -254,5 +255,21 @@ export function useSteeringChat(config: SteeringConfig, maxTokens: number = DEFA
     [status, send],
   );
 
-  return { messages, status, error, send, stop, reset, regenerate };
+  const editAndResend = useCallback(
+    (messageIndex: number, newContent: string) => {
+      if (status !== 'idle') return;
+      const trimmed = newContent.trim();
+      if (!trimmed) return;
+
+      // Truncate everything from the edited message onward, then re-send with new content
+      const truncated = messagesRef.current.slice(0, messageIndex);
+      setMessages(truncated);
+      messagesRef.current = truncated;
+
+      queueMicrotask(() => send(trimmed));
+    },
+    [status, send],
+  );
+
+  return { messages, status, error, send, stop, reset, regenerate, editAndResend };
 }

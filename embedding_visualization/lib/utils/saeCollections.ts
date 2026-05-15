@@ -1,9 +1,14 @@
 /**
- * Single source of truth for SAE collection <-> model/layer mappings.
- * Add new entries here when ingesting SAE data for additional models.
+ * SAE collection <-> model/layer mappings.
+ *
+ * Primary lookup: `getSaeInfoFromMetadata()` reads `sae_model_id` / `sae_id`
+ * from the collection's DuckDB metadata (set via Collection Manager UI).
+ *
+ * Fallback: `getSaeInfo()` checks the hardcoded `SAE_ENTRIES` for legacy
+ * collections that predate the dynamic metadata approach.
  */
 
-interface SaeIdentifier {
+export interface SaeIdentifier {
   modelId: string;
   saeId: string;
 }
@@ -40,7 +45,22 @@ export const SAE_TO_COLLECTION: Record<string, string> = Object.fromEntries(
   SAE_ENTRIES.map((e) => [`${e.modelId}::${e.saeId}`, e.collectionName]),
 );
 
-/** Check if a collection name is an SAE collection */
+/**
+ * Read SAE info from collection metadata (dynamic, preferred).
+ * Returns null if the metadata doesn't contain SAE linkage fields.
+ */
+export function getSaeInfoFromMetadata(
+  metadata: { sae_model_id?: string | null; sae_id?: string | null } | null | undefined,
+): SaeIdentifier | null {
+  if (!metadata) return null;
+  const { sae_model_id, sae_id } = metadata;
+  if (typeof sae_model_id === 'string' && typeof sae_id === 'string') {
+    return { modelId: sae_model_id, saeId: sae_id };
+  }
+  return null;
+}
+
+/** Check if a collection name is an SAE collection (hardcoded fallback) */
 export function getSaeInfo(collectionName: string | null): SaeIdentifier | null {
   if (!collectionName) return null;
   return COLLECTION_TO_SAE[collectionName] ?? null;
@@ -57,6 +77,25 @@ export function getSemanticCollectionName(modelSaeKey: string): string | null {
     (e) => e.modelId === modelId && e.saeId === saeId && e.embeddedCollectionName,
   );
   return entry?.embeddedCollectionName ?? null;
+}
+
+/**
+ * Get all embedded collection names matching a set of (modelId, saeId) pairs.
+ * Used for cross-SAE semantic search fan-out.
+ */
+export function getSemanticCollections(
+  saePairs: Array<{ modelId: string; saeId: string }>,
+): Array<{ modelId: string; saeId: string; collectionName: string }> {
+  return saePairs
+    .map(({ modelId, saeId }) => {
+      const entry = SAE_ENTRIES.find(
+        (e) => e.modelId === modelId && e.saeId === saeId && e.embeddedCollectionName,
+      );
+      return entry
+        ? { modelId, saeId, collectionName: entry.embeddedCollectionName! }
+        : null;
+    })
+    .filter((x): x is { modelId: string; saeId: string; collectionName: string } => x !== null);
 }
 
 /** The metadata field on SAE collection items that holds the feature index */
@@ -77,6 +116,20 @@ const NEURONPEDIA_TO_HOOK: Record<string, HookType> = {
   res: 'RESID_POST',
   mlp: 'MLP_OUT',
   att: 'ATTN_OUT',
+};
+
+/** Short abbreviation for each hook type (matches Neuronpedia convention). */
+export const HOOK_TYPE_SHORT: Record<HookType, string> = {
+  RESID_POST: 'res',
+  MLP_OUT: 'mlp',
+  ATTN_OUT: 'att',
+};
+
+/** Human-readable display name for each hook type. */
+export const HOOK_TYPE_DISPLAY: Record<HookType, string> = {
+  RESID_POST: 'Residual',
+  MLP_OUT: 'MLP',
+  ATTN_OUT: 'Attention',
 };
 
 /**

@@ -64,6 +64,9 @@ export interface EmbeddingMetadata {
   has_projections?: boolean;
   // Prompt info (for models like Gemma Embedding)
   embedding_prompt?: string | null;  // Single field - can be predefined name or custom string
+  // SAE linkage (set via Collection Manager to connect scatter plot to feature explorer)
+  sae_model_id?: string | null;
+  sae_id?: string | null;
 }
 
 export interface ProjectionData {

@@ -37,7 +37,7 @@ export function ChatPanel({
   onClose,
 }: ChatPanelProps) {
   const [maxTokens, setMaxTokens] = useState(256);
-  const { messages, status, error, send, stop, reset, regenerate } = useSteeringChat(steeringConfig, maxTokens);
+  const { messages, status, error, send, stop, reset, regenerate, editAndResend } = useSteeringChat(steeringConfig, maxTokens);
   const { containerRef, endRef, isAtBottom, scrollToBottom } = useScrollToBottom();
   const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
@@ -142,9 +142,11 @@ export function ChatPanel({
               <ChatMessage
                 key={msg.id}
                 message={msg}
+                messageIndex={i}
                 isGenerating={isBusy}
                 vote={votes.get(msg.id)}
                 onVote={handleVote}
+                onEdit={msg.role === 'user' ? editAndResend : undefined}
                 onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
               />
             ))}

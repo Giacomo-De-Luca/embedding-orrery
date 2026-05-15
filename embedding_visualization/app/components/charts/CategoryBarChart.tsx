@@ -113,7 +113,7 @@ export function CategoryBarChart({
   const chartConfig = useMemo(() => {
     const config: ChartConfig = {
       count: { label: 'Total' },
-      matches: { label: 'Matches' },
+      matches: { label: 'Visible' },
     };
     for (const cat of displayCategories) {
       const safeKey = sanitizeKey(cat);
@@ -180,7 +180,7 @@ export function CategoryBarChart({
         {displayCategories.length > 0 && (
           <CardDescription className="text-xs">
             {isSearchActive
-              ? `${totalMatches.toLocaleString()} matches across ${matchedCategoryCount} categories`
+              ? `${totalMatches.toLocaleString()} visible across ${matchedCategoryCount} categories`
               : `${totalPoints.toLocaleString()} points across ${sortedCategories.length} categories`
             }
           </CardDescription>
@@ -227,7 +227,7 @@ export function CategoryBarChart({
                       <p className="text-xs font-medium mb-1">{label}</p>
                       {isSearchActive ? (
                         <>
-                          <p className="text-xs text-muted-foreground">Matches: {(data.matches ?? 0).toLocaleString()}</p>
+                          <p className="text-xs text-muted-foreground">Visible: {(data.matches ?? 0).toLocaleString()}</p>
                           <p className="text-xs text-muted-foreground">Total: {(data.count ?? 0).toLocaleString()}</p>
                         </>
                       ) : (

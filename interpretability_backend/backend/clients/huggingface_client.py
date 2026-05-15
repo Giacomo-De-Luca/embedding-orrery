@@ -150,15 +150,13 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
                 splits = []
                 if builder.info.splits:
                     for split_name, split_info in builder.info.splits.items():
+                        raw_rows = getattr(split_info, "num_examples", None)
+                        raw_bytes = getattr(split_info, "num_bytes", None)
                         splits.append(
                             SplitInfo(
                                 name=split_name,
-                                num_rows=split_info.num_examples
-                                if hasattr(split_info, "num_examples")
-                                else None,
-                                num_bytes=split_info.num_bytes
-                                if hasattr(split_info, "num_bytes")
-                                else None,
+                                num_rows=int(raw_rows) if raw_rows is not None else None,
+                                num_bytes=int(raw_bytes) if raw_bytes is not None else None,
                             )
                         )
 

@@ -27,6 +27,7 @@ import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 import { InlineEditableField, SelectOption } from './InlineEditableField';
 import { AddFieldForm } from './AddFieldForm';
 import { TopicExtractionCard } from './TopicExtractionCard';
+import { SaeLinkSection } from './SaeLinkSection';
 
 export interface CollectionInfo {
   name: string;
@@ -721,6 +722,16 @@ export function CollectionManagerTab({
             </CollapsibleContent>
           </Card>
         </Collapsible>
+      )}
+
+      {/* SAE Link */}
+      {selectedCollectionInfo && (
+        <SaeLinkSection
+          collectionName={selectedCollectionInfo.name}
+          currentModelId={(metadata.sae_model_id as string) ?? null}
+          currentSaeId={(metadata.sae_id as string) ?? null}
+          onUpdate={(meta) => updateCollectionMetadata(selectedCollectionInfo.name, meta)}
+        />
       )}
 
       {/* Topic Extraction */}

@@ -10,7 +10,7 @@ interface SimilarFeaturesProps {
   collectionName: string;
   featureIndex: number;
   featureLabel: string | null;
-  onSelectFeature: (index: number) => void;
+  onSelectFeature: (index: number, modelId?: string, saeId?: string) => void;
   selectedIndex: number | null;
 }
 

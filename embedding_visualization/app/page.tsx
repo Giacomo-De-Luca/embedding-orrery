@@ -17,7 +17,7 @@ import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/us
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
 import type { HighlightMap } from '../lib/types/types';
-import { getSaeInfo } from '../lib/utils/saeCollections';
+import { getSaeInfo, getSaeInfoFromMetadata } from '../lib/utils/saeCollections';
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
 
@@ -171,10 +171,26 @@ export default function Home() {
     loading: textSearchLoading,
   } = useTextSearch(selectedCollection, searchQuery, textSearchConfig, data?.ids);
 
-  // SAE prompt activation highlight
-  const saeInfo = getSaeInfo(selectedCollection);
+  // SAE prompt activation highlight — prefer metadata-based lookup, fall back to hardcoded
+  const saeInfo = getSaeInfoFromMetadata(data?.metadata) ?? getSaeInfo(selectedCollection);
   const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(null);
   const promptHighlight = usePromptHighlight(saeInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
+
+  // Wrap search handlers to clear prompt highlight when user initiates semantic search
+  const wrappedHandlePointClick = useCallback(
+    (point: Parameters<typeof handlePointClick>[0]) => {
+      promptHighlight.clear();
+      handlePointClick(point);
+    },
+    [handlePointClick, promptHighlight.clear],
+  );
+  const wrappedHandleSemanticSearch = useCallback(
+    (query: string) => {
+      promptHighlight.clear();
+      handleSemanticSearch(query);
+    },
+    [handleSemanticSearch, promptHighlight.clear],
+  );
 
   // Build table-ready results from prompt highlight features
   const promptHighlightResults = useMemo(() => {
@@ -255,12 +271,13 @@ export default function Home() {
               onCollectionChange={setSelectedCollection}
               totalWords={data?.metadata.total_items}
               embeddingDim={data?.metadata.embedding_dim}
-              onSemanticSearch={handleSemanticSearch}
+              onSemanticSearch={wrappedHandleSemanticSearch}
               searchLoading={searchLoading}
               activePanel={activePanel}
               onToggleControls={toggleControls}
               onToggleSearch={toggleSearch}
               onToggleAnalytics={toggleAnalytics}
+              saeInfo={saeInfo}
             />
           </div>
         </div>
@@ -291,7 +308,7 @@ export default function Home() {
                   highlightedIndices={combinedHighlightedIndices}
                   textSearchHighlights={textSearchHighlightedIndices}
                   textSearchLoading={textSearchLoading}
-                  onPointClick={handlePointClick}
+                  onPointClick={wrappedHandlePointClick}
                   selectedPoint={selectedPoint}
                   semanticSearchResults={semanticSearchResults}
                   searchQueryLabel={searchQueryLabel}
@@ -313,7 +330,7 @@ export default function Home() {
                   highlightedCount={combinedHighlightedIndices?.size}
                   colorFieldOptions={colorFieldOptions}
                   textSearchResults={textSearchResults}
-                  onTextResultClick={handlePointClick}
+                  onTextResultClick={wrappedHandlePointClick}
                   activePanel={activePanel}
                   queryPromptName={queryPromptName}
                   onQueryPromptNameChange={setQueryPromptName}

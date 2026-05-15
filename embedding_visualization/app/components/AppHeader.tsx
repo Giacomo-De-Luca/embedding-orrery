@@ -56,6 +56,7 @@ interface AppHeaderProps {
   onToggleControls?: () => void;
   onToggleSearch?: () => void;
   onToggleAnalytics?: () => void;
+  saeInfo?: { modelId: string; saeId: string } | null;
 }
 
 export function AppHeader({
@@ -72,6 +73,7 @@ export function AppHeader({
   onToggleControls,
   onToggleSearch,
   onToggleAnalytics,
+  saeInfo: saeInfoProp,
 }: AppHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
@@ -216,7 +218,7 @@ export function AppHeader({
             </Combobox>
           ) : null}
           <Link href={(() => {
-            const sae = getSaeInfo(selectedCollection ?? null);
+            const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
             return sae
               ? `/features?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
               : '/features';

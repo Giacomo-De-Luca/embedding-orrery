@@ -47,6 +47,8 @@ export const GET_COLLECTION_DATA = gql`
         embeddingModel
         embeddingPrompt
         fieldAnalysis
+        saeModelId
+        saeId
       }
     }
   }
@@ -420,8 +422,9 @@ export const GET_SAE_ACTIVATIONS = gql`
  */
 export const SEARCH_SAE_FEATURES = gql`
   query SearchSaeFeatures(
-    $modelId: String!
-    $saeId: String!
+    $modelId: String
+    $saeId: String
+    $saeIds: [String!]
     $query: String
     $minDensity: Float
     $maxDensity: Float
@@ -431,6 +434,7 @@ export const SEARCH_SAE_FEATURES = gql`
     saeFeatureSearch(
       modelId: $modelId
       saeId: $saeId
+      saeIds: $saeIds
       query: $query
       minDensity: $minDensity
       maxDensity: $maxDensity

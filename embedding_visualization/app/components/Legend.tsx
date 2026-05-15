@@ -31,6 +31,12 @@ interface LegendProps {
   categoryField?: string | null;
   categoryValues?: string[];
   categoryCounts?: Record<string, number>;
+  /** Per-category counts after filtering (text search + temporal). Shows "filtered / total" when present. */
+  filteredCounts?: Record<string, number> | null;
+  /** Per-topic filtered counts for nested legend mode. */
+  filteredTopicCounts?: Record<string, number> | null;
+  /** Per-subtopic filtered counts for nested legend mode. */
+  filteredSubtopicCounts?: Record<string, number> | null;
   mutedCategories?: string[];
   onCategoryToggle?: (category: string, shiftKey: boolean) => void;
   onCategoryReset?: () => void;
@@ -147,6 +153,9 @@ export function Legend({
   categoryField,
   categoryValues,
   categoryCounts,
+  filteredCounts,
+  filteredTopicCounts,
+  filteredSubtopicCounts,
   mutedCategories = [],
   onCategoryToggle,
   onCategoryReset,
@@ -426,7 +435,9 @@ export function Legend({
                   </span>
                   {topicCount !== undefined && (
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      {formatCount(topicCount)}
+                      {filteredTopicCounts
+                        ? `${formatCount(filteredTopicCounts[topic] ?? 0)} / ${formatCount(topicCount)}`
+                        : formatCount(topicCount)}
                     </span>
                   )}
                 </div>
@@ -507,7 +518,9 @@ export function Legend({
                       </span>
                       {subCount !== undefined && (
                         <span className="text-xs text-muted-foreground tabular-nums">
-                          {formatCount(subCount)}
+                          {filteredSubtopicCounts
+                            ? `${formatCount(filteredSubtopicCounts[sub] ?? 0)} / ${formatCount(subCount)}`
+                            : formatCount(subCount)}
                         </span>
                       )}
                     </div>
@@ -608,7 +621,9 @@ export function Legend({
               </span>
               {count !== undefined && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {formatCount(count)}
+                  {filteredCounts
+                    ? `${formatCount(filteredCounts[value] ?? 0)} / ${formatCount(count)}`
+                    : formatCount(count)}
                 </span>
               )}
             </div>

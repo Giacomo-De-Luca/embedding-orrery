@@ -233,6 +233,11 @@ class DuckDBClient:
             ON sae_activations (model_id, sae_id, feature_index)
         """)
 
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sae_features_model
+            ON sae_features (model_id)
+        """)
+
         # FTS extension
         self._conn.execute("INSTALL fts")
         self._conn.execute("LOAD fts")
@@ -1278,17 +1283,35 @@ class DuckDBClient:
 
     def search_sae_features(
         self,
-        model_id: str,
-        sae_id: str,
+        model_id: str | None = None,
+        sae_id: str | None = None,
+        sae_ids: list[str] | None = None,
         query: str | None = None,
         min_density: float | None = None,
         max_density: float | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Search features by label (ILIKE) and/or density range."""
-        conditions = ["model_id = ?", "sae_id = ?"]
-        params: list = [model_id, sae_id]
+        """Search features by label (ILIKE) and/or density range.
+
+        All filter parameters are optional, enabling cross-SAE search:
+        - ``model_id`` — filter to a single model (None = all models)
+        - ``sae_id`` — filter to a single SAE (None = all SAEs)
+        - ``sae_ids`` — filter to a set of SAEs (takes precedence over ``sae_id``)
+        """
+        conditions: list[str] = []
+        params: list = []
+
+        if model_id is not None:
+            conditions.append("model_id = ?")
+            params.append(model_id)
+        if sae_ids is not None and len(sae_ids) > 0:
+            placeholders = ", ".join(["?"] * len(sae_ids))
+            conditions.append(f"sae_id IN ({placeholders})")
+            params.extend(sae_ids)
+        elif sae_id is not None:
+            conditions.append("sae_id = ?")
+            params.append(sae_id)
 
         if query:
             conditions.append("label ILIKE ?")
@@ -1300,11 +1323,11 @@ class DuckDBClient:
             conditions.append("density <= ?")
             params.append(max_density)
 
-        where = " AND ".join(conditions)
+        where = " AND ".join(conditions) if conditions else "TRUE"
         params.extend([limit, offset])
 
         rows = self._conn.execute(
-            f"SELECT feature_index, density, label, top_logits, bottom_logits "
+            f"SELECT model_id, sae_id, feature_index, density, label, top_logits, bottom_logits "
             f"FROM sae_features WHERE {where} "
             f"ORDER BY density DESC "
             f"LIMIT ? OFFSET ?",
@@ -1314,13 +1337,13 @@ class DuckDBClient:
         results = []
         for r in rows:
             feat = {
-                "model_id": model_id,
-                "sae_id": sae_id,
-                "feature_index": r[0],
-                "density": r[1],
-                "label": r[2],
-                "top_logits": json.loads(r[3]) if isinstance(r[3], str) else r[3],
-                "bottom_logits": json.loads(r[4]) if isinstance(r[4], str) else r[4],
+                "model_id": r[0],
+                "sae_id": r[1],
+                "feature_index": r[2],
+                "density": r[3],
+                "label": r[4],
+                "top_logits": json.loads(r[5]) if isinstance(r[5], str) else r[5],
+                "bottom_logits": json.loads(r[6]) if isinstance(r[6], str) else r[6],
             }
             results.append(feat)
         return results

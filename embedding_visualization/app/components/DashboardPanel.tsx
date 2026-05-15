@@ -295,6 +295,34 @@ export function DashboardPanel({
     return set.size > 0 ? set : null;
   }, [temporallyMutedIndices, searchMutedIndices]);
 
+  // Compute per-category filtered counts (points surviving all filters) in a single pass.
+  // Shared between Legend and AnalyticsSidebar to avoid duplicate iteration.
+  const { filteredCategoryCounts, filteredTopicCounts, filteredSubtopicCounts } = useMemo(() => {
+    if (!combinedMutedIndices || !colorByField) {
+      return { filteredCategoryCounts: null, filteredTopicCounts: null, filteredSubtopicCounts: null };
+    }
+    const catCounts: Record<string, number> = {};
+    const topCounts: Record<string, number> = {};
+    const subCounts: Record<string, number> = {};
+    const isNested = !!nestedColorMap;
+    for (const p of points) {
+      if (combinedMutedIndices.has(p.index)) continue;
+      const val = p.metadata?.[colorByField];
+      if (val != null && val !== '') catCounts[String(val)] = (catCounts[String(val)] ?? 0) + 1;
+      if (isNested) {
+        const t = p.metadata?.['topic_label'];
+        const s = p.metadata?.['subtopic_label'];
+        if (t != null && t !== '') topCounts[String(t)] = (topCounts[String(t)] ?? 0) + 1;
+        if (s != null && s !== '') subCounts[String(s)] = (subCounts[String(s)] ?? 0) + 1;
+      }
+    }
+    return {
+      filteredCategoryCounts: catCounts,
+      filteredTopicCounts: isNested ? topCounts : null,
+      filteredSubtopicCounts: isNested ? subCounts : null,
+    };
+  }, [combinedMutedIndices, colorByField, points, nestedColorMap]);
+
   // Check if we're using a continuous scale
   const isContinuousScale = colorScale.type === 'sequential' || colorScale.type === 'diverging' || colorScale.type === 'monochrome';
 
@@ -581,6 +609,9 @@ export function DashboardPanel({
             categoryField={colorByField}
             categoryValues={categoryValues}
             categoryCounts={categoryCounts}
+            filteredCounts={filteredCategoryCounts}
+            filteredTopicCounts={filteredTopicCounts}
+            filteredSubtopicCounts={filteredSubtopicCounts}
             mutedCategories={effectiveMutedCategories}
             onCategoryToggle={handleCategoryToggle}
             onCategoryReset={handleCategoryReset}
@@ -766,7 +797,8 @@ export function DashboardPanel({
           mutedCategories={effectiveMutedCategories}
           temporalRange={temporalRange}
           onTemporalRangeChange={handleTemporalRangeChange}
-          textSearchHighlights={textSearchHighlights}
+          sharedFilteredCounts={filteredCategoryCounts}
+          combinedMutedIndices={combinedMutedIndices}
           colorFieldOptions={colorFieldOptions}
           variant="floating"
           className={cn(

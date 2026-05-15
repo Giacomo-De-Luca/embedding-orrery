@@ -28,7 +28,10 @@ interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   mutedCategories?: string[];
   temporalRange?: TemporalRange | null;
   onTemporalRangeChange?: (range: TemporalRange | null) => void;
-  textSearchHighlights?: Set<number>;
+  /** Pre-computed filtered counts from DashboardPanel (keyed by colorByField). */
+  sharedFilteredCounts?: Record<string, number> | null;
+  /** Combined muted indices (text search + temporal) for local fallback computation. */
+  combinedMutedIndices?: Set<number> | null;
   colorFieldOptions?: ColorFieldOption[];
 }
 
@@ -42,7 +45,8 @@ export function AnalyticsSidebar({
   mutedCategories = [],
   temporalRange,
   onTemporalRangeChange,
-  textSearchHighlights,
+  sharedFilteredCounts,
+  combinedMutedIndices,
   colorFieldOptions,
   className,
   ...props
@@ -90,19 +94,23 @@ export function AnalyticsSidebar({
     return counts;
   }, [filteredCategoryValues, activeCategoryValues.length, activeCategoryCounts]);
 
-  // Compute search match counts per category when text search is active
+  // Filtered counts per category: reuse shared computation when field matches, compute locally otherwise.
+  // Uses combinedMutedIndices (text search + temporal) for consistency with scatter plot muting.
   const searchMatchCounts = useMemo(() => {
-    if (!textSearchHighlights || textSearchHighlights.size === 0 || !effectiveAnalysisField) return null;
+    // When analysis field follows colorByField, reuse the pre-computed counts from DashboardPanel
+    if (!isOverridden && sharedFilteredCounts) return sharedFilteredCounts;
+    // Otherwise compute locally using combinedMutedIndices (covers both text + temporal filters)
+    if (!combinedMutedIndices || combinedMutedIndices.size === 0 || !effectiveAnalysisField) return null;
     const counts: Record<string, number> = {};
     for (const p of points) {
-      if (!textSearchHighlights.has(p.index)) continue;
+      if (combinedMutedIndices.has(p.index)) continue;
       const value = p.metadata?.[effectiveAnalysisField];
       if (value === null || value === undefined || value === '') continue;
       const key = String(value);
       counts[key] = (counts[key] ?? 0) + 1;
     }
     return counts;
-  }, [textSearchHighlights, effectiveAnalysisField, points]);
+  }, [isOverridden, sharedFilteredCounts, combinedMutedIndices, effectiveAnalysisField, points]);
 
   const { temporalField, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,

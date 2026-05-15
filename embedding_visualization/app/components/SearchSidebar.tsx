@@ -203,6 +203,36 @@ export function SearchSidebar({
             </p>
           </div>
 
+          {/* Search fields selector (combobox with chips) */}
+              <div className="space-y-2">
+                <Label className="text-sm">Search in</Label>
+                <Combobox<string, true>
+                  multiple
+                  value={selectedFields}
+                  onValueChange={handleFieldsChange}
+                >
+                  <ComboboxChips ref={chipsRef} className="min-h-8">
+                    {selectedFields.map((field) => (
+                      <ComboboxChip key={field}>
+                        {field === DOCUMENT_SENTINEL ? 'Document' : fieldToDisplayName(field)}
+                      </ComboboxChip>
+                    ))}
+                    <ComboboxChipsInput placeholder="Add fields..." className="text-xs" />
+                  </ComboboxChips>
+                  <ComboboxContent anchor={chipsRef}>
+                    <ComboboxList>
+                      <ComboboxItem value={DOCUMENT_SENTINEL}>Document</ComboboxItem>
+                      {availableFields.map((field) => (
+                        <ComboboxItem key={field} value={field}>
+                          {fieldToDisplayName(field)}
+                        </ComboboxItem>
+                      ))}
+                    </ComboboxList>
+                    <ComboboxEmpty>No matching fields</ComboboxEmpty>
+                  </ComboboxContent>
+                </Combobox>
+              </div>
+
           {/* SAE Prompt Activation */}
           {saeInfo && onPromptHighlightSubmit && (
             <div className="space-y-3">
@@ -324,35 +354,7 @@ export function SearchSidebar({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-4 pt-2">
-              {/* Search fields selector (combobox with chips) */}
-              <div className="space-y-2">
-                <Label className="text-sm">Search in</Label>
-                <Combobox<string, true>
-                  multiple
-                  value={selectedFields}
-                  onValueChange={handleFieldsChange}
-                >
-                  <ComboboxChips ref={chipsRef} className="min-h-8">
-                    {selectedFields.map((field) => (
-                      <ComboboxChip key={field}>
-                        {field === DOCUMENT_SENTINEL ? 'Document' : fieldToDisplayName(field)}
-                      </ComboboxChip>
-                    ))}
-                    <ComboboxChipsInput placeholder="Add fields..." className="text-xs" />
-                  </ComboboxChips>
-                  <ComboboxContent anchor={chipsRef}>
-                    <ComboboxList>
-                      <ComboboxItem value={DOCUMENT_SENTINEL}>Document</ComboboxItem>
-                      {availableFields.map((field) => (
-                        <ComboboxItem key={field} value={field}>
-                          {fieldToDisplayName(field)}
-                        </ComboboxItem>
-                      ))}
-                    </ComboboxList>
-                    <ComboboxEmpty>No matching fields</ComboboxEmpty>
-                  </ComboboxContent>
-                </Combobox>
-              </div>
+              
 
               {/* Match mode toggle */}
               <div className="space-y-2">

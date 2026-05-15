@@ -471,6 +471,9 @@ class CollectionMetadata:
     topic_hierarchy: JSON | None = None  # {reduced_label: [subtopic_labels]}
     # Pre-computed field analysis (cached for fast frontend loading)
     field_analysis: JSON | None = None
+    # SAE linkage (set via updateCollectionMetadata to connect scatter plot to feature explorer)
+    sae_model_id: str | None = None
+    sae_id: str | None = None
 
 
 @strawberry.type

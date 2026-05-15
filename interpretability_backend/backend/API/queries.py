@@ -761,8 +761,9 @@ class Query:
     @strawberry.field
     def sae_feature_search(
         self,
-        model_id: str,
-        sae_id: str,
+        model_id: str | None = None,
+        sae_id: str | None = None,
+        sae_ids: list[str] | None = None,
         query: str | None = None,
         min_density: float | None = None,
         max_density: float | None = None,
@@ -770,11 +771,16 @@ class Query:
         offset: int = 0,
         info=None,
     ) -> list[SaeFeatureSearchResult]:
-        """Search features by label text and/or density range."""
+        """Search features by label text and/or density range.
+
+        All filter params are optional for cross-SAE search.
+        ``sae_ids`` filters to a set of SAEs (takes precedence over ``sae_id``).
+        """
         db = get_duckdb_client()
         features = db.search_sae_features(
-            model_id,
-            sae_id,
+            model_id=model_id,
+            sae_id=sae_id,
+            sae_ids=sae_ids,
             query=query,
             min_density=min_density,
             max_density=max_density,

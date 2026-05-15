@@ -1,7 +1,10 @@
 'use client';
 
+import { useCallback, useRef, useState, type KeyboardEvent } from 'react';
 import { motion } from 'motion/react';
+import { Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
+import { Button } from '@/lib/ui-primitives/button';
 import type { ChatMessage as ChatMessageType, MessageVote } from '@/lib/types/types';
 import { AssistantAvatar } from './AssistantAvatar';
 import { MessageResponse } from './ai-elements/message';
@@ -13,7 +16,8 @@ interface ChatMessageProps {
   isGenerating?: boolean;
   vote?: MessageVote;
   onVote?: (messageId: string, isUpvoted: boolean) => void;
-  onEdit?: (message: ChatMessageType) => void;
+  onEdit?: (messageIndex: number, newContent: string) => void;
+  messageIndex?: number;
   onRegenerate?: () => void;
 }
 
@@ -23,9 +27,56 @@ export function ChatMessage({
   vote,
   onVote,
   onEdit,
+  messageIndex,
   onRegenerate,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const startEditing = useCallback(() => {
+    setEditText(message.content);
+    setIsEditing(true);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.selectionStart = ta.value.length;
+      }
+    });
+  }, [message.content]);
+
+  const cancelEditing = useCallback(() => {
+    setIsEditing(false);
+    setEditText('');
+  }, []);
+
+  const submitEdit = useCallback(() => {
+    const trimmed = editText.trim();
+    if (!trimmed || trimmed === message.content) {
+      cancelEditing();
+      return;
+    }
+    if (onEdit && messageIndex !== undefined) {
+      onEdit(messageIndex, trimmed);
+    }
+    setIsEditing(false);
+    setEditText('');
+  }, [editText, message.content, onEdit, messageIndex, cancelEditing]);
+
+  const handleEditKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitEdit();
+      }
+      if (e.key === 'Escape') {
+        cancelEditing();
+      }
+    },
+    [submitEdit, cancelEditing],
+  );
 
   if (isUser) {
     return (
@@ -35,22 +86,64 @@ export function ChatMessage({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
       >
-        <div
-          className={cn(
-            'w-fit max-w-[min(80%,56ch)] overflow-hidden break-words',
-            'rounded-2xl rounded-br-lg',
-            'border border-border/30 bg-gradient-to-br from-secondary to-muted',
-            'px-3.5 py-2 shadow-[var(--shadow-chat-card)]',
-            'text-[13px] leading-[1.65]',
-          )}
-        >
-          <MessageResponse>{message.content}</MessageResponse>
-        </div>
-        <ChatMessageActions
-          message={message}
-          isGenerating={isGenerating}
-          onEdit={onEdit}
-        />
+        {isEditing ? (
+          <div className="w-full max-w-[min(80%,56ch)]">
+            <textarea
+              ref={textareaRef}
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              rows={1}
+              className={cn(
+                'w-full resize-none rounded-2xl rounded-br-lg',
+                'border border-ring/50 bg-gradient-to-br from-secondary to-muted',
+                'px-3.5 py-2 text-[13px] leading-[1.65] outline-none',
+                'ring-[3px] ring-ring/20',
+              )}
+              style={{ fieldSizing: 'content' } as React.CSSProperties}
+            />
+            <div className="mt-1.5 flex justify-end gap-1">
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={cancelEditing}
+                className="size-6 text-muted-foreground"
+              >
+                <X className="size-3" />
+                <span className="sr-only">Cancel edit</span>
+              </Button>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={submitEdit}
+                disabled={!editText.trim() || editText.trim() === message.content}
+                className="size-6 text-foreground"
+              >
+                <Check className="size-3" />
+                <span className="sr-only">Submit edit</span>
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className={cn(
+                'w-fit max-w-[min(80%,56ch)] overflow-hidden break-words',
+                'rounded-2xl rounded-br-lg',
+                'border border-border/30 bg-gradient-to-br from-secondary to-muted',
+                'px-3.5 py-2 shadow-[var(--shadow-chat-card)]',
+                'text-[13px] leading-[1.65]',
+              )}
+            >
+              <MessageResponse>{message.content}</MessageResponse>
+            </div>
+            <ChatMessageActions
+              message={message}
+              isGenerating={isGenerating}
+              onEdit={onEdit ? () => startEditing() : undefined}
+            />
+          </>
+        )}
       </motion.div>
     );
   }

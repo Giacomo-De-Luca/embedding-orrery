@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useQuery, useLazyQuery } from '@apollo/client/react';
+import { useQuery, useLazyQuery, useApolloClient } from '@apollo/client/react';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles, Sun, Moon } from 'lucide-react';
 import { useTheme } from 'next-themes';
@@ -29,8 +29,20 @@ import { SimilarFeatures } from './components/SimilarFeatures';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Separator } from '@/lib/ui-primitives/separator';
-import { SAE_TO_COLLECTION, getSemanticCollectionName } from '@/lib/utils/saeCollections';
+import { SAE_TO_COLLECTION, getSemanticCollectionName, getSemanticCollections, parseSaeId } from '@/lib/utils/saeCollections';
 import { ChatPanel, steeringFeatureKey } from './components/ChatInterface';
+import { useSaeSelectors } from './hooks/useSaeSelectors';
+
+/** Shape of a single collection's fan-out semantic search result. */
+interface FanoutResult {
+  modelId: string;
+  saeId: string;
+  results: Array<{
+    document: string | null;
+    metadata: Record<string, unknown>;
+    similarity: number;
+  }>;
+}
 
 function ModeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -54,16 +66,18 @@ function ModeToggle() {
 export default function FeaturesPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const apolloClient = useApolloClient();
 
-  // URL state
+  // URL state — supports both legacy (?modelId=&saeId=) and multi-SAE (?model=&layer=&hookType=&width=)
   const modelIdParam = searchParams.get('modelId');
   const saeIdParam = searchParams.get('saeId');
   const featureParam = searchParams.get('featureIndex');
+  const modelParam = searchParams.get('model');
+  const layerParam = searchParams.get('layer');
+  const hookTypeParam = searchParams.get('hookType');
+  const widthParam = searchParams.get('width');
 
   // Local state
-  const [selectedModelSae, setSelectedModelSae] = useState<string | null>(
-    modelIdParam && saeIdParam ? `${modelIdParam}::${saeIdParam}` : null,
-  );
   const [featureIndex, setFeatureIndex] = useState<number | null>(
     featureParam != null ? parseInt(featureParam, 10) : null,
   );
@@ -75,6 +89,10 @@ export default function FeaturesPage() {
   const [chatWidth, setChatWidth] = useState(448); // 28rem
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
+
+  // Fan-out semantic search state
+  const [mergedSemanticResults, setMergedSemanticResults] = useState<SemanticFeatureResult[]>([]);
+  const [semanticFanoutLoading, setSemanticFanoutLoading] = useState(false);
 
   const openChat = useCallback(() => setChatOpen(true), []);
   const closeChat = useCallback(() => setChatOpen(false), []);
@@ -99,15 +117,6 @@ export default function FeaturesPage() {
     document.addEventListener('mouseup', onMouseUp);
   }, []);
 
-  // Parse selected model/sae
-  const [modelId, saeId] = selectedModelSae?.split('::') ?? [null, null];
-
-  // Semantic collection for this model/sae
-  const semanticCollectionName = useMemo(
-    () => selectedModelSae ? getSemanticCollectionName(selectedModelSae) : null,
-    [selectedModelSae],
-  );
-
   // ---------- Queries ----------
 
   const { data: modelsData, loading: modelsLoading } = useQuery<{ saeModels: SaeModelInfo[] }>(
@@ -115,13 +124,73 @@ export default function FeaturesPage() {
   );
   const models = useMemo(() => modelsData?.saeModels ?? [], [modelsData]);
 
-  // Auto-select first model if none chosen
-  useEffect(() => {
-    if (!selectedModelSae && models.length > 0) {
-      const key = `${models[0].modelId}::${models[0].saeId}`;
-      setSelectedModelSae(key);
+  // Build initial selectors from URL params (legacy or multi-SAE format)
+  const initialSelectors = useMemo(() => {
+    if (modelIdParam && saeIdParam) {
+      // Legacy format: reverse-parse saeId into individual selectors
+      const parsed = parseSaeId(saeIdParam);
+      return {
+        model: modelIdParam,
+        layer: String(parsed.layerIndex),
+        hookType: parsed.hookType as string,
+        width: parsed.width,
+      };
     }
-  }, [models, selectedModelSae]);
+    // Multi-SAE format: read individual selector params (null = "All")
+    return {
+      model: modelParam,
+      layer: layerParam,
+      hookType: hookTypeParam,
+      width: widthParam,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cascading SAE selectors
+  const {
+    selectors,
+    setModel,
+    setLayer,
+    setHookType,
+    setWidth,
+    modelOptions,
+    layerOptions,
+    hookTypeOptions,
+    widthOptions,
+    resolvedSaePairs,
+    isSingleSae,
+    singleModelId,
+    singleSaeId,
+    totalFeatureCount,
+  } = useSaeSelectors(models, initialSelectors);
+
+  const modelId = singleModelId;
+  const saeId = singleSaeId;
+
+  // Auto-select first model when no URL params and models load
+  useEffect(() => {
+    if (!modelIdParam && !saeIdParam && models.length > 0 && resolvedSaePairs.length === 0) {
+      // Default to first model's specific SAE
+      const first = models[0];
+      const parsed = parseSaeId(first.saeId);
+      setModel(first.modelId);
+      setLayer(String(parsed.layerIndex));
+      setHookType(parsed.hookType);
+      setWidth(parsed.width);
+    }
+  }, [models, modelIdParam, saeIdParam, resolvedSaePairs.length, setModel, setLayer, setHookType, setWidth]);
+
+  // Semantic collection: single-SAE mode uses direct lookup, multi-SAE checks all resolved
+  const semanticCollectionName = useMemo(
+    () => isSingleSae && modelId && saeId ? getSemanticCollectionName(`${modelId}::${saeId}`) : null,
+    [isSingleSae, modelId, saeId],
+  );
+  const hasAnySemanticCollection = useMemo(
+    () => isSingleSae
+      ? !!semanticCollectionName
+      : getSemanticCollections(resolvedSaePairs).length > 0,
+    [isSingleSae, semanticCollectionName, resolvedSaePairs],
+  );
 
   const [fetchFeature, { data: featureData, loading: featureLoading }] = useLazyQuery<{
     saeFeature: SaeFeature | null;
@@ -135,7 +204,7 @@ export default function FeaturesPage() {
     saeFeatureSearch: SaeFeatureSearchResult[];
   }>(SEARCH_SAE_FEATURES);
 
-  // Semantic search
+  // Semantic search (single-collection)
   const [fetchSemanticSearch, { data: semanticSearchData, loading: semanticSearchLoading }] = useLazyQuery<{
     semanticSearch: Array<{ id: string; document: string | null; metadata: Record<string, unknown>; similarity: number }>;
   }>(SEMANTIC_SEARCH);
@@ -156,8 +225,8 @@ export default function FeaturesPage() {
   const allDensities = densitiesData?.saeFeatureDensities ?? [];
   const quantileGroups = quantilesData?.saeActivationsByQuantile;
 
-  // Semantic search results mapped to display format
-  const semanticSearchResults: SemanticFeatureResult[] = useMemo(() => {
+  // Semantic search results mapped to display format (single-collection)
+  const singleSemanticResults: SemanticFeatureResult[] = useMemo(() => {
     if (!semanticSearchData?.semanticSearch) return [];
     return semanticSearchData.semanticSearch.map((r) => ({
       featureIndex: Number(r.metadata?.index ?? 0),
@@ -167,9 +236,19 @@ export default function FeaturesPage() {
     }));
   }, [semanticSearchData]);
 
+  // Active semantic results: use fan-out results when multi-SAE, single otherwise
+  const semanticSearchResults = !isSingleSae && mergedSemanticResults.length > 0
+    ? mergedSemanticResults
+    : singleSemanticResults;
+
+  // Clear stale fan-out results when selectors change
+  useEffect(() => {
+    setMergedSemanticResults([]);
+  }, [resolvedSaePairs]);
+
   // ---------- Effects ----------
 
-  // Fetch feature + activations when index or model changes
+  // Fetch feature + activations when index or model changes (single SAE only)
   useEffect(() => {
     if (modelId && saeId && featureIndex != null) {
       fetchFeature({ variables: { modelId, saeId, featureIndex } });
@@ -177,7 +256,7 @@ export default function FeaturesPage() {
     }
   }, [modelId, saeId, featureIndex, fetchFeature, fetchActivations]);
 
-  // Fetch densities once when model/sae changes
+  // Fetch densities once when model/sae changes (single SAE only)
   useEffect(() => {
     if (modelId && saeId) {
       fetchDensities({ variables: { modelId, saeId } });
@@ -187,43 +266,114 @@ export default function FeaturesPage() {
   // Sync URL
   useEffect(() => {
     const params = new URLSearchParams();
-    if (modelId) params.set('modelId', modelId);
-    if (saeId) params.set('saeId', saeId);
-    if (featureIndex != null) params.set('featureIndex', featureIndex.toString());
+    if (isSingleSae && modelId && saeId) {
+      params.set('modelId', modelId);
+      params.set('saeId', saeId);
+      if (featureIndex != null) params.set('featureIndex', featureIndex.toString());
+    } else {
+      // Multi-SAE mode: encode individual selectors
+      if (selectors.model) params.set('model', selectors.model);
+      if (selectors.layer) params.set('layer', selectors.layer);
+      if (selectors.hookType) params.set('hookType', selectors.hookType);
+      if (selectors.width) params.set('width', selectors.width);
+    }
     const newSearch = `?${params.toString()}`;
     if (newSearch !== window.location.search) {
       router.replace(newSearch, { scroll: false });
     }
-  }, [modelId, saeId, featureIndex, router]);
+  }, [isSingleSae, modelId, saeId, featureIndex, selectors, router]);
 
   // ---------- Handlers ----------
-
-  const handleModelSaeChange = useCallback((value: string) => {
-    setSelectedModelSae(value);
-    setFeatureIndex(0);
-  }, []);
 
   const handleFeatureIndexChange = useCallback((index: number) => {
     setFeatureIndex(index);
   }, []);
 
-  const handleSearch = useCallback(() => {
+  const handleSearch = useCallback(async () => {
     const q = searchQuery.trim();
     if (!q) return;
-    if (searchMode === 'semantic' && semanticCollectionName) {
-      fetchSemanticSearch({
-        variables: { collectionName: semanticCollectionName, query: q, nResults: 50 },
-      });
-    } else if (modelId && saeId) {
-      fetchSearch({
-        variables: { modelId, saeId, query: q, limit: 50 },
-      });
-    }
-  }, [modelId, saeId, searchQuery, searchMode, semanticCollectionName, fetchSearch, fetchSemanticSearch]);
 
-  const handleSearchSelect = useCallback((index: number) => {
+    if (searchMode === 'semantic') {
+      if (isSingleSae && semanticCollectionName) {
+        // Single SAE semantic search
+        fetchSemanticSearch({
+          variables: { collectionName: semanticCollectionName, query: q, nResults: 50 },
+        });
+      } else if (!isSingleSae) {
+        // Fan-out semantic search across resolved SAEs
+        const collections = getSemanticCollections(resolvedSaePairs);
+        if (collections.length === 0) return;
+
+        setSemanticFanoutLoading(true);
+        try {
+          const promises = collections.map(({ modelId: mId, saeId: sId, collectionName }): Promise<FanoutResult> =>
+            apolloClient.query<{ semanticSearch: FanoutResult['results'] }>({
+              query: SEMANTIC_SEARCH,
+              variables: { collectionName, query: q, nResults: 50 },
+            }).then(({ data }) => ({
+              modelId: mId,
+              saeId: sId,
+              results: (data?.semanticSearch ?? []) as FanoutResult['results'],
+            })),
+          );
+
+          const allResults = await Promise.allSettled(promises);
+          const merged: SemanticFeatureResult[] = [];
+          for (const r of allResults) {
+            if (r.status !== 'fulfilled') continue;
+            const { modelId: mId, saeId: sId, results } = r.value;
+            for (const item of results) {
+              merged.push({
+                featureIndex: Number(item.metadata?.index ?? 0),
+                label: item.document ?? null,
+                density: (item.metadata?.density as number) ?? null,
+                similarity: item.similarity,
+                modelId: mId,
+                saeId: sId,
+              });
+            }
+          }
+          merged.sort((a, b) => b.similarity - a.similarity);
+          setMergedSemanticResults(merged.slice(0, 50));
+        } finally {
+          setSemanticFanoutLoading(false);
+        }
+      }
+    } else {
+      // Text search
+      if (isSingleSae && modelId && saeId) {
+        fetchSearch({ variables: { modelId, saeId, query: q, limit: 50 } });
+      } else {
+        // Cross-SAE text search
+        const saeIds = resolvedSaePairs.map((p) => p.saeId);
+        const selectedModel = selectors.model; // null if "All models"
+        fetchSearch({
+          variables: {
+            modelId: selectedModel,
+            saeIds: saeIds.length > 0 ? saeIds : undefined,
+            query: q,
+            limit: 50,
+          },
+        });
+      }
+    }
+  }, [
+    searchQuery, searchMode, isSingleSae, modelId, saeId,
+    semanticCollectionName, resolvedSaePairs, selectors.model,
+    fetchSearch, fetchSemanticSearch, apolloClient,
+  ]);
+
+  const handleSearchSelect = useCallback((index: number, resultModelId?: string, resultSaeId?: string) => {
+    if (resultModelId && resultSaeId && !isSingleSae) {
+      // Cross-SAE result: drill into that specific SAE
+      const parsed = parseSaeId(resultSaeId);
+      setModel(resultModelId);
+      setLayer(String(parsed.layerIndex));
+      setHookType(parsed.hookType);
+      setWidth(parsed.width);
+    }
     setFeatureIndex(index);
-  }, []);
+  }, [isSingleSae, setModel, setLayer, setHookType, setWidth]);
 
   const handleRequestQuantiles = useCallback(() => {
     if (modelId && saeId && featureIndex != null) {
@@ -256,20 +406,28 @@ export default function FeaturesPage() {
     }));
   }, []);
 
-  // Find max feature count for navigation bounds
-  const currentModel = models.find(
-    (m: SaeModelInfo) => m.modelId === modelId && m.saeId === saeId,
-  );
-  const maxFeatureIndex = currentModel?.featureCount;
+  // Max feature index for navigation bounds (single SAE only)
+  const maxFeatureIndex = isSingleSae ? totalFeatureCount : undefined;
 
-  // Collection link for cross-navigation
-  const collectionLink = selectedModelSae ? SAE_TO_COLLECTION[selectedModelSae] ?? null : null;
+  // Collection link for cross-navigation (single SAE only)
+  const collectionLink = isSingleSae && modelId && saeId
+    ? SAE_TO_COLLECTION[`${modelId}::${saeId}`] ?? null
+    : null;
 
   // Active search results depend on mode
   const isSemanticSearch = searchMode === 'semantic';
-  const activeSearchLoading = isSemanticSearch ? semanticSearchLoading : searchLoading;
-  const hasActiveResults = isSemanticSearch ? semanticSearchResults.length > 0 : searchResults.length > 0;
-  const activeResultCount = isSemanticSearch ? semanticSearchResults.length : searchResults.length;
+  const activeSearchLoading = isSemanticSearch
+    ? (isSingleSae ? semanticSearchLoading : semanticFanoutLoading)
+    : searchLoading;
+  const hasActiveResults = isSemanticSearch
+    ? semanticSearchResults.length > 0
+    : searchResults.length > 0;
+  const activeResultCount = isSemanticSearch
+    ? semanticSearchResults.length
+    : searchResults.length;
+
+  // Show SAE badge in results when multi-SAE
+  const showSaeBadge = !isSingleSae;
 
   // ---------- Render ----------
 
@@ -308,10 +466,18 @@ export default function FeaturesPage() {
             ) : (
               <>
                 <FeatureHeader
-                  models={models}
-                  selectedModelSae={selectedModelSae}
-                  onModelSaeChange={handleModelSaeChange}
-                  featureIndex={featureIndex}
+                  selectors={selectors}
+                  modelOptions={modelOptions}
+                  layerOptions={layerOptions}
+                  hookTypeOptions={hookTypeOptions}
+                  widthOptions={widthOptions}
+                  onModelChange={setModel}
+                  onLayerChange={setLayer}
+                  onHookTypeChange={setHookType}
+                  onWidthChange={setWidth}
+                  resolvedCount={resolvedSaePairs.length}
+                  isSingleSae={isSingleSae}
+                  featureIndex={isSingleSae ? featureIndex : null}
                   onFeatureIndexChange={handleFeatureIndexChange}
                   searchQuery={searchQuery}
                   onSearchQueryChange={setSearchQuery}
@@ -320,7 +486,7 @@ export default function FeaturesPage() {
                   collectionLink={collectionLink}
                   searchMode={searchMode}
                   onSearchModeChange={setSearchMode}
-                  hasSemanticSearch={!!semanticCollectionName}
+                  hasSemanticSearch={hasAnySemanticCollection}
                 />
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -342,17 +508,26 @@ export default function FeaturesPage() {
                         selectedIndex={featureIndex}
                         mode={searchMode}
                         semanticResults={isSemanticSearch ? semanticSearchResults : undefined}
+                        showSaeBadge={showSaeBadge}
                       />
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        Search by label or browse with the arrow buttons.
+                        {!isSingleSae
+                          ? `Search across ${resolvedSaePairs.length} SAEs, or select a single SAE to browse features.`
+                          : 'Search by label or browse with the arrow buttons.'}
                       </p>
                     )}
                   </div>
 
                   {/* Right: Feature detail + statistics + similar + activations */}
                   <div className="lg:col-span-2 space-y-4">
-                    {featureLoading ? (
+                    {!isSingleSae ? (
+                      <div className="text-center py-8 text-muted-foreground text-sm">
+                        {resolvedSaePairs.length > 1
+                          ? `${resolvedSaePairs.length} SAEs selected. Use the search to find features across them, or narrow the selectors to browse a single SAE.`
+                          : 'No SAEs match the current selection.'}
+                      </div>
+                    ) : featureLoading ? (
                       <div className="flex justify-center py-8">
                         <Spinner className="h-5 w-5" />
                       </div>
@@ -456,8 +631,8 @@ export default function FeaturesPage() {
         </div>
       </div>
 
-      {/* Floating chat button */}
-      {!chatOpen && (
+      {/* Floating chat button — only when single SAE */}
+      {!chatOpen && isSingleSae && (
         <Button
           variant="circular"
           size="icon-lg"

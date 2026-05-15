@@ -12,7 +12,7 @@ interface ChatMessageActionsProps {
   isGenerating: boolean;
   vote?: MessageVote;
   onVote?: (messageId: string, isUpvoted: boolean) => void;
-  onEdit?: (message: ChatMessage) => void;
+  onEdit?: () => void;
   onRegenerate?: () => void;
   className?: string;
 }
@@ -83,7 +83,7 @@ export function ChatMessageActions({
       {isUser && onEdit && (
         <MessageAction
           tooltip="Edit"
-          onClick={() => onEdit(message)}
+          onClick={onEdit}
           disabled={isGenerating}
         >
           <Pencil size={14} />
