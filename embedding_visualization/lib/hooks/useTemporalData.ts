@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Point2D, Point3D } from '../types/types';
 import {
-  detectTemporalField,
+  detectTemporalFields,
   computeTemporalCrossTab,
   computeTemporalCounts,
   type TemporalCrossTabRow,
@@ -10,6 +10,8 @@ import {
 
 interface TemporalData {
   temporalField: string | null;
+  /** All detected temporal field candidates, ordered by priority. */
+  temporalFieldCandidates: string[];
   crossTabData: TemporalCrossTabRow[];
   temporalCounts: TemporalCountRow[];
   allPeriods: string[];
@@ -19,22 +21,27 @@ interface TemporalData {
  * Detects temporal fields and computes cross-tabulation data for the TemporalChart.
  * Detects temporal field regardless of whether a category field is set.
  * Returns temporalCounts (standalone mode) and crossTabData (stacked mode).
+ *
+ * @param temporalFieldOverride - When set, uses this field instead of auto-detection.
  */
 export function useTemporalData(
   points: (Point2D | Point3D)[],
   categoryField: string | null | undefined,
   categoryValues: string[],
-  availableFields: string[]
+  availableFields: string[],
+  temporalFieldOverride?: string | null
 ): TemporalData {
   // Extract itemMetadata from points for field analysis
   const itemMetadata = useMemo(() => {
     return points.map(p => p.metadata ?? {}) as Record<string, unknown>[];
   }, [points]);
 
-  const temporalField = useMemo(() => {
-    if (points.length === 0 || availableFields.length === 0) return null;
-    return detectTemporalField(availableFields, itemMetadata);
+  const temporalFieldCandidates = useMemo(() => {
+    if (points.length === 0 || availableFields.length === 0) return [];
+    return detectTemporalFields(availableFields, itemMetadata);
   }, [points.length, availableFields, itemMetadata]);
+
+  const temporalField = temporalFieldOverride ?? temporalFieldCandidates[0] ?? null;
 
   const crossTabData = useMemo(() => {
     if (!temporalField || !categoryField || categoryValues.length === 0) return [];
@@ -51,5 +58,5 @@ export function useTemporalData(
     return temporalCounts.map(r => r.period);
   }, [temporalField, temporalCounts]);
 
-  return { temporalField, crossTabData, temporalCounts, allPeriods };
+  return { temporalField, temporalFieldCandidates, crossTabData, temporalCounts, allPeriods };
 }

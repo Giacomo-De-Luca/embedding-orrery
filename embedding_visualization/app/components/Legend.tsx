@@ -244,34 +244,56 @@ export function Legend({
     [categoryField, values, categoricalPalette, categoryColorOverrides]
   );
 
-  // Filter flat category values by display label
+  // Filter flat category values by display label, then sort zero-count items to the bottom when filtered
   const filteredValues = useMemo(() => {
-    if (!debouncedFilter.trim()) return values;
-    const q = debouncedFilter.toLowerCase();
-    return values.filter((value) => {
-      const label = getCategoryLabel(categoryField ?? null, value);
-      return String(label).toLowerCase().includes(q);
-    });
-  }, [values, debouncedFilter, categoryField]);
-
-  // Filter nested hierarchy: topic match keeps all subtopics; subtopic match keeps parent + matching subtopics
-  const filteredHierarchy = useMemo(() => {
-    if (!nestedColorMap) return null;
-    if (!debouncedFilter.trim()) return nestedColorMap.hierarchy;
-    const q = debouncedFilter.toLowerCase();
-    const result: Record<string, string[]> = {};
-    for (const [topic, subtopics] of Object.entries(nestedColorMap.hierarchy)) {
-      if (topic.toLowerCase().includes(q)) {
-        result[topic] = subtopics;
-      } else {
-        const matchingSubs = subtopics.filter((sub) => sub.toLowerCase().includes(q));
-        if (matchingSubs.length > 0) {
-          result[topic] = matchingSubs;
-        }
-      }
+    let result = values;
+    if (debouncedFilter.trim()) {
+      const q = debouncedFilter.toLowerCase();
+      result = result.filter((value) => {
+        const label = getCategoryLabel(categoryField ?? null, value);
+        return String(label).toLowerCase().includes(q);
+      });
+    }
+    if (filteredCounts) {
+      result = [...result].sort((a, b) => (filteredCounts[b] ?? 0) - (filteredCounts[a] ?? 0));
     }
     return result;
-  }, [nestedColorMap, debouncedFilter]);
+  }, [values, debouncedFilter, categoryField, filteredCounts]);
+
+  // Filter nested hierarchy: topic match keeps all subtopics; subtopic match keeps parent + matching subtopics.
+  // When filtered counts are present, sort topics and subtopics so zero-count items sink to the bottom.
+  const filteredHierarchy = useMemo(() => {
+    if (!nestedColorMap) return null;
+    let source = nestedColorMap.hierarchy;
+    if (debouncedFilter.trim()) {
+      const q = debouncedFilter.toLowerCase();
+      const filtered: Record<string, string[]> = {};
+      for (const [topic, subtopics] of Object.entries(source)) {
+        if (topic.toLowerCase().includes(q)) {
+          filtered[topic] = subtopics;
+        } else {
+          const matchingSubs = subtopics.filter((sub) => sub.toLowerCase().includes(q));
+          if (matchingSubs.length > 0) {
+            filtered[topic] = matchingSubs;
+          }
+        }
+      }
+      source = filtered;
+    }
+    if (!filteredTopicCounts && !filteredSubtopicCounts) return source;
+    // Sort topics by filtered count, and subtopics within each topic
+    const sortedTopics = Object.keys(source).sort((a, b) =>
+      (filteredTopicCounts?.[b] ?? 0) - (filteredTopicCounts?.[a] ?? 0)
+    );
+    const result: Record<string, string[]> = {};
+    for (const topic of sortedTopics) {
+      const subs = source[topic];
+      result[topic] = filteredSubtopicCounts
+        ? [...subs].sort((a, b) => (filteredSubtopicCounts[b] ?? 0) - (filteredSubtopicCounts[a] ?? 0))
+        : subs;
+    }
+    return result;
+  }, [nestedColorMap, debouncedFilter, filteredTopicCounts, filteredSubtopicCounts]);
 
   // For continuous scales, render histogram range chart or fallback gradient bar
   if (isContinuous && numericRange) {

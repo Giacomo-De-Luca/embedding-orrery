@@ -21,6 +21,7 @@ import gc
 import logging
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -451,6 +452,108 @@ class InterpretService:
             )
             for idx, val in zip(sorted_indices, sorted_values, strict=True)
         ]
+
+    # ------------------------------------------------------------------
+    # UC3b: Batch prompt highlight (max-pooled activations for many docs)
+    # ------------------------------------------------------------------
+
+    def run_batch_highlight(
+        self,
+        documents: list[tuple[str, str]],
+        layer: int,
+        width: str,
+        hook_type: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[tuple[str, list[FeatureActivation]]]:
+        """Run SAE highlight inference on multiple documents.
+
+        Keeps the HookManager session open across all documents so SAE
+        weights are loaded only once.
+
+        Parameters
+        ----------
+        documents:
+            List of ``(item_id, text)`` pairs.
+        layer:
+            Transformer layer index for the SAE.
+        width:
+            SAE width string (e.g. ``"16k"``).
+        hook_type:
+            Hook type string (e.g. ``"RESID_POST"``).
+        progress_callback:
+            Optional ``(done, total)`` callback invoked after each document.
+
+        Returns
+        -------
+        List of ``(item_id, activations)`` where *activations* is a list
+        of :class:`FeatureActivation` for nonzero features, sorted by
+        activation descending.
+        """
+        wrapper = self._require_model()
+        ht = self._parse_hook_type(hook_type)
+        device = str(wrapper.device)
+
+        sae_config = GemmaScopeSAEConfig(
+            layer_index=layer,
+            hook_type=ht,
+            width=width,
+            device=device,
+            prefill_only=True,
+            read_only=True,
+        )
+
+        manager = HookManager()
+        manager.add_sae(sae_config)
+
+        total = len(documents)
+        results: list[tuple[str, list[FeatureActivation]]] = []
+
+        with manager.session(wrapper.model.model.layers) as store:
+            for i, (item_id, text) in enumerate(documents):
+                store.clear()
+                try:
+                    wrapper.generate(text, output_len=1)
+                    record = store.prefill(layer=layer, hook_type=ht)
+                except Exception:
+                    logger.exception(
+                        "Failed inference for item %s (%d/%d)", item_id, i + 1, total
+                    )
+                    results.append((item_id, []))
+                    if progress_callback:
+                        progress_callback(i + 1, total)
+                    continue
+
+                if record is None:
+                    results.append((item_id, []))
+                else:
+                    feature_acts = record.feature_acts[0]  # (seq_len, d_sae)
+                    max_pooled = feature_acts.max(dim=0).values  # (d_sae,)
+
+                    nonzero_mask = max_pooled > 0
+                    nonzero_indices = torch.nonzero(nonzero_mask, as_tuple=True)[0]
+
+                    if len(nonzero_indices) == 0:
+                        activations: list[FeatureActivation] = []
+                    else:
+                        values = max_pooled[nonzero_indices]
+                        order = values.argsort(descending=True)
+                        sorted_indices = nonzero_indices[order]
+                        sorted_values = values[order]
+                        activations = [
+                            FeatureActivation(
+                                feature_index=int(idx),
+                                activation=float(val),
+                            )
+                            for idx, val in zip(
+                                sorted_indices, sorted_values, strict=True
+                            )
+                        ]
+                    results.append((item_id, activations))
+
+                if progress_callback:
+                    progress_callback(i + 1, total)
+
+        return results
 
     # ------------------------------------------------------------------
     # UC4: Streaming chat generation

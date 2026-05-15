@@ -668,6 +668,47 @@ class SaeFeatureSearchResult:
     activation_count: int | None = None
 
 
+@strawberry.type
+class DocumentActivationResult:
+    """A document ranked by its SAE feature activation score."""
+
+    item_id: str
+    document: str | None = None
+    metadata: JSON | None = None
+    score: float
+    matching_features: int
+    row_index: int | None = None
+
+
+@strawberry.type
+class DocumentActivationSearchResponse:
+    """Response from the two-hop feature-label → document search."""
+
+    results: list[DocumentActivationResult]
+    total_results: int
+    matched_feature_count: int
+    matched_features: list[SaeFeature] | None = None
+    error: str | None = None
+
+
+@strawberry.input
+class ComputeDocumentActivationsInput:
+    """Input for batch SAE inference on all documents in a collection."""
+
+    collection_name: str
+
+
+@strawberry.type
+class ComputeDocumentActivationsResult:
+    """Result of batch SAE document activation computation."""
+
+    collection_name: str
+    items_processed: int
+    total_items: int
+    duration_seconds: float
+    error: str | None = None
+
+
 @strawberry.input
 class IngestSaeFeaturesInput:
     """Input for ingesting SAE feature parquet."""

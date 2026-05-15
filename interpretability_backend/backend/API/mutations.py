@@ -1,6 +1,8 @@
 """GraphQL mutation resolvers for embedding visualization backend."""
 
 import asyncio
+import logging
+import time
 
 import strawberry
 
@@ -25,6 +27,8 @@ from .interpret_instance import get_interpret_service
 from .types import (
     JSON,
     AppliedSteering,
+    ComputeDocumentActivationsInput,
+    ComputeDocumentActivationsResult,
     EmbedDatasetInput,
     EmbedDatasetResult,
     EmbedLocalFileInput,
@@ -610,6 +614,188 @@ class Mutation:
             return PromptHighlightResponse(
                 features=[],
                 error="Generation timed out after 120s",
+            )
+
+    # ------------------------------------------------------------------
+    # Batch SAE document activations
+    # ------------------------------------------------------------------
+
+    @strawberry.mutation
+    async def compute_document_activations(
+        self, input: ComputeDocumentActivationsInput, info=None
+    ) -> ComputeDocumentActivationsResult:
+        """Run SAE inference on all documents in a collection and store activations.
+
+        Parses layer/width/hook_type from the collection's SAE metadata.
+        Supports resume: already-processed items are skipped.
+        Emits progress via the embedding_progress subscription.
+        """
+        from ..services.progress_emitter import emit_progress_sync
+
+        logger = logging.getLogger("star_map.mutations")
+        db = get_duckdb_client()
+        service = get_interpret_service()
+        collection_name = input.collection_name
+
+        # --- Resolve SAE config from collection metadata ---
+        vc_row = db._conn.execute(
+            "SELECT dataset_name FROM vector_collections WHERE collection_name = ?",
+            [collection_name],
+        ).fetchone()
+        if not vc_row:
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=0,
+                total_items=0,
+                duration_seconds=0.0,
+                error=f"Collection '{collection_name}' not found.",
+            )
+        dataset_name = vc_row[0]
+
+        ds = db.get_dataset(dataset_name)
+        extra = (ds.get("extra_metadata") or {}) if ds else {}
+        model_id = extra.get("sae_model_id")
+        sae_id = extra.get("sae_id")
+        if not model_id or not sae_id:
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=0,
+                total_items=0,
+                duration_seconds=0.0,
+                error="Collection has no SAE metadata (sae_model_id / sae_id).",
+            )
+
+        # Parse sae_id → layer, hook_type, width
+        # Format: "{layer}-gemmascope-{version}-{hookAbbrev}-{width}"
+        parts = sae_id.split("-")
+        layer = int(parts[0]) if parts else 9
+        hook_abbrev = parts[3] if len(parts) > 3 else "res"
+        width = parts[4] if len(parts) > 4 else "16k"
+        hook_map = {"res": "RESID_POST", "mlp": "MLP_OUT", "att": "ATTN_OUT"}
+        hook_type = hook_map.get(hook_abbrev, "RESID_POST")
+
+        # --- Load all items ---
+        all_items = db.get_filtered_items(dataset_name, filters=[], limit=100_000)
+        if not all_items:
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=0,
+                total_items=0,
+                duration_seconds=0.0,
+                error="No items found in dataset.",
+            )
+
+        # --- Resume: skip already-processed items ---
+        existing_ids = db.get_document_activation_item_ids(collection_name)
+        documents = [
+            (item["id"], item.get("document") or "")
+            for item in all_items
+            if item["id"] not in existing_ids
+        ]
+
+        total_items = len(all_items)
+        already_done = len(existing_ids)
+        to_process = len(documents)
+
+        if to_process == 0:
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=total_items,
+                total_items=total_items,
+                duration_seconds=0.0,
+            )
+
+        job_id = f"{collection_name}_sae_activations"
+
+        # Verify model is loaded
+        if not service.get_status().loaded:
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=already_done,
+                total_items=total_items,
+                duration_seconds=0.0,
+                error="Model not loaded. Call loadModel first.",
+            )
+
+        def _run_batch():
+            start = time.monotonic()
+
+            def progress_cb(done: int, total: int):
+                emit_progress_sync(
+                    job_id=job_id,
+                    status="running",
+                    items_processed=already_done + done,
+                    total_items=total_items,
+                    current_batch=done,
+                    total_batches=total,
+                    message=f"SAE inference: {already_done + done}/{total_items}",
+                )
+
+            emit_progress_sync(
+                job_id=job_id,
+                status="running",
+                items_processed=already_done,
+                total_items=total_items,
+                current_batch=0,
+                total_batches=to_process,
+                message=f"Starting SAE inference ({to_process} items)...",
+            )
+
+            results = service.run_batch_highlight(
+                documents=documents,
+                layer=layer,
+                width=width,
+                hook_type=hook_type,
+                progress_callback=progress_cb,
+            )
+
+            # Store activations in DuckDB
+            for item_id, activations in results:
+                acts = [(f.feature_index, f.activation) for f in activations]
+                if acts:
+                    db.insert_document_activations_batch(collection_name, item_id, acts)
+
+            elapsed = time.monotonic() - start
+
+            emit_progress_sync(
+                job_id=job_id,
+                status="completed",
+                items_processed=total_items,
+                total_items=total_items,
+                current_batch=to_process,
+                total_batches=to_process,
+                message="SAE document activations complete.",
+            )
+
+            return already_done + len(results), elapsed
+
+        try:
+            async with service._lock:
+                items_processed, duration = await asyncio.to_thread(_run_batch)
+
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=items_processed,
+                total_items=total_items,
+                duration_seconds=round(duration, 2),
+            )
+        except Exception as e:
+            logger.exception("compute_document_activations failed")
+            emit_progress_sync(
+                job_id=job_id,
+                status="failed",
+                items_processed=already_done,
+                total_items=total_items,
+                current_batch=0,
+                total_batches=to_process,
+                error=str(e),
+            )
+            return ComputeDocumentActivationsResult(
+                collection_name=collection_name,
+                items_processed=already_done,
+                total_items=total_items,
+                duration_seconds=0.0,
+                error=str(e),
             )
 
 

@@ -8,10 +8,10 @@ import { cn } from '@/lib/utils/utils';
 const DRAFT_KEY = 'steering-chat-draft';
 
 const SUGGESTIONS = [
-  'Explain what you see',
-  'Write a poem',
+  'What is your favourite job?',
+  'How do you feel?',
   'Tell me a story',
-  'Describe your purpose',
+  'What are the important things in life?',
 ];
 
 interface ChatInputProps {

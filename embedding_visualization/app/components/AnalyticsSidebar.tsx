@@ -53,6 +53,8 @@ export function AnalyticsSidebar({
 }: AnalyticsSidebarProps) {
   // Independent analysis field: null means "follow colorByField"
   const [analysisField, setAnalysisField] = useState<string | null>(null);
+  // Temporal field override: null means auto-detect
+  const [temporalFieldOverride, setTemporalFieldOverride] = useState<string | null>(null);
 
   // Reset analysisField when colorByField changes (so it follows by default)
   useEffect(() => {
@@ -112,15 +114,17 @@ export function AnalyticsSidebar({
     return counts;
   }, [isOverridden, sharedFilteredCounts, combinedMutedIndices, effectiveAnalysisField, points]);
 
-  const { temporalField, crossTabData, temporalCounts, allPeriods } = useTemporalData(
+  const { temporalField, temporalFieldCandidates, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,
     colorByField,
     filteredCategoryValues,
-    availableFields
+    availableFields,
+    temporalFieldOverride
   );
 
   const hasCategoricalData = effectiveAnalysisField && filteredCategoryValues.length > 0;
   const hasTemporalData = temporalField && allPeriods.length >= 2;
+  const showTemporalSection = hasTemporalData || availableFields.length > 0;
   const hasStackedTemporalData = hasTemporalData && crossTabData.length >= 2 && hasCategoricalData;
 
   // Compute brush indices from temporalRange
@@ -153,6 +157,11 @@ export function AnalyticsSidebar({
   const handleAnalysisFieldChange = React.useCallback((field: string | null) => {
     setAnalysisField(field);
   }, []);
+
+  const handleTemporalFieldChange = React.useCallback((field: string | null) => {
+    setTemporalFieldOverride(field);
+    onTemporalRangeChange?.(null); // clear brush when switching fields
+  }, [onTemporalRangeChange]);
 
   return (
     <Sidebar
@@ -193,11 +202,11 @@ export function AnalyticsSidebar({
             />
           )}
 
-          {hasTemporalData && (
+          {showTemporalSection && (
             <>
               {hasCategoricalData && <Separator />}
               <TemporalFilterChart
-                temporalField={temporalField!}
+                temporalField={temporalField ?? ''}
                 allPeriods={allPeriods}
                 onBrushChange={handleBrushChange}
                 brushStartIndex={brushStartIndex}
@@ -209,11 +218,14 @@ export function AnalyticsSidebar({
                 crossTabData={hasStackedTemporalData ? crossTabData : undefined}
                 categoricalPalette={categoricalPalette}
                 mutedCategories={mutedCategories}
+                availableFields={availableFields}
+                temporalFieldOverride={temporalFieldOverride}
+                onTemporalFieldChange={handleTemporalFieldChange}
               />
             </>
           )}
 
-          {!hasCategoricalData && !hasTemporalData && (!colorFieldOptions || colorFieldOptions.length === 0) && (
+          {!hasCategoricalData && !showTemporalSection && (!colorFieldOptions || colorFieldOptions.length === 0) && (
             <p className="text-sm text-muted-foreground">
               Select a categorical color field to view distribution charts.
             </p>

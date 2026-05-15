@@ -238,6 +238,22 @@ class DuckDBClient:
             ON sae_features (model_id)
         """)
 
+        # -- SAE document activation table (per-document max-pooled activations) --
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS sae_document_activations (
+                collection_name  VARCHAR NOT NULL,
+                item_id          VARCHAR NOT NULL,
+                feature_index    INTEGER NOT NULL,
+                activation       FLOAT   NOT NULL,
+                PRIMARY KEY (collection_name, item_id, feature_index)
+            )
+        """)
+
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sae_doc_act_feature
+            ON sae_document_activations (collection_name, feature_index)
+        """)
+
         # FTS extension
         self._conn.execute("INSTALL fts")
         self._conn.execute("LOAD fts")
@@ -426,6 +442,15 @@ class DuckDBClient:
         self._conn.execute(
             """
             DELETE FROM projections WHERE collection_name IN (
+                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
+            )
+        """,
+            [name],
+        )
+
+        self._conn.execute(
+            """
+            DELETE FROM sae_document_activations WHERE collection_name IN (
                 SELECT collection_name FROM vector_collections WHERE dataset_name = ?
             )
         """,
@@ -1467,3 +1492,176 @@ class DuckDBClient:
         )
         logger.info("Deleted SAE data for %s/%s", model_id, sae_id)
         return True
+
+    # ------------------------------------------------------------------
+    # SAE Document Activations (per-document max-pooled sparse vectors)
+    # ------------------------------------------------------------------
+
+    def insert_document_activations_batch(
+        self,
+        collection_name: str,
+        item_id: str,
+        activations: list[tuple[int, float]],
+    ) -> int:
+        """Insert one document's nonzero SAE activations.
+
+        Parameters
+        ----------
+        collection_name:
+            The vector collection the document belongs to.
+        item_id:
+            The document's ID in the items table.
+        activations:
+            List of ``(feature_index, activation)`` pairs (nonzero only).
+        """
+        if not activations:
+            return 0
+        df = pd.DataFrame(
+            {
+                "collection_name": collection_name,
+                "item_id": item_id,
+                "feature_index": [a[0] for a in activations],
+                "activation": [a[1] for a in activations],
+            }
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df"
+        )
+        return len(activations)
+
+    def insert_document_activations_bulk(
+        self,
+        df: pd.DataFrame,
+    ) -> int:
+        """Bulk-insert document activations from a DataFrame.
+
+        Expected columns: collection_name, item_id, feature_index, activation.
+        """
+        if df.empty:
+            return 0
+        self._conn.execute(
+            "INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df"
+        )
+        return len(df)
+
+    def get_document_activation_item_ids(self, collection_name: str) -> set[str]:
+        """Return item IDs that already have activations stored (for resume)."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT item_id FROM sae_document_activations "
+            "WHERE collection_name = ?",
+            [collection_name],
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def has_document_activations(self, collection_name: str) -> bool:
+        """Check if any document activations exist for a collection."""
+        row = self._conn.execute(
+            "SELECT 1 FROM sae_document_activations "
+            "WHERE collection_name = ? LIMIT 1",
+            [collection_name],
+        ).fetchone()
+        return row is not None
+
+    def delete_document_activations(self, collection_name: str) -> int:
+        """Delete all document activations for a collection. Returns rows deleted."""
+        count = self._conn.execute(
+            "SELECT COUNT(*) FROM sae_document_activations WHERE collection_name = ?",
+            [collection_name],
+        ).fetchone()[0]
+        self._conn.execute(
+            "DELETE FROM sae_document_activations WHERE collection_name = ?",
+            [collection_name],
+        )
+        logger.info(
+            "Deleted %d document activation rows for %s", count, collection_name
+        )
+        return int(count)
+
+    def search_documents_by_feature_labels(
+        self,
+        collection_name: str,
+        query: str,
+        model_id: str,
+        sae_id: str,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Two-hop search: label text → matching features → ranked documents.
+
+        1. Finds SAE features whose label matches *query* (ILIKE).
+        2. Looks up which documents activate those features.
+        3. Ranks documents by MAX(activation) across matching features.
+
+        Returns dict with keys: results (list[dict]), matched_feature_count (int),
+        matched_features (list[dict]).
+        """
+        # Hop 1 — find matching feature indices
+        matched_features = self.search_sae_features(
+            query=query,
+            model_id=model_id,
+            sae_id=sae_id,
+            limit=500,
+        )
+        if not matched_features:
+            return {
+                "results": [],
+                "matched_feature_count": 0,
+                "matched_features": matched_features,
+            }
+
+        feature_indices = [f["feature_index"] for f in matched_features]
+        placeholders = ", ".join(["?"] * len(feature_indices))
+
+        # Hop 2 — rank documents by MAX activation
+        rows = self._conn.execute(
+            f"SELECT item_id, MAX(activation) AS score, COUNT(*) AS matching_features "
+            f"FROM sae_document_activations "
+            f"WHERE collection_name = ? AND feature_index IN ({placeholders}) "
+            f"GROUP BY item_id "
+            f"ORDER BY score DESC "
+            f"LIMIT ?",
+            [collection_name, *feature_indices, limit],
+        ).fetchall()
+
+        if not rows:
+            return {
+                "results": [],
+                "matched_feature_count": len(matched_features),
+                "matched_features": matched_features,
+            }
+
+        # Enrich with documents + metadata
+        item_ids = [r[0] for r in rows]
+        scores = {r[0]: (r[1], r[2]) for r in rows}
+
+        # Resolve dataset name from collection
+        vc_row = self._conn.execute(
+            "SELECT dataset_name FROM vector_collections WHERE collection_name = ?",
+            [collection_name],
+        ).fetchone()
+
+        enriched: dict[str, dict[str, Any]] = {}
+        if vc_row:
+            items = self.get_items_by_ids(vc_row[0], item_ids)
+            for item in items:
+                enriched[item["id"]] = item
+
+        results = []
+        for item_id in item_ids:
+            score, matching_count = scores[item_id]
+            item = enriched.get(item_id, {})
+            results.append(
+                {
+                    "item_id": item_id,
+                    "document": item.get("document"),
+                    "metadata": item.get("metadata"),
+                    "score": score,
+                    "matching_features": matching_count,
+                    "row_index": item.get("row_index"),
+                }
+            )
+
+        return {
+            "results": results,
+            "matched_feature_count": len(matched_features),
+            "matched_features": matched_features,
+        }

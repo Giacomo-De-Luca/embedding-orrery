@@ -18,6 +18,8 @@ from .interpret_instance import get_interpret_service
 from .types import (
     Collection,
     CollectionMetadata,
+    DocumentActivationResult,
+    DocumentActivationSearchResponse,
     EmbeddingItem,
     EmbeddingJob,
     ExtractTopicsResult,
@@ -852,6 +854,89 @@ class Query:
             model_name=status.model_name,
             device=status.device,
         )
+
+    # ------------------------------------------------------------------
+    # SAE document activation search
+    # ------------------------------------------------------------------
+
+    @strawberry.field
+    def search_documents_by_features(
+        self,
+        collection_name: str,
+        query: str,
+        model_id: str | None = None,
+        sae_id: str | None = None,
+        limit: int = 50,
+        info=None,
+    ) -> DocumentActivationSearchResponse:
+        """Two-hop search: feature label text -> matching features -> ranked documents.
+
+        If model_id/sae_id not provided, looks them up from the collection's metadata.
+        """
+        db = get_duckdb_client()
+
+        # Resolve model_id / sae_id from collection metadata if not provided
+        if model_id is None or sae_id is None:
+            ds = db.get_dataset(collection_name)
+            if ds is None:
+                # Try via vector_collections → dataset_name
+                vc_row = db._conn.execute(
+                    "SELECT dataset_name FROM vector_collections "
+                    "WHERE collection_name = ?",
+                    [collection_name],
+                ).fetchone()
+                if vc_row:
+                    ds = db.get_dataset(vc_row[0])
+            if ds:
+                extra = ds.get("extra_metadata") or {}
+                model_id = model_id or extra.get("sae_model_id")
+                sae_id = sae_id or extra.get("sae_id")
+
+        if not model_id or not sae_id:
+            return DocumentActivationSearchResponse(
+                results=[],
+                total_results=0,
+                matched_feature_count=0,
+                error="Could not resolve model_id/sae_id for this collection.",
+            )
+
+        result = db.search_documents_by_feature_labels(
+            collection_name=collection_name,
+            query=query,
+            model_id=model_id,
+            sae_id=sae_id,
+            limit=limit,
+        )
+
+        return DocumentActivationSearchResponse(
+            results=[
+                DocumentActivationResult(
+                    item_id=r["item_id"],
+                    document=r.get("document"),
+                    metadata=r.get("metadata"),
+                    score=r["score"],
+                    matching_features=r["matching_features"],
+                    row_index=r.get("row_index"),
+                )
+                for r in result["results"]
+            ],
+            total_results=len(result["results"]),
+            matched_feature_count=result["matched_feature_count"],
+            matched_features=[
+                _dict_to_sae_feature(f) for f in result.get("matched_features", [])
+            ]
+            or None,
+        )
+
+    @strawberry.field
+    def has_document_activations(
+        self,
+        collection_name: str,
+        info=None,
+    ) -> bool:
+        """Check if a collection has precomputed SAE document activations."""
+        db = get_duckdb_client()
+        return db.has_document_activations(collection_name)
 
 
 def _dict_to_sae_feature(d: dict) -> SaeFeature:

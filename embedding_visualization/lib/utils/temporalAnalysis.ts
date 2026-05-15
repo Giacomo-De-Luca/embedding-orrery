@@ -44,6 +44,41 @@ export function isTemporalField(fieldName: string, analysis: FieldAnalysisResult
 }
 
 /**
+ * Find all candidate temporal fields from available fields, ordered by priority.
+ * Name-matched fields first, then year-like numeric fields.
+ */
+export function detectTemporalFields(
+  availableFields: string[],
+  itemMetadata: Record<string, unknown>[]
+): string[] {
+  if (itemMetadata.length === 0) return [];
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  // Priority 1: Fields with temporal names
+  for (const field of availableFields) {
+    if (TEMPORAL_NAME_PATTERNS.test(field)) {
+      const analysis = analyzeField(field, itemMetadata, 200);
+      if (analysis.uniqueCount >= 3 && analysis.uniqueCount < 200) {
+        candidates.push(field);
+        seen.add(field);
+      }
+    }
+  }
+
+  // Priority 2: Numeric fields with year-like ranges
+  for (const field of availableFields) {
+    if (seen.has(field)) continue;
+    const analysis = analyzeField(field, itemMetadata, 200);
+    if (isTemporalField(field, analysis) && analysis.uniqueCount < 200) {
+      candidates.push(field);
+    }
+  }
+
+  return candidates;
+}
+
+/**
  * Find the best temporal field from available fields.
  * Returns null if no temporal field is detected.
  */
@@ -51,27 +86,8 @@ export function detectTemporalField(
   availableFields: string[],
   itemMetadata: Record<string, unknown>[]
 ): string | null {
-  if (itemMetadata.length === 0) return null;
-
-  // Priority 1: Fields with temporal names
-  for (const field of availableFields) {
-    if (TEMPORAL_NAME_PATTERNS.test(field)) {
-      const analysis = analyzeField(field, itemMetadata, 200);
-      if (analysis.uniqueCount >= 3 && analysis.uniqueCount < 200) {
-        return field;
-      }
-    }
-  }
-
-  // Priority 2: Numeric fields with year-like ranges
-  for (const field of availableFields) {
-    const analysis = analyzeField(field, itemMetadata, 200);
-    if (isTemporalField(field, analysis) && analysis.uniqueCount < 200) {
-      return field;
-    }
-  }
-
-  return null;
+  const candidates = detectTemporalFields(availableFields, itemMetadata);
+  return candidates[0] ?? null;
 }
 
 /**

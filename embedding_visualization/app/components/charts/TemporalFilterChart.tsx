@@ -13,6 +13,14 @@ import {
   ChartContainer,
   type ChartConfig,
 } from '@/lib/ui-primitives/chart';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/lib/ui-primitives/select';
 import { buildCategoryColorMap, getCategoryLabel, getCategoryDisplayName } from '@/lib/utils/categoryColors';
 import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
 import { fieldToDisplayName } from '@/lib/utils/fieldAnalysis';
@@ -20,6 +28,9 @@ import type { TemporalCrossTabRow, TemporalCountRow } from '@/lib/utils/temporal
 
 /** Only use stacked mode when visible categories are at or below this count */
 const STACKED_THRESHOLD = 6;
+
+/** Sentinel value for "auto-detect" in the field selector */
+const AUTO_DETECT_FIELD = '__auto__';
 
 /** Sanitize category value for use as a recharts/CSS variable key */
 const sanitizeKey = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -40,6 +51,10 @@ interface TemporalFilterChartProps {
   crossTabData?: TemporalCrossTabRow[];
   categoricalPalette?: string;
   mutedCategories?: string[];
+  // Field selector
+  availableFields?: string[];
+  temporalFieldOverride?: string | null;
+  onTemporalFieldChange?: (field: string | null) => void;
 }
 
 interface DragState {
@@ -61,6 +76,9 @@ export function TemporalFilterChart({
   crossTabData = [],
   categoricalPalette,
   mutedCategories = [],
+  availableFields = [],
+  temporalFieldOverride,
+  onTemporalFieldChange,
 }: TemporalFilterChartProps) {
   // Local range state (indices into allPeriods)
   const [rangeStart, setRangeStart] = useState(0);
@@ -154,6 +172,7 @@ export function TemporalFilterChart({
   const chartData = isStackedMode ? safeStackedData : (temporalCounts ?? []);
   const temporalDisplayName = fieldToDisplayName(temporalField);
   const displayName = isStackedMode ? getCategoryDisplayName(categoryField!) : 'Items';
+  const showFieldSelector = availableFields.length > 0 && !!onTemporalFieldChange;
 
   // --- Drag interaction ---
   const clientXToIndex = useCallback((clientX: number): number => {
@@ -277,13 +296,39 @@ export function TemporalFilterChart({
     ? `${allPeriods[rangeStart]} \u2013 ${allPeriods[rangeEnd]}`
     : null;
 
-  if (chartData.length < 2) return null;
+  const hasChartData = chartData.length >= 2;
+
+  // Show selector even without chart data so users can pick a temporal field
+  if (!hasChartData && !showFieldSelector) return null;
 
   return (
     <Card className="border-0 shadow-none bg-transparent">
-      <CardHeader className="px-0 pt-0 pb-2">
-        <CardTitle className="text-sm">{displayName} over {temporalDisplayName}</CardTitle>
-        <CardDescription className="text-xs flex items-center gap-1">
+      <CardHeader className="px-0 pt-0 pb-2 space-y-2">
+        <CardTitle className="text-sm">
+          {hasChartData ? `${displayName} over ${temporalDisplayName}` : 'Temporal Distribution'}
+        </CardTitle>
+        {showFieldSelector && (
+          <Select
+            value={temporalFieldOverride ?? AUTO_DETECT_FIELD}
+            onValueChange={(val) => onTemporalFieldChange!(val === AUTO_DETECT_FIELD ? null : val)}
+          >
+            <SelectTrigger size="sm" className="w-full text-xs h-7">
+              <SelectValue placeholder="Select field..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={AUTO_DETECT_FIELD}>
+                <span className="text-xs text-muted-foreground">Auto-detect</span>
+              </SelectItem>
+              <SelectSeparator />
+              {availableFields.map(field => (
+                <SelectItem key={field} value={field}>
+                  <span className="text-xs">{fieldToDisplayName(field)}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {hasChartData && <CardDescription className="text-xs flex items-center gap-1">
           {allPeriods.length} periods
           {rangeText && (
             <>
@@ -298,9 +343,9 @@ export function TemporalFilterChart({
               </button>
             </>
           )}
-        </CardDescription>
+        </CardDescription>}
       </CardHeader>
-      <CardContent className="px-0 pb-0">
+      {hasChartData && <CardContent className="px-0 pb-0">
         <div
           ref={containerRef}
           className="relative"
@@ -503,7 +548,7 @@ export function TemporalFilterChart({
             })()}
           </div>
         </div>
-      </CardContent>
+      </CardContent>}
     </Card>
   );
 }
