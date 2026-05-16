@@ -1,5 +1,7 @@
 """GraphQL query resolvers for embedding visualization backend."""
 
+import json
+
 import strawberry
 
 # Import clients at module level
@@ -909,7 +911,8 @@ class Query:
                 if vc_row:
                     ds = db.get_dataset(vc_row[0])
             if ds:
-                extra = ds.get("extra_metadata") or {}
+                raw_extra = ds.get("extra_metadata") or {}
+                extra = json.loads(raw_extra) if isinstance(raw_extra, str) else raw_extra
                 model_id = model_id or extra.get("sae_model_id")
                 sae_id = sae_id or extra.get("sae_id")
 

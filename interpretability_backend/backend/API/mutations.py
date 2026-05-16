@@ -753,7 +753,8 @@ class Mutation:
         dataset_name = vc_row[0]
 
         ds = db.get_dataset(dataset_name)
-        extra = (ds.get("extra_metadata") or {}) if ds else {}
+        raw_extra = (ds.get("extra_metadata") or {}) if ds else {}
+        extra = json.loads(raw_extra) if isinstance(raw_extra, str) else raw_extra
         model_id = extra.get("sae_model_id")
         sae_id = extra.get("sae_id")
         if not model_id or not sae_id:
@@ -986,7 +987,8 @@ class Mutation:
             )
 
         ds = db.get_dataset(vc_row[0])
-        extra = (ds.get("extra_metadata") or {}) if ds else {}
+        raw_extra = (ds.get("extra_metadata") or {}) if ds else {}
+        extra = json.loads(raw_extra) if isinstance(raw_extra, str) else raw_extra
         sae_id = extra.get("sae_id")
         if not sae_id:
             return PromptDocumentSearchResponse(
