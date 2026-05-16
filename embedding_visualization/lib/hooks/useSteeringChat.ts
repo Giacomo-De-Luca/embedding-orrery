@@ -62,6 +62,7 @@ function buildSteeringInputs(config: SteeringConfig) {
 export function useSteeringChat(
   config: SteeringConfig,
   maxTokens: number = DEFAULT_OUTPUT_LEN,
+  temperature: number = 0.7,
   options?: SteeringChatOptions,
 ): UseSteeringChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -192,6 +193,7 @@ export function useSteeringChat(
               turns,
               steering,
               outputLen: maxTokens,
+              temperature,
               topP: DEFAULT_TOP_P,
               topK: DEFAULT_TOP_K,
             },

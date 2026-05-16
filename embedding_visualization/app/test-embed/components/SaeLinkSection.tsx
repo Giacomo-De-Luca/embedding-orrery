@@ -42,6 +42,7 @@ export function SaeLinkSection({
 
   const [selectedValue, setSelectedValue] = useState(savedValue);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   // Sync local state when props change (e.g. after external refresh)
   useEffect(() => {
@@ -52,6 +53,7 @@ export function SaeLinkSection({
 
   const handleSave = async () => {
     setSaving(true);
+    setSaved(false);
     try {
       if (selectedValue === NONE_VALUE) {
         await onUpdate({ sae_model_id: null, sae_id: null });
@@ -59,6 +61,8 @@ export function SaeLinkSection({
         const [modelId, saeId] = selectedValue.split('::');
         await onUpdate({ sae_model_id: modelId, sae_id: saeId });
       }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } finally {
       setSaving(false);
     }
@@ -104,8 +108,9 @@ export function SaeLinkSection({
               size="sm"
               onClick={handleSave}
               disabled={!isDirty || saving}
+              variant={saved ? 'outline' : 'default'}
             >
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? 'Saving...' : saved ? '✓ Saved' : 'Save'}
             </Button>
           </div>
         </div>

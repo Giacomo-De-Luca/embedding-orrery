@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { ChevronDown, History, PanelRightIcon, RotateCcw } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Slider } from '@/lib/ui-primitives/slider';
@@ -58,6 +58,7 @@ export function ChatPanel({
   loadedMessages,
 }: ChatPanelProps) {
   const [maxTokens, setMaxTokens] = useState(256);
+  const [temperature, setTemperature] = useState(0.7);
   const [showHistory, setShowHistory] = useState(false);
   const prevLoadedRef = useRef<ChatMessageType[] | null | undefined>(undefined);
 
@@ -70,7 +71,7 @@ export function ChatPanel({
   );
 
   const { messages, status, error, send, stop, reset, regenerate, editAndResend, loadMessages } =
-    useSteeringChat(steeringConfig, maxTokens, chatOptions);
+    useSteeringChat(steeringConfig, maxTokens, temperature, chatOptions);
   const { containerRef, endRef, isAtBottom, scrollToBottom } = useScrollToBottom();
   const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
@@ -91,7 +92,6 @@ export function ChatPanel({
     setVotes((prev) => {
       const next = new Map(prev);
       const existing = next.get(messageId);
-      // Toggle off if same vote
       if (existing?.isUpvoted === isUpvoted) {
         next.delete(messageId);
       } else {
@@ -102,7 +102,6 @@ export function ChatPanel({
   }, []);
 
   const handleRegenerate = useCallback((assistantMessageIndex: number) => {
-    // Find the preceding user message and re-send via the hook's regenerate support
     for (let i = assistantMessageIndex - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
         regenerate(assistantMessageIndex);
@@ -112,165 +111,188 @@ export function ChatPanel({
   }, [messages, regenerate]);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-0">
-        <h2 className="text-sm font-semibold">
-          {showHistory ? 'History' : 'Steered Chat'}
-        </h2>
-        <div className="flex items-center gap-1">
-          <Button
-            size="icon"
-            variant={showHistory ? 'secondary' : 'ghost'}
-            onClick={() => setShowHistory((v) => !v)}
-            className="size-7 text-muted-foreground"
+    <div className="flex h-full">
+      {/* Lateral history panel */}
+      <AnimatePresence>
+        {showHistory && (
+          <motion.div
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 200, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="flex h-full shrink-0 flex-col overflow-hidden border-r border-border/30"
           >
-            <History className="size-3.5" />
-            <span className="sr-only">Toggle history</span>
-          </Button>
-          {!isEmpty && !showHistory && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => {
+            <ChatHistory
+              sessions={sessions}
+              loading={sessionsLoading}
+              activeSessionId={activeSessionId}
+              onSelectSession={(id) => onSelectSession?.(id)}
+              onDeleteSession={(id) => onDeleteSession?.(id)}
+              onNewChat={() => {
                 reset();
                 onNewChat?.();
               }}
-              className="size-7 text-muted-foreground"
-            >
-              <RotateCcw className="size-3.5" />
-              <span className="sr-only">New chat</span>
-            </Button>
-          )}
-          {onClose && (
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main chat column */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 pt-4 pb-0">
+          <h2 className="text-sm font-semibold">Steered Chat</h2>
+          <div className="flex items-center gap-1">
             <Button
               size="icon"
-              variant="ghost"
-              onClick={onClose}
+              variant={showHistory ? 'secondary' : 'ghost'}
+              onClick={() => setShowHistory((v) => !v)}
               className="size-7 text-muted-foreground"
             >
-              <PanelRightIcon className="size-3.5" />
-              <span className="sr-only">Close chat</span>
+              <History className="size-3.5" />
+              <span className="sr-only">Toggle history</span>
             </Button>
-          )}
-        </div>
-      </div>
-      {/* Steering controls */}
-      <SteeringControls
-        config={steeringConfig}
-        onAddFeature={onAddFeature}
-        onRemoveFeature={onRemoveFeature}
-        onUpdateStrength={onUpdateStrength}
-        currentFeature={currentFeature}
-        currentModelId={modelId}
-        currentSaeId={saeId}
-      />
-
-      {/* Max tokens control */}
-      <div className="flex items-center gap-3 border-b border-border/30 px-4 py-2">
-        <span className="shrink-0 text-[11px] text-muted-foreground">Max tokens</span>
-        <Slider
-          value={[maxTokens]}
-          min={32}
-          max={2048}
-          step={32}
-          onValueChange={([v]) => setMaxTokens(v)}
-          className="flex-1"
-        />
-        <span className="w-10 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-          {maxTokens}
-        </span>
-      </div>
-
-      {showHistory ? (
-        <ChatHistory
-          sessions={sessions}
-          loading={sessionsLoading}
-          activeSessionId={activeSessionId}
-          onSelectSession={(id) => {
-            onSelectSession?.(id);
-            setShowHistory(false);
-          }}
-          onDeleteSession={(id) => onDeleteSession?.(id)}
-          onNewChat={() => {
-            reset();
-            onNewChat?.();
-            setShowHistory(false);
-          }}
-        />
-      ) : (
-        <>
-          {/* Messages area */}
-          <div className="relative flex-1 overflow-hidden">
-            {isEmpty && (
-              <ChatGreeting featureCount={steeringConfig.features.length} />
+            {!isEmpty && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => {
+                  reset();
+                  onNewChat?.();
+                }}
+                className="size-7 text-muted-foreground"
+              >
+                <RotateCcw className="size-3.5" />
+                <span className="sr-only">New chat</span>
+              </Button>
             )}
+            {onClose && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={onClose}
+                className="size-7 text-muted-foreground"
+              >
+                <PanelRightIcon className="size-3.5" />
+                <span className="sr-only">Close chat</span>
+              </Button>
+            )}
+          </div>
+        </div>
 
-            <div
-              ref={containerRef}
-              className="absolute inset-0 overflow-y-auto"
-            >
-              <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
-                {messages.map((msg, i) => (
-                  <ChatMessage
-                    key={msg.id}
-                    message={msg}
-                    messageIndex={i}
-                    isGenerating={isBusy}
-                    vote={votes.get(msg.id)}
-                    onVote={handleVote}
-                    onEdit={msg.role === 'user' ? editAndResend : undefined}
-                    onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
-                  />
-                ))}
+        {/* Steering controls */}
+        <SteeringControls
+          config={steeringConfig}
+          onAddFeature={onAddFeature}
+          onRemoveFeature={onRemoveFeature}
+          onUpdateStrength={onUpdateStrength}
+          currentFeature={currentFeature}
+          currentModelId={modelId}
+          currentSaeId={saeId}
+        />
 
-                {isBusy && messages[messages.length - 1]?.content === '' && (
-                  <ThinkingIndicator phase={isLoadingModel ? 'loading_model' : 'thinking'} />
-                )}
+        {/* Generation parameters */}
+        <div className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-2">
+          <div className="flex items-center gap-3">
+            <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Max tokens</span>
+            <Slider
+              value={[maxTokens]}
+              min={32}
+              max={2048}
+              step={32}
+              onValueChange={([v]) => setMaxTokens(v)}
+              className="flex-1"
+            />
+            <span className="w-10 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
+              {maxTokens}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Temperature</span>
+            <Slider
+              value={[temperature]}
+              min={0}
+              max={2}
+              step={0.05}
+              onValueChange={([v]) => setTemperature(v)}
+              className="flex-1"
+            />
+            <span className="w-10 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
+              {temperature.toFixed(2)}
+            </span>
+          </div>
+        </div>
 
-                {error && (
-                  <motion.div
-                    className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    {error}
-                  </motion.div>
-                )}
+        {/* Messages area */}
+        <div className="relative flex-1 overflow-hidden">
+          {isEmpty && (
+            <ChatGreeting featureCount={steeringConfig.features.length} />
+          )}
 
-                <div ref={endRef} />
-              </div>
-            </div>
+          <div
+            ref={containerRef}
+            className="absolute inset-0 overflow-y-auto"
+          >
+            <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
+              {messages.map((msg, i) => (
+                <ChatMessage
+                  key={msg.id}
+                  message={msg}
+                  messageIndex={i}
+                  isGenerating={isBusy}
+                  vote={votes.get(msg.id)}
+                  onVote={handleVote}
+                  onEdit={msg.role === 'user' ? editAndResend : undefined}
+                  onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
+                />
+              ))}
 
-            {/* Scroll-to-bottom button */}
-            <button
-              onClick={() => scrollToBottom()}
-              className={cn(
-                'absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center justify-center',
-                'size-7 rounded-full border border-border/50 bg-card/90',
-                'shadow-[var(--shadow-float)] backdrop-blur-lg',
-                'transition-all duration-200',
-                isAtBottom
-                  ? 'pointer-events-none scale-90 opacity-0'
-                  : 'pointer-events-auto scale-100 opacity-100',
+              {isBusy && messages[messages.length - 1]?.content === '' && (
+                <ThinkingIndicator phase={isLoadingModel ? 'loading_model' : 'thinking'} />
               )}
-              aria-label="Scroll to bottom"
-            >
-              <ChevronDown className="size-3 text-muted-foreground" />
-            </button>
+
+              {error && (
+                <motion.div
+                  className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {error}
+                </motion.div>
+              )}
+
+              <div ref={endRef} />
+            </div>
           </div>
 
-          {/* Input area */}
-          <ChatInput
-            onSend={send}
-            onStop={stop}
-            isGenerating={isBusy}
-            showSuggestions={isEmpty}
-            onSuggest={send}
-          />
-        </>
-      )}
+          {/* Scroll-to-bottom button */}
+          <button
+            onClick={() => scrollToBottom()}
+            className={cn(
+              'absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center justify-center',
+              'size-7 rounded-full border border-border/50 bg-card/90',
+              'shadow-[var(--shadow-float)] backdrop-blur-lg',
+              'transition-all duration-200',
+              isAtBottom
+                ? 'pointer-events-none scale-90 opacity-0'
+                : 'pointer-events-auto scale-100 opacity-100',
+            )}
+            aria-label="Scroll to bottom"
+          >
+            <ChevronDown className="size-3 text-muted-foreground" />
+          </button>
+        </div>
+
+        {/* Input area */}
+        <ChatInput
+          onSend={send}
+          onStop={stop}
+          isGenerating={isBusy}
+          showSuggestions={isEmpty}
+          onSuggest={send}
+        />
+      </div>
     </div>
   );
 }

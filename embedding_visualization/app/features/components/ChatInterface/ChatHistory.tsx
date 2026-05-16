@@ -43,25 +43,22 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
 }) {
   return (
     <div
-      className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 cursor-pointer transition-colors ${
+      className={`group flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer transition-colors ${
         isActive
           ? 'bg-accent text-accent-foreground'
           : 'hover:bg-muted/50'
       }`}
       onClick={onSelect}
     >
-      <span className="flex-1 truncate text-sm">{session.title}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-        {formatDistanceToNow(new Date(session.updatedAt), { addSuffix: true })}
-      </span>
+      <span className="flex-1 truncate text-xs">{session.title}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            <MoreHorizontal className="h-3 w-3" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
@@ -131,12 +128,12 @@ export function ChatHistory({
 
   if (loading) {
     return (
-      <div className="flex-1 overflow-y-auto px-3 py-4">
-        <div className="flex flex-col gap-1">
+      <div className="flex-1 overflow-y-auto px-2 py-3">
+        <div className="flex flex-col gap-0.5">
           {[44, 32, 28, 64, 52].map((w, i) => (
-            <div key={i} className="flex h-8 items-center rounded-lg px-2">
+            <div key={i} className="flex h-6 items-center rounded-md px-2">
               <div
-                className="h-3 animate-pulse rounded-md bg-muted"
+                className="h-2.5 animate-pulse rounded-sm bg-muted"
                 style={{ width: `${w}%` }}
               />
             </div>
@@ -148,14 +145,14 @@ export function ChatHistory({
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-3 py-2">
+      <div className="flex-1 overflow-y-auto px-2 py-2">
         <Button
           variant="outline"
           size="sm"
-          className="mb-3 w-full justify-start gap-2"
+          className="mb-2 w-full justify-start gap-1.5 text-xs h-7"
           onClick={onNewChat}
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-3 w-3" />
           New Chat
         </Button>
 
