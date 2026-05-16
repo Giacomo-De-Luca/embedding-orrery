@@ -855,6 +855,10 @@ class DuckDBClient:
         ).fetchall()
         variance_map = {r[0]: r[1] for r in pm_rows}
 
+        # Parse extra_metadata (stored as JSON string)
+        raw_extra = ds.get("extra_metadata") if ds else None
+        extra = json.loads(raw_extra) if isinstance(raw_extra, str) else (raw_extra or {})
+
         metadata = {
             "total_items": len(ids),
             "embedding_dim": vc.get("embedding_dim"),
@@ -869,6 +873,8 @@ class DuckDBClient:
             "source_split": ds.get("source_split") if ds else None,
             "source_file": ds.get("source_file") if ds else None,
             "embedded_columns": ds.get("embedded_columns") if ds else None,
+            "sae_model_id": extra.get("sae_model_id"),
+            "sae_id": extra.get("sae_id"),
         }
 
         return {
