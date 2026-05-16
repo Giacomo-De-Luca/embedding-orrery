@@ -886,6 +886,12 @@ class Mutation:
             async with service._lock:
                 items_processed, duration = await asyncio.to_thread(_run_batch)
 
+            # Persist SAE link in collection metadata if not already set
+            if not extra.get("sae_model_id") or not extra.get("sae_id"):
+                extra["sae_model_id"] = model_id
+                extra["sae_id"] = sae_id
+                db.update_dataset_metadata(dataset_name, {"extra_metadata": json.dumps(extra)})
+
             return ComputeDocumentActivationsResult(
                 collection_name=collection_name,
                 items_processed=items_processed,

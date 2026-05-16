@@ -24,7 +24,8 @@ export interface SteeringChatOptions {
 
 /** Serialise config into a stable key for change detection. */
 function configKey(config: SteeringConfig): string {
-  const sorted = [...config.features]
+  const features = config?.features ?? [];
+  const sorted = [...features]
     .sort((a, b) => a.featureIndex - b.featureIndex)
     .map((f) => `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`);
   return sorted.join(',');
