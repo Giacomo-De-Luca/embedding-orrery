@@ -429,22 +429,35 @@ class PromptExplorer:
                         stacklevel=2,
                     )
                 params = FeatureLabelStore.params_from_config(cfg)
-                mask = self._get_density_mask(cfg)
+                try:
+                    mask = self._get_density_mask(cfg)
+                except FileNotFoundError:
+                    # No label file for this layer/hook/width — skip density masking
+                    mask = None
 
                 # Get per-token top-k labels
-                if k > 0:
-                    per_token = self.label_store.label_top_k_per_token(
-                        feature_acts, *params, k=k, mask=mask,
-                    )
-                else:
-                    # All non-zero features per token
-                    per_token = self._all_nonzero_per_token(
-                        feature_acts, params, mask,
+                try:
+                    if k > 0:
+                        per_token = self.label_store.label_top_k_per_token(
+                            feature_acts, *params, k=k, mask=mask,
+                        )
+                    else:
+                        # All non-zero features per token
+                        per_token = self._all_nonzero_per_token(
+                            feature_acts, params, mask,
+                        )
+                except FileNotFoundError:
+                    # No label file — fall back to unlabelled top-k
+                    per_token = self._unlabelled_top_k_per_token(
+                        feature_acts, k=k, mask=mask,
                     )
 
                 # Build TokenFeatures for each position
                 # Densities for annotation
-                densities = self.label_store.get_densities(*params)
+                try:
+                    densities = self.label_store.get_densities(*params)
+                except FileNotFoundError:
+                    densities = torch.zeros(feature_acts.shape[1])
                 tokens_list: list[TokenFeatures] = []
                 for pos, features_at_pos in enumerate(per_token):
                     active = [
@@ -474,6 +487,27 @@ class PromptExplorer:
             layers=layer_results,
             generated_text=generated if output_len > 0 else None,
         )
+
+    @staticmethod
+    def _unlabelled_top_k_per_token(
+        feature_acts: torch.Tensor,
+        k: int,
+        mask: torch.Tensor | None = None,
+    ) -> list[list[tuple[int, float, str]]]:
+        """Return top-k features per token without labels (fallback when no label file)."""
+        result = []
+        for pos in range(feature_acts.shape[0]):
+            acts = feature_acts[pos].detach().float().cpu()
+            if mask is not None:
+                acts = torch.where(mask.cpu(), acts, torch.tensor(float("-inf")))
+            topk = torch.topk(acts, k=min(k, acts.shape[0]))
+            token_feats = []
+            for val, idx in zip(topk.values, topk.indices):
+                if val.item() == float("-inf") or val.item() <= 0:
+                    break
+                token_feats.append((idx.item(), float(val), ""))
+            result.append(token_feats)
+        return result
 
     def _all_nonzero_per_token(
         self,
