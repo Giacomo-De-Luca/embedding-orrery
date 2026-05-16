@@ -109,6 +109,8 @@ export function useEmbeddingData(
         embedding_provider: meta.embeddingProvider as string | undefined,
         embedding_model: meta.embeddingModel as string | undefined,
         embedding_prompt: meta.embeddingPrompt as string | null | undefined,
+        sae_model_id: meta.saeModelId as string | null | undefined,
+        sae_id: meta.saeId as string | null | undefined,
       };
 
       // Phase 1: Determine display config — check field_analysis cache first
