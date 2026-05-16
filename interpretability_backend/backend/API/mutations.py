@@ -60,7 +60,6 @@ from .types import (
     ModelStatus,
     PrepareSaeInput,
     PrepareSaeResult,
-    SaeCollectionMode,
     PromptActivationsResponse,
     PromptDocumentSearchResponse,
     PromptDocumentSearchResult,
@@ -73,6 +72,7 @@ from .types import (
     RenameTopicLabelResult,
     RunPromptActivationsInput,
     RunPromptHighlightInput,
+    SaeCollectionMode,
     SaveChatMessageInput,
     SearchDocumentsByPromptInput,
     SteeredGenerationResponse,
@@ -623,9 +623,11 @@ class Mutation:
 
             # Cleanup source files if requested
             if input.delete_source_files:
-                Path(result["features_parquet"]).unlink(missing_ok=True)
-                if result.get("activations_jsonl"):
-                    Path(result["activations_jsonl"]).unlink(missing_ok=True)
+                def _cleanup():
+                    Path(result["features_parquet"]).unlink(missing_ok=True)
+                    if result.get("activations_jsonl"):
+                        Path(result["activations_jsonl"]).unlink(missing_ok=True)
+                await asyncio.to_thread(_cleanup)
 
         return PrepareSaeResult(
             model_id=result["model_id"],

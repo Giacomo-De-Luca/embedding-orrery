@@ -254,6 +254,31 @@ class InterpretService:
     # UC1: Prompt activations
     # ------------------------------------------------------------------
 
+    def _find_prompt_token_range(
+        self, token_strings: list[str], prompt: str
+    ) -> tuple[int, int]:
+        """Find the start/end indices of the actual user prompt tokens.
+
+        The chat template wraps as:
+          <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model
+
+        Returns (start, end) where token_strings[start:end] are the prompt tokens.
+        """
+        # Tokenize just the prefix to find where prompt content begins
+        wrapper = self._require_model()
+        prefix = "<start_of_turn>user\n"
+        prefix_ids = wrapper.tokenize(prefix, bos=True)
+        start = len(prefix_ids)
+
+        # Find <end_of_turn> token scanning backwards from the end
+        end = len(token_strings)
+        for i in range(len(token_strings) - 1, start - 1, -1):
+            if "<end_of_turn>" in token_strings[i]:
+                end = i
+                break
+
+        return start, end
+
     def run_prompt_activations(
         self,
         prompt: str,
@@ -263,8 +288,8 @@ class InterpretService:
     ) -> PromptActivationsResult:
         """Run a prompt through the model with SAE hooks.
 
-        Returns per-token top-k feature activations with labels from DuckDB
-        for every requested layer.
+        Returns per-token top-k feature activations with labels from DuckDB,
+        filtered to only include the actual prompt tokens (no chat template).
         """
         from backend.API.duckdb_instance import get_duckdb_client
 
@@ -274,19 +299,33 @@ class InterpretService:
         explorer = self._get_prompt_explorer(effective_layers, width, top_k)
         prompt_result = explorer.run_prompt(prompt, output_len=1, top_k=top_k)
 
+        # Determine which token positions belong to the actual prompt
+        all_token_strings = list(prompt_result.token_strings)
+        prompt_start, prompt_end = self._find_prompt_token_range(
+            all_token_strings, prompt
+        )
+        prompt_token_strings = all_token_strings[prompt_start:prompt_end]
+
         # Collect all feature indices per layer for batch DuckDB lookup
         db = get_duckdb_client()
         model_id = "gemma-3-4b-it"  # Only model currently supported
 
         # Convert the toolkit's PromptResult → service dataclasses,
         # enriching labels/density from DuckDB (authoritative source).
+        # Only include tokens within the prompt range.
         layer_results: list[LayerActivationsResult] = []
         for layer_idx in sorted(prompt_result.layers.keys()):
             lr = prompt_result.layers[layer_idx]
 
+            # Filter to only prompt token positions
+            prompt_tokens = [
+                tf for tf in lr.tokens
+                if prompt_start <= tf.position < prompt_end
+            ]
+
             # Gather all unique feature indices for this layer
             all_indices: set[int] = set()
-            for tf in lr.tokens:
+            for tf in prompt_tokens:
                 for f in tf.features:
                     all_indices.add(f.index)
 
@@ -295,7 +334,7 @@ class InterpretService:
             label_map = db.get_sae_feature_labels_batch(model_id, sae_id, list(all_indices))
 
             token_results: list[TokenFeaturesResult] = []
-            for tf in lr.tokens:
+            for tf in prompt_tokens:
                 features = []
                 for f in tf.features:
                     db_label, db_density = label_map.get(f.index, ("", None))
@@ -310,7 +349,7 @@ class InterpretService:
                 token_results.append(
                     TokenFeaturesResult(
                         token=tf.token,
-                        position=tf.position,
+                        position=tf.position - prompt_start,
                         features=features,
                     )
                 )
@@ -324,7 +363,7 @@ class InterpretService:
 
         return PromptActivationsResult(
             prompt=prompt,
-            token_strings=list(prompt_result.token_strings),
+            token_strings=prompt_token_strings,
             layers=layer_results,
         )
 
