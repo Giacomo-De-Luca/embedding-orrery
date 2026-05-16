@@ -808,15 +808,18 @@ class Mutation:
 
         job_id = f"{collection_name}_sae_activations"
 
-        # Verify model is loaded
+        # Auto-load model if not already loaded
         if not service.get_status().loaded:
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=already_done,
-                total_items=total_items,
-                duration_seconds=0.0,
-                error="Model not loaded. Call loadModel first.",
-            )
+            try:
+                await asyncio.to_thread(service.load_model)
+            except Exception as e:
+                return ComputeDocumentActivationsResult(
+                    collection_name=collection_name,
+                    items_processed=already_done,
+                    total_items=total_items,
+                    duration_seconds=0.0,
+                    error=f"Failed to load model: {e}",
+                )
 
         def _run_batch():
             start = time.monotonic()
