@@ -450,6 +450,20 @@ class GemmaPytorchInference:
             )
             return key
 
+        # ── Text-only format (Gemma3ForCausalLM: 1b-pt, 1b-it, etc.) ────
+        # Keys start with "model.*" directly (no "language_model." prefix).
+        if hf_key.startswith("model.embed_tokens."):
+            return hf_key.replace("model.embed_tokens", "text_token_embedder")
+        if hf_key.startswith("model.layers."):
+            key = hf_key
+            # Rename QK norms to match reference format
+            key = key.replace(".self_attn.q_norm.", ".self_attn.query_norm.")
+            key = key.replace(".self_attn.k_norm.", ".self_attn.key_norm.")
+            return key
+        # Final norm (text-only)
+        if hf_key.startswith("model.norm."):
+            return hf_key
+
         return None
 
     def _generate(
