@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { Download, RefreshCw, Trash2, Check, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
@@ -27,7 +27,25 @@ import type { SaeModelInfo } from '@/lib/types/types';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const LABELLED_LAYERS = new Set([9, 17, 22, 29]);
+interface GemmaModelConfig {
+  size: string;
+  label: string;
+  layers: number;
+  dIn: number;
+  labelledLayers: Set<number>;
+}
+
+const GEMMA_MODELS: GemmaModelConfig[] = [
+  { size: '1b', label: 'Gemma 3 1B', layers: 26, dIn: 1152, labelledLayers: new Set() },
+  { size: '4b', label: 'Gemma 3 4B', layers: 34, dIn: 2560, labelledLayers: new Set([9, 17, 22, 29]) },
+  { size: '12b', label: 'Gemma 3 12B', layers: 48, dIn: 3840, labelledLayers: new Set() },
+  { size: '27b', label: 'Gemma 3 27B', layers: 62, dIn: 5376, labelledLayers: new Set() },
+];
+
+const VARIANT_OPTIONS = [
+  { value: 'it', label: 'Instruction-tuned (IT)' },
+  { value: 'pt', label: 'Pretrained (PT)' },
+];
 
 const WIDTH_OPTIONS = [
   { value: '16k', label: '16k', desc: '16,384 features, ~160 MB' },
@@ -57,11 +75,23 @@ function formatCount(n: number): string {
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function SaeTab() {
+  // Model selection state
+  const [modelSize, setModelSize] = useState('4b');
+  const [variant, setVariant] = useState('it');
+  const activeModel = GEMMA_MODELS.find((m) => m.size === modelSize) ?? GEMMA_MODELS[1];
+
   // Form state
   const [layer, setLayer] = useState(9);
   const [width, setWidth] = useState('16k');
   const [hookType, setHookType] = useState('resid_post');
   const [includeActivations, setIncludeActivations] = useState(false);
+
+  // Clamp layer when model changes
+  useEffect(() => {
+    if (layer >= activeModel.layers) {
+      setLayer(0);
+    }
+  }, [modelSize]); // eslint-disable-line react-hooks/exhaustive-deps
   // Collection creation state
   const [createCollection, setCreateCollection] = useState(false);
   const [collectionMode, setCollectionMode] = useState<SaeCollectionMode>('DECODER_VECTORS');
@@ -121,7 +151,7 @@ export function SaeTab() {
   });
 
   const handleDownload = () => {
-    const jobId = `sae_prepare_${layer}_${hookType}_${width}`;
+    const jobId = `sae_prepare_${modelSize}_${variant}_${layer}_${hookType}_${width}`;
     setActiveJobId(jobId);
     setLastResult(null);
     prepareSae({
@@ -130,6 +160,8 @@ export function SaeTab() {
           layer,
           width,
           hookType,
+          modelSize,
+          variant,
           includeActivations,
           skipDownload: false,
           createCollection,
@@ -158,6 +190,42 @@ export function SaeTab() {
           </p>
 
           <div className="flex flex-wrap items-end gap-3">
+            {/* Model Size */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Model</label>
+              <Select value={modelSize} onValueChange={setModelSize}>
+                <SelectTrigger className="w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {GEMMA_MODELS.map((m) => (
+                    <SelectItem key={m.size} value={m.size}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Variant */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Variant</label>
+              <Select value={variant} onValueChange={setVariant}>
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VARIANT_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
             {/* Layer */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Layer</label>
@@ -166,11 +234,11 @@ export function SaeTab() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: 34 }, (_, i) => (
+                  {Array.from({ length: activeModel.layers }, (_, i) => (
                     <SelectItem key={i} value={String(i)}>
                       <span className="flex items-center gap-1.5">
                         {i}
-                        {LABELLED_LAYERS.has(i) && (
+                        {activeModel.labelledLayers.has(i) && (
                           <Badge variant="secondary" className="text-[10px] px-1 py-0">
                             labelled
                           </Badge>
@@ -255,10 +323,10 @@ export function SaeTab() {
                     </SelectItem>
                     <SelectItem
                       value="LABEL_EMBEDDINGS"
-                      disabled={!LABELLED_LAYERS.has(layer)}
+                      disabled={!activeModel.labelledLayers.has(layer)}
                     >
                       Label embeddings (semantic)
-                      {!LABELLED_LAYERS.has(layer) && (
+                      {!activeModel.labelledLayers.has(layer) && (
                         <span className="ml-1 text-muted-foreground">— no labels</span>
                       )}
                     </SelectItem>

@@ -551,12 +551,14 @@ class Mutation:
         from ..services.sae_pipeline_service import prepare_sae_data as run_pipeline
 
         # Phase 1: SAE download + ingest into DuckDB
-        job_id = f"sae_prepare_{input.layer}_{input.hook_type}_{input.width}"
+        job_id = f"sae_prepare_{input.model_size}_{input.variant}_{input.layer}_{input.hook_type}_{input.width}"
         result = await asyncio.to_thread(
             run_pipeline,
             layer=input.layer,
             width=input.width,
             hook_type=input.hook_type,
+            model_size=input.model_size,
+            variant=input.variant,
             skip_download=input.skip_download,
             include_activations=input.include_activations,
             job_id=job_id,
@@ -577,7 +579,8 @@ class Mutation:
             )
             mode = input.collection_mode or SaeCollectionMode.DECODER_VECTORS
             mode_suffix = "vectors" if mode == SaeCollectionMode.DECODER_VECTORS else "labels"
-            collection_name = f"sae_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
+            variant_suffix = f"_{input.variant}" if input.variant != "it" else ""
+            collection_name = f"sae_{input.model_size}{variant_suffix}_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
 
             try:
                 if mode == SaeCollectionMode.DECODER_VECTORS:

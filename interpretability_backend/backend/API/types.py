@@ -815,6 +815,8 @@ class PrepareSaeInput:
     layer: int
     width: str = "16k"
     hook_type: str = "resid_post"
+    model_size: str = "4b"
+    variant: str = "it"
     skip_download: bool = False
     include_activations: bool = False
     # Collection creation options

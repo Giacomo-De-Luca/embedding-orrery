@@ -46,4 +46,5 @@ def activation_batches_dir(config: GemmaScopeSAEConfig) -> Path:
 def vectors_parquet_path(config: GemmaScopeSAEConfig) -> Path:
     """Path to the decoder-vector + labels parquet for one source."""
     hook = config.hook_type.value
-    return vectors_dir() / f"w_dec_layer{config.layer_index}_{hook}_w{config.width}.parquet"
+    model = config.neuronpedia_model_id
+    return vectors_dir() / f"w_dec_{model}_layer{config.layer_index}_{hook}_w{config.width}.parquet"

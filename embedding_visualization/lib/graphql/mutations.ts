@@ -588,6 +588,8 @@ export interface PrepareSaeInput {
   layer: number;
   width?: string;
   hookType?: string;
+  modelSize?: string;
+  variant?: string;
   skipDownload?: boolean;
   includeActivations?: boolean;
   createCollection?: boolean;

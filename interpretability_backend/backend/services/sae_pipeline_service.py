@@ -15,7 +15,12 @@ from interpret.sae.pipeline.prepare_sae_data import (
     SAEPipelineConfig,
     SAEPipelineRunner,
 )
-from interpret.sae.sae_config import HOOK_TYPE_FROM_STR, GemmaScopeSAEConfig
+from interpret.sae.sae_config import (
+    HOOK_TYPE_FROM_STR,
+    GemmaScopeSAEConfig,
+    MODEL_SIZE_TO_D_IN,
+    MODEL_SIZE_TO_LAYERS,
+)
 from interpret.sae.source_ids import neuronpedia_source_id
 
 from ..services.progress_emitter import emit_progress
@@ -44,6 +49,8 @@ def prepare_sae_data(
     layer: int,
     width: str = "16k",
     hook_type: str = "resid_post",
+    model_size: str = "4b",
+    variant: str = "it",
     skip_download: bool = False,
     include_activations: bool = False,
     job_id: str | None = None,
@@ -71,10 +78,25 @@ def prepare_sae_data(
             "error": (f"Unknown hook_type '{hook_type}'. Valid: {list(HOOK_TYPE_FROM_STR.keys())}"),
         }
 
+    max_layers = MODEL_SIZE_TO_LAYERS.get(model_size)
+    if max_layers is not None and layer >= max_layers:
+        return {
+            "model_id": "",
+            "sae_id": "",
+            "features_parquet": None,
+            "activations_jsonl": None,
+            "duration_seconds": 0.0,
+            "status": "failed",
+            "error": f"Layer {layer} exceeds max ({max_layers - 1}) for model size '{model_size}'",
+        }
+
     sae_config = GemmaScopeSAEConfig(
         layer_index=layer,
         width=width,
         hook_type=ht,
+        model_size=model_size,
+        variant=variant,
+        d_in=MODEL_SIZE_TO_D_IN.get(model_size, 2560),
         device="cpu",
     )
 

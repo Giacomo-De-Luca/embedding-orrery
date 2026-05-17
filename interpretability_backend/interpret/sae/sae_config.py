@@ -42,6 +42,22 @@ WIDTH_TO_D_SAE: dict[str, int] = {
     "262k": 262144,
 }
 
+# Per-model-size hidden dimension (d_in) for Gemma-3.
+MODEL_SIZE_TO_D_IN: dict[str, int] = {
+    "1b": 1152,
+    "4b": 2560,
+    "12b": 3840,
+    "27b": 5376,
+}
+
+# Per-model-size number of decoder layers for Gemma-3.
+MODEL_SIZE_TO_LAYERS: dict[str, int] = {
+    "1b": 26,
+    "4b": 34,
+    "12b": 48,
+    "27b": 62,
+}
+
 
 @dataclass
 class GemmaScopeSAEConfig:

@@ -375,10 +375,9 @@ export default function FeaturesPage() {
       return density <= promptMaxDensity;
     });
 
-    // Sort by activation descending, take top 50
+    // Sort by activation descending
     const sorted = filtered
-      .sort(([, a], [, b]) => b.activation - a.activation)
-      .slice(0, 50);
+      .sort(([, a], [, b]) => b.activation - a.activation);
     if (sorted.length === 0) return [];
     const maxAct = sorted[0][1].activation;
     return sorted.map(([featureIndex, { activation, label, density }]) => ({
@@ -460,7 +459,7 @@ export default function FeaturesPage() {
         const { data } = await apolloClient.mutate<{ runPromptActivations: PromptActivationsResult }>({
           mutation: RUN_PROMPT_ACTIVATIONS,
           variables: {
-            input: { prompt: q, layers: [parsed.layerIndex], width: parsed.width, topK: 10 },
+            input: { prompt: q, layers: [parsed.layerIndex], width: parsed.width, topK: 0 },
           },
         });
         const result = data?.runPromptActivations;
