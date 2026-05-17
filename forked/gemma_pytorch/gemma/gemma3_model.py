@@ -49,17 +49,16 @@ class Gemma3ForMultimodalLM(nn.Module):
         self.model = gemma_model.GemmaModel(config)
         self.sampler = gemma_model.Sampler(vocab_size, config)
 
-        if config.vision_config is None:
-            raise ValueError("vision_config must be provided for Gemma3.")
-        self.siglip_vision_model = siglip_vision_model.SiglipVisionModel(config.vision_config)
-        # transformer/embedder/mm_soft_embedding_norm
-        self.mm_soft_embedding_norm = gemma_model.RMSNorm(
-            config.vision_config.embedding_dim, eps=config.rms_norm_eps
-        )
-        # transformer/embedder/mm_input_projection
-        self.mm_input_projection = gemma_model.Linear(
-            config.vision_config.embedding_dim, config.hidden_size, config.quant
-        )
+        if config.vision_config is not None:
+            self.siglip_vision_model = siglip_vision_model.SiglipVisionModel(config.vision_config)
+            # transformer/embedder/mm_soft_embedding_norm
+            self.mm_soft_embedding_norm = gemma_model.RMSNorm(
+                config.vision_config.embedding_dim, eps=config.rms_norm_eps
+            )
+            # transformer/embedder/mm_input_projection
+            self.mm_input_projection = gemma_model.Linear(
+                config.vision_config.embedding_dim, config.hidden_size, config.quant
+            )
 
         if config.rope_wave_length is None:
             raise ValueError("rope_wave_length must be provided for Gemma3.")
@@ -84,7 +83,7 @@ class Gemma3ForMultimodalLM(nn.Module):
             theta=rope_lengths.get(
                 gemma_config.AttentionType.GLOBAL, defaults[gemma_config.AttentionType.GLOBAL]
             ),
-            rope_scaling_factor=config.rope_scaling_factor,
+            rope_scaling_factor=config.rope_scaling_factor or 1,
         )
 
     def _register_freqs_cis(

@@ -315,17 +315,20 @@ class GemmaPytorchInference:
 
         # Directory — check for safetensors first, then fall back to bin shards
         safetensors_index = ckpt / "model.safetensors.index.json"
+        single_safetensors = ckpt / "model.safetensors"
         bin_index = ckpt / "pytorch_model.bin.index.json"
 
         if safetensors_index.is_file():
             self._load_safetensors_hf(ckpt, safetensors_index)
+        elif single_safetensors.is_file():
+            self._load_single_safetensors(single_safetensors)
         elif bin_index.is_file():
             self.model.load_weights(checkpoint_path)
         else:
             raise FileNotFoundError(
                 f"No valid checkpoint found in {ckpt}. Expected one of: "
-                "single .pt file, model.safetensors.index.json, or "
-                "pytorch_model.bin.index.json"
+                "single .pt file, model.safetensors.index.json, "
+                "model.safetensors, or pytorch_model.bin.index.json"
             )
 
     def _load_safetensors_hf(self, ckpt_dir: Path, index_path: Path) -> None:
@@ -344,6 +347,16 @@ class GemmaPytorchInference:
             self.model.load_state_dict(mapped_state, strict=False)
             del hf_state, mapped_state
             gc.collect()
+
+    def _load_single_safetensors(self, safetensors_path: Path) -> None:
+        """Load a single (non-sharded) HuggingFace safetensors file."""
+        from safetensors.torch import load_file
+
+        hf_state = load_file(str(safetensors_path))
+        mapped_state = self._map_hf_to_reference(hf_state)
+        self.model.load_state_dict(mapped_state, strict=False)
+        del hf_state, mapped_state
+        gc.collect()
 
     def _map_hf_to_reference(self, hf_state: dict) -> dict:
         """Map HuggingFace weight keys to reference gemma_pytorch format.

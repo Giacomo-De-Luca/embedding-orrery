@@ -88,8 +88,9 @@ def tokenize_raw_input(
             user_input_token_ids: Batch of token IDs with shape (B, L), where L is the max sequence length.
             image_batch: Batch of images with shape (B, N, C, H, W), where N is the max number of images.
     """
-    if config.vision_config is None:
-        raise ValueError('vision_config must be provided for Gemma3.')
+    # vision_config is only needed when the input contains images;
+    # text-only models (e.g. gemma-3-1b) pass vision_config=None and
+    # the image code paths below are never reached.
 
     preprocessed_batch = gemma3_batch_input_preprocessor(raw_input)
 
