@@ -50,8 +50,7 @@ class ExtractDecoderItem:
     sae: SAEConfig
 
     def output_filename(self) -> str:
-        hook = self.sae.hook_type.value
-        return f"w_dec_layer{self.sae.layer_index}_{hook}_w{self.sae.width}.parquet"
+        return _default_vectors_parquet_path(self.sae).name
 
 
 @dataclass
