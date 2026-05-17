@@ -57,6 +57,9 @@ class PromptExplorerConfig:
     top_k: int = 10
     density_threshold: float = 0.01
     labels_dir: Path = _DEFAULT_LABELS_DIR
+    skip_labels: bool = False
+    model_size: str = "4b"
+    variant: str = "it"
 
 
 # ── Result dataclasses ───────────────────────────────────────────────────────
@@ -395,6 +398,8 @@ class PromptExplorer:
             cfg = SAEConfig(
                 layer_index=layer,
                 width=self._config.width,
+                model_size=self._config.model_size,
+                variant=self._config.variant,
                 device=str(self._wrapper.device),
                 prefill_only=True,
                 read_only=True,
@@ -428,26 +433,14 @@ class PromptExplorer:
                         f"tokens — token labels may be misaligned.",
                         stacklevel=2,
                     )
-                params = FeatureLabelStore.params_from_config(cfg)
-                try:
-                    mask = self._get_density_mask(cfg)
-                except FileNotFoundError:
-                    # No label file for this layer/hook/width — skip density masking
-                    mask = None
-
-                # Get per-token top-k labels
-                try:
-                    if k > 0:
-                        per_token = self.label_store.label_top_k_per_token(
-                            feature_acts, *params, k=k, mask=mask,
-                        )
-                    else:
-                        # All non-zero features per token
-                        per_token = self._all_nonzero_per_token(
-                            feature_acts, params, mask,
-                        )
-                except FileNotFoundError:
-                    # No label file — fall back to unlabelled results
+                if self._config.skip_labels:
+                    # Service mode: pure torch top-k, no JSONL/SQLite access.
+                    # Still apply density masking if label files are available
+                    # to filter out ultra-common non-interpretable features.
+                    try:
+                        mask = self._get_density_mask(cfg)
+                    except FileNotFoundError:
+                        mask = None
                     if k > 0:
                         per_token = self._unlabelled_top_k_per_token(
                             feature_acts, k=k, mask=mask,
@@ -456,13 +449,38 @@ class PromptExplorer:
                         per_token = self._unlabelled_all_nonzero_per_token(
                             feature_acts, mask=mask,
                         )
-
-                # Build TokenFeatures for each position
-                # Densities for annotation
-                try:
-                    densities = self.label_store.get_densities(*params)
-                except FileNotFoundError:
                     densities = torch.zeros(feature_acts.shape[1])
+                else:
+                    # Notebook mode: JSONL/SQLite labels with fallback
+                    params = FeatureLabelStore.params_from_config(cfg)
+                    try:
+                        mask = self._get_density_mask(cfg)
+                    except FileNotFoundError:
+                        mask = None
+
+                    try:
+                        if k > 0:
+                            per_token = self.label_store.label_top_k_per_token(
+                                feature_acts, *params, k=k, mask=mask,
+                            )
+                        else:
+                            per_token = self._all_nonzero_per_token(
+                                feature_acts, params, mask,
+                            )
+                    except FileNotFoundError:
+                        if k > 0:
+                            per_token = self._unlabelled_top_k_per_token(
+                                feature_acts, k=k, mask=mask,
+                            )
+                        else:
+                            per_token = self._unlabelled_all_nonzero_per_token(
+                                feature_acts, mask=mask,
+                            )
+
+                    try:
+                        densities = self.label_store.get_densities(*params)
+                    except FileNotFoundError:
+                        densities = torch.zeros(feature_acts.shape[1])
                 tokens_list: list[TokenFeatures] = []
                 for pos, features_at_pos in enumerate(per_token):
                     active = [
@@ -593,7 +611,12 @@ class PromptExplorer:
         Returns:
             FeatureDetail with label, logits, similar features, and examples.
         """
-        cfg = SAEConfig(layer_index=layer, width=self._config.width)
+        cfg = SAEConfig(
+            layer_index=layer,
+            width=self._config.width,
+            model_size=self._config.model_size,
+            variant=self._config.variant,
+        )
         params = FeatureLabelStore.params_from_config(cfg)
 
         # Label and density

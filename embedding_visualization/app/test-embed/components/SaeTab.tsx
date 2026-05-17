@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { Download, RefreshCw, Trash2, Check, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
@@ -86,12 +86,13 @@ export function SaeTab() {
   const [hookType, setHookType] = useState('resid_post');
   const [includeActivations, setIncludeActivations] = useState(false);
 
-  // Clamp layer when model changes
-  useEffect(() => {
-    if (layer >= activeModel.layers) {
+  const handleModelSizeChange = (size: string) => {
+    setModelSize(size);
+    const newModel = GEMMA_MODELS.find((m) => m.size === size);
+    if (newModel && layer >= newModel.layers) {
       setLayer(0);
     }
-  }, [modelSize]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
   // Collection creation state
   const [createCollection, setCreateCollection] = useState(false);
   const [collectionMode, setCollectionMode] = useState<SaeCollectionMode>('DECODER_VECTORS');
@@ -193,7 +194,7 @@ export function SaeTab() {
             {/* Model Size */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Model</label>
-              <Select value={modelSize} onValueChange={setModelSize}>
+              <Select value={modelSize} onValueChange={handleModelSizeChange}>
                 <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>

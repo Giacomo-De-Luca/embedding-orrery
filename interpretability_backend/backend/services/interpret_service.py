@@ -48,6 +48,7 @@ from interpret.sae.sae_config import (  # noqa: E402
     HookType,
     WIDTH_TO_D_SAE,
 )
+from interpret.sae.source_ids import neuronpedia_source_id  # noqa: E402
 from interpret.sae.steering import SteeringMode, SteeringOp  # noqa: E402
 from interpret.sae import paths as sae_paths  # noqa: E402
 
@@ -138,6 +139,8 @@ class InterpretService:
         self._wrapper: GemmaPytorchInference | None = None
         self._prompt_explorer: PromptExplorer | None = None
         self._model_name: str | None = None
+        self._model_size: str = "4b"
+        self._variant: str = "it"
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -153,6 +156,25 @@ class InterpretService:
             model_name=self._model_name,
             device=str(self._wrapper.device),
         )
+
+    @staticmethod
+    def _parse_checkpoint(checkpoint: str) -> tuple[str, str]:
+        """Extract (model_size, variant) from a checkpoint string.
+
+        Handles formats like:
+            "google/gemma-3-4b-it"  → ("4b", "it")
+            "google/gemma-3-1b"     → ("1b", "pt")
+            "gemma-3-12b-it"        → ("12b", "it")
+        """
+        # Strip org prefix
+        name = checkpoint.rsplit("/", 1)[-1]  # "gemma-3-4b-it"
+        # Remove "gemma-3-" prefix if present
+        if name.startswith("gemma-3-"):
+            name = name[len("gemma-3-"):]  # "4b-it" or "1b"
+        parts = name.split("-", 1)
+        model_size = parts[0]  # "4b"
+        variant = parts[1] if len(parts) > 1 else "pt"  # "it" or default "pt"
+        return model_size, variant
 
     def load_model(
         self,
@@ -170,9 +192,16 @@ class InterpretService:
         logger.info("Loading model %s ...", checkpoint)
         self._wrapper = GemmaPytorchInference(checkpoint)
         self._model_name = checkpoint
+        self._model_size, self._variant = self._parse_checkpoint(checkpoint)
         self._prompt_explorer = None  # rebuilt lazily
         logger.info("Model loaded on %s", self._wrapper.device)
         return self.get_status()
+
+    @property
+    def _neuronpedia_model_id(self) -> str:
+        """Derive Neuronpedia model ID from the loaded model's size and variant."""
+        base = f"gemma-3-{self._model_size}"
+        return base if self._variant == "pt" else f"{base}-{self._variant}"
 
     def unload_model(self) -> ModelStatusResult:
         """Unload the model and free GPU memory."""
@@ -184,6 +213,8 @@ class InterpretService:
         self._wrapper = None
         self._prompt_explorer = None
         self._model_name = None
+        self._model_size = "4b"
+        self._variant = "it"
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
@@ -221,22 +252,24 @@ class InterpretService:
             or self._prompt_explorer.config.top_k != top_k
         )
         if need_rebuild:
+            resolved_labels_dir = sae_paths.labels_dir(
+                GemmaScopeSAEConfig(
+                    layer_index=0,
+                    model_size=self._model_size,
+                    variant=self._variant,
+                )
+            )
             config = PromptExplorerConfig(
                 wrapper=wrapper,
                 layers=layers,
                 width=width,
                 top_k=top_k,
+                skip_labels=True,
+                model_size=self._model_size,
+                variant=self._variant,
             )
-            # Derive labels dir from a default SAE config (only model ID matters)
-            resolved_labels_dir = sae_paths.labels_dir(GemmaScopeSAEConfig(layer_index=0))
             if resolved_labels_dir.is_dir():
                 config.labels_dir = resolved_labels_dir
-            else:
-                logger.warning(
-                    "Neuronpedia labels directory not found at %s — "
-                    "feature labels will be unavailable.",
-                    resolved_labels_dir,
-                )
             self._prompt_explorer = PromptExplorer(config)
 
         return self._prompt_explorer
@@ -291,7 +324,9 @@ class InterpretService:
         Returns per-token top-k feature activations with labels from DuckDB,
         filtered to only include the actual prompt tokens (no chat template).
         """
-        from backend.API.duckdb_instance import get_duckdb_client
+        import duckdb as _duckdb
+
+        from backend.embedding_functions.config import DUCKDB_PATH
 
         self._require_model()
         effective_layers = layers if layers else _DEFAULT_LAYERS
@@ -306,13 +341,14 @@ class InterpretService:
         )
         prompt_token_strings = all_token_strings[prompt_start:prompt_end]
 
-        # Collect all feature indices per layer for batch DuckDB lookup
-        db = get_duckdb_client()
-        model_id = "gemma-3-4b-it"  # Only model currently supported
+        model_id = self._neuronpedia_model_id
 
         # Convert the toolkit's PromptResult → service dataclasses,
         # enriching labels/density from DuckDB (authoritative source).
         # Only include tokens within the prompt range.
+        # Use a dedicated read-only connection (the singleton isn't thread-safe).
+        db_conn = _duckdb.connect(str(DUCKDB_PATH.resolve()), read_only=True)
+
         layer_results: list[LayerActivationsResult] = []
         for layer_idx in sorted(prompt_result.layers.keys()):
             lr = prompt_result.layers[layer_idx]
@@ -324,14 +360,28 @@ class InterpretService:
             ]
 
             # Gather all unique feature indices for this layer
-            all_indices: set[int] = set()
-            for tf in prompt_tokens:
-                for f in tf.features:
-                    all_indices.add(f.index)
+            all_indices: list[int] = list({
+                f.index for tf in prompt_tokens for f in tf.features
+            })
 
             # Batch fetch labels + densities from DuckDB
-            sae_id = f"{layer_idx}-gemmascope-2-res-{width}"
-            label_map = db.get_sae_feature_labels_batch(model_id, sae_id, list(all_indices))
+            sae_id = neuronpedia_source_id(
+                GemmaScopeSAEConfig(
+                    layer_index=layer_idx,
+                    width=width,
+                    model_size=self._model_size,
+                    variant=self._variant,
+                )
+            )
+            label_map: dict[int, tuple[str, float | None]] = {}
+            if all_indices:
+                rows = db_conn.execute(
+                    "SELECT feature_index, label, density FROM sae_features "
+                    "WHERE model_id = ? AND sae_id = ? AND feature_index IN "
+                    "(SELECT UNNEST(?::INT[]))",
+                    [model_id, sae_id, all_indices],
+                ).fetchall()
+                label_map = {r[0]: (r[1] or "", r[2]) for r in rows}
 
             token_results: list[TokenFeaturesResult] = []
             for tf in prompt_tokens:
@@ -360,6 +410,8 @@ class InterpretService:
                     tokens=token_results,
                 )
             )
+
+        db_conn.close()
 
         return PromptActivationsResult(
             prompt=prompt,

@@ -66,7 +66,7 @@ All file paths are derived from `GemmaScopeSAEConfig` via `interpret/sae/paths.p
 | `features_jsonl_path(config)` | `...neuronpedia_gemma-3-4b-it/gemma-3-4b-it_9-gemmascope-2-res-65k_features.jsonl` |
 | `activations_jsonl_path(config)` | `...neuronpedia_gemma-3-4b-it/gemma-3-4b-it_9-gemmascope-2-res-65k_activations.jsonl` |
 | `activation_batches_dir(config)` | `...neuronpedia_gemma-3-4b-it/activations/9-gemmascope-2-res-65k/` |
-| `vectors_parquet_path(config)` | `resources/sae_vectors/w_dec_layer9_resid_post_w65k.parquet` |
+| `vectors_parquet_path(config)` | `resources/sae_vectors/w_dec_gemma-3-4b-it_layer9_resid_post_w65k.parquet` |
 
 ## Pipeline Stages
 

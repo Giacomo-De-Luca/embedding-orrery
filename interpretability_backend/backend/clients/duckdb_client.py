@@ -1740,6 +1740,63 @@ class DuckDBClient:
             "matched_features": matched_features,
         }
 
+    def search_documents_by_feature_indices(
+        self,
+        collection_name: str,
+        feature_indices: list[int],
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Rank documents by MAX(activation) over explicit feature indices.
+
+        This is hop-2 only — the caller has already selected which features
+        to search for (e.g. from a multi-select combobox in the frontend).
+
+        Returns list of dicts with keys: item_id, document, metadata, score,
+        matching_features, row_index.
+        """
+        if not feature_indices:
+            return []
+
+        placeholders = ", ".join(["?"] * len(feature_indices))
+        rows = self._conn.execute(
+            f"SELECT item_id, MAX(activation) AS score, COUNT(*) AS matching_features "
+            f"FROM sae_document_activations "
+            f"WHERE collection_name = ? AND feature_index IN ({placeholders}) "
+            f"GROUP BY item_id "
+            f"ORDER BY score DESC "
+            f"LIMIT ?",
+            [collection_name, *feature_indices, limit],
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        item_ids = [r[0] for r in rows]
+        scores = {r[0]: (r[1], r[2]) for r in rows}
+
+        vc_row = self._conn.execute(
+            "SELECT dataset_name FROM vector_collections WHERE collection_name = ?",
+            [collection_name],
+        ).fetchone()
+
+        enriched: dict[str, dict[str, Any]] = {}
+        if vc_row:
+            items = self.get_items_by_ids(vc_row[0], item_ids)
+            for item in items:
+                enriched[item["id"]] = item
+
+        return [
+            {
+                "item_id": item_id,
+                "document": enriched.get(item_id, {}).get("document"),
+                "metadata": enriched.get(item_id, {}).get("metadata"),
+                "score": scores[item_id][0],
+                "matching_features": scores[item_id][1],
+                "row_index": enriched.get(item_id, {}).get("row_index"),
+            }
+            for item_id in item_ids
+        ]
+
     def search_documents_by_activations(
         self,
         collection_name: str,

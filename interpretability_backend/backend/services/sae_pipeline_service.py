@@ -10,7 +10,6 @@ Files flow for visualization.
 import logging
 import time
 
-from interpret.sae.paths import vectors_parquet_path
 from interpret.sae.pipeline.prepare_sae_data import (
     SAEPipelineConfig,
     SAEPipelineRunner,
@@ -66,6 +65,17 @@ def prepare_sae_data(
     """
     start = time.time()
 
+    if model_size not in MODEL_SIZE_TO_LAYERS:
+        return {
+            "model_id": "",
+            "sae_id": "",
+            "features_parquet": None,
+            "activations_jsonl": None,
+            "duration_seconds": 0.0,
+            "status": "failed",
+            "error": f"Unknown model_size '{model_size}'. Valid: {list(MODEL_SIZE_TO_LAYERS.keys())}",
+        }
+
     ht = HOOK_TYPE_FROM_STR.get(hook_type)
     if ht is None:
         return {
@@ -78,8 +88,8 @@ def prepare_sae_data(
             "error": (f"Unknown hook_type '{hook_type}'. Valid: {list(HOOK_TYPE_FROM_STR.keys())}"),
         }
 
-    max_layers = MODEL_SIZE_TO_LAYERS.get(model_size)
-    if max_layers is not None and layer >= max_layers:
+    max_layers = MODEL_SIZE_TO_LAYERS[model_size]
+    if layer >= max_layers:
         return {
             "model_id": "",
             "sae_id": "",

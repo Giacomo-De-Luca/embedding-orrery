@@ -951,6 +951,38 @@ class Query:
         )
 
     @strawberry.field
+    def search_documents_by_feature_indices(
+        self,
+        collection_name: str,
+        feature_indices: list[int],
+        limit: int = 50,
+        info=None,
+    ) -> list[DocumentActivationResult]:
+        """Search documents by explicit SAE feature indices (user-selected from combobox).
+
+        Unlike searchDocumentsByFeatures which does label→features→docs in one call,
+        this takes pre-selected feature indices directly. Used when the frontend lets
+        the user pick specific features from a multi-select combobox.
+        """
+        db = get_duckdb_client()
+        results = db.search_documents_by_feature_indices(
+            collection_name=collection_name,
+            feature_indices=feature_indices,
+            limit=limit,
+        )
+        return [
+            DocumentActivationResult(
+                item_id=r["item_id"],
+                document=r.get("document"),
+                metadata=r.get("metadata"),
+                score=r["score"],
+                matching_features=r["matching_features"],
+                row_index=r.get("row_index"),
+            )
+            for r in results
+        ]
+
+    @strawberry.field
     def has_document_activations(
         self,
         collection_name: str,

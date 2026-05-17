@@ -79,12 +79,16 @@ class GemmaScopeSAEConfig:
     variant: str = "it"  # "pt" (pretrained/base) or "it" (instruction-tuned)
     width: str = "16k"  # "16k", "65k", or "262k"
     l0_size: str = "medium"  # "small", "medium", or "big"
-    d_in: int = 2560
+    d_in: int | None = None  # auto-derived from model_size if None
     dtype: str = "bfloat16"
     device: str = "mps"
     collect_last_only: bool = False
     prefill_only: bool = False
     read_only: bool = True
+
+    def __post_init__(self) -> None:
+        if self.d_in is None:
+            self.d_in = MODEL_SIZE_TO_D_IN.get(self.model_size, 2560)
 
     @property
     def repo_id(self) -> str:

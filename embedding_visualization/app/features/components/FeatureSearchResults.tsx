@@ -80,15 +80,15 @@ export function FeatureSearchResults({
 
   return (
     <div className="border rounded-md overflow-hidden">
-      <table className="w-full text-sm">
+      <table className="w-full text-sm table-fixed">
         <thead>
           <tr className="border-b bg-muted/50">
-            <th className="text-left px-3 py-2 font-medium text-xs text-muted-foreground w-16">#</th>
+            <th className="text-left px-3 py-2 font-medium text-xs text-muted-foreground w-14">#</th>
             {showSaeBadge && (
-              <th className="text-left px-3 py-2 font-medium text-xs text-muted-foreground w-24">SAE</th>
+              <th className="text-left px-3 py-2 font-medium text-xs text-muted-foreground w-20">SAE</th>
             )}
             <th className="text-left px-3 py-2 font-medium text-xs text-muted-foreground">Label</th>
-            <th className="text-right px-3 py-2 font-medium text-xs text-muted-foreground w-24">
+            <th className="text-right px-3 py-2 font-medium text-xs text-muted-foreground w-20">
               {valueLabel}
             </th>
           </tr>
@@ -120,10 +120,10 @@ export function FeatureSearchResults({
                     </Badge>
                   </td>
                 )}
-                <td className="px-3 py-2 text-xs truncate max-w-xs" title={row.label ?? ''}>
+                <td className="px-3 py-2 text-xs truncate overflow-hidden" title={row.label ?? ''}>
                   {row.label ?? <span className="text-muted-foreground italic">no label</span>}
                 </td>
-                <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground tabular-nums">
+                <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                   {row.value != null
                     ? isSemanticMode
                       ? row.value.toFixed(4)

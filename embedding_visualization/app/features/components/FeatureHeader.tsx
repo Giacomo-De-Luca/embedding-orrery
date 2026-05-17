@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, type KeyboardEvent } from 'react';
+import { useState, useCallback, useEffect, type KeyboardEvent } from 'react';
 import { Input } from '@/lib/ui-primitives/input';
 import { Button } from '@/lib/ui-primitives/button';
 import { Search, ArrowLeft, ArrowRight } from 'lucide-react';
@@ -100,11 +100,12 @@ export function FeatureHeader({
     }
   }, [featureIndex, maxFeatureIndex, onFeatureIndexChange]);
 
-  // Sync local input when parent changes feature index
-  const displayedIndex = featureIndex?.toString() ?? '';
-  if (indexInput !== displayedIndex && featureIndex != null) {
-    setIndexInput(displayedIndex);
-  }
+  // Sync local input when parent changes feature index (e.g. clicking a search result)
+  useEffect(() => {
+    if (featureIndex != null) {
+      setIndexInput(featureIndex.toString());
+    }
+  }, [featureIndex]);
 
   const indexNavDisabled = !isSingleSae;
 
