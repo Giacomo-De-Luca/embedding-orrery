@@ -383,6 +383,7 @@ class InterpretService:
 
         # Enrich labels/density from DuckDB (authoritative source).
         db = get_duckdb_client()
+        density_threshold = explorer._config.density_threshold
 
         layer_results: list[LayerActivationsResult] = []
         for layer_idx in sorted(prompt_result.layers.keys()):
@@ -422,12 +423,16 @@ class InterpretService:
                 features = []
                 for f in tf.features:
                     db_label, db_density = label_map.get(f.index, ("", None))
+                    density = db_density if db_density is not None else f.density
+                    # Filter out ultra-common features using DuckDB density
+                    if density is not None and density >= density_threshold:
+                        continue
                     features.append(
                         ActiveFeatureResult(
                             index=f.index,
                             activation=f.activation,
                             label=db_label or f.label,
-                            density=db_density if db_density is not None else f.density,
+                            density=density,
                         )
                     )
                 token_results.append(
