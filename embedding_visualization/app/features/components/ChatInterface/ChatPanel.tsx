@@ -8,7 +8,8 @@ import { Slider } from '@/lib/ui-primitives/slider';
 import { useScrollToBottom } from '@/lib/hooks/useScrollToBottom';
 import { useSteeringChat, type SteeringChatOptions } from '@/lib/hooks/useSteeringChat';
 import { cn } from '@/lib/utils/utils';
-import type { ChatMessage as ChatMessageType, ChatSessionSummary, SaeFeature, SteeringConfig, SteeringFeature, MessageVote } from '@/lib/types/types';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
+import type { ChatMessage as ChatMessageType, ChatSessionSummary, SaeFeature, MessageVote } from '@/lib/types/types';
 import { ChatGreeting } from './ChatGreeting';
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
@@ -17,13 +18,7 @@ import { SteeringControls } from './SteeringControls';
 import { ThinkingIndicator } from './ThinkingIndicator';
 
 interface ChatPanelProps {
-  steeringConfig: SteeringConfig;
-  modelId: string | null;
-  saeId: string | null;
   currentFeature: SaeFeature | null;
-  onAddFeature: (feature: SteeringFeature) => void;
-  onRemoveFeature: (key: string) => void;
-  onUpdateStrength: (key: string, strength: number) => void;
   onClose?: () => void;
   // Chat history props
   sessions?: ChatSessionSummary[];
@@ -40,13 +35,7 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({
-  steeringConfig,
-  modelId,
-  saeId,
   currentFeature,
-  onAddFeature,
-  onRemoveFeature,
-  onUpdateStrength,
   onClose,
   sessions = [],
   sessionsLoading = false,
@@ -59,6 +48,8 @@ export function ChatPanel({
   loadedMessages,
   onSelectModel,
 }: ChatPanelProps) {
+  // Read model identity + steering config from store
+  const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
   const [maxTokens, setMaxTokens] = useState(256);
   const [temperature, setTemperature] = useState(0.7);
   const [showHistory, setShowHistory] = useState(false);
@@ -182,13 +173,7 @@ export function ChatPanel({
 
         {/* Steering controls */}
         <SteeringControls
-          config={steeringConfig}
-          onAddFeature={onAddFeature}
-          onRemoveFeature={onRemoveFeature}
-          onUpdateStrength={onUpdateStrength}
           currentFeature={currentFeature}
-          currentModelId={modelId}
-          currentSaeId={saeId}
         />
 
         {/* Generation parameters */}
@@ -291,8 +276,6 @@ export function ChatPanel({
           isGenerating={isBusy}
           showSuggestions={isEmpty}
           onSuggest={send}
-          modelId={steeringConfig.features[0]?.modelId ?? null}
-          saeId={steeringConfig.features[0]?.saeId ?? null}
           onSelectModel={onSelectModel}
         />
       </div>

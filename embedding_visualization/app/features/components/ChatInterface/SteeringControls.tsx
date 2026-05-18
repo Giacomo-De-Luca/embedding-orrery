@@ -11,63 +11,50 @@ import {
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
 import { cn } from '@/lib/utils/utils';
-import { parseSaeId } from '@/lib/utils/saeCollections';
-import type { SaeFeature, SteeringConfig, SteeringFeature } from '@/lib/types/types';
+import { useModelIdentityStore, steeringFeatureKey } from '@/lib/stores/useModelIdentityStore';
+import type { SaeFeature } from '@/lib/types/types';
 
 const DEFAULT_STRENGTH = 800;
 const STRENGTH_MIN = -2000;
 const STRENGTH_MAX = 2000;
 const STRENGTH_STEP = 50;
 
-/** Composite identity key for a steering feature. */
-export function steeringFeatureKey(f: SteeringFeature | { modelId: string; saeId: string; featureIndex: number }): string {
-  return `${f.modelId}::${f.saeId}::${f.featureIndex}`;
-}
+// Re-export so existing barrel imports still work
+export { steeringFeatureKey };
 
 interface SteeringControlsProps {
-  config: SteeringConfig;
-  onAddFeature: (feature: SteeringFeature) => void;
-  onRemoveFeature: (key: string) => void;
-  onUpdateStrength: (key: string, strength: number) => void;
   currentFeature: SaeFeature | null;
-  currentModelId: string | null;
-  currentSaeId: string | null;
 }
 
-export function SteeringControls({
-  config,
-  onAddFeature,
-  onRemoveFeature,
-  onUpdateStrength,
-  currentFeature,
-  currentModelId,
-  currentSaeId,
-}: SteeringControlsProps) {
+export function SteeringControls({ currentFeature }: SteeringControlsProps) {
   const [open, setOpen] = useState(true);
+  const config = useModelIdentityStore((s) => s.steeringConfig);
+  const modelId = useModelIdentityStore((s) => s.modelId);
+  const saeId = useModelIdentityStore((s) => s.saeId);
+  const parsedSae = useModelIdentityStore((s) => s.parsedSae);
   const count = config.features.length;
 
   const isCurrentAlreadyAdded =
     currentFeature != null &&
-    currentModelId != null &&
-    currentSaeId != null &&
+    modelId != null &&
+    saeId != null &&
     config.features.some(
-      (f) => steeringFeatureKey(f) === `${currentModelId}::${currentSaeId}::${currentFeature.featureIndex}`,
+      (f) => steeringFeatureKey(f) === `${modelId}::${saeId}::${currentFeature.featureIndex}`,
     );
 
-  const canAdd = currentFeature != null && currentModelId != null && currentSaeId != null && !isCurrentAlreadyAdded;
+  const canAdd = currentFeature != null && modelId != null && saeId != null && !isCurrentAlreadyAdded;
 
   const handleAdd = () => {
-    if (!canAdd) return;
-    const parsed = parseSaeId(currentSaeId!);
-    onAddFeature({
-      modelId: currentModelId!,
-      saeId: currentSaeId!,
-      layerIndex: parsed.layerIndex,
+    if (!canAdd || !parsedSae) return;
+    useModelIdentityStore.getState().addSteeringFeature({
+      modelId: modelId!,
+      saeId: saeId!,
+      layerIndex: parsedSae.layerIndex,
       featureIndex: currentFeature!.featureIndex,
       strength: DEFAULT_STRENGTH,
       label: currentFeature!.label ?? undefined,
-      hookType: parsed.hookType,
-      width: parsed.width,
+      hookType: parsedSae.hookType,
+      width: parsedSae.width,
     });
   };
 
@@ -116,7 +103,7 @@ export function SteeringControls({
                   min={STRENGTH_MIN}
                   max={STRENGTH_MAX}
                   step={STRENGTH_STEP}
-                  onValueChange={([v]) => onUpdateStrength(key, v)}
+                  onValueChange={([v]) => useModelIdentityStore.getState().updateSteeringStrength(key, v)}
                   className="w-20 shrink-0"
                 />
 
@@ -127,7 +114,7 @@ export function SteeringControls({
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={() => onRemoveFeature(key)}
+                  onClick={() => useModelIdentityStore.getState().removeSteeringFeature(key)}
                   className="size-5 shrink-0 text-muted-foreground/50 hover:text-destructive"
                 >
                   <X className="size-3" />

@@ -683,6 +683,8 @@ class Mutation:
                 loaded=result.loaded,
                 model_name=result.model_name,
                 device=result.device,
+                variant=result.variant,
+                model_size=result.model_size,
             )
         except (TimeoutError, RuntimeError) as e:
             return ModelStatus(loaded=False, model_name=str(e))
@@ -697,6 +699,8 @@ class Mutation:
             loaded=result.loaded,
             model_name=result.model_name,
             device=result.device,
+            variant=result.variant,
+            model_size=result.model_size,
         )
 
     @strawberry.mutation
@@ -716,6 +720,7 @@ class Mutation:
                         input.top_k,
                         input.model_id,
                         input.sae_id,
+                        input.skip_chat_template,
                     ),
                     timeout=120.0,
                 )

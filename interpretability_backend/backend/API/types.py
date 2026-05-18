@@ -886,6 +886,7 @@ class RunPromptActivationsInput:
     top_k: int = 10
     model_id: str | None = None
     sae_id: str | None = None
+    skip_chat_template: bool = False
 
 
 @strawberry.input
@@ -918,6 +919,8 @@ class ModelStatus:
     loaded: bool
     model_name: str | None = None
     device: str | None = None
+    variant: str | None = None       # "it" (instruction-tuned) or "pt" (pretrained/base)
+    model_size: str | None = None    # "4b", "12b", etc.
 
 
 @strawberry.type

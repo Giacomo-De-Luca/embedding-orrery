@@ -75,6 +75,8 @@ class ModelStatusResult:
     loaded: bool
     model_name: str | None = None
     device: str | None = None
+    variant: str | None = None      # "it" (instruction-tuned) or "pt" (pretrained/base)
+    model_size: str | None = None   # "4b", "12b", etc.
 
 
 @dataclass
@@ -163,6 +165,8 @@ class InterpretService:
             loaded=True,
             model_name=self._model_name,
             device=str(self._wrapper.device),
+            variant=self._variant,
+            model_size=self._model_size,
         )
 
     @staticmethod
@@ -351,6 +355,7 @@ class InterpretService:
         top_k: int,
         db_model_id: str | None = None,
         db_sae_id: str | None = None,
+        skip_chat_template: bool = False,
     ) -> PromptActivationsResult:
         """Run a prompt through the model with SAE hooks.
 
@@ -360,6 +365,8 @@ class InterpretService:
         Args:
             db_model_id: DuckDB model_id for label lookup (from frontend selector).
             db_sae_id: DuckDB sae_id for label lookup (from frontend selector).
+            skip_chat_template: If True, treat the prompt as raw text even for
+                instruction-tuned models (skip BOS only, no chat wrapping).
         """
         from backend.API.duckdb_instance import get_duckdb_client
 
@@ -373,9 +380,13 @@ class InterpretService:
 
         # Determine which token positions belong to the actual prompt
         all_token_strings = list(prompt_result.token_strings)
-        prompt_start, prompt_end = self._find_prompt_token_range(
-            all_token_strings, prompt
-        )
+        if skip_chat_template:
+            # Treat as raw text: skip only BOS token (position 0)
+            prompt_start, prompt_end = 1, len(all_token_strings)
+        else:
+            prompt_start, prompt_end = self._find_prompt_token_range(
+                all_token_strings, prompt
+            )
         prompt_token_strings = all_token_strings[prompt_start:prompt_end]
 
         # Use frontend-provided identifiers (authoritative), fall back to derived
@@ -779,21 +790,37 @@ class InterpretService:
                     )
 
             def _run_generation():
-                for event in wrapper.generate_chat_stream(
-                    turns,
-                    output_len,
-                    temperature,
-                    top_p,
-                    top_k,
-                    cancel_event=cancel_event,
-                ):
-                    emit_token(
-                        stream_id,
-                        event.token_index,
-                        event.token_id,
-                        event.text_delta,
-                        event.is_done,
+                if self._variant == "pt":
+                    # Base model: no chat template. Use the last user turn as
+                    # a plain prompt via generate_from_template (non-streaming).
+                    last_user_content = next(
+                        (content for role, content in reversed(turns) if role == "user"),
+                        "",
                     )
+                    text = wrapper.generate_from_template(
+                        last_user_content,
+                        output_len=output_len,
+                        temperature=temperature,
+                    )
+                    # Emit the full response as a single token event
+                    emit_token(stream_id, 0, 0, text, done=False)
+                    emit_token(stream_id, 1, 0, "", done=True)
+                else:
+                    for event in wrapper.generate_chat_stream(
+                        turns,
+                        output_len,
+                        temperature,
+                        top_p,
+                        top_k,
+                        cancel_event=cancel_event,
+                    ):
+                        emit_token(
+                            stream_id,
+                            event.token_index,
+                            event.token_id,
+                            event.text_delta,
+                            event.is_done,
+                        )
 
             if manager is not None:
                 with manager.session(wrapper.model.model.layers):

@@ -877,6 +877,8 @@ class Query:
             loaded=status.loaded,
             model_name=status.model_name,
             device=status.device,
+            variant=status.variant,
+            model_size=status.model_size,
         )
 
     # ------------------------------------------------------------------

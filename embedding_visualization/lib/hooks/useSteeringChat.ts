@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { GENERATE_STREAM } from '@/lib/graphql/queries';
-import { ensureModelLoaded, modelIdToCheckpoint } from '@/lib/utils/modelLoader';
+import { ensureModelLoaded } from '@/lib/utils/modelLoader';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import type { ChatMessage, ChatStatus, SteeringConfig } from '@/lib/types/types';
 
 export interface UseSteeringChatReturn {
@@ -166,9 +167,8 @@ export function useSteeringChat(
       // Ensure model is loaded, then start streaming
       const startStreaming = async () => {
         try {
-          const modelId = config.features[0]?.modelId;
-          const checkpoint = modelId ? modelIdToCheckpoint(modelId) : undefined;
-          const loadError = await ensureModelLoaded(checkpoint);
+          const { checkpoint } = useModelIdentityStore.getState();
+          const loadError = await ensureModelLoaded(checkpoint ?? undefined);
           if (cancelledRef.current) return;
           if (loadError) {
             removePlaceholder();

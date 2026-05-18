@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { ChevronDown, Cpu } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,7 +13,8 @@ import {
 import { cn } from '@/lib/utils/utils';
 import { MODEL_STATUS, GET_SAE_MODELS } from '@/lib/graphql/queries';
 import { LOAD_MODEL, UNLOAD_MODEL } from '@/lib/graphql/mutations';
-import { modelIdToCheckpoint, isModelMatch } from '@/lib/utils/modelLoader';
+import { isModelMatch } from '@/lib/utils/modelLoader';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 
 interface SaeModelInfo {
   modelId: string;
@@ -23,22 +24,42 @@ interface SaeModelInfo {
 }
 
 interface ModelStatusButtonProps {
-  modelId: string | null;
-  saeId: string | null;
   onSelectModel?: (modelId: string, saeId: string) => void;
 }
 
-function PureModelStatusButton({ modelId, saeId, onSelectModel }: ModelStatusButtonProps) {
+function PureModelStatusButton({ onSelectModel }: ModelStatusButtonProps) {
+  const modelId = useModelIdentityStore((s) => s.modelId);
+  const checkpoint = useModelIdentityStore((s) => s.checkpoint);
   const [transitioning, setTransitioning] = useState(false);
   const [open, setOpen] = useState(false);
 
   // Model status polling
   const { data: statusData, refetch } = useQuery<{
-    modelStatus: { loaded: boolean; modelName: string | null; device: string | null };
+    modelStatus: {
+      loaded: boolean;
+      modelName: string | null;
+      device: string | null;
+      variant: string | null;
+      modelSize: string | null;
+    };
   }>(MODEL_STATUS, {
     pollInterval: 5000,
     fetchPolicy: 'network-only',
   });
+
+  // Sync backend status into the store
+  useEffect(() => {
+    if (statusData?.modelStatus) {
+      const ms = statusData.modelStatus;
+      useModelIdentityStore.getState().syncBackendStatus({
+        loaded: ms.loaded,
+        modelName: ms.modelName,
+        device: ms.device,
+        variant: ms.variant,
+        modelSize: ms.modelSize,
+      });
+    }
+  }, [statusData]);
 
   // Available models list (reuse same query as SteeringSelector)
   const { data: modelsData } = useQuery<{ saeModels: SaeModelInfo[] }>(GET_SAE_MODELS);
@@ -49,7 +70,6 @@ function PureModelStatusButton({ modelId, saeId, onSelectModel }: ModelStatusBut
   // Derive status
   const loaded = statusData?.modelStatus?.loaded ?? false;
   const loadedModelName = statusData?.modelStatus?.modelName ?? null;
-  const checkpoint = modelId ? modelIdToCheckpoint(modelId) : null;
   const isCorrectModel = loaded && !!checkpoint && isModelMatch(loadedModelName, checkpoint);
 
   const dotColorClass = transitioning
@@ -94,6 +114,10 @@ function PureModelStatusButton({ modelId, saeId, onSelectModel }: ModelStatusBut
   }, [onSelectModel]);
 
   const displayLabel = modelId ?? 'No model';
+  const backendVariant = statusData?.modelStatus?.variant ?? null;
+  const variantLabel = isCorrectModel && backendVariant
+    ? backendVariant === 'pt' ? 'Base' : 'Chat'
+    : null;
 
   return (
     <div className="flex items-center gap-0.5">
@@ -107,7 +131,7 @@ function PureModelStatusButton({ modelId, saeId, onSelectModel }: ModelStatusBut
           transitioning
             ? 'Loading...'
             : isCorrectModel
-              ? 'Model loaded — click to unload'
+              ? `Model loaded (${variantLabel ?? 'unknown'}) — click to unload`
               : 'Model not loaded — click to load'
         }
       >
@@ -118,10 +142,20 @@ function PureModelStatusButton({ modelId, saeId, onSelectModel }: ModelStatusBut
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
-            className="h-7 max-w-[180px] justify-start gap-1 rounded-lg px-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            className="h-7 max-w-[210px] justify-start gap-1 rounded-lg px-1.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
             variant="ghost"
           >
             <span className="truncate">{displayLabel}</span>
+            {variantLabel && (
+              <span className={cn(
+                'shrink-0 rounded px-1 py-px text-[9px] font-medium leading-none',
+                backendVariant === 'pt'
+                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                  : 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+              )}>
+                {variantLabel}
+              </span>
+            )}
             <ChevronDown className="ml-auto h-3 w-3 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>

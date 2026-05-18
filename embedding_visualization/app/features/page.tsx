@@ -19,7 +19,6 @@ import {
 import type {
   SaeModelInfo, SaeFeature, SaeActivation,
   SaeFeatureSearchResult, SaeActivationQuantileGroup,
-  SteeringConfig, SteeringFeature,
 } from '@/lib/types/types';
 import { FeatureHeader } from './components/FeatureHeader';
 import { FeatureDetailCard } from './components/FeatureDetailCard';
@@ -35,8 +34,9 @@ import { Slider } from '@/lib/ui-primitives/slider';
 import { RUN_PROMPT_ACTIVATIONS } from '@/lib/graphql/mutations';
 import type { PromptActivationsResult } from '@/lib/graphql/mutations';
 import { SAE_TO_COLLECTION, getSemanticCollectionName, getSemanticCollections, parseSaeId } from '@/lib/utils/saeCollections';
-import { ensureModelLoaded, modelIdToCheckpoint } from '@/lib/utils/modelLoader';
-import { ChatPanel, steeringFeatureKey } from './components/ChatInterface';
+import { ensureModelLoaded } from '@/lib/utils/modelLoader';
+import { ChatPanel } from './components/ChatInterface';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { PromptTokenActivations, type SelectedTokenInfo } from './components/PromptTokenActivations';
 import { useChatSessions } from '@/lib/hooks/useChatSessions';
 import { useSaeSelectors } from './hooks/useSaeSelectors';
@@ -94,6 +94,7 @@ export default function FeaturesPage() {
   const [searchMode, setSearchMode] = useState<'text' | 'semantic' | 'prompt'>('text');
 
   // Prompt search state — single call to runPromptActivations gives both ranked list and token strip
+  const [skipChatTemplate, setSkipChatTemplate] = useState(false);
   const [promptActivations, setPromptActivations] = useState<PromptActivationsResult | null>(null);
   const [promptSearchLoading, setPromptSearchLoading] = useState(false);
   const [promptSearchError, setPromptSearchError] = useState<string | null>(null);
@@ -102,22 +103,9 @@ export default function FeaturesPage() {
   const [selectedTokenInfo, setSelectedTokenInfo] = useState<SelectedTokenInfo | null>(null);
   const [hoveredActivationValue, setHoveredActivationValue] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
-  const [steeringConfig, setSteeringConfig] = useState<SteeringConfig>(() => {
-    const defaultModelId = 'gemma-3-4b-it';
-    const defaultSaeId = '9-gemmascope-2-res-16k';
-    const parsed = parseSaeId(defaultSaeId);
-    return {
-      features: [3289, 197, 437].map((featureIndex) => ({
-        modelId: defaultModelId,
-        saeId: defaultSaeId,
-        layerIndex: parsed.layerIndex,
-        featureIndex,
-        strength: 0,
-        hookType: parsed.hookType,
-        width: parsed.width,
-      })),
-    };
-  });
+
+  // Steering config from Zustand store (single source of truth)
+  const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
   const [chatWidth, setChatWidth] = useState(448); // 28rem
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
@@ -192,7 +180,7 @@ export default function FeaturesPage() {
       try {
         const { messages, config } = await loadSession(id);
         setLoadedMessages(messages);
-        setSteeringConfig(config);
+        useModelIdentityStore.getState().setSteeringConfig(config);
       } catch {
         toast.error('Failed to load session');
       }
@@ -252,23 +240,22 @@ export default function FeaturesPage() {
     totalFeatureCount,
   } = useSaeSelectors(models, initialSelectors);
 
+  // Aliases reading from the selector hook (for queries, URL sync, etc.)
   const modelId = singleModelId;
   const saeId = singleSaeId;
 
-  // Handle model selection from the chat input — syncs both steering config and page selectors
+  // Bridge useSaeSelectors output into the Zustand store (single source of truth)
+  useEffect(() => {
+    if (isSingleSae) {
+      useModelIdentityStore.getState().setIdentity(singleModelId, singleSaeId);
+    } else {
+      useModelIdentityStore.getState().setIdentity(null, null);
+    }
+  }, [isSingleSae, singleModelId, singleSaeId]);
+
+  // Handle model selection from the chat input — updates selectors only; bridge effect syncs store
   const handleSelectModel = useCallback((newModelId: string, newSaeId: string) => {
     const parsed = parseSaeId(newSaeId);
-    setSteeringConfig({
-      features: [{
-        modelId: newModelId,
-        saeId: newSaeId,
-        layerIndex: parsed.layerIndex,
-        featureIndex: 0,
-        strength: 0,
-        hookType: parsed.hookType,
-        width: parsed.width,
-      }],
-    });
     setModel(newModelId);
     setLayer(String(parsed.layerIndex));
     setHookType(parsed.hookType);
@@ -278,7 +265,6 @@ export default function FeaturesPage() {
   // Auto-select first model when no URL params and models load
   useEffect(() => {
     if (!modelIdParam && !saeIdParam && models.length > 0 && resolvedSaePairs.length === 0) {
-      // Default to first model's specific SAE
       const first = models[0];
       const parsed = parseSaeId(first.saeId);
       setModel(first.modelId);
@@ -287,28 +273,6 @@ export default function FeaturesPage() {
       setWidth(parsed.width);
     }
   }, [models, modelIdParam, saeIdParam, resolvedSaePairs.length, setModel, setLayer, setHookType, setWidth]);
-
-  // Sync steering config when the page-level model/SAE resolves to a single pair
-  useEffect(() => {
-    if (!isSingleSae || !modelId || !saeId) return;
-    const currentModelId = steeringConfig.features[0]?.modelId;
-    const currentSaeId = steeringConfig.features[0]?.saeId;
-    if (currentModelId === modelId && currentSaeId === saeId) return;
-    const parsed = parseSaeId(saeId);
-    setSteeringConfig((prev) => ({
-      features: prev.features.length > 0 && prev.features[0].modelId === modelId
-        ? prev.features.map((f) => ({ ...f, saeId, layerIndex: parsed.layerIndex, hookType: parsed.hookType, width: parsed.width }))
-        : [{
-            modelId,
-            saeId,
-            layerIndex: parsed.layerIndex,
-            featureIndex: 0,
-            strength: 0,
-            hookType: parsed.hookType,
-            width: parsed.width,
-          }],
-    }));
-  }, [isSingleSae, modelId, saeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Semantic collection: single-SAE mode uses direct lookup, multi-SAE checks all resolved
   const semanticCollectionName = useMemo(
@@ -493,24 +457,24 @@ export default function FeaturesPage() {
       setPromptSearchLoading(true);
       setPromptSearchError(null);
       try {
-        const checkpoint = modelIdToCheckpoint(modelId);
-        const loadErr = await ensureModelLoaded(checkpoint);
+        const { checkpoint: storeCheckpt, parsedSae } = useModelIdentityStore.getState();
+        const loadErr = await ensureModelLoaded(storeCheckpt ?? undefined);
         if (loadErr) {
           setPromptSearchError(loadErr);
           setPromptSearchLoading(false);
           return;
         }
-        const parsed = parseSaeId(saeId);
         const { data } = await apolloClient.mutate<{ runPromptActivations: PromptActivationsResult }>({
           mutation: RUN_PROMPT_ACTIVATIONS,
           variables: {
             input: {
               prompt: q,
-              layers: [parsed.layerIndex],
-              width: parsed.width,
+              layers: parsedSae ? [parsedSae.layerIndex] : [],
+              width: parsedSae?.width ?? '16k',
               topK: 0,
               modelId: modelId,
               saeId: saeId,
+              skipChatTemplate,
             },
           },
         });
@@ -615,29 +579,6 @@ export default function FeaturesPage() {
       });
     }
   }, [modelId, saeId, featureIndex, fetchQuantiles]);
-
-  // ---------- Steering handlers ----------
-
-  const handleAddFeature = useCallback((f: SteeringFeature) => {
-    const key = steeringFeatureKey(f);
-    setSteeringConfig((prev) => ({
-      features: [...prev.features.filter((x) => steeringFeatureKey(x) !== key), f],
-    }));
-  }, []);
-
-  const handleRemoveFeature = useCallback((key: string) => {
-    setSteeringConfig((prev) => ({
-      features: prev.features.filter((x) => steeringFeatureKey(x) !== key),
-    }));
-  }, []);
-
-  const handleUpdateStrength = useCallback((key: string, strength: number) => {
-    setSteeringConfig((prev) => ({
-      features: prev.features.map((f) =>
-        steeringFeatureKey(f) === key ? { ...f, strength } : f,
-      ),
-    }));
-  }, []);
 
   // Max feature index for navigation bounds (single SAE only)
   const maxFeatureIndex = isSingleSae ? totalFeatureCount : undefined;
@@ -755,6 +696,21 @@ export default function FeaturesPage() {
 
                     {isPromptSearch && promptSearchError && (
                       <p className="text-xs text-destructive shrink-0">{promptSearchError}</p>
+                    )}
+
+                    {/* Skip chat template toggle (prompt mode only) */}
+                    {isPromptSearch && (
+                      <label className="flex items-center gap-1.5 shrink-0 mb-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={skipChatTemplate}
+                          onChange={(e) => setSkipChatTemplate(e.target.checked)}
+                          className="h-3 w-3 rounded border-border accent-primary"
+                        />
+                        <span className="text-[10px] text-muted-foreground select-none">
+                          Raw tokens (skip chat template)
+                        </span>
+                      </label>
                     )}
 
                     {/* Prompt pooling controls (only when showing pooled results, not token features) */}
@@ -936,13 +892,7 @@ export default function FeaturesPage() {
           />
           <div className="flex h-full flex-col border-l bg-background">
             <ChatPanel
-              steeringConfig={steeringConfig}
-              modelId={modelId}
-              saeId={saeId}
               currentFeature={feature}
-              onAddFeature={handleAddFeature}
-              onRemoveFeature={handleRemoveFeature}
-              onUpdateStrength={handleUpdateStrength}
               onClose={closeChat}
               sessions={chatSessions}
               sessionsLoading={chatSessionsLoading}

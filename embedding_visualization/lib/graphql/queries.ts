@@ -539,6 +539,8 @@ export const MODEL_STATUS = gql`
       loaded
       modelName
       device
+      variant
+      modelSize
     }
   }
 `;
