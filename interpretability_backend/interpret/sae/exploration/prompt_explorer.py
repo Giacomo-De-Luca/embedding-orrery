@@ -444,13 +444,9 @@ class PromptExplorer:
                         stacklevel=2,
                     )
                 if self._config.skip_labels:
-                    # Service mode: pure torch top-k, no JSONL/SQLite access.
-                    # Still apply density masking if label files are available
-                    # to filter out ultra-common non-interpretable features.
-                    try:
-                        mask = self._get_density_mask(cfg)
-                    except FileNotFoundError:
-                        mask = None
+                    # Service mode: no JSONL/SQLite access.  Density filtering
+                    # is handled by the service layer via DuckDB (authoritative).
+                    mask = None
                     if k > 0:
                         per_token = self._unlabelled_top_k_per_token(
                             feature_acts, k=k, mask=mask,

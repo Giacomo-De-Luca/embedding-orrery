@@ -244,14 +244,15 @@ export default function FeaturesPage() {
   const modelId = singleModelId;
   const saeId = singleSaeId;
 
-  // Bridge useSaeSelectors output into the Zustand store (single source of truth)
+  // Bridge useSaeSelectors output into the Zustand store (single source of truth).
+  // Always propagate the model selector value so the chat knows which model to
+  // load, even when multiple SAEs are resolved. saeId is only set when exactly
+  // one SAE is resolved (needed for label lookups / prompt search).
   useEffect(() => {
-    if (isSingleSae) {
-      useModelIdentityStore.getState().setIdentity(singleModelId, singleSaeId);
-    } else {
-      useModelIdentityStore.getState().setIdentity(null, null);
-    }
-  }, [isSingleSae, singleModelId, singleSaeId]);
+    const effectiveModelId = singleModelId ?? selectors.model ?? null;
+    const effectiveSaeId = isSingleSae ? singleSaeId : null;
+    useModelIdentityStore.getState().setIdentity(effectiveModelId, effectiveSaeId);
+  }, [isSingleSae, singleModelId, singleSaeId, selectors.model]);
 
   // Handle model selection from the chat input — updates selectors only; bridge effect syncs store
   const handleSelectModel = useCallback((newModelId: string, newSaeId: string) => {
