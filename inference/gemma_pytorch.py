@@ -129,8 +129,9 @@ class GemmaPytorchInference:
                 f"Expected: {tokenizer_rel}"
             )
 
-        # Construct model with bfloat16 default tensor type
-        with _set_default_tensor_type(torch.bfloat16):
+        # Construct model with the configured dtype as the default tensor type
+        model_dtype = self.config.get_dtype() or torch.bfloat16
+        with _set_default_tensor_type(model_dtype):
             self.model = gemma3_model.Gemma3ForMultimodalLM(self.config)
             self._load_weights(checkpoint_path)
 
