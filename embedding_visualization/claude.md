@@ -70,6 +70,7 @@ Visualization state is managed by a **Zustand store** (`lib/stores/useVisualizat
 | Resize hooks | `lib/hooks/useVerticalResize.ts` — drag-to-resize with collapse-on-release for Legend |
 | SAE Feature Explorer | `app/features/page.tsx` + `components/` — token-strip heatmaps, logit charts, feature search |
 | SAE collection map | `lib/utils/saeCollections.ts` — single source of truth for collection ↔ SAE model/layer mapping |
+| Steering presets | `lib/utils/steeringPresets.ts` — model-keyed bundles auto-loaded by `ChatPanel` on mount when the steering config is empty; ship at strength 0. Direction-vector presets (`directionName` set) render with a ±5 / 0.1-step slider and resolve server-side via `DIRECTION_REGISTRY`. Strength-0 entries are filtered from the GraphQL payload (`useSteeringChat.buildSteeringInputs`) so inactive presets cost nothing. |
 | UI primitives | `lib/ui-primitives/` — 34 Shadcn components |
 
 ## GraphQL Integration

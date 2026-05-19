@@ -787,6 +787,7 @@ export const SAVE_CHAT_MESSAGE = gql`
       role
       content
       parts
+      steeringSnapshot
       createdAt
     }
   }

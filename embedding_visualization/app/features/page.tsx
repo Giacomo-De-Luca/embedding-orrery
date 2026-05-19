@@ -105,8 +105,6 @@ export default function FeaturesPage() {
   const [hoveredActivationValue, setHoveredActivationValue] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
 
-  // Steering config from Zustand store (single source of truth)
-  const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
   const [chatWidth, setChatWidth] = useState(448); // 28rem
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
@@ -158,19 +156,21 @@ export default function FeaturesPage() {
   const handleUserMessageSent = useCallback(
     async (message: ChatMessage) => {
       let sessionId = activeSessionIdRef.current;
+      const snapshot = useModelIdentityStore.getState().steeringConfig;
       if (!sessionId) {
-        sessionId = await createSession(steeringConfig, message.content);
+        sessionId = await createSession(snapshot, message.content);
       }
-      saveMessage(sessionId, message);
+      saveMessage(sessionId, message, snapshot);
     },
-    [createSession, saveMessage, steeringConfig]
+    [createSession, saveMessage]
   );
 
   const handleAssistantMessageComplete = useCallback(
     (message: ChatMessage) => {
       const sessionId = activeSessionIdRef.current;
       if (sessionId) {
-        saveMessage(sessionId, message);
+        const snapshot = useModelIdentityStore.getState().steeringConfig;
+        saveMessage(sessionId, message, snapshot);
       }
     },
     [saveMessage]

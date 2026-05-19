@@ -1,0 +1,8 @@
+{
+  "name": "refusal",
+  "intermediate": "pre_attn",
+  "source_position": -3,
+  "layer": 14,
+  "coefficient": -1.0,
+  "model_id": "gemma-3-4b-it"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "poetry_prose",
+  "intermediate": "post_attn",
+  "position": -2,
+  "layer": 11,
+  "coefficient": 1.0,
+  "refusal_score": -6.336913547085789,
+  "kl_score": 0.26500870841844637,
+  "baseline_harmful_refusal_score": 7.475366300480627,
+  "baseline_harmless_refusal_score": -17.991878264735387,
+  "model_id": "gemma-3-4b-it"
+}

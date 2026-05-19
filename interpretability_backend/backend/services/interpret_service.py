@@ -66,6 +66,44 @@ _DEFAULT_LAYERS = [9, 17, 22, 29]  # fallback for unknown sizes
 
 
 # ---------------------------------------------------------------------------
+# Direction-vector presets
+# ---------------------------------------------------------------------------
+#
+# Activation-additive steering directions stored as pre-extracted 1-D ``.pt``
+# files (model-dim vectors). Unlike SAE-feature steering, the vector is
+# loaded directly rather than read from ``sae.w_dec``. The runtime applies
+# them at ``RESID_POST`` of the configured layer. The metadata JSON files
+# co-located with each ``.pt`` are provenance only; layer + model binding
+# live here as the runtime source of truth.
+
+DIRECTIONS_DIR = Path(__file__).resolve().parents[2] / "resources" / "directions"
+
+
+@dataclass(frozen=True)
+class DirectionPreset:
+    name: str
+    file: str       # filename inside DIRECTIONS_DIR
+    layer: int      # applied at RESID_POST of this layer
+    model_id: str   # gated to this model only
+
+
+DIRECTION_REGISTRY: dict[str, DirectionPreset] = {
+    "refusal": DirectionPreset(
+        name="refusal",
+        file="refusal_direction.pt",
+        layer=14,
+        model_id="gemma-3-4b-it",
+    ),
+    "poetry": DirectionPreset(
+        name="poetry",
+        file="poetry_direction.pt",
+        layer=11,
+        model_id="gemma-3-4b-it",
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Service result dataclasses (plain Python, not Strawberry)
 # ---------------------------------------------------------------------------
 
@@ -110,13 +148,21 @@ class PromptActivationsResult:
 
 @dataclass
 class SteeringSpec:
-    """A single steering feature specification (service-internal)."""
+    """A single steering specification (service-internal).
+
+    Two mutually exclusive flavours:
+      - SAE feature: ``feature_index`` + ``layer`` + ``hook_type`` + ``width``
+        resolve a direction from ``sae.w_dec``.
+      - Pre-extracted direction: ``direction_name`` resolves a 1-D vector
+        from ``DIRECTION_REGISTRY``. The other fields are ignored.
+    """
 
     feature_index: int
     layer: int
     hook_type: str
     width: str
     strength: float
+    direction_name: str | None = None
 
 
 @dataclass
@@ -157,6 +203,7 @@ class InterpretService:
         self._model_size: str = "4b"
         self._variant: str = "it"
         self._lock = asyncio.Lock()
+        self._direction_cache: dict[str, torch.Tensor] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -249,6 +296,7 @@ class InterpretService:
         self._model_name = None
         self._model_size = "4b"
         self._variant = "it"
+        self._direction_cache.clear()
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
@@ -265,6 +313,31 @@ class InterpretService:
         if self._wrapper is None:
             raise RuntimeError("Model not loaded. Call loadModel first.")
         return self._wrapper
+
+    def _load_direction(self, name: str) -> torch.Tensor:
+        """Resolve a 1-D direction vector by registry name, with per-instance caching.
+
+        The cached tensor lives on the model's device with ``float32`` dtype.
+        Cleared on ``unload_model`` so a fresh device is picked up on reload.
+        """
+        if name in self._direction_cache:
+            return self._direction_cache[name]
+        preset = DIRECTION_REGISTRY.get(name)
+        if preset is None:
+            raise KeyError(f"unknown direction: {name!r}")
+        wrapper = self._require_model()
+        path = DIRECTIONS_DIR / preset.file
+        if not path.exists():
+            raise FileNotFoundError(f"direction file missing: {path}")
+        vec = torch.load(path, map_location=wrapper.device, weights_only=False)
+        if not isinstance(vec, torch.Tensor) or vec.ndim != 1:
+            raise ValueError(
+                f"direction {name!r} must be a 1-D tensor, got "
+                f"{type(vec).__name__} shape={getattr(vec, 'shape', None)}"
+            )
+        vec = vec.to(dtype=torch.float32).contiguous()
+        self._direction_cache[name] = vec
+        return vec
 
     def _get_prompt_explorer(
         self,
@@ -552,8 +625,13 @@ class InterpretService:
         if not steering_specs:
             raise ValueError("At least one steering spec is required.")
 
-        # Validate all specs up-front before any inference.
+        # Validate SAE-feature specs up-front. Direction specs need no validation
+        # (registry lookup happens at apply time and raises clearly).
         for spec in steering_specs:
+            if spec.direction_name is not None:
+                if spec.direction_name not in DIRECTION_REGISTRY:
+                    raise KeyError(f"unknown direction: {spec.direction_name!r}")
+                continue
             d_sae = WIDTH_TO_D_SAE.get(spec.width)
             if d_sae is None:
                 raise ValueError(f"Unknown SAE width '{spec.width}'")
@@ -576,6 +654,20 @@ class InterpretService:
         manager = HookManager()
         seen_sae_keys: set[tuple[int, str, str]] = set()
         for spec in steering_specs:
+            if spec.direction_name is not None:
+                preset = DIRECTION_REGISTRY[spec.direction_name]
+                manager.add_steering(
+                    SteeringOp(
+                        layer_index=preset.layer,
+                        mode=SteeringMode.ADDITIVE,
+                        vector=self._load_direction(spec.direction_name),
+                        strength=spec.strength,
+                        normalise=False,
+                        hook_type=HookType.RESID_POST,
+                    )
+                )
+                continue
+
             ht = self._parse_hook_type(spec.hook_type)
             sae_key = (spec.layer, spec.hook_type, spec.width)
             if sae_key not in seen_sae_keys:
@@ -822,6 +914,22 @@ class InterpretService:
                 seen_sae_keys: set[tuple[int, str, str]] = set()
 
                 for spec in steering_specs:
+                    if spec.direction_name is not None:
+                        preset = DIRECTION_REGISTRY.get(spec.direction_name)
+                        if preset is None:
+                            raise KeyError(f"unknown direction: {spec.direction_name!r}")
+                        manager.add_steering(
+                            SteeringOp(
+                                layer_index=preset.layer,
+                                mode=SteeringMode.ADDITIVE,
+                                vector=self._load_direction(spec.direction_name),
+                                strength=spec.strength,
+                                normalise=False,
+                                hook_type=HookType.RESID_POST,
+                            )
+                        )
+                        continue
+
                     ht = self._parse_hook_type(spec.hook_type)
                     width = spec.width
                     d_sae = WIDTH_TO_D_SAE.get(width)

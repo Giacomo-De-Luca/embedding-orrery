@@ -1051,8 +1051,16 @@ class Mutation:
         """Save a message to a chat session."""
         db = get_duckdb_client()
         parts_str = json.dumps(input.parts) if input.parts is not None else None
+        steering_snapshot_str = (
+            json.dumps(input.steering_snapshot) if input.steering_snapshot is not None else None
+        )
         data = db.save_chat_message(
-            input.id, input.session_id, input.role, input.content, parts_str
+            input.id,
+            input.session_id,
+            input.role,
+            input.content,
+            parts_str,
+            steering_snapshot_str,
         )
         return ChatSessionMessage(
             id=data["id"],
@@ -1060,6 +1068,7 @@ class Mutation:
             role=data["role"],
             content=data["content"],
             parts=data.get("parts"),
+            steering_snapshot=data.get("steering_snapshot"),
             created_at=data["created_at"],
         )
 
@@ -1196,6 +1205,7 @@ def _steering_inputs_to_specs(inputs) -> list[SteeringSpec]:
             hook_type=s.hook_type.value,
             width=s.width,
             strength=s.strength,
+            direction_name=s.direction_name,
         )
         for s in inputs
     ]
@@ -1210,6 +1220,7 @@ def _steering_inputs_to_applied(inputs) -> list[AppliedSteering]:
             hook_type=s.hook_type.value,
             width=s.width,
             strength=s.strength,
+            direction_name=s.direction_name,
         )
         for s in inputs
     ]

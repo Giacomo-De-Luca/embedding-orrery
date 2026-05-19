@@ -879,10 +879,17 @@ class ActivationFilterMode(Enum):
 
 @strawberry.input
 class SteeringInput:
-    """A single SAE feature steering specification.
+    """A single steering specification.
+
+    Two flavours, distinguished by ``direction_name``:
+      - SAE feature (default): ``feature_index`` + ``layer`` + ``hook_type``
+        + ``width`` resolve a direction from ``sae.w_dec``.
+      - Pre-extracted direction: ``direction_name`` (e.g. "refusal", "poetry")
+        looks up a 1-D vector from the backend's DIRECTION_REGISTRY. The
+        other fields are ignored in that case (pass zeros / defaults).
 
     Multiple SteeringInput entries can be combined to steer on several
-    features simultaneously (same or different layers).
+    features / directions simultaneously.
     """
 
     feature_index: int
@@ -890,6 +897,7 @@ class SteeringInput:
     hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
     width: str = "16k"
     strength: float = 800.0
+    direction_name: str | None = None
 
 
 @strawberry.input
@@ -987,6 +995,7 @@ class AppliedSteering:
     hook_type: str
     width: str
     strength: float
+    direction_name: str | None = None
 
 
 @strawberry.type
@@ -1075,6 +1084,7 @@ class ChatSessionMessage:
     role: str
     content: str
     parts: JSON | None = None
+    steering_snapshot: JSON | None = None
     created_at: str
 
 
@@ -1108,3 +1118,4 @@ class SaveChatMessageInput:
     role: str
     content: str
     parts: JSON | None = None
+    steering_snapshot: JSON | None = None

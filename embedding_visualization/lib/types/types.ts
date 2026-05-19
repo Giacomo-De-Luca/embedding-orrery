@@ -353,6 +353,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   parts?: ChatMessagePart[];
+  steeringSnapshot?: SteeringConfig;
 }
 
 // Vote state (local-only for now, ready for GraphQL persistence later)
@@ -370,6 +371,10 @@ export interface SteeringFeature {
   label?: string;
   hookType?: string;   // 'RESID_POST' | 'MLP_OUT' | 'ATTN_OUT'
   width?: string;      // '16k', '65k', etc.
+  // Pre-extracted direction-vector preset (e.g. "refusal", "poetry"). When
+  // set, this entry is resolved server-side from DIRECTION_REGISTRY and
+  // the SAE-related fields are ignored. Layer is baked into the registry.
+  directionName?: string;
 }
 
 export interface SteeringConfig {

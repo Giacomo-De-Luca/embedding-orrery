@@ -41,14 +41,20 @@ _TOPIC_KEYS = frozenset(
 _SNIPPET_RADIUS = 100
 
 
-def _sanitize_for_json(d: dict) -> dict:
-    """Convert non-JSON-serializable values (datetime, etc.) to strings."""
+def _sanitize_for_json(d: dict, json_columns: tuple[str, ...] = ()) -> dict:
+    """Convert non-JSON-serializable values (datetime, etc.) to strings.
+
+    DuckDB returns ``JSON``-typed columns as Python strings; pass their names
+    in ``json_columns`` to parse them back into dicts/lists for API responses.
+    """
     import datetime
 
     out = {}
     for k, v in d.items():
         if isinstance(v, (datetime.datetime, datetime.date)):
             out[k] = v.isoformat()
+        elif k in json_columns and isinstance(v, str):
+            out[k] = json.loads(v)
         else:
             out[k] = v
     return out
@@ -305,14 +311,20 @@ class DuckDBClient:
 
         self._exec("""
             CREATE TABLE IF NOT EXISTS chat_messages (
-                id          VARCHAR PRIMARY KEY,
-                session_id  VARCHAR NOT NULL REFERENCES chat_sessions(id),
-                role        VARCHAR NOT NULL,
-                content     VARCHAR NOT NULL,
-                parts       JSON,
-                created_at  TIMESTAMP DEFAULT current_timestamp
+                id                VARCHAR PRIMARY KEY,
+                session_id        VARCHAR NOT NULL REFERENCES chat_sessions(id),
+                role              VARCHAR NOT NULL,
+                content           VARCHAR NOT NULL,
+                parts             JSON,
+                steering_snapshot JSON,
+                created_at        TIMESTAMP DEFAULT current_timestamp
             )
         """)
+
+        # Idempotent migration for DBs created before steering_snapshot existed.
+        self._exec(
+            "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS steering_snapshot JSON"
+        )
 
         self._exec("""
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session
@@ -2040,7 +2052,7 @@ class DuckDBClient:
         )
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
-        return _sanitize_for_json(dict(zip(cols, row)))
+        return _sanitize_for_json(dict(zip(cols, row)), json_columns=("config",))
 
     def list_chat_sessions(self, limit: int = 50) -> list[dict]:
         """List chat sessions ordered by most recently updated."""
@@ -2055,7 +2067,7 @@ class DuckDBClient:
         )
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
-        return [_sanitize_for_json(dict(zip(cols, r))) for r in rows]
+        return [_sanitize_for_json(dict(zip(cols, r)), json_columns=("config",)) for r in rows]
 
     def get_chat_session_with_messages(self, session_id: str) -> dict | None:
         """Get a session with all its messages."""
@@ -2066,11 +2078,11 @@ class DuckDBClient:
         if not row:
             return None
         cols = [d[0] for d in cur.description]
-        session = _sanitize_for_json(dict(zip(cols, row)))
+        session = _sanitize_for_json(dict(zip(cols, row)), json_columns=("config",))
 
         msg_cur = self._exec(
             """
-            SELECT id, session_id, role, content, parts, created_at
+            SELECT id, session_id, role, content, parts, steering_snapshot, created_at
             FROM chat_messages
             WHERE session_id = ?
             ORDER BY created_at ASC
@@ -2079,7 +2091,13 @@ class DuckDBClient:
         )
         msg_rows = msg_cur.fetchall()
         msg_cols = [d[0] for d in msg_cur.description]
-        session["messages"] = [_sanitize_for_json(dict(zip(msg_cols, m))) for m in msg_rows]
+        session["messages"] = [
+            _sanitize_for_json(
+                dict(zip(msg_cols, m)),
+                json_columns=("parts", "steering_snapshot"),
+            )
+            for m in msg_rows
+        ]
         return session
 
     def save_chat_message(
@@ -2089,14 +2107,15 @@ class DuckDBClient:
         role: str,
         content: str,
         parts_json: str | None = None,
+        steering_snapshot_json: str | None = None,
     ) -> dict:
         """Save a single chat message and bump session updated_at."""
         self._exec(
             """
-            INSERT INTO chat_messages (id, session_id, role, content, parts)
-            VALUES (?, ?, ?, ?, ?::JSON)
+            INSERT INTO chat_messages (id, session_id, role, content, parts, steering_snapshot)
+            VALUES (?, ?, ?, ?, ?::JSON, ?::JSON)
             """,
-            [message_id, session_id, role, content, parts_json],
+            [message_id, session_id, role, content, parts_json, steering_snapshot_json],
         )
         self._exec(
             "UPDATE chat_sessions SET updated_at = current_timestamp WHERE id = ?",
@@ -2107,7 +2126,10 @@ class DuckDBClient:
         )
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
-        return _sanitize_for_json(dict(zip(cols, row)))
+        return _sanitize_for_json(
+            dict(zip(cols, row)),
+            json_columns=("parts", "steering_snapshot"),
+        )
 
     def delete_chat_session(self, session_id: str) -> bool:
         """Delete a chat session and all its messages."""

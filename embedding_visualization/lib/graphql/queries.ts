@@ -3,6 +3,7 @@
  */
 
 import { gql } from '@apollo/client';
+import type { ChatMessagePart, SteeringConfig } from '@/lib/types/types';
 
 /**
  * Query to get all available collections
@@ -597,8 +598,30 @@ export const GET_CHAT_SESSION = gql`
         role
         content
         parts
+        steeringSnapshot
         createdAt
       }
     }
   }
 `;
+
+export interface ChatSessionQueryMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  parts: ChatMessagePart[] | null;
+  steeringSnapshot: SteeringConfig | null;
+  createdAt: string;
+}
+
+export interface ChatSessionQueryResult {
+  chatSession: {
+    id: string;
+    title: string;
+    config: SteeringConfig;
+    createdAt: string;
+    updatedAt: string;
+    messages: ChatSessionQueryMessage[];
+  } | null;
+}

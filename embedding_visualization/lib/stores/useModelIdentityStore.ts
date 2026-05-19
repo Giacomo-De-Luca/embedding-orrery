@@ -6,13 +6,22 @@ import { parseSaeId } from '../utils/saeCollections';
 import { modelIdToCheckpoint } from '../utils/modelLoader';
 
 // ---------------------------------------------------------------------------
-// Steering feature key (moved here as single source of truth)
+// Steering feature key (single source of truth across the app)
 // ---------------------------------------------------------------------------
 
-/** Composite identity key for a steering feature. */
+/** Composite identity key for a steering feature.
+ *
+ * Direction-vector presets (``directionName`` set) are keyed independently
+ * of the SAE coordinate, so adding a direction never collides with — or
+ * is wiped by — SAE-feature presets at any layer/saeId. */
 export function steeringFeatureKey(
-  f: SteeringFeature | { modelId: string; saeId: string; featureIndex: number },
+  f:
+    | SteeringFeature
+    | { modelId: string; saeId: string; featureIndex: number; directionName?: string },
 ): string {
+  if (f.directionName) {
+    return `${f.modelId}::direction::${f.directionName}`;
+  }
   return `${f.modelId}::${f.saeId}::${f.featureIndex}`;
 }
 
@@ -114,7 +123,8 @@ export const useModelIdentityStore = create<ModelIdentityStore>()(
       // Sync steering config to new identity when it changes.
       // Three cases:
       //   (a) No features → nothing to sync
-      //   (b) Same model, different SAE → update SAE-derived fields on existing features
+      //   (b) Same model, different SAE → update SAE-derived fields on SAE features
+      //       only; direction presets are SAE-agnostic and are left untouched
       //   (c) Different model → clear features (they reference the wrong model)
       const { steeringConfig } = get();
       if (steeringConfig.features.length === 0) return;
@@ -123,16 +133,20 @@ export const useModelIdentityStore = create<ModelIdentityStore>()(
         const currentSaeId = steeringConfig.features[0]?.saeId;
         if (currentModelId !== modelId || currentSaeId !== saeId) {
           if (currentModelId === modelId) {
-            // Case (b): same model, different SAE
+            // Case (b): same model, different SAE — remap SAE features only
             set({
               steeringConfig: {
-                features: steeringConfig.features.map((f) => ({
-                  ...f,
-                  saeId,
-                  layerIndex: parsed.parsedSae!.layerIndex,
-                  hookType: parsed.parsedSae!.hookType,
-                  width: parsed.parsedSae!.width,
-                })),
+                features: steeringConfig.features.map((f) =>
+                  f.directionName
+                    ? f
+                    : {
+                        ...f,
+                        saeId,
+                        layerIndex: parsed.parsedSae!.layerIndex,
+                        hookType: parsed.parsedSae!.hookType,
+                        width: parsed.parsedSae!.width,
+                      },
+                ),
               },
             });
           } else {

@@ -23,12 +23,20 @@ export interface SteeringChatOptions {
   onAssistantMessageComplete?: (message: ChatMessage) => void;
 }
 
-/** Serialise config into a stable key for change detection. */
+/** Serialise config into a stable key for change detection.
+ *
+ * Strength-0 entries are inert (auto-loaded presets sitting idle) and
+ * are excluded so dialling them in/out is what resets the chat, not the
+ * mere act of loading the preset list. */
 function configKey(config: SteeringConfig): string {
-  const features = config?.features ?? [];
+  const features = (config?.features ?? []).filter((f) => f.strength !== 0);
   const sorted = [...features]
     .sort((a, b) => a.featureIndex - b.featureIndex)
-    .map((f) => `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`);
+    .map((f) =>
+      f.directionName
+        ? `dir:${f.directionName}:${f.strength}`
+        : `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`,
+    );
   return sorted.join(',');
 }
 
@@ -47,15 +55,20 @@ const DEFAULT_OUTPUT_LEN = 256;
 const DEFAULT_TOP_P = 0.95;
 const DEFAULT_TOP_K = 64;
 
-/** Map SteeringConfig features to the GraphQL [SteeringInput] list format. */
+/** Map SteeringConfig features to the GraphQL [SteeringInput] list format.
+ *
+ * Inactive (strength=0) entries are dropped: they are no-ops mathematically
+ * and would cause needless SAE loads server-side. */
 function buildSteeringInputs(config: SteeringConfig) {
-  if (config.features.length === 0) return null;
-  return config.features.map((f) => ({
+  const active = config.features.filter((f) => f.strength !== 0);
+  if (active.length === 0) return null;
+  return active.map((f) => ({
     featureIndex: f.featureIndex,
     layer: f.layerIndex,
     strength: f.strength,
     hookType: f.hookType ?? 'RESID_POST',
     width: f.width ?? '16k',
+    directionName: f.directionName ?? null,
   }));
 }
 

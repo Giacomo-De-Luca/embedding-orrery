@@ -134,6 +134,7 @@ class Subscription:
                     hook_type=s.hook_type.value,
                     width=s.width,
                     strength=s.strength,
+                    direction_name=s.direction_name,
                 )
                 for s in input.steering
             ]

@@ -19,6 +19,12 @@ const STRENGTH_MIN = -2000;
 const STRENGTH_MAX = 2000;
 const STRENGTH_STEP = 50;
 
+// Pre-extracted directions (refusal, poetry) are applied at coefficients
+// in the unit-ish range; the SAE-feature scale is wildly excessive.
+const DIRECTION_STRENGTH_MIN = -5;
+const DIRECTION_STRENGTH_MAX = 5;
+const DIRECTION_STRENGTH_STEP = 0.1;
+
 interface SteeringControlsProps {
   currentFeature: SaeFeature | null;
 }
@@ -82,30 +88,41 @@ export function SteeringControls({ currentFeature }: SteeringControlsProps) {
         <div className="flex flex-col gap-2">
           {config.features.map((f) => {
             const key = steeringFeatureKey(f);
+            const isDirection = !!f.directionName;
+            const sliderMin = isDirection ? DIRECTION_STRENGTH_MIN : STRENGTH_MIN;
+            const sliderMax = isDirection ? DIRECTION_STRENGTH_MAX : STRENGTH_MAX;
+            const sliderStep = isDirection ? DIRECTION_STRENGTH_STEP : STRENGTH_STEP;
+            const strengthDisplay = isDirection ? f.strength.toFixed(1) : f.strength;
             return (
               <div
                 key={key}
                 className="flex items-center gap-2 rounded-lg bg-muted/30 px-2.5 py-1.5"
               >
-                <Badge variant="outline" className="shrink-0 text-[10px] font-mono px-1.5 py-0">
-                  #{f.featureIndex}
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'shrink-0 text-[10px] font-mono px-1.5 py-0',
+                    isDirection && 'uppercase tracking-wide',
+                  )}
+                >
+                  {isDirection ? 'dir' : `#${f.featureIndex}`}
                 </Badge>
 
                 <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                  {f.label || `Layer ${f.layerIndex}`}
+                  {f.label || (isDirection ? f.directionName : `Layer ${f.layerIndex}`)}
                 </span>
 
                 <Slider
                   value={[f.strength]}
-                  min={STRENGTH_MIN}
-                  max={STRENGTH_MAX}
-                  step={STRENGTH_STEP}
+                  min={sliderMin}
+                  max={sliderMax}
+                  step={sliderStep}
                   onValueChange={([v]) => useModelIdentityStore.getState().updateSteeringStrength(key, v)}
                   className="w-20 shrink-0"
                 />
 
                 <span className="w-12 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-                  {f.strength}
+                  {strengthDisplay}
                 </span>
 
                 <Button

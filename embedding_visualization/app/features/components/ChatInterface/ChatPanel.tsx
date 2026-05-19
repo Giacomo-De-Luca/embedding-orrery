@@ -2,13 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronDown, History, PanelRightIcon, RotateCcw } from 'lucide-react';
+import { ChevronDown, Download, History, PanelRightIcon, RotateCcw } from 'lucide-react';
+import { useLazyQuery } from '@apollo/client/react';
+import { toast } from 'sonner';
 import { Button } from '@/lib/ui-primitives/button';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { useScrollToBottom } from '@/lib/hooks/useScrollToBottom';
 import { useSteeringChat, type SteeringChatOptions } from '@/lib/hooks/useSteeringChat';
 import { cn } from '@/lib/utils/utils';
+import { downloadJson } from '@/lib/utils/downloadJson';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
+import { STEERING_PRESETS } from '@/lib/utils/steeringPresets';
+import { GET_CHAT_SESSION, type ChatSessionQueryResult } from '@/lib/graphql/queries';
 import type { ChatMessage as ChatMessageType, ChatSessionSummary, SaeFeature, MessageVote } from '@/lib/types/types';
 import { ChatGreeting } from './ChatGreeting';
 import { ChatHistory } from './ChatHistory';
@@ -76,6 +81,19 @@ export function ChatPanel({
     }
   }, [loadedMessages, loadMessages, steeringConfig]);
 
+  // Auto-load model-specific steering presets when the chat opens against
+  // a model that has a preset bundle and no features are configured yet.
+  // Presets ship at strength 0 — the user activates them via the slider.
+  const modelId = useModelIdentityStore((s) => s.modelId);
+  useEffect(() => {
+    if (!modelId) return;
+    const presets = STEERING_PRESETS[modelId];
+    if (!presets) return;
+    const { steeringConfig: cfg, setSteeringConfig } = useModelIdentityStore.getState();
+    if (cfg.features.length > 0) return;
+    setSteeringConfig({ features: presets });
+  }, [modelId]);
+
   const isEmpty = messages.length === 0;
   const isLoadingModel = status === 'loading_model';
   const isGenerating = status === 'generating';
@@ -102,6 +120,45 @@ export function ChatPanel({
       }
     }
   }, [messages, regenerate]);
+
+  // Download the active session as JSON (fetched fresh so per-message
+  // steering snapshots are included even for messages saved this turn).
+  const [fetchSessionForDownload] = useLazyQuery<ChatSessionQueryResult>(
+    GET_CHAT_SESSION,
+    { fetchPolicy: 'network-only' },
+  );
+
+  const handleDownload = useCallback(async () => {
+    if (!activeSessionId) return;
+    try {
+      const { data } = await fetchSessionForDownload({ variables: { id: activeSessionId } });
+      const session = data?.chatSession;
+      if (!session) {
+        toast.error('Session not found');
+        return;
+      }
+      downloadJson(
+        {
+          schemaVersion: 1,
+          exportedAt: new Date().toISOString(),
+          session: {
+            id: session.id,
+            title: session.title,
+            config: session.config,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+          },
+          messages: session.messages,
+        },
+        `chat-${session.id}.json`,
+      );
+    } catch (err) {
+      console.error('Failed to download chat:', err);
+      toast.error('Failed to download chat');
+    }
+  }, [activeSessionId, fetchSessionForDownload]);
+
+  const canDownload = !!activeSessionId && messages.length > 0;
 
   return (
     <div className="flex h-full">
@@ -144,6 +201,16 @@ export function ChatPanel({
             >
               <History className="size-3.5" />
               <span className="sr-only">Toggle history</span>
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={handleDownload}
+              disabled={!canDownload}
+              className="size-7 text-muted-foreground"
+            >
+              <Download className="size-3.5" />
+              <span className="sr-only">Download chat as JSON</span>
             </Button>
             <Button
               size="icon"

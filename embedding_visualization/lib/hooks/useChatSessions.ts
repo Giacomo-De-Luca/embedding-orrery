@@ -3,7 +3,11 @@
 import { useMutation, useQuery } from '@apollo/client/react';
 import { useCallback, useRef, useState } from 'react';
 
-import { GET_CHAT_SESSION, GET_CHAT_SESSIONS } from '../graphql/queries';
+import {
+  GET_CHAT_SESSION,
+  GET_CHAT_SESSIONS,
+  type ChatSessionQueryResult,
+} from '../graphql/queries';
 import {
   CREATE_CHAT_SESSION,
   DELETE_CHAT_SESSION,
@@ -36,7 +40,11 @@ export interface UseChatSessionsReturn {
   loadSession: (
     id: string
   ) => Promise<{ messages: ChatMessage[]; config: SteeringConfig }>;
-  saveMessage: (sessionId: string, message: ChatMessage) => void;
+  saveMessage: (
+    sessionId: string,
+    message: ChatMessage,
+    steeringSnapshot?: SteeringConfig | null
+  ) => void;
   deleteSession: (id: string) => void;
   setActiveSessionId: (id: string | null) => void;
 }
@@ -88,8 +96,7 @@ export function useChatSessions(): UseChatSessionsReturn {
       id: string
     ): Promise<{ messages: ChatMessage[]; config: SteeringConfig }> => {
       const { apolloClient } = await import('../utils/apollo-client');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: detail } = await apolloClient.query<{ chatSession: any }>({
+      const { data: detail } = await apolloClient.query<ChatSessionQueryResult>({
         query: GET_CHAT_SESSION,
         variables: { id },
         fetchPolicy: 'network-only',
@@ -100,16 +107,14 @@ export function useChatSessions(): UseChatSessionsReturn {
       }
 
       const session = detail.chatSession;
-      const messages: ChatMessage[] = (session.messages ?? []).map(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          timestamp: new Date(m.createdAt).getTime(),
-          parts: m.parts ?? undefined,
-        })
-      );
+      const messages: ChatMessage[] = session.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: new Date(m.createdAt).getTime(),
+        parts: m.parts ?? undefined,
+        steeringSnapshot: m.steeringSnapshot ?? undefined,
+      }));
 
       setActiveSessionId(id);
       return { messages, config: session.config };
@@ -118,7 +123,11 @@ export function useChatSessions(): UseChatSessionsReturn {
   );
 
   const saveMessage = useCallback(
-    (sessionId: string, message: ChatMessage) => {
+    (
+      sessionId: string,
+      message: ChatMessage,
+      steeringSnapshot?: SteeringConfig | null
+    ) => {
       saveMessageMutation({
         variables: {
           input: {
@@ -127,6 +136,7 @@ export function useChatSessions(): UseChatSessionsReturn {
             role: message.role,
             content: message.content,
             parts: message.parts ?? null,
+            steeringSnapshot: steeringSnapshot ?? null,
           },
         },
       }).catch((err: unknown) => {
