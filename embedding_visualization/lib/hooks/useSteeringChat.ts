@@ -27,17 +27,19 @@ export interface SteeringChatOptions {
  *
  * Strength-0 entries are inert (auto-loaded presets sitting idle) and
  * are excluded so dialling them in/out is what resets the chat, not the
- * mere act of loading the preset list. */
-function configKey(config: SteeringConfig): string {
+ * mere act of loading the preset list.
+ *
+ * Exported for unit testing. */
+export function configKey(config: SteeringConfig): string {
   const features = (config?.features ?? []).filter((f) => f.strength !== 0);
-  const sorted = [...features]
-    .sort((a, b) => a.featureIndex - b.featureIndex)
-    .map((f) =>
-      f.directionName
-        ? `dir:${f.directionName}:${f.strength}`
-        : `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`,
-    );
-  return sorted.join(',');
+  const tokens = features.map((f) =>
+    f.directionName
+      ? `dir:${f.directionName}:${f.strength}`
+      : `${f.modelId}/${f.saeId}/${f.featureIndex}/${f.hookType}/${f.width}:${f.strength}`,
+  );
+  // Sort by token string so two direction presets (which share featureIndex=0)
+  // don't swap order with insertion-order changes.
+  return [...tokens].sort().join(',');
 }
 
 interface TokenChunkData {
@@ -58,8 +60,10 @@ const DEFAULT_TOP_K = 64;
 /** Map SteeringConfig features to the GraphQL [SteeringInput] list format.
  *
  * Inactive (strength=0) entries are dropped: they are no-ops mathematically
- * and would cause needless SAE loads server-side. */
-function buildSteeringInputs(config: SteeringConfig) {
+ * and would cause needless SAE loads server-side.
+ *
+ * Exported for unit testing. */
+export function buildSteeringInputs(config: SteeringConfig) {
   const active = config.features.filter((f) => f.strength !== 0);
   if (active.length === 0) return null;
   return active.map((f) => ({

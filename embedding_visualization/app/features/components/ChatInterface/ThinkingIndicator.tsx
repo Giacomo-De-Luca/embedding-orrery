@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'motion/react';
+import type { SteeringFeature } from '@/lib/types/types';
 import { AssistantAvatar } from './AssistantAvatar';
 import { Shimmer } from './Shimmer';
 
@@ -15,9 +16,10 @@ const MODEL_LOADING_PHRASES = [
 
 interface ThinkingIndicatorProps {
   phase?: 'thinking' | 'loading_model';
+  features?: SteeringFeature[];
 }
 
-export function ThinkingIndicator({ phase = 'thinking' }: ThinkingIndicatorProps) {
+export function ThinkingIndicator({ phase = 'thinking', features = [] }: ThinkingIndicatorProps) {
   const [phraseIndex] = useState(() =>
     Math.floor(Math.random() * MODEL_LOADING_PHRASES.length)
   );
@@ -34,7 +36,7 @@ export function ThinkingIndicator({ phase = 'thinking' }: ThinkingIndicatorProps
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
     >
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <AssistantAvatar />
+        <AssistantAvatar features={features} />
       </div>
       <div className="flex h-[calc(13px*1.65)] items-center text-[13px] leading-[1.65]">
         <Shimmer className="font-medium" duration={phase === 'loading_model' ? 2 : 1}>

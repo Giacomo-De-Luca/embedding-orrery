@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useState } from 'react';
-import { MoreHorizontal, Plus, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import {
   DropdownMenu,
@@ -19,6 +19,7 @@ import {
 } from '@/lib/ui-primitives/dialog';
 import type { ChatSessionSummary } from '@/lib/types/types';
 import { groupSessionsByDate, type GroupedSessions } from '../../utils/chatHistoryUtils';
+import { SteeringIdenticon } from './SteeringIdenticon';
 
 interface ChatHistoryProps {
   sessions: ChatSessionSummary[];
@@ -42,13 +43,19 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
 }) {
   return (
     <div
-      className={`group flex items-center gap-1 rounded-md px-2 py-1 cursor-pointer transition-colors ${
+      className={`group flex items-center gap-1.5 rounded-md px-2 py-1 cursor-pointer transition-colors ${
         isActive
           ? 'bg-accent text-accent-foreground'
           : 'hover:bg-muted/50'
       }`}
       onClick={onSelect}
     >
+      <SteeringIdenticon
+        features={session.config.features}
+        size={14}
+        fallback={<Sparkles className="size-3 text-muted-foreground" />}
+        className="shrink-0"
+      />
       <span className="flex-1 truncate text-xs">{session.title}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>

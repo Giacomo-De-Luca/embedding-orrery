@@ -286,21 +286,39 @@ export function ChatPanel({
             className="absolute inset-0 overflow-y-auto"
           >
             <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
-              {messages.map((msg, i) => (
-                <ChatMessage
-                  key={msg.id}
-                  message={msg}
-                  messageIndex={i}
-                  isGenerating={isBusy}
-                  vote={votes.get(msg.id)}
-                  onVote={handleVote}
-                  onEdit={msg.role === 'user' ? editAndResend : undefined}
-                  onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
-                />
-              ))}
+              {messages.map((msg, i) => {
+                // Skip the trailing empty assistant placeholder while busy —
+                // ThinkingIndicator already covers that slot, so rendering both
+                // produces two avatars. Restricted to the last message so earlier
+                // empty assistant turns (aborted, regen'd) still render.
+                if (
+                  isBusy &&
+                  i === messages.length - 1 &&
+                  msg.role === 'assistant' &&
+                  msg.content === '' &&
+                  (!msg.parts || msg.parts.length === 0)
+                ) {
+                  return null;
+                }
+                return (
+                  <ChatMessage
+                    key={msg.id}
+                    message={msg}
+                    messageIndex={i}
+                    isGenerating={isBusy}
+                    vote={votes.get(msg.id)}
+                    onVote={handleVote}
+                    onEdit={msg.role === 'user' ? editAndResend : undefined}
+                    onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
+                  />
+                );
+              })}
 
               {isBusy && messages[messages.length - 1]?.content === '' && (
-                <ThinkingIndicator phase={isLoadingModel ? 'loading_model' : 'thinking'} />
+                <ThinkingIndicator
+                  phase={isLoadingModel ? 'loading_model' : 'thinking'}
+                  features={steeringConfig.features}
+                />
               )}
 
               {error && (

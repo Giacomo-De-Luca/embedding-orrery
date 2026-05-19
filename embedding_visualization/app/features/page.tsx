@@ -36,6 +36,7 @@ import type { PromptActivationsResult } from '@/lib/graphql/mutations';
 import { SAE_TO_COLLECTION, getSemanticCollectionName, getSemanticCollections, parseSaeId } from '@/lib/utils/saeCollections';
 import { ensureModelLoaded } from '@/lib/utils/modelLoader';
 import { ChatPanel } from './components/ChatInterface';
+import { SteeringIdenticon } from './components/ChatInterface/SteeringIdenticon';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { PromptTokenActivations, type SelectedTokenInfo } from './components/PromptTokenActivations';
 import { useChatSessions } from '@/lib/hooks/useChatSessions';
@@ -105,6 +106,7 @@ export default function FeaturesPage() {
   const [hoveredActivationValue, setHoveredActivationValue] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
 
+  const floatingButtonFeatures = useModelIdentityStore((s) => s.steeringConfig.features);
   const [chatWidth, setChatWidth] = useState(448); // 28rem
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
@@ -963,7 +965,11 @@ export default function FeaturesPage() {
           onClick={openChat}
           className="!fixed bottom-6 right-6 z-40 shadow-[var(--shadow-float)]"
         >
-          <Sparkles className="size-4" />
+          <SteeringIdenticon
+            features={floatingButtonFeatures}
+            size={32}
+            fallback={<Sparkles className="size-4" />}
+          />
           <span className="sr-only">Open steered chat</span>
         </Button>
       )}

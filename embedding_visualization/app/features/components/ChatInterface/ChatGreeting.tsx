@@ -2,12 +2,16 @@
 
 import { motion } from 'motion/react';
 import { Sparkles } from 'lucide-react';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
+import { SteeringIdenticon } from './SteeringIdenticon';
 
 interface ChatGreetingProps {
   featureCount: number;
 }
 
 export function ChatGreeting({ featureCount }: ChatGreetingProps) {
+  const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
+
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div className="flex flex-col items-center px-6">
@@ -18,7 +22,11 @@ export function ChatGreeting({ featureCount }: ChatGreetingProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         >
-          <Sparkles className="size-5 text-muted-foreground" />
+          <SteeringIdenticon
+            features={steeringConfig.features}
+            size={40}
+            fallback={<Sparkles className="size-5 text-muted-foreground" />}
+          />
         </motion.div>
 
         {/* Heading */}

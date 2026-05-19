@@ -52,6 +52,7 @@
     "geist": "^1.5.1",
     "graphql": "^16.12.0",
     "graphql-ws": "^6.0.6",
+    "jdenticon": "^3.3.0",
     "lodash.debounce": "^4.0.8",
     "lucide-react": "^0.554.0",
     "motion": "^12.38.0",

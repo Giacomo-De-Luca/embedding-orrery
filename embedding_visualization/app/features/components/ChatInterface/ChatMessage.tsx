@@ -160,7 +160,7 @@ export function ChatMessage({
     >
       {/* Avatar aligned to first line */}
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <AssistantAvatar />
+        <AssistantAvatar features={message.steeringSnapshot?.features ?? []} />
       </div>
 
       {/* Content */}

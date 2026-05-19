@@ -326,6 +326,11 @@ class InterpretService:
         if preset is None:
             raise KeyError(f"unknown direction: {name!r}")
         wrapper = self._require_model()
+        if preset.model_id != self._neuronpedia_model_id:
+            raise ValueError(
+                f"direction {name!r} is bound to model {preset.model_id!r}, "
+                f"but {self._neuronpedia_model_id!r} is loaded"
+            )
         path = DIRECTIONS_DIR / preset.file
         if not path.exists():
             raise FileNotFoundError(f"direction file missing: {path}")
@@ -338,6 +343,72 @@ class InterpretService:
         vec = vec.to(dtype=torch.float32).contiguous()
         self._direction_cache[name] = vec
         return vec
+
+    def _build_steering_session(
+        self, steering_specs: list[SteeringSpec], device: str
+    ) -> HookManager:
+        """Build a HookManager populated with the given steering ops.
+
+        Branches per-spec on ``direction_name``:
+          - Direction specs use ``SteeringOp(vector=...)`` and skip ``add_sae``
+            (registry lookup provides the application layer; site is
+            ``RESID_POST``).
+          - SAE specs validate ``(width, feature_index, hook_type)`` and add
+            the matching ``GemmaScopeSAEConfig`` (deduped by key).
+        """
+        manager = HookManager()
+        seen_sae_keys: set[tuple[int, str, str]] = set()
+        for spec in steering_specs:
+            if spec.direction_name is not None:
+                preset = DIRECTION_REGISTRY.get(spec.direction_name)
+                if preset is None:
+                    raise KeyError(f"unknown direction: {spec.direction_name!r}")
+                manager.add_steering(
+                    SteeringOp(
+                        layer_index=preset.layer,
+                        mode=SteeringMode.ADDITIVE,
+                        vector=self._load_direction(spec.direction_name),
+                        strength=spec.strength,
+                        normalise=False,
+                        hook_type=HookType.RESID_POST,
+                    )
+                )
+                continue
+
+            ht = self._parse_hook_type(spec.hook_type)
+            d_sae = WIDTH_TO_D_SAE.get(spec.width)
+            if d_sae is None:
+                raise ValueError(f"Unknown SAE width '{spec.width}'")
+            if not 0 <= spec.feature_index < d_sae:
+                raise ValueError(
+                    f"feature_index {spec.feature_index} out of range [0, {d_sae})"
+                )
+
+            sae_key = (spec.layer, spec.hook_type, spec.width)
+            if sae_key not in seen_sae_keys:
+                seen_sae_keys.add(sae_key)
+                manager.add_sae(
+                    GemmaScopeSAEConfig(
+                        layer_index=spec.layer,
+                        hook_type=ht,
+                        width=spec.width,
+                        model_size=self._model_size,
+                        variant=self._variant,
+                        device=device,
+                        read_only=True,
+                    )
+                )
+            manager.add_steering(
+                SteeringOp(
+                    layer_index=spec.layer,
+                    mode=SteeringMode.ADDITIVE,
+                    feature_index=spec.feature_index,
+                    strength=spec.strength,
+                    normalise=False,
+                    hook_type=ht,
+                )
+            )
+        return manager
 
     def _get_prompt_explorer(
         self,
@@ -625,19 +696,9 @@ class InterpretService:
         if not steering_specs:
             raise ValueError("At least one steering spec is required.")
 
-        # Validate SAE-feature specs up-front. Direction specs need no validation
-        # (registry lookup happens at apply time and raises clearly).
-        for spec in steering_specs:
-            if spec.direction_name is not None:
-                if spec.direction_name not in DIRECTION_REGISTRY:
-                    raise KeyError(f"unknown direction: {spec.direction_name!r}")
-                continue
-            d_sae = WIDTH_TO_D_SAE.get(spec.width)
-            if d_sae is None:
-                raise ValueError(f"Unknown SAE width '{spec.width}'")
-            if not 0 <= spec.feature_index < d_sae:
-                raise ValueError(f"feature_index {spec.feature_index} out of range [0, {d_sae})")
-            self._parse_hook_type(spec.hook_type)  # validate early
+        # Build (and validate) the steering session up-front so a malformed
+        # spec fails before we burn cycles on the baseline generation.
+        manager = self._build_steering_session(steering_specs, device)
 
         # --- Baseline (no steering) ---
         if self._variant == "pt":
@@ -650,49 +711,6 @@ class InterpretService:
             )
 
         # --- Steered ---
-        # Collect unique (layer, hook_type, width) combos for SAE loading.
-        manager = HookManager()
-        seen_sae_keys: set[tuple[int, str, str]] = set()
-        for spec in steering_specs:
-            if spec.direction_name is not None:
-                preset = DIRECTION_REGISTRY[spec.direction_name]
-                manager.add_steering(
-                    SteeringOp(
-                        layer_index=preset.layer,
-                        mode=SteeringMode.ADDITIVE,
-                        vector=self._load_direction(spec.direction_name),
-                        strength=spec.strength,
-                        normalise=False,
-                        hook_type=HookType.RESID_POST,
-                    )
-                )
-                continue
-
-            ht = self._parse_hook_type(spec.hook_type)
-            sae_key = (spec.layer, spec.hook_type, spec.width)
-            if sae_key not in seen_sae_keys:
-                seen_sae_keys.add(sae_key)
-                manager.add_sae(
-                    GemmaScopeSAEConfig(
-                        layer_index=spec.layer,
-                        hook_type=ht,
-                        width=spec.width,
-                        model_size=self._model_size,
-                        variant=self._variant,
-                        device=device,
-                        read_only=True,
-                    )
-                )
-            manager.add_steering(
-                SteeringOp(
-                    layer_index=spec.layer,
-                    mode=SteeringMode.ADDITIVE,
-                    feature_index=spec.feature_index,
-                    strength=spec.strength,
-                    normalise=False,
-                    hook_type=ht,
-                )
-            )
 
         with manager.session(wrapper.model.model.layers):
             if self._variant == "pt":
@@ -909,62 +927,7 @@ class InterpretService:
             # Build optional HookManager for steering
             manager: HookManager | None = None
             if steering_specs:
-                device = str(wrapper.device)
-                manager = HookManager()
-                seen_sae_keys: set[tuple[int, str, str]] = set()
-
-                for spec in steering_specs:
-                    if spec.direction_name is not None:
-                        preset = DIRECTION_REGISTRY.get(spec.direction_name)
-                        if preset is None:
-                            raise KeyError(f"unknown direction: {spec.direction_name!r}")
-                        manager.add_steering(
-                            SteeringOp(
-                                layer_index=preset.layer,
-                                mode=SteeringMode.ADDITIVE,
-                                vector=self._load_direction(spec.direction_name),
-                                strength=spec.strength,
-                                normalise=False,
-                                hook_type=HookType.RESID_POST,
-                            )
-                        )
-                        continue
-
-                    ht = self._parse_hook_type(spec.hook_type)
-                    width = spec.width
-                    d_sae = WIDTH_TO_D_SAE.get(width)
-                    if d_sae is None:
-                        raise ValueError(f"Unknown SAE width '{width}'")
-                    if not 0 <= spec.feature_index < d_sae:
-                        raise ValueError(
-                            f"feature_index {spec.feature_index} out of range [0, {d_sae})"
-                        )
-
-                    sae_key = (spec.layer, spec.hook_type, width)
-                    if sae_key not in seen_sae_keys:
-                        seen_sae_keys.add(sae_key)
-                        manager.add_sae(
-                            GemmaScopeSAEConfig(
-                                layer_index=spec.layer,
-                                hook_type=ht,
-                                width=width,
-                                model_size=self._model_size,
-                                variant=self._variant,
-                                device=device,
-                                read_only=True,
-                            )
-                        )
-
-                    manager.add_steering(
-                        SteeringOp(
-                            layer_index=spec.layer,
-                            mode=SteeringMode.ADDITIVE,
-                            feature_index=spec.feature_index,
-                            strength=spec.strength,
-                            normalise=False,
-                            hook_type=ht,
-                        )
-                    )
+                manager = self._build_steering_session(steering_specs, str(wrapper.device))
 
             def _run_generation():
                 if self._variant == "pt":
