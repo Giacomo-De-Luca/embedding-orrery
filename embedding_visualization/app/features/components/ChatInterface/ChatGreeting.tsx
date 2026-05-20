@@ -26,6 +26,7 @@ export function ChatGreeting({ featureCount }: ChatGreetingProps) {
             features={steeringConfig.features}
             size={40}
             fallback={<Sparkles className="size-5 text-muted-foreground" />}
+            crossfadeOnChange
           />
         </motion.div>
 

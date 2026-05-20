@@ -147,6 +147,7 @@ export function useSteeringChat(
         role: 'user',
         content: trimmed,
         timestamp: Date.now(),
+        steeringSnapshot: config,
       };
 
       // Build conversation turns
@@ -156,7 +157,9 @@ export function useSteeringChat(
         content: m.content,
       }));
 
-      // Create placeholder assistant message
+      // Create placeholder assistant message. Tag it with the current steering
+      // config so its avatar renders the right identicon immediately (rather than
+      // falling back to Sparkles before the persisted snapshot is reloaded).
       const assistantId = crypto.randomUUID();
       assistantIdRef.current = assistantId;
       const assistantMsg: ChatMessage = {
@@ -164,6 +167,7 @@ export function useSteeringChat(
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
+        steeringSnapshot: config,
       };
 
       setMessages([...allMessages, assistantMsg]);

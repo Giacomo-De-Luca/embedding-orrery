@@ -857,7 +857,14 @@ export default function FeaturesPage() {
                   ) : feature ? (
                     <>
                       <div className="border rounded-lg p-4 bg-card">
-                        <FeatureDetailCard feature={feature} />
+                        <FeatureDetailCard
+                          feature={feature}
+                          onLabelUpdated={() => {
+                            if (modelId && saeId && featureIndex != null) {
+                              fetchFeature({ variables: { modelId, saeId, featureIndex } });
+                            }
+                          }}
+                        />
                       </div>
 
                       <FeatureStatistics
@@ -969,6 +976,7 @@ export default function FeaturesPage() {
             features={floatingButtonFeatures}
             size={32}
             fallback={<Sparkles className="size-4" />}
+            crossfadeOnChange
           />
           <span className="sr-only">Open steered chat</span>
         </Button>

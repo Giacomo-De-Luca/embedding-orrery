@@ -55,6 +55,7 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
         size={14}
         fallback={<Sparkles className="size-3 text-muted-foreground" />}
         className="shrink-0"
+        crossfadeOnChange
       />
       <span className="flex-1 truncate text-xs">{session.title}</span>
       <DropdownMenu>

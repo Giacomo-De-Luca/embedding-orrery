@@ -1532,6 +1532,18 @@ class DuckDBClient:
             for r in rows
         ]
 
+    def update_sae_feature_label(
+        self, model_id: str, sae_id: str, feature_index: int, label: str
+    ) -> bool:
+        """Update the label of a single SAE feature. Returns True if a row was updated."""
+        with self._write_lock:
+            result = self._conn.execute(
+                "UPDATE sae_features SET label = ? "
+                "WHERE model_id = ? AND sae_id = ? AND feature_index = ?",
+                [label, model_id, sae_id, feature_index],
+            )
+            return result.rowcount > 0
+
     def search_sae_features(
         self,
         model_id: str | None = None,

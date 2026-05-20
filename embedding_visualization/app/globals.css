@@ -313,3 +313,45 @@
 .animate-fade-in {
   animation: fade-in 0.2s ease both;
 }
+
+/* Steering-identicon shape-level animations. jdenticon emits one <path> per
+   color (cells merged), so these act on the two color groups only. Classes are
+   applied to the wrapper by SteeringIdenticon.tsx SHAPE_ANIMATION_CLASSES. */
+@keyframes ji-cw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes ji-ccw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(-360deg); }
+}
+
+@keyframes ji-assemble {
+  0%   { opacity: 0.25; transform: scale(0.6); }
+  50%  { opacity: 1;    transform: scale(1); }
+  100% { opacity: 0.25; transform: scale(0.6); }
+}
+
+@keyframes ji-alt-a {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
+
+@keyframes ji-alt-b {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+.ji-counter-rotate path { transform-box: fill-box; transform-origin: center; }
+.ji-counter-rotate path:nth-of-type(1) { animation: ji-cw 6s linear infinite; }
+.ji-counter-rotate path:nth-of-type(2) { animation: ji-ccw 6s linear infinite; }
+
+.ji-assemble path { transform-box: fill-box; transform-origin: center; }
+.ji-assemble path:nth-of-type(1) { animation: ji-assemble 1.6s ease-in-out infinite; }
+.ji-assemble path:nth-of-type(2) { animation: ji-assemble 1.6s ease-in-out 0.15s infinite; }
+
+/* opacity-only today; transform-box kept for symmetry if a transform is added */
+.ji-alternate-pulse path { transform-box: fill-box; transform-origin: center; }
+.ji-alternate-pulse path:nth-of-type(1) { animation: ji-alt-a 1.6s ease-in-out infinite; }
+.ji-alternate-pulse path:nth-of-type(2) { animation: ji-alt-b 1.6s ease-in-out infinite; }

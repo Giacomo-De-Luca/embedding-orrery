@@ -36,7 +36,7 @@ export function ThinkingIndicator({ phase = 'thinking', features = [] }: Thinkin
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
     >
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <AssistantAvatar features={features} />
+        <AssistantAvatar features={features} active />
       </div>
       <div className="flex h-[calc(13px*1.65)] items-center text-[13px] leading-[1.65]">
         <Shimmer className="font-medium" duration={phase === 'loading_model' ? 2 : 1}>

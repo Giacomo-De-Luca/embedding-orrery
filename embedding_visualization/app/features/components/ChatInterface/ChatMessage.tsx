@@ -19,6 +19,8 @@ interface ChatMessageProps {
   onEdit?: (messageIndex: number, newContent: string) => void;
   messageIndex?: number;
   onRegenerate?: () => void;
+  /** True for the final message in the list (drives streaming avatar animation). */
+  isLast?: boolean;
 }
 
 export function ChatMessage({
@@ -29,6 +31,7 @@ export function ChatMessage({
   onEdit,
   messageIndex,
   onRegenerate,
+  isLast = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
@@ -160,7 +163,10 @@ export function ChatMessage({
     >
       {/* Avatar aligned to first line */}
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <AssistantAvatar features={message.steeringSnapshot?.features ?? []} />
+        <AssistantAvatar
+          features={message.steeringSnapshot?.features ?? []}
+          active={isGenerating && isLast}
+        />
       </div>
 
       {/* Content */}

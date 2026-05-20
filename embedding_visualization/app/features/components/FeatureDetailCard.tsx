@@ -1,17 +1,51 @@
 'use client';
 
+import { useCallback, useState } from 'react';
+import { useMutation } from '@apollo/client/react';
+import { toast } from 'sonner';
 import type { SaeFeature } from '@/lib/types/types';
 import { Badge } from '@/lib/ui-primitives/badge';
+import { UPDATE_SAE_FEATURE_LABEL } from '@/lib/graphql/mutations';
+import { InlineEditableField } from '@/app/test-embed/components/InlineEditableField';
 import { LogitBarChart } from './LogitBarChart';
 
 interface FeatureDetailCardProps {
   feature: SaeFeature;
+  onLabelUpdated?: (newLabel: string) => void;
 }
 
-/**
- * Card showing feature metadata: label, density, and top/bottom logit charts.
- */
-export function FeatureDetailCard({ feature }: FeatureDetailCardProps) {
+export function FeatureDetailCard({ feature, onLabelUpdated }: FeatureDetailCardProps) {
+  const [updateLabel] = useMutation<{ updateSaeFeatureLabel: boolean }>(UPDATE_SAE_FEATURE_LABEL);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSaveLabel = useCallback(async (_key: string, value: unknown): Promise<boolean> => {
+    const newLabel = String(value).trim();
+    if (!newLabel) return false;
+    setIsSaving(true);
+    try {
+      const { data } = await updateLabel({
+        variables: {
+          modelId: feature.modelId,
+          saeId: feature.saeId,
+          featureIndex: feature.featureIndex,
+          label: newLabel,
+        },
+      });
+      if (data?.updateSaeFeatureLabel) {
+        toast.success('Label updated');
+        onLabelUpdated?.(newLabel);
+        return true;
+      }
+      toast.error('Feature not found');
+      return false;
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update label');
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [feature.modelId, feature.saeId, feature.featureIndex, updateLabel, onLabelUpdated]);
+
   return (
     <div className="space-y-4">
       {/* Header: index + density */}
@@ -28,10 +62,15 @@ export function FeatureDetailCard({ feature }: FeatureDetailCardProps) {
         )}
       </div>
 
-      {/* Label / explanation */}
-      {feature.label && (
-        <p className="text-sm leading-relaxed">{feature.label}</p>
-      )}
+      {/* Editable label */}
+      <InlineEditableField
+        fieldKey="label"
+        label="Label"
+        value={feature.label ?? ''}
+        type="text"
+        isSaving={isSaving}
+        onSave={handleSaveLabel}
+      />
 
       {/* Logit charts side by side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

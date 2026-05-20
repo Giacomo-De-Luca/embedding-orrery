@@ -614,6 +614,22 @@ export interface PrepareSaeResult {
   collectionItems: number;
 }
 
+export const UPDATE_SAE_FEATURE_LABEL = gql`
+  mutation UpdateSaeFeatureLabel(
+    $modelId: String!
+    $saeId: String!
+    $featureIndex: Int!
+    $label: String!
+  ) {
+    updateSaeFeatureLabel(
+      modelId: $modelId
+      saeId: $saeId
+      featureIndex: $featureIndex
+      label: $label
+    )
+  }
+`;
+
 export const DELETE_SAE_DATA = gql`
   mutation DeleteSaeData($modelId: String!, $saeId: String!) {
     deleteSaeData(modelId: $modelId, saeId: $saeId)

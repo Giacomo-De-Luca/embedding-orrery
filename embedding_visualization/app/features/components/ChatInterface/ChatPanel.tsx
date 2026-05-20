@@ -305,6 +305,7 @@ export function ChatPanel({
                     key={msg.id}
                     message={msg}
                     messageIndex={i}
+                    isLast={i === messages.length - 1}
                     isGenerating={isBusy}
                     vote={votes.get(msg.id)}
                     onVote={handleVote}
