@@ -55,17 +55,16 @@ _DATASET_FILTER = "name IN ({})".format(", ".join(f"'{d}'" for d in SEED_DATASET
 _COLLECTION_FILTER = "collection_name IN ({})".format(", ".join(f"'{c}'" for c in SEED_COLLECTIONS))
 
 
-def _quoted_items_table(dataset_name: str) -> str:
-    """Mirror DuckDBClient items-table naming for a dataset (quoted identifier)."""
-    return f'"items_{DuckDBClient._sanitize_table_name(dataset_name)}"'
-
-
 def export_duckdb() -> None:
     """Create the seed DuckDB with schema, then copy filtered production rows."""
     print(f"[duckdb] creating seed schema at {SEED_DUCKDB_PATH}")
     seed_client = DuckDBClient(db_path=str(SEED_DUCKDB_PATH))
+    # Reuse the canonical items-table naming from DuckDBClient (single source
+    # of truth) while the client is alive.
+    items_tables = {}
     for dataset in SEED_DATASETS:
         seed_client._ensure_items_table(dataset)
+        items_tables[dataset] = seed_client._items_table(dataset)
     seed_client.close()
 
     print(f"[duckdb] attaching production DB {DUCKDB_PATH} (read-only)")
@@ -82,7 +81,7 @@ def export_duckdb() -> None:
             ),
         ]
         for dataset in SEED_DATASETS:
-            tbl = _quoted_items_table(dataset)
+            tbl = items_tables[dataset]
             statements.append((f"items({dataset})", f"INSERT INTO {tbl} SELECT * FROM prod.{tbl}"))
         statements += [
             (
@@ -118,6 +117,9 @@ def export_duckdb() -> None:
             print(f"[duckdb]   {label:<22} {count:>7} rows")
 
         con.execute("DETACH prod")
+        # Fold the WAL into the main file so the seed ships as a single,
+        # self-contained .duckdb with no sidecar.
+        con.execute("CHECKPOINT")
     finally:
         con.close()
 
@@ -157,16 +159,22 @@ def main() -> int:
         shutil.rmtree(SEED_DIR)
     SEED_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Both stores are locked while the server runs. On any failure, remove the
+    # partially-built seed dir so we never leave a half-built snapshot behind.
     try:
         export_duckdb()
+        export_chromadb()
     except duckdb.IOException as e:
+        shutil.rmtree(SEED_DIR, ignore_errors=True)
         print(
             f"ERROR: could not open production DuckDB (is the backend running?): {e}",
             file=sys.stderr,
         )
         return 1
-
-    export_chromadb()
+    except Exception as e:
+        shutil.rmtree(SEED_DIR, ignore_errors=True)
+        print(f"ERROR: seed build failed (is the backend running?): {e}", file=sys.stderr)
+        return 1
 
     size = sum(f.stat().st_size for f in SEED_DIR.rglob("*") if f.is_file())
     print(f"\nSeed snapshot built at {SEED_DIR} ({size / 1e6:.1f} MB)")

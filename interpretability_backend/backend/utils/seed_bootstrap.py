@@ -11,6 +11,7 @@ an existing database, so a developer's real (large) data store is always safe.
 """
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -42,10 +43,17 @@ def ensure_seed_loaded() -> bool:
     logger.info("No live database found; seeding from %s", SEED_DIR)
 
     live_duckdb.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SEED_DUCKDB_PATH, live_duckdb)
 
+    # Copy the vectors first, then move the DuckDB file into place atomically as
+    # the LAST step. Since the never-clobber guard keys off main.duckdb's
+    # existence, this ensures a crash mid-copy can never leave a half-seeded DB
+    # that is mistaken for complete (it would just be retried next startup).
     if SEED_VECTOR_DB.exists():
         shutil.copytree(SEED_VECTOR_DB, Path(DB_PATH), dirs_exist_ok=True)
+
+    tmp_duckdb = live_duckdb.with_name(live_duckdb.name + ".seedtmp")
+    shutil.copy2(SEED_DUCKDB_PATH, tmp_duckdb)
+    os.replace(tmp_duckdb, live_duckdb)
 
     logger.info("Seed snapshot loaded into %s and %s", live_duckdb, DB_PATH)
     return True
