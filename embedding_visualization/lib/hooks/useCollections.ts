@@ -1,8 +1,10 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { GET_COLLECTIONS } from '../graphql/queries';
 import type { CollectionsManifest, TopicInfo } from '../types/types';
+import type { DefaultColorScheme } from '../utils/colorScaleUrl';
 
 interface GraphQLCollection {
   name: string;
@@ -40,27 +42,50 @@ function parseTopicSummary(metadata: Record<string, unknown>): TopicInfo[] | und
   }
 }
 
+/**
+ * Parse the per-collection default colour scheme from metadata. Stored as a
+ * JSON string under `default_color_scheme` (see SaveColorDefaultButton).
+ */
+function parseDefaultColorScheme(metadata: Record<string, unknown>): DefaultColorScheme | undefined {
+  const raw = metadata?.default_color_scheme;
+  if (!raw || typeof raw !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.colorBy === 'string') {
+      return parsed as DefaultColorScheme;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function useCollections() {
   const { data, loading, error } = useQuery<CollectionsData>(GET_COLLECTIONS);
 
-  // Transform GraphQL response to CollectionsManifest format
-  const collections: CollectionsManifest | null = data?.collections
-    ? data.collections.reduce((acc, col) => {
-        const topics = parseTopicSummary(col.metadata);
-        acc[col.name] = {
-          name: col.name,
-          display_name: col.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-          count: col.count,
-          embedding_dim: col.metadata?.embedding_dim || 384,
-          timestamp: col.metadata?.timestamp || '',
-          source_dataset: col.metadata?.source_dataset,
-          has_projections: col.metadata?.has_projections,
-          has_topics: topics !== undefined && topics.length > 0,
-          topics,
-        };
-        return acc;
-      }, {} as CollectionsManifest)
-    : null;
+  // Transform GraphQL response to CollectionsManifest format. Memoized on `data`
+  // so the manifest keeps a stable reference across renders (avoids re-running the
+  // reduce for every consumer and churning effects that depend on `collections`).
+  const collections: CollectionsManifest | null = useMemo(() => (
+    data?.collections
+      ? data.collections.reduce((acc, col) => {
+          const topics = parseTopicSummary(col.metadata);
+          acc[col.name] = {
+            name: col.name,
+            display_name: col.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+            count: col.count,
+            embedding_dim: col.metadata?.embedding_dim || 384,
+            timestamp: col.metadata?.timestamp || '',
+            source_dataset: col.metadata?.source_dataset,
+            has_projections: col.metadata?.has_projections,
+            has_topics: topics !== undefined && topics.length > 0,
+            topics,
+            defaultColorScheme: parseDefaultColorScheme(col.metadata),
+          };
+          return acc;
+        }, {} as CollectionsManifest)
+      : null
+  ), [data]);
 
   return { collections, loading, error: error || null };
 }

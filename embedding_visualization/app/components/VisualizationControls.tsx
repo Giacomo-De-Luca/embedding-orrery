@@ -22,6 +22,7 @@ import { Slider } from '@/lib/ui-primitives/slider';
 import type { ProjectionMethod, DimensionMode, DistanceMetric } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
+import { SaveColorDefaultButton } from './SaveColorDefaultButton';
 import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -35,6 +36,8 @@ interface VisualizationControlsProps {
   colorFieldOptions?: ColorFieldOption[];
   availableFields?: string[];
   nestedColorAvailable?: boolean;
+  /** Active collection — enables saving the colouring as its default. */
+  collectionName?: string | null;
 }
 
 export function VisualizationControls({
@@ -43,6 +46,7 @@ export function VisualizationControls({
   colorFieldOptions = [],
   availableFields = [],
   nestedColorAvailable,
+  collectionName,
 }: VisualizationControlsProps) {
   const store = useVisualizationStore;
   const {
@@ -258,6 +262,11 @@ export function VisualizationControls({
               <ColorScaleSelector />
             )}
           </div>
+
+          {/* Persist the current colouring as this collection's default */}
+          {colorByField && (
+            <SaveColorDefaultButton collectionName={collectionName ?? null} />
+          )}
 
           {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
           {colorByField &&

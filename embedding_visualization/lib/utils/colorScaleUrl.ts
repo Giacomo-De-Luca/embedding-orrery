@@ -69,3 +69,42 @@ export function deserializeColorScale(params: {
       return null;
   }
 }
+
+/**
+ * A colour scheme persisted as a per-collection default in `extra_metadata`.
+ * Same flattened shape as the URL params, plus the field to colour by. Stored as
+ * a JSON string under `default_color_scheme` (matching the `field_analysis`
+ * convention) and applied on collection load when no URL `colorBy` is present.
+ */
+export interface DefaultColorScheme extends ColorUrlParams {
+  colorBy: string;
+}
+
+/** Build a persisted default from the live colour state (field + scale + palette). */
+export function serializeDefaultColorScheme(
+  colorBy: string,
+  scale: ColorScale,
+  palette: string | undefined,
+): DefaultColorScheme {
+  return { colorBy, ...serializeColorScale(scale, palette) };
+}
+
+/**
+ * Resolve a persisted default into the pieces needed to apply it. Returns null
+ * when there is no field to colour by. `scale` is null when the stored scale is
+ * absent/invalid, letting the caller fall back to the field's recommended scale.
+ */
+export function resolveDefaultColorScheme(
+  scheme: DefaultColorScheme | null | undefined,
+): { field: string; scale: ColorScale | null; palette: string | null } | null {
+  if (!scheme?.colorBy) return null;
+  return {
+    field: scheme.colorBy,
+    scale: deserializeColorScale({
+      scale: scheme.scale ?? null,
+      scaleName: scheme.scaleName ?? null,
+      color: scheme.color ?? null,
+    }),
+    palette: scheme.palette ?? null,
+  };
+}

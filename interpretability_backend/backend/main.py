@@ -5,6 +5,8 @@ Supports:
 - GraphQL subscriptions over WebSocket for real-time progress updates
 """
 
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,12 +15,22 @@ from strawberry.subscriptions import GRAPHQL_TRANSPORT_WS_PROTOCOL, GRAPHQL_WS_P
 
 from .API import schema
 from .API.upload import router as upload_router
+from .utils.seed_bootstrap import ensure_seed_loaded
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Populate the data stores from the shipped seed snapshot on first run."""
+    ensure_seed_loaded()
+    yield
+
 
 # Create FastAPI app
 app = FastAPI(
     title="Embedding Visualization API",
     description="GraphQL API for exploring word embeddings with ChromaDB",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS (including WebSocket origins)

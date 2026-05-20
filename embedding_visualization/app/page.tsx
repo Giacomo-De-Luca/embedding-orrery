@@ -17,9 +17,9 @@ import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/us
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
-import type { HighlightMap } from '../lib/types/types';
+import type { HighlightMap, ColorScale } from '../lib/types/types';
 import { getSaeInfo, getSaeInfoFromMetadata } from '../lib/utils/saeCollections';
-import { serializeColorScale, deserializeColorScale } from '../lib/utils/colorScaleUrl';
+import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
 
@@ -68,7 +68,7 @@ export default function Home() {
   const distanceMetric = store((s) => s.distanceMetric);
   const temporalRange = store((s) => s.temporalRange);
 
-  const { data, loading, error, colorFieldOptions, defaultTooltipFields } = useEmbeddingData(
+  const { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection } = useEmbeddingData(
     selectedCollection,
     method,
     mode,
@@ -283,28 +283,54 @@ export default function Home() {
     store.getState().resetForCollectionChange();
   }, [selectedCollection, resetSearch, promptHighlight.clear, featureSearch.clearFeatures]);
 
-  // Apply colorBy from URL once data loads, then mark initial load complete
+  // Apply the colour scheme for the active collection once its data is loaded.
+  // Precedence: URL params (first load only) > collection's saved default > none.
+  // Re-applies only when `selectedCollection` actually changes to a new value, so
+  // manual edits persist for the lifetime of a selection. The ref keeps the effect
+  // inert across `collections` refetches (e.g. after saving a default).
+  const defaultsAppliedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!isInitialLoad.current || colorFieldOptions.length === 0) return;
+    // Act only once the loaded fields belong to the selected collection AND have
+    // populated. `loadedCollection` guards against the previous collection's stale
+    // options; the length check covers the uncached field-analysis path, where
+    // colorFieldOptions arrive a tick after loadedCollection (via setTimeout in
+    // useEmbeddingData). The guard sits before the ref write so a blocked run never
+    // marks the collection as done.
+    if (!selectedCollection || loadedCollection !== selectedCollection || colorFieldOptions.length === 0) return;
+    if (defaultsAppliedFor.current === selectedCollection) return;
+    defaultsAppliedFor.current = selectedCollection;
+
+    const wasInitialLoad = isInitialLoad.current;
     isInitialLoad.current = false;
-    const initialColorBy = initialColorByRef.current;
-    if (initialColorBy) {
-      const fieldOption = colorFieldOptions.find(f => f.field === initialColorBy);
-      if (fieldOption) {
-        const urlScale = initialColorScaleRef.current;
-        // When the URL carries an explicit scale, set the field WITHOUT a recommended
-        // scale (so setColorByField preserves the current colorScale rather than
-        // overwriting it with the field default) and then apply the URL scale.
-        store.getState().setColorByField(
-          initialColorBy,
-          urlScale ? undefined : fieldOption.recommendedScale,
-        );
-        if (urlScale) store.getState().setColorScale(urlScale);
-        const urlPalette = initialPaletteRef.current;
-        if (urlPalette) store.getState().setCategoricalPalette(urlPalette);
+
+    // Resolve which scheme to apply: URL (first load only) wins, else the default.
+    let field: string | null = null;
+    let scale: ColorScale | null = null;
+    let palette: string | null = null;
+
+    if (wasInitialLoad && initialColorByRef.current) {
+      field = initialColorByRef.current;
+      scale = initialColorScaleRef.current;
+      palette = initialPaletteRef.current;
+    } else {
+      const resolved = resolveDefaultColorScheme(collections?.[selectedCollection]?.defaultColorScheme);
+      if (resolved) {
+        field = resolved.field;
+        scale = resolved.scale;
+        palette = resolved.palette;
       }
     }
-  }, [colorFieldOptions]);
+
+    if (!field) return;
+    // A recommended scale is only needed when no explicit scale was provided
+    // (e.g. a shared link with colorBy but no scale). Otherwise apply the scale as-is.
+    const recommended = scale
+      ? undefined
+      : colorFieldOptions.find(f => f.field === field)?.recommendedScale;
+    store.getState().setColorByField(field, recommended);
+    if (scale) store.getState().setColorScale(scale);
+    if (palette) store.getState().setCategoricalPalette(palette);
+  }, [selectedCollection, loadedCollection, collections, colorFieldOptions]);
 
   // Auto-reset of mutedCategories on colorByField change is handled by the store subscription
 
@@ -381,6 +407,7 @@ export default function Home() {
                   searchQuery={searchQuery}
                   highlightedCount={combinedHighlightedIndices?.size}
                   colorFieldOptions={colorFieldOptions}
+                  collectionName={selectedCollection}
                   textSearchResults={textSearchResults}
                   onTextResultClick={wrappedHandlePointClick}
                   activePanel={activePanel}

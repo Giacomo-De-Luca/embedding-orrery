@@ -152,6 +152,7 @@ Storage:
 - **`id_utils.py`** - `IDDeduplicator` always appends `_N` suffix (1-based) for uniqueness.
 - **`provider_list.py`** - Single source of truth for `EmbeddingProviderEnum` (Strawberry enum). Used by both GraphQL types and the internal `EmbeddingProvider` mapping.
 - **`logger.py`** - Configures `star_map` logger with file handler (DEBUG) and console handler (ERROR).
+- **`seed_bootstrap.py`** - `ensure_seed_loaded()`: on first run copies the committed seed snapshot (`resources/seed/main.duckdb` + `vector_db/`) into the live paths, **only if `main.duckdb` is absent** (never clobbers an existing DB). Called from the FastAPI `lifespan` hook in `main.py`. Build/refresh the seed with `scripts/build_seed_snapshot.py` (run with the backend stopped — DuckDB is single-writer). The seed ships `emotion` + `xkcd_hilbert_gemini` (~23 MB); `.gitignore` un-ignores `resources/seed/`.
 
 ## Data Storage
 

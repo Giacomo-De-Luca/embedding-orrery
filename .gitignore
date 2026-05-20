@@ -51,6 +51,13 @@ lacan_sentences.tsv
 Papers/
 vector_db/
 
+# Shipped seed snapshot (small demo collections, ~5-6 MB) — tracked.
+# Negations must follow the broad `vector_db/` rule above to take effect.
+!interpretability_backend/resources/seed/
+!interpretability_backend/resources/seed/main.duckdb
+!interpretability_backend/resources/seed/vector_db/
+!interpretability_backend/resources/seed/vector_db/**
+
 
 interpretability/resources
 embedding-atlas/

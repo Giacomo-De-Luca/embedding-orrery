@@ -8,7 +8,7 @@ Polish is not there, a lot of the functionalities are iffy at best, but the arch
 
 (I'm trying to make it work for sparse embeddings as well and qwen embeddings, there were some interpretability experiments in the backend folder, but the code was... raw.)
 
-*Note:* the first time it launches, there are no data to display, probably I should add a test little dataset. Anyways, click on the "Embed" button on the top right, it opens the collection manager page. There one can embed datasets or use the default "emotion one" (which is quite terrible as an example, since it doesn't have labels). Select the columns to embed, and click embed. Remotely the only provider tested that it's working is sentence-transformers. I will add more later. 
+*Note:* the app **ships with two small demo collections** (a ~23 MB seed in `interpretability_backend/resources/seed/`), so the dashboard renders something on first launch — `emotion` (1000 rows, with topic labels) and `xkcd_hilbert_gemini` (the XKCD color survey with rainbow coloring). On first backend startup these are copied into place automatically (an existing local database is never overwritten). To add your own data, click the "Embed" button on the top right to open the collection manager, pick columns, and embed. The only embedding provider confirmed working end-to-end is sentence-transformers. *(Live semantic search on the XKCD collection needs `GEMINI_API_KEY` since its vectors are Gemini-embedded; viewing and the `emotion` collection's search work with no setup.)* 
 
 ![Interface Screenshot](interface.png)
 
@@ -29,11 +29,11 @@ npm install
 npm run dev
 # Visit http://localhost:3000
 
-# First time: Click "Embed" button (top right) to create your first collection
-# Try the HuggingFace tab to embed a dataset like "emotion" or "squad"
+# Ships with demo collections (emotion + xkcd) — the dashboard is populated on first launch
+# To add your own: click "Embed" (top right); try the HuggingFace tab with a dataset like "emotion" or "squad"
 ```
 
-**Note**: The first time you launch, there are no collections to display. Use the `/test-embed` page (click "Embed" button in header) to create your first collection from HuggingFace datasets or local files.
+**Note**: The app ships with two demo collections (a ~23 MB seed copied into place on first backend startup; an existing local database is never overwritten), so the dashboard is populated immediately. To add your own data, use the `/test-embed` page (click "Embed" in the header) to create collections from HuggingFace datasets or local files.
 
 ## Project Structure
 

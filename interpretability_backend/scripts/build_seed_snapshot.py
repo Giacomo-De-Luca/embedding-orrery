@@ -30,7 +30,6 @@ Usage:
 
 import shutil
 import sys
-from pathlib import Path
 
 import chromadb
 import duckdb
@@ -53,15 +52,12 @@ SEED_VECTOR_DB = SEED_DIR / "vector_db"
 # Tables copied wholesale-filtered. Per-dataset items tables are handled
 # separately. Order matters: parents before children (FK constraints).
 _DATASET_FILTER = "name IN ({})".format(", ".join(f"'{d}'" for d in SEED_DATASETS))
-_COLLECTION_FILTER = "collection_name IN ({})".format(
-    ", ".join(f"'{c}'" for c in SEED_COLLECTIONS)
-)
+_COLLECTION_FILTER = "collection_name IN ({})".format(", ".join(f"'{c}'" for c in SEED_COLLECTIONS))
 
 
 def _quoted_items_table(dataset_name: str) -> str:
-    """Mirror DuckDBClient._items_table naming for a dataset."""
-    db = DuckDBClient.__new__(DuckDBClient)  # no __init__; just use the helper
-    return db._items_table(dataset_name)
+    """Mirror DuckDBClient items-table naming for a dataset (quoted identifier)."""
+    return f'"items_{DuckDBClient._sanitize_table_name(dataset_name)}"'
 
 
 def export_duckdb() -> None:
@@ -75,29 +71,50 @@ def export_duckdb() -> None:
     print(f"[duckdb] attaching production DB {DUCKDB_PATH} (read-only)")
     con = duckdb.connect(str(SEED_DUCKDB_PATH))
     try:
-        con.execute("ATTACH ? AS prod (READ_ONLY)", [str(DUCKDB_PATH.resolve())])
+        # ATTACH does not support bound parameters; the path is from config.
+        con.execute(f"ATTACH '{DUCKDB_PATH.resolve()}' AS prod (READ_ONLY)")
 
         # Parents first, then children (FK order).
         statements = [
-            ("datasets", f"INSERT INTO datasets SELECT * FROM prod.datasets WHERE {_DATASET_FILTER}"),
+            (
+                "datasets",
+                f"INSERT INTO datasets SELECT * FROM prod.datasets WHERE {_DATASET_FILTER}",
+            ),
         ]
         for dataset in SEED_DATASETS:
             tbl = _quoted_items_table(dataset)
-            statements.append(
-                (f"items({dataset})", f"INSERT INTO {tbl} SELECT * FROM prod.{tbl}")
-            )
+            statements.append((f"items({dataset})", f"INSERT INTO {tbl} SELECT * FROM prod.{tbl}"))
         statements += [
-            ("vector_collections", f"INSERT INTO vector_collections SELECT * FROM prod.vector_collections WHERE {_COLLECTION_FILTER}"),
-            ("projections", f"INSERT INTO projections SELECT * FROM prod.projections WHERE {_COLLECTION_FILTER}"),
-            ("projection_metadata", f"INSERT INTO projection_metadata SELECT * FROM prod.projection_metadata WHERE {_COLLECTION_FILTER}"),
-            ("topic_extractions", f"INSERT INTO topic_extractions SELECT * FROM prod.topic_extractions WHERE {_COLLECTION_FILTER}"),
-            ("topic_info", f"INSERT INTO topic_info SELECT * FROM prod.topic_info WHERE extraction_id IN (SELECT id FROM prod.topic_extractions WHERE {_COLLECTION_FILTER})"),
-            ("topic_assignments", f"INSERT INTO topic_assignments SELECT * FROM prod.topic_assignments WHERE extraction_id IN (SELECT id FROM prod.topic_extractions WHERE {_COLLECTION_FILTER})"),
+            (
+                "vector_collections",
+                f"INSERT INTO vector_collections SELECT * FROM prod.vector_collections WHERE {_COLLECTION_FILTER}",
+            ),
+            (
+                "projections",
+                f"INSERT INTO projections SELECT * FROM prod.projections WHERE {_COLLECTION_FILTER}",
+            ),
+            (
+                "projection_metadata",
+                f"INSERT INTO projection_metadata SELECT * FROM prod.projection_metadata WHERE {_COLLECTION_FILTER}",
+            ),
+            (
+                "topic_extractions",
+                f"INSERT INTO topic_extractions SELECT * FROM prod.topic_extractions WHERE {_COLLECTION_FILTER}",
+            ),
+            (
+                "topic_info",
+                f"INSERT INTO topic_info SELECT * FROM prod.topic_info WHERE extraction_id IN (SELECT id FROM prod.topic_extractions WHERE {_COLLECTION_FILTER})",
+            ),
+            (
+                "topic_assignments",
+                f"INSERT INTO topic_assignments SELECT * FROM prod.topic_assignments WHERE extraction_id IN (SELECT id FROM prod.topic_extractions WHERE {_COLLECTION_FILTER})",
+            ),
         ]
 
         for label, sql in statements:
-            con.execute(sql)
-            count = con.execute("SELECT changes()").fetchone()[0]
+            # DuckDB INSERT returns a one-row result with the inserted count.
+            row = con.execute(sql).fetchone()
+            count = row[0] if row else 0
             print(f"[duckdb]   {label:<22} {count:>7} rows")
 
         con.execute("DETACH prod")
@@ -125,7 +142,9 @@ def export_chromadb() -> None:
         # dim, task) survives for live semantic search.
         dest_col = dest.create_collection(name=name, metadata=dict(src_col.metadata or {}))
         dest_col.add(ids=ids, embeddings=embeddings)
-        print(f"[chroma]   {name:<22} {len(ids):>7} vectors (dim={len(embeddings[0]) if embeddings else 0})")
+        print(
+            f"[chroma]   {name:<22} {len(ids):>7} vectors (dim={len(embeddings[0]) if embeddings else 0})"
+        )
 
 
 def main() -> int:

@@ -1,6 +1,8 @@
 // Types for embedding visualization
 // Flexible design to support any embedding data source
 
+import type { DefaultColorScheme } from '../utils/colorScaleUrl';
+
 export interface CollectionInfo {
   name: string;
   display_name: string;
@@ -17,6 +19,8 @@ export interface CollectionInfo {
   // Topic info (populated when topic extraction has been run)
   has_topics?: boolean;
   topics?: TopicInfo[];
+  // Per-collection default colour scheme (stored in extra_metadata)
+  defaultColorScheme?: DefaultColorScheme;
 }
 
 // ============ Topic types (shared with mutations.ts) ============

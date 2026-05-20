@@ -36,6 +36,8 @@ interface UseEmbeddingDataResult {
   error: Error | null;
   colorFieldOptions: ColorFieldOption[];
   defaultTooltipFields: string[];
+  /** Collection the current data/colorFieldOptions belong to (null until loaded). */
+  loadedCollection: string | null;
 }
 
 export function useEmbeddingData(
@@ -48,6 +50,7 @@ export function useEmbeddingData(
   const [error, setError] = useState<Error | null>(null);
   const [colorFieldOptions, setColorFieldOptions] = useState<ColorFieldOption[]>([]);
   const [defaultTooltipFields, setDefaultTooltipFields] = useState<string[]>([]);
+  const [loadedCollection, setLoadedCollection] = useState<string | null>(null);
 
   // Track accumulated projections across multiple fetches for the same collection.
   // When the user switches method/mode, we fetch only the new projection and merge it here.
@@ -228,6 +231,8 @@ export function useEmbeddingData(
     setData(embeddingData);
     setLoading(false);
     setError(null);
+    // Signal that data + colorFieldOptions now correspond to this collection.
+    setLoadedCollection(collectionData._collectionName as string);
 
     console.log('Loaded collection:', {
       collection: core.collection,
@@ -315,5 +320,5 @@ export function useEmbeddingData(
     });
   }, [collectionName, method, mode, executeQuery, processResponse]);
 
-  return { data, loading, error, colorFieldOptions, defaultTooltipFields };
+  return { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection };
 }
