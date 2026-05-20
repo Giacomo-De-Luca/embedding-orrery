@@ -27,16 +27,7 @@ fi
 echo "Installing Python dependencies..."
 uv sync
 
-# --- 2. Rust Setup ---
-#echo ""
-#echo "🦀 Setting up Rust environment..."
-#if [ -f "./setup_rust.sh" ]; then
-#    chmod +x ./setup_rust.sh
-#    ./setup_rust.sh
-#else
-#    echo "Error: setup_rust.sh not found!"
-#    exit 1
-#fi
+
 
 # --- 3. Node.js/npm Setup ---
 echo ""

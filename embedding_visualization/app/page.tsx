@@ -19,6 +19,7 @@ import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
 import type { HighlightMap } from '../lib/types/types';
 import { getSaeInfo, getSaeInfoFromMetadata } from '../lib/utils/saeCollections';
+import { serializeColorScale, deserializeColorScale } from '../lib/utils/colorScaleUrl';
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
 
@@ -30,6 +31,13 @@ export default function Home() {
   const colorByFromUrl = searchParams.get('colorBy');
   const isInitialLoad = useRef(true);
   const initialColorByRef = useRef(colorByFromUrl);
+  // Color-scheme params captured from the URL on first render (applied once data loads)
+  const initialColorScaleRef = useRef(deserializeColorScale({
+    scale: searchParams.get('scale'),
+    scaleName: searchParams.get('scaleName'),
+    color: searchParams.get('color'),
+  }));
+  const initialPaletteRef = useRef(searchParams.get('palette'));
 
   // Default to the first available collection
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
@@ -53,6 +61,8 @@ export default function Home() {
   const method = store((s) => s.method);
   const mode = store((s) => s.mode);
   const colorByField = store((s) => s.colorByField);
+  const colorScale = store((s) => s.colorScale);
+  const categoricalPalette = store((s) => s.categoricalPalette);
   const searchQuery = store((s) => s.searchQuery);
   const textSearchConfig = store((s) => s.textSearchConfig);
   const distanceMetric = store((s) => s.distanceMetric);
@@ -74,13 +84,26 @@ export default function Home() {
       ?? (isInitialLoad.current ? initialColorByRef.current : null);
     if (effectiveColorBy) {
       params.set('colorBy', effectiveColorBy);
+      // Encode the color scheme alongside the field. During initial load the
+      // store hasn't applied the URL state yet, so prefer the original URL refs.
+      const effectiveScale = isInitialLoad.current
+        ? (initialColorScaleRef.current ?? colorScale)
+        : colorScale;
+      const effectivePalette = isInitialLoad.current
+        ? (initialPaletteRef.current ?? categoricalPalette)
+        : categoricalPalette;
+      const colorParams = serializeColorScale(effectiveScale, effectivePalette ?? undefined);
+      if (colorParams.scale) params.set('scale', colorParams.scale);
+      if (colorParams.scaleName) params.set('scaleName', colorParams.scaleName);
+      if (colorParams.color) params.set('color', colorParams.color);
+      if (colorParams.palette) params.set('palette', colorParams.palette);
     }
     const newSearch = `?${params.toString()}`;
     // Only navigate if the URL actually changed
     if (newSearch !== window.location.search) {
       router.replace(newSearch, { scroll: false });
     }
-  }, [selectedCollection, colorByField, router]);
+  }, [selectedCollection, colorByField, colorScale, categoricalPalette, router]);
 
   // Get topics for selected collection
   const selectedCollectionTopics = useMemo(() => {
@@ -268,7 +291,17 @@ export default function Home() {
     if (initialColorBy) {
       const fieldOption = colorFieldOptions.find(f => f.field === initialColorBy);
       if (fieldOption) {
-        store.getState().setColorByField(initialColorBy, fieldOption.recommendedScale);
+        const urlScale = initialColorScaleRef.current;
+        // When the URL carries an explicit scale, set the field WITHOUT a recommended
+        // scale (so setColorByField preserves the current colorScale rather than
+        // overwriting it with the field default) and then apply the URL scale.
+        store.getState().setColorByField(
+          initialColorBy,
+          urlScale ? undefined : fieldOption.recommendedScale,
+        );
+        if (urlScale) store.getState().setColorScale(urlScale);
+        const urlPalette = initialPaletteRef.current;
+        if (urlPalette) store.getState().setCategoricalPalette(urlPalette);
       }
     }
   }, [colorFieldOptions]);
