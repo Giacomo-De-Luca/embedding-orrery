@@ -3,7 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
 
-  reactCompiler: true,
+  experimental: {
+    reactCompiler: true,
+  },
 
   webpack: (config) => {
     // glslify is a browserify shader compiler that regl-scatter2d lists as a

@@ -226,7 +226,8 @@ def get_dataset_preview(
         config_name = config if config and config != "default" else None
         dataset = load_dataset(dataset_id, name=config_name, split=split, streaming=True)
 
-        columns = list(dataset.features.keys()) if hasattr(dataset, "features") else []
+        features = getattr(dataset, "features", None)
+        columns = list(features.keys()) if features else []
 
         rows = []
         for i, row in enumerate(dataset):
@@ -241,6 +242,11 @@ def get_dataset_preview(
                 else:
                     row_dict[key] = str(value)[:200]
             rows.append(row_dict)
+
+        # Streaming datasets without a declared schema have features=None;
+        # fall back to deriving columns from the first row's keys.
+        if not columns and rows:
+            columns = list(rows[0].keys())
 
         # Try to get total row count
         total_rows = None

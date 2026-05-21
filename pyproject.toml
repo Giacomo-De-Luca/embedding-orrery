@@ -43,6 +43,7 @@ dependencies = [
     "google-genai>=1.73.1",
     "requests>=2.32.5",
     "sae-lens>=6.43.0",
+    "zstandard>=0.25.0",
 ]
 
 [project.optional-dependencies]

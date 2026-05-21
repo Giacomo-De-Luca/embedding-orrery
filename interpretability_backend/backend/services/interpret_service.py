@@ -42,6 +42,7 @@ from interpret.sae.exploration.prompt_explorer import (  # noqa: E402
     PromptExplorerConfig,
 )
 from interpret.sae.hook_manager import HookManager  # noqa: E402
+from interpret.sae.loading import clear_sae_cache  # noqa: E402
 from interpret.sae.sae_config import (  # noqa: E402
     HOOK_TYPE_FROM_STR,
     GemmaScopeSAEConfig,
@@ -297,6 +298,7 @@ class InterpretService:
         self._model_size = "4b"
         self._variant = "it"
         self._direction_cache.clear()
+        clear_sae_cache()
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
