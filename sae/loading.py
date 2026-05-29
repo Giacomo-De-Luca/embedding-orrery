@@ -60,8 +60,11 @@ def _load_gemma_scope_sae(config: GemmaScopeSAEConfig) -> JumpReLUSAE:
         config.l0_size,
     )
     sae = JumpReLUSAE.from_pretrained(
-        path, d_in=config.d_in, d_sae=WIDTH_TO_D_SAE[config.width],
-        device=config.device, dtype=dtype,
+        path,
+        d_in=config.d_in,
+        d_sae=WIDTH_TO_D_SAE[config.width],
+        device=config.device,
+        dtype=dtype,
     )
     sae.eval()
     return sae
@@ -88,7 +91,18 @@ def _load_qwen_scope_sae(config: QwenScopeSAEConfig) -> TopKSAE:
     )
     state = torch.load(path, map_location="cpu", weights_only=True)
 
-    sae = TopKSAE(d_in=config.d_in, d_sae=config.d_sae, k=config.k)
+    # On-disk W_enc is (d_sae, d_in); the tensor is the source of truth for the
+    # dims, so a new Qwen model needs no d_in/d_sae bookkeeping. Validate the
+    # advisory config d_in against it to catch a wrong model_size early. d_sae
+    # is left to the tensor (config.d_sae is only the smoke-test's estimate).
+    d_sae_disk, d_in_disk = state["W_enc"].shape
+    if config.d_in is not None and config.d_in != d_in_disk:
+        raise ValueError(
+            f"d_in mismatch for {config.repo_id}: config expects {config.d_in}, "
+            f"weights have {d_in_disk}. Check model_size."
+        )
+
+    sae = TopKSAE(d_in=d_in_disk, d_sae=d_sae_disk, k=config.k)
     sae.w_enc.data = state["W_enc"].T.contiguous().to(dtype=dtype)
     sae.w_dec.data = state["W_dec"].T.contiguous().to(dtype=dtype)
     sae.b_enc.data = state["b_enc"].to(dtype=dtype)
@@ -132,10 +146,9 @@ def _config_to_key(config: GemmaScopeSAEConfig | QwenScopeSAEConfig) -> tuple:
             QwenScopeSAEConfig,
             config.layer_index,
             config.hook_type.value,
+            config.model_size,
             config.width,
             str(config.k),
-            config.variant,
-            "-",
             config.dtype,
             config.device,
         )
@@ -161,9 +174,7 @@ def load_sae(config: GemmaScopeSAEConfig | QwenScopeSAEConfig) -> SAEBase:
     instance. Call ``clear_sae_cache()`` to free.
     """
     if config.dtype not in DTYPE_MAP:
-        raise ValueError(
-            f"Unknown dtype '{config.dtype}'. Valid: {list(DTYPE_MAP.keys())}"
-        )
+        raise ValueError(f"Unknown dtype '{config.dtype}'. Valid: {list(DTYPE_MAP.keys())}")
     key = _config_to_key(config)
     cached = _SAE_CACHE.get(key)
     if cached is not None:
