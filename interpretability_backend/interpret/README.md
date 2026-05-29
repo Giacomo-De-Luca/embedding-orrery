@@ -64,6 +64,7 @@ interpret/
 ```
 
 Each non-trivial subdirectory has its own README:
+- [`QWEN_SUPPORT.md`](QWEN_SUPPORT.md) — Qwen3 / Qwen3.5 support: model registry, SAE-config design, streaming contract
 - [`sae/README.md`](sae/README.md) — full SAE library tour
 - [`experiments/refusal_directions/README.md`](experiments/refusal_directions/README.md)
 - [`experiments/poetry_directions/README.md`](experiments/poetry_directions/README.md)

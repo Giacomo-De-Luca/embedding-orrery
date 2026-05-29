@@ -43,24 +43,17 @@ import sys
 import threading
 from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal
 
 from PIL import Image
+
+from interpret.inference.streaming import TokenStreamEvent
 
 if TYPE_CHECKING:
     import torch
 
 # Add gemma_pytorch fork to import path
 _GEMMA_PYTORCH_ROOT = Path(__file__).resolve().parents[1] / "forked" / "gemma_pytorch"
-
-
-class TokenStreamEvent(NamedTuple):
-    """A single token yielded during streaming generation."""
-
-    token_index: int  # 0-based position in generated output
-    token_id: int  # raw SentencePiece token ID
-    text_delta: str  # clean text chunk for display
-    is_done: bool  # True on the last token
 
 
 @contextlib.contextmanager

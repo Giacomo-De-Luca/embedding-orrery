@@ -56,14 +56,23 @@ CLI:
 
 import argparse
 import contextlib
+import queue
+import threading
 from collections.abc import Callable, Generator
 from typing import Literal
 
 import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    StoppingCriteria,
+    StoppingCriteriaList,
+)
+from transformers.generation.streamers import BaseStreamer
 
+from interpret.inference.streaming import TokenStreamEvent
 from interpret.sae.activation_store import ActivationStore
 from interpret.sae.sae_config import HookType
 
@@ -170,20 +179,15 @@ class _RawActivationCapture:
         for layer_idx in self.layers:
             if layer_idx >= len(decoder_layers):
                 raise ValueError(
-                    f"layer_index {layer_idx} out of range "
-                    f"(model has {len(decoder_layers)} layers)"
+                    f"layer_index {layer_idx} out of range (model has {len(decoder_layers)} layers)"
                 )
             for hook_type in self.hook_types:
                 target = self._resolve_target(decoder_layers[layer_idx], hook_type)
                 key = (layer_idx, hook_type)
                 if hook_type in self._PRE_HOOK_TYPES:
-                    handle = target.register_forward_pre_hook(
-                        self._make_pre_forward_hook(key)
-                    )
+                    handle = target.register_forward_pre_hook(self._make_pre_forward_hook(key))
                 else:
-                    handle = target.register_forward_hook(
-                        self._make_forward_hook(key)
-                    )
+                    handle = target.register_forward_hook(self._make_forward_hook(key))
                 self._handles.append(handle)
 
     def detach(self) -> None:
@@ -199,6 +203,84 @@ class _RawActivationCapture:
                 if record is not None:
                     result.setdefault(layer_idx, {})[hook_type] = record.feature_acts
         return result
+
+
+class _TokenIdStreamer(BaseStreamer):
+    """Collects generated token IDs into a queue for incremental consumption.
+
+    Mirrors ``TextStreamer``'s prompt handling: the first ``put`` (the prompt
+    token IDs, a 2-D tensor) is dropped; each subsequent ``put`` carries the
+    newly generated token id(s). ``end()`` enqueues a sentinel so the consumer
+    knows generation finished. Batch size 1 only (the wrapper never batches).
+    """
+
+    SENTINEL = object()
+
+    def __init__(self) -> None:
+        self.queue: queue.Queue = queue.Queue()
+        self._prompt_seen = False
+
+    def put(self, value: torch.Tensor) -> None:
+        if value.dim() > 1:
+            value = value[0]  # drop batch dim; prompt arrives as (1, prompt_len)
+        if not self._prompt_seen:
+            self._prompt_seen = True
+            return
+        for token_id in value.tolist():
+            self.queue.put(int(token_id))
+
+    def end(self) -> None:
+        self.queue.put(self.SENTINEL)
+
+
+class _CancelCriteria(StoppingCriteria):
+    """Stops generation after the current token once ``cancel_event`` is set."""
+
+    def __init__(self, cancel_event: threading.Event) -> None:
+        self._cancel_event = cancel_event
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        return self._cancel_event.is_set()
+
+
+def _drain_until_sentinel(q: "queue.Queue") -> Generator[int, None, None]:
+    """Yield token ids from a queue until the streamer's sentinel appears."""
+    while True:
+        item = q.get()
+        if item is _TokenIdStreamer.SENTINEL:
+            return
+        yield item
+
+
+def _stream_token_events(
+    token_source,
+    decode: Callable[..., str],
+    *,
+    skip_special_tokens: bool = True,
+) -> Generator[TokenStreamEvent, None, None]:
+    """Turn a stream of token ids into ``TokenStreamEvent``s via decode + diff.
+
+    Decodes the full growing token list each step and yields only the new
+    characters — the same diff strategy ``GemmaPytorchInference`` uses, which
+    keeps multi-byte / BPE pieces from being split across deltas. The last
+    emitted event carries ``is_done=True``; an empty source yields nothing.
+    Pure (no model / threads) so it can be unit-tested directly.
+    """
+    token_ids: list[int] = []
+    prev_text = ""
+    pending: TokenStreamEvent | None = None
+    idx = 0
+    for token_id in token_source:
+        if pending is not None:
+            yield pending
+        token_ids.append(token_id)
+        full_text = decode(token_ids, skip_special_tokens=skip_special_tokens)
+        text_delta = full_text[len(prev_text) :]
+        prev_text = full_text
+        pending = TokenStreamEvent(idx, token_id, text_delta, False)
+        idx += 1
+    if pending is not None:
+        yield pending._replace(is_done=True)
 
 
 class Qwen3Inference:
@@ -221,9 +303,11 @@ class Qwen3Inference:
         self.dtype = _DTYPE_MAP[dtype]
 
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=self.dtype
-        ).to(self.device).eval()
+        self.model = (
+            AutoModelForCausalLM.from_pretrained(model_name, dtype=self.dtype)
+            .to(self.device)
+            .eval()
+        )
 
         assert hasattr(self.model, "model") and hasattr(self.model.model, "layers"), (
             "Qwen3 layer path drifted — expected `model.model.layers`. "
@@ -243,15 +327,19 @@ class Qwen3Inference:
         """Tokenize a string. Defaults to no special tokens (for offset use)."""
         return self._tokenizer.encode(text, add_special_tokens=add_special_tokens)
 
-    def format_prompt(self, prompt: str | list[dict]) -> str:
-        """Apply Qwen3's chat template. Accepts a raw user string or a messages list."""
-        messages = (
-            [{"role": "user", "content": prompt}]
-            if isinstance(prompt, str)
-            else prompt
-        )
+    def format_prompt(self, prompt: str | list[dict], enable_thinking: bool = True) -> str:
+        """Apply Qwen3's chat template. Accepts a raw user string or a messages list.
+
+        ``enable_thinking`` maps to the Qwen3 template variable of the same
+        name; the streaming chat methods default it to False to suppress
+        ``<think>`` blocks in the visible output.
+        """
+        messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
         return self._tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
         )
 
     def generate(
@@ -306,15 +394,100 @@ class Qwen3Inference:
         generated = output_ids[0, prompt_len:]
         return self._tokenizer.decode(generated, skip_special_tokens=True)
 
+    def _generate_stream(
+        self,
+        formatted_prompt: str,
+        output_len: int,
+        temperature: float | None,
+        top_p: float,
+        top_k: int,
+        cancel_event: threading.Event | None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Stream tokens from a pre-formatted prompt.
+
+        Runs ``model.generate`` on a background thread feeding a token-id queue,
+        and yields clean text deltas via full-decode + diff. The last real token
+        carries ``is_done=True``. A cancel criterion is always attached: an
+        explicit ``cancel_event`` (set by the caller on disconnect), or an
+        internal one set on generator close so abandoning the stream early halts
+        the background generate instead of running it to completion.
+        """
+        inputs = self._tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
+        do_sample = temperature is not None
+        gen_kwargs: dict = {
+            "max_new_tokens": output_len,
+            "do_sample": do_sample,
+            "pad_token_id": self._tokenizer.eos_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = temperature
+            gen_kwargs["top_p"] = top_p
+            gen_kwargs["top_k"] = top_k
+
+        cancel = cancel_event if cancel_event is not None else threading.Event()
+        gen_kwargs["stopping_criteria"] = StoppingCriteriaList([_CancelCriteria(cancel)])
+
+        streamer = _TokenIdStreamer()
+        errors: list[BaseException] = []
+
+        def _run() -> None:
+            try:
+                with torch.no_grad():
+                    self.model.generate(**inputs, streamer=streamer, **gen_kwargs)
+            except BaseException as exc:  # surface to the consumer below
+                errors.append(exc)
+                streamer.end()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        try:
+            yield from _stream_token_events(
+                _drain_until_sentinel(streamer.queue), self._tokenizer.decode
+            )
+        finally:
+            cancel.set()  # halt the background generate if abandoned early
+            thread.join(timeout=30.0)
+        if errors:
+            raise errors[0]
+
+    def generate_stream(
+        self,
+        prompt: str,
+        output_len: int = 256,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        cancel_event: threading.Event | None = None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Stream tokens from a single-turn user prompt (thinking disabled)."""
+        formatted = self.format_prompt(prompt, enable_thinking=False)
+        yield from self._generate_stream(
+            formatted, output_len, temperature, top_p, top_k, cancel_event
+        )
+
+    def generate_chat_stream(
+        self,
+        turns: list[tuple[str, str]],
+        output_len: int = 256,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        cancel_event: threading.Event | None = None,
+    ) -> Generator[TokenStreamEvent, None, None]:
+        """Stream tokens from a multi-turn conversation. Roles: 'user'/'assistant'/'system'."""
+        messages = [{"role": role, "content": content} for role, content in turns]
+        formatted = self.format_prompt(messages, enable_thinking=False)
+        yield from self._generate_stream(
+            formatted, output_len, temperature, top_p, top_k, cancel_event
+        )
+
     @contextlib.contextmanager
     def cache_activations(
         self,
         layers: set[int],
         hook_types: set[HookType] | None = None,
         prefill_only: bool = True,
-    ) -> Generator[
-        Callable[[], dict[int, dict[HookType, torch.Tensor]]], None, None
-    ]:
+    ) -> Generator[Callable[[], dict[int, dict[HookType, torch.Tensor]]], None, None]:
         """Context manager: capture raw hidden states at the requested layers.
 
         Yields a callable that, after generation, returns
@@ -352,11 +525,15 @@ def main() -> None:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=64)
     parser.add_argument(
-        "--capture-layer", type=int, default=5,
+        "--capture-layer",
+        type=int,
+        default=5,
         help="Layer index to capture activations from for the smoke test",
     )
     parser.add_argument(
-        "--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16",
+        "--dtype",
+        choices=("bfloat16", "float16", "float32"),
+        default="bfloat16",
     )
     args = parser.parse_args()
 

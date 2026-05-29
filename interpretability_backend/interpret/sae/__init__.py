@@ -16,10 +16,12 @@ from interpret.sae.activation_store import ActivationRecord, ActivationStore
 from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig
 from interpret.sae.feature_labels import FeatureLabelStore
 from interpret.sae.hook_manager import HookManager
-from interpret.sae.loading import load_sae
+from interpret.sae.loading import clear_sae_cache, load_sae
 from interpret.sae.sae_config import (
+    QWEN_SCOPE_MODELS,
     GemmaScopeSAEConfig,
     HookType,
+    QwenScopeModelInfo,
     QwenScopeSAEConfig,
     SAEConfig,
 )
@@ -47,6 +49,8 @@ __all__ = [
     "JumpReLUSAE",
     "PromptExplorer",
     "PromptExplorerConfig",
+    "QWEN_SCOPE_MODELS",
+    "QwenScopeModelInfo",
     "QwenScopeSAEConfig",
     "SAEBase",
     "SAEConfig",
@@ -54,6 +58,7 @@ __all__ = [
     "SteeringOp",
     "TopKSAE",
     "apply_steering",
+    "clear_sae_cache",
     "load_sae",
     "neuronpedia_source_id",
     "neuronpedia_source_id_prefixed",

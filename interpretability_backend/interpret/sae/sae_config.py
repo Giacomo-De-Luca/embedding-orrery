@@ -5,8 +5,8 @@ Two SAE families are supported, each with its own config dataclass:
 - ``GemmaScopeSAEConfig`` — Google's Gemma-scope JumpReLU SAE suite for
   Gemma3. Hosted on HuggingFace under ``google/gemma-scope-2-{size}-{variant}``
   with per-(hook, layer, width, l0) folders. Indexed by Neuronpedia.
-- ``QwenScopeSAEConfig`` — Qwen's TopK SAE suite for Qwen3. Hosted on
-  HuggingFace under ``Qwen/SAE-Res-Qwen3-{size}-{variant}-W{width}-L0_{k}``
+- ``QwenScopeSAEConfig`` — Qwen's TopK SAE suite for Qwen3 / Qwen3.5. Hosted
+  on HuggingFace under ``Qwen/SAE-Res-{family}-{size}[-{variant}]-W{width}-L0_{k}``
   with one ``layer{N}.sae.pt`` per layer. Not indexed by Neuronpedia.
 
 Both expose the fields ``HookManager`` and ``loading.load_sae`` consume:
@@ -34,11 +34,16 @@ class HookType(Enum):
 HOOK_TYPE_FROM_STR: dict[str, HookType] = {ht.value: ht for ht in HookType}
 
 
-# d_sae value for each width suffix shared across SAE families.
+# d_sae value for each width suffix, shared across SAE families. Gemma-scope
+# uses 16k/32k/65k/262k; Qwen-scope adds 64k/80k/128k. Width *labels* differ per
+# family (e.g. Gemma "65k" vs Qwen "64k") but each resolves to a latent count.
 WIDTH_TO_D_SAE: dict[str, int] = {
     "16k": 16384,
     "32k": 32768,
+    "64k": 65536,
     "65k": 65536,
+    "80k": 81920,
+    "128k": 131072,
     "262k": 262144,
 }
 
@@ -113,36 +118,103 @@ class GemmaScopeSAEConfig:
 SAEConfig = GemmaScopeSAEConfig
 
 
+@dataclass(frozen=True)
+class QwenScopeModelInfo:
+    """Per-model Qwen-Scope facts that can't be inferred without a download.
+
+    ``family`` is the segment in the SAE repo *name* ("Qwen3" or "Qwen3.5");
+    the HuggingFace org is always "Qwen". ``variant`` is the "-Base" segment
+    when present (``None`` for Qwen3.5-27B, whose repo has no "-Base" suffix).
+    ``d_in`` is advisory — the loader validates it against the downloaded
+    tensor and treats the tensor shape as the source of truth.
+    """
+
+    family: str
+    variant: str | None
+    d_in: int
+    widths: tuple[str, ...]
+    ks: tuple[int, ...]
+    n_layers: int
+
+
+# Registry of Qwen-Scope SAE checkpoints. Adding a model is a one-line entry;
+# dims are confirmed against the downloaded weights at load time. The larger
+# ``d_in``/``n_layers`` values should be checked against the model card on
+# first download (the loader's shape check is the safety net for ``d_in``).
+QWEN_SCOPE_MODELS: dict[str, QwenScopeModelInfo] = {
+    "1.7B": QwenScopeModelInfo("Qwen3", "Base", 2048, ("32k",), (50, 100), 28),
+    "8B": QwenScopeModelInfo("Qwen3", "Base", 4096, ("64k",), (50, 100), 36),
+    "27B": QwenScopeModelInfo("Qwen3.5", None, 5120, ("80k",), (50, 100), 64),
+}
+
+
 @dataclass
 class QwenScopeSAEConfig:
     """Configuration for a single pretrained Qwen-scope TopK SAE.
 
-    The repo layout is flat:
-        Qwen/SAE-Res-Qwen3-{model_size}-{variant}-W{width}-L0_{k}
-        layer{N}.sae.pt
+    The repo layout is flat — one ``layer{N}.sae.pt`` per layer under:
+        Qwen/SAE-Res-{family}-{model_size}[-{variant}]-W{width}-L0_{k}
 
-    Only ``RESID_POST`` is meaningful for Qwen-scope (the SAEs are
-    trained on the residual stream after each decoder layer).
+    Naming is irregular across the suite (family prefix, the optional "-Base"
+    segment, and width all vary by model), so those facts live in
+    ``QWEN_SCOPE_MODELS`` keyed by ``model_size`` rather than being derived by
+    string rule. ``d_in``/``d_sae`` here are advisory: the loader reads the
+    real dims from the downloaded tensor and validates against the config.
+
+    Only ``RESID_POST`` is meaningful for Qwen-scope (the SAEs are trained on
+    the residual stream after each decoder layer).
     """
 
     layer_index: int
+    model_size: str = "1.7B"  # key into QWEN_SCOPE_MODELS
     k: int = 50  # 50 or 100 — selects the L0_50 or L0_100 trained variant
-    width: str = "32k"  # only "32k" shipped today
-    model_size: str = "1.7B"  # "1.7B" today; future: "0.6B", "4B", ...
-    variant: str = "Base"  # "Base" today
+    width: str | None = None  # None -> the model's first/only width
     hook_type: HookType = HookType.RESID_POST
-    d_in: int = 2048  # Qwen3-1.7B hidden size
+    d_in: int | None = None  # None -> filled from the registry; loader validates
     dtype: str = "bfloat16"
     device: str = "mps"
     collect_last_only: bool = False
     prefill_only: bool = False
     read_only: bool = True
 
+    def __post_init__(self) -> None:
+        info = QWEN_SCOPE_MODELS.get(self.model_size)
+        if info is None:
+            raise ValueError(
+                f"Unknown Qwen model_size {self.model_size!r}. Valid: {sorted(QWEN_SCOPE_MODELS)}"
+            )
+        if self.hook_type is not HookType.RESID_POST:
+            raise ValueError(
+                "Qwen-scope SAEs are residual-stream only; hook_type must be "
+                f"RESID_POST, got {self.hook_type}."
+            )
+        if self.width is None:
+            self.width = info.widths[0]
+        if self.width not in info.widths:
+            raise ValueError(
+                f"width {self.width!r} not available for Qwen {self.model_size}. "
+                f"Valid: {list(info.widths)}"
+            )
+        if self.k not in info.ks:
+            raise ValueError(
+                f"k={self.k} not available for Qwen {self.model_size}. Valid: {list(info.ks)}"
+            )
+        if self.d_in is None:
+            self.d_in = info.d_in
+
+    @property
+    def variant(self) -> str | None:
+        """The "-Base" segment for this model (``None`` when the repo has none)."""
+        return QWEN_SCOPE_MODELS[self.model_size].variant
+
     @property
     def repo_id(self) -> str:
         """HuggingFace repository ID for SAE weights."""
+        info = QWEN_SCOPE_MODELS[self.model_size]
+        variant_seg = f"-{info.variant}" if info.variant else ""
         return (
-            f"Qwen/SAE-Res-Qwen3-{self.model_size}-{self.variant}-W{self.width.upper()}-L0_{self.k}"
+            f"Qwen/SAE-Res-{info.family}-{self.model_size}"
+            f"{variant_seg}-W{self.width.upper()}-L0_{self.k}"
         )
 
     def weights_filename(self, layer: int | None = None) -> str:

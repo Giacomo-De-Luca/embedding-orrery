@@ -58,9 +58,7 @@ class HookManager:
         self.store = ActivationStore()
         self._prefill_done: bool = False
         self._steering_ops: list[SteeringOp] = []
-        self._resolved_by_layer: dict[
-            tuple[int, HookType], list[ResolvedSteeringOp]
-        ] = {}
+        self._resolved_by_layer: dict[tuple[int, HookType], list[ResolvedSteeringOp]] = {}
         self.strength_multiplier: float = 1.0
 
     def add_sae(self, config: SAEConfigT) -> None:
@@ -135,8 +133,7 @@ class HookManager:
         for (layer_idx, hook_type), sae in self._saes.items():
             if layer_idx >= len(layers):
                 raise ValueError(
-                    f"layer_index {layer_idx} out of range "
-                    f"(model has {len(layers)} layers)"
+                    f"layer_index {layer_idx} out of range (model has {len(layers)} layers)"
                 )
             config = self._configs[(layer_idx, hook_type)]
             target = self._resolve_hook_target(layers[layer_idx], hook_type)
@@ -164,9 +161,7 @@ class HookManager:
                     f"(model has {len(layers)} layers)"
                 )
             target = self._resolve_hook_target(layers[layer_idx], hook_type)
-            handle = target.register_forward_hook(
-                self._make_steering_only_hook(steer_ops)
-            )
+            handle = target.register_forward_hook(self._make_steering_only_hook(steer_ops))
             self._handles.append(handle)
 
         # Attach a lightweight sentinel hook to the last layer to detect
@@ -201,7 +196,9 @@ class HookManager:
         if hook_type is HookType.RESID_POST:
             return layer
         if hook_type is HookType.ATTN_OUT:
-            target = layer.self_attn
+            # Qwen3.5 hybrid layers expose `linear_attn` (Gated DeltaNet) instead
+            # of `self_attn`; mirror the wrapper's resolver (qwen3_transformers.py).
+            target = getattr(layer, "self_attn", None) or getattr(layer, "linear_attn", None)
         elif hook_type is HookType.MLP_OUT:
             target = layer.mlp
         else:
@@ -228,9 +225,7 @@ class HookManager:
                 return None
 
             with torch.no_grad():
-                hidden_states = (
-                    output[0] if isinstance(output, tuple) else output
-                )
+                hidden_states = output[0] if isinstance(output, tuple) else output
                 if steer_ops:
                     hidden_states = apply_steering(
                         hidden_states, steer_ops, self.strength_multiplier
@@ -263,12 +258,8 @@ class HookManager:
             output: torch.Tensor,
         ) -> torch.Tensor | tuple | None:
             with torch.no_grad():
-                hidden_states = (
-                    output[0] if isinstance(output, tuple) else output
-                )
-                hidden_states = apply_steering(
-                    hidden_states, steer_ops, self.strength_multiplier
-                )
+                hidden_states = output[0] if isinstance(output, tuple) else output
+                hidden_states = apply_steering(hidden_states, steer_ops, self.strength_multiplier)
                 if isinstance(output, tuple):
                     return (hidden_states,) + output[1:]
                 return hidden_states
@@ -287,9 +278,7 @@ class HookManager:
         self._prefill_done = False
 
     @contextlib.contextmanager
-    def session(
-        self, layers: nn.ModuleList
-    ) -> Generator[ActivationStore, None, None]:
+    def session(self, layers: nn.ModuleList) -> Generator[ActivationStore, None, None]:
         """Context manager: attach hooks, yield store, detach on exit.
 
         Args:
