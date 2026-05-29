@@ -44,9 +44,12 @@ All configurable — nothing hardcoded:
 
 - **SAE**: `layer_index`, `hook_type`, `width` (16k/65k/262k), `l0_size`, `variant`.
 - **Aggregation**: `last_token` | `mean_prefill` | `max_prefill`.
-- **Corpus scope**: `limit`, `pos_filter`, `prompt_template`, `use_chat_template`.
+- **Corpus scope**: `limit`, `pos_filter`, `prompt_template`, `use_chat_template`,
+  `wordnet_xml_path` (relative paths resolve against `PROJECT_ROOT`).
 - **Feature selection**: `density_min/max`, `require_min_nonzero`, explicit `feature_indices` list.
-- **Agents**: worker count, reps per worker, `show_zero_fraction_to_evaluator` (`on`/`off`/`ab`).
+- **Agents**: worker count, reps per worker, `show_zero_fraction_to_evaluator`
+  (`on`/`off`/`ab`), `fail_on_queue_errors` (raise vs. log when any item ends
+  up in `failed` status; default `true`).
 - **Scoring**: `min_pearson`, whether to push back to `FeatureLabelStore`.
 
 ## Output layout

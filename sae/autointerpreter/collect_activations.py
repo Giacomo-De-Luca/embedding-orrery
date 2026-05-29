@@ -26,6 +26,7 @@ from tqdm import tqdm
 
 from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.sae.autointerpreter.config import (
+    PROJECT_ROOT,
     AutoInterpretCollectConfig,
     dump_yaml,
 )
@@ -43,18 +44,31 @@ class ActivationCollector:
         config: AutoInterpretCollectConfig,
         wrapper: GemmaPytorchInference | None = None,
         parser: WordNetParser | None = None,
+        run_dir: Path | None = None,
     ) -> None:
         self.config = config
         self.wrapper = wrapper or GemmaPytorchInference(
             config.checkpoint, precision=config.dtype,
         )
-        self.parser = parser or WordNetParser()
+        if parser is not None:
+            self.parser = parser
+        elif config.wordnet_xml_path:
+            xml_path = Path(config.wordnet_xml_path)
+            if not xml_path.is_absolute():
+                xml_path = (PROJECT_ROOT / xml_path).resolve()
+            self.parser = WordNetParser(xml_file_path=str(xml_path))
+        else:
+            self.parser = WordNetParser()
 
         self.sae_config = config.to_sae_config()
         self.manager = HookManager()
         self.manager.add_sae(self.sae_config)
 
-        self.run_dir = config.run_dir()
+        # Caller (typically AutoInterpretRunner) can override run_dir so the
+        # collector lands its artifacts in the same place the orchestrator
+        # expects, even when a top-level ``run_slug`` overrides the
+        # SAE-derived default.
+        self.run_dir = run_dir if run_dir is not None else config.run_dir()
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         d_sae = WIDTH_TO_D_SAE[config.width]

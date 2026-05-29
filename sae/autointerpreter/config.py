@@ -38,6 +38,12 @@ from interpret.sae.sae_config import HookType, SAEConfig
 Aggregation = Literal["last_token", "mean_prefill", "max_prefill"]
 ZeroHintMode = Literal["on", "off", "ab"]
 
+# Repository root used to anchor every project-relative path produced by
+# this config (output directories, WordNet XML, label store, …). Computed
+# from this file's location so the answer is stable no matter where the
+# Python process was invoked from.
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
+
 
 @dataclass
 class AutoInterpretCollectConfig:
@@ -63,6 +69,13 @@ class AutoInterpretCollectConfig:
     prompt_template: str = "{word}: {definition}."
     add_bos: bool = True
     use_chat_template: bool = False
+    # Path to the WordNet XML. Relative paths are resolved against
+    # :data:`PROJECT_ROOT`, not the WordNetParser's script dir nor the
+    # process cwd, so the existing repository cache is honoured even when
+    # the pipeline is launched from a sibling directory. Set to ``None``
+    # to let the parser fall back to its built-in default (and re-download
+    # if the file is missing).
+    wordnet_xml_path: str | None = "resources/dictionaries/english-wordnet-2024.xml"
 
     # Storage
     output_root: Path = Path("resources/sae_autointerpret")
@@ -126,6 +139,11 @@ class AgentStageConfig:
     eval_reps_per_worker: int = 100
     show_zero_fraction_to_evaluator: ZeroHintMode = "ab"
     poll_interval_seconds: int = 10
+    # When True (default), the orchestrator raises ``RuntimeError`` if the
+    # queue settles with any ``failed`` items rather than letting downstream
+    # stages run against truncated input. Flip to ``False`` only for
+    # exploratory smoke runs where partial completion is acceptable.
+    fail_on_queue_errors: bool = True
 
     # Where input files live (matches the task JSONs' input_folder)
     label_input_dir: Path = Path("resources/jobs/autointerpret-label/input")

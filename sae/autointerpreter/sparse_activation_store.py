@@ -12,6 +12,7 @@ run directory so Stage 2 consumers work directly on the sparse matrix.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -103,7 +104,18 @@ class SparseActivationStore:
             combined = sparse.vstack([old, new_matrix], format="csr")
         else:
             combined = new_matrix
-        sparse.save_npz(self.activations_path, combined, compressed=True)
+        # Atomic write: save to a sibling .tmp then rename. A SIGKILL during
+        # the multi-MB save_npz used to truncate activations.npz and lose
+        # every prior flush (the file is rewritten in full each time).
+        # NOTE: scipy.sparse.save_npz auto-appends ".npz" if the path
+        # doesn't already end in it — so the temp must end in .npz too,
+        # otherwise we'd write to "...tmp.npz" and then try to rename a
+        # non-existent "...tmp".
+        tmp_npz = self.activations_path.with_name(
+            self.activations_path.stem + ".tmp.npz",
+        )
+        sparse.save_npz(tmp_npz, combined, compressed=True)
+        os.replace(tmp_npz, self.activations_path)
 
         self._append_index(self._pending_meta)
 
@@ -159,7 +171,14 @@ class SparseActivationStore:
             df = pd.concat([df_old, df_new], ignore_index=True)
         else:
             df = df_new
-        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), self.index_path)
+        # Atomic write, same reasoning as flush(): a kill mid-write
+        # would otherwise leave an empty/partial parquet that desyncs
+        # against activations.npz.
+        tmp_index = self.index_path.with_name(self.index_path.name + ".tmp")
+        pq.write_table(
+            pa.Table.from_pandas(df, preserve_index=False), tmp_index,
+        )
+        os.replace(tmp_index, self.index_path)
 
     def _count_existing_rows(self) -> int:
         if not self.activations_path.exists():

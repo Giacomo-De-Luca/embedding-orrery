@@ -23,6 +23,7 @@ from pathlib import Path
 
 from interpret.sae.autointerpreter.collect_activations import ActivationCollector
 from interpret.sae.autointerpreter.config import (
+    PROJECT_ROOT,
     AutoInterpretConfig,
     dump_yaml,
     load_experiments,
@@ -31,7 +32,6 @@ from interpret.sae.autointerpreter.extract_top_k import TopKFeatureExtractor
 from interpret.sae.autointerpreter.prepare_agent_inputs import AgentInputWriter
 from interpret.sae.autointerpreter.score_autointerpret import AutoInterpretScorer
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 JOB_QUEUE = PROJECT_ROOT / "scripts" / "AgentSystem" / "job_queue.py"
 LAUNCHER = PROJECT_ROOT / "scripts" / "AgentSystem" / "launch_agents.sh"
 
@@ -48,7 +48,11 @@ class AutoInterpretRunner:
 
     def __init__(self, config: AutoInterpretConfig) -> None:
         self.config = config
-        self.run_dir = config.collect.run_dir()
+        # Honour the top-level ``run_slug:`` override when set so the
+        # smoke/debug experiments don't collide on the same auto-derived
+        # SAE-parameter slug. Falls back to ``collect.run_slug()``.
+        slug = config.run_slug or config.collect.run_slug()
+        self.run_dir = Path(config.collect.output_root) / slug
 
     # ── Stage wrappers ──────────────────────────────────────────────────
 
@@ -72,7 +76,7 @@ class AutoInterpretRunner:
 
     def _stage_collect(self) -> None:
         print(f"[1/5] collect → {self.run_dir}")
-        ActivationCollector(self.config.collect).run()
+        ActivationCollector(self.config.collect, run_dir=self.run_dir).run()
 
     def _stage_extract(self) -> None:
         print("[2/5] extract top-k + linspace")
@@ -151,12 +155,28 @@ class AutoInterpretRunner:
             pending = int(status.get("items_pending", 0))
             in_progress = int(status.get("items_in_progress", 0))
             completed = int(status.get("items_completed", 0))
+            failed = int(status.get("items_failed", 0))
             total = int(status.get("items_total", 0))
             print(
                 f"  [{task_name}] completed {completed}/{total} "
-                f"(in_progress={in_progress}, pending={pending})"
+                f"(in_progress={in_progress}, pending={pending}, failed={failed})"
             )
             if pending == 0 and in_progress == 0:
+                # The queue auto-resets only ``in_progress`` items past the
+                # stale timeout; ``failed`` items keep ``pending`` at zero
+                # but never re-enter the queue, so the loop would otherwise
+                # spin forever. Surface them, then either raise or fall
+                # through depending on ``fail_on_queue_errors``.
+                if failed > 0:
+                    msg = (
+                        f"[{task_name}] {failed} item(s) finished in "
+                        f"failed status. Inspect "
+                        f"resources/jobs/{task_name}/queue/manifest.json, "
+                        f"reset, and re-run the affected stage."
+                    )
+                    if self.config.agents.fail_on_queue_errors:
+                        raise RuntimeError(msg)
+                    print(f"  {msg}")
                 return
             time.sleep(interval)
 
