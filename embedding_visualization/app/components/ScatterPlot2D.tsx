@@ -81,6 +81,8 @@ interface ScatterPlot2DProps {
   customNumericRange?: CustomNumericRange | null;
   /** Callback when a point is right-clicked (contextmenu) */
   onPointContextMenu?: (point: Point2D, event: MouseEvent) => void;
+  /** Show axis lines, grid, and tick labels */
+  showAxes?: boolean;
 }
 
 
@@ -109,6 +111,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   topicLabelToIdMap,
   customNumericRange,
   onPointContextMenu,
+  showAxes = false,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphDivRef = useRef<any>(null);
@@ -1323,30 +1326,34 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       xaxis: {
         title: { text: '', font: { color: axisColor } },
         gridcolor: gridColor,
-        zerolinecolor: gridColor,
+        zerolinecolor: axisColor,
+        zerolinewidth: showAxes ? 2 : 0,
         tickfont: { color: axisColor },
-        showgrid: false, 
-        zeroline: false,
+        showgrid: false,
+        zeroline: showAxes,
         showspikes: false,
-        showticklabels: false,
+        showticklabels: showAxes,
+        showline: false,
         showtitle: false,
       },
       yaxis: {
         title: { text: '', font: { color: axisColor } },
         gridcolor: gridColor,
-        zerolinecolor: gridColor,
+        zerolinecolor: axisColor,
+        zerolinewidth: showAxes ? 2 : 0,
         tickfont: { color: axisColor },
         scaleanchor: 'x',
         scaleratio: 1,
-        showgrid: false, 
-        zeroline: false,
+        showgrid: false,
+        zeroline: showAxes,
         showspikes: false,
-        showticklabels: false,
+        showticklabels: showAxes,
+        showline: false,
         showtitle: false,
       },
       margin: { l: 50, r: 50, t: 50, b: 50 },
     }),
-    [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width]
+    [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width, showAxes]
   );
 
    

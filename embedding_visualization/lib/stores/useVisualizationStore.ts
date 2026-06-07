@@ -44,6 +44,7 @@ export interface VisualizationStoreState {
   showClusterLabels: boolean;
   showAllClusterLabels: boolean;
   nebulaMode: boolean;
+  showAxes: boolean;
 
   // Muting / filtering
   mutedCategories: string[];
@@ -85,7 +86,7 @@ interface VisualizationStoreActions {
   setFlag: (flag: keyof Pick<VisualizationStoreState,
     'showOnlyHighlighted' | 'showLabels' | 'showContours' |
     'hideUnclustered' | 'showClusterLabels' | 'showAllClusterLabels' | 'nebulaMode' |
-    'hideFilteredPoints'
+    'showAxes' | 'hideFilteredPoints'
   >, value: boolean) => void;
 
   // Muting / filtering
@@ -130,6 +131,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
     showClusterLabels: false,
     showAllClusterLabels: false,
     nebulaMode: false,
+    showAxes: false,
     mutedCategories: [],
     hideFilteredPoints: false,
     mutedPointOpacity: 0.20,

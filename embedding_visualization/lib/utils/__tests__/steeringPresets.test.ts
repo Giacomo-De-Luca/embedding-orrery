@@ -11,10 +11,10 @@ import { STEERING_PRESETS } from '../steeringPresets';
 import { steeringFeatureKey } from '@/lib/stores/useModelIdentityStore';
 
 describe('STEERING_PRESETS', () => {
-  it('exposes a five-entry preset bundle for gemma-3-4b-it', () => {
+  it('exposes a four-entry preset bundle for gemma-3-4b-it', () => {
     const presets = STEERING_PRESETS['gemma-3-4b-it'];
     expect(presets).toBeDefined();
-    expect(presets).toHaveLength(5);
+    expect(presets).toHaveLength(4);
   });
 
   it('ships all presets at strength 0', () => {
@@ -37,10 +37,10 @@ describe('STEERING_PRESETS', () => {
     expect(indices).toEqual([197, 3289, 4963]);
   });
 
-  it('contains two direction presets (refusal, poetry)', () => {
+  it('contains one direction preset (refusal)', () => {
     const directions = STEERING_PRESETS['gemma-3-4b-it'].filter((p) => p.directionName);
     const names = directions.map((p) => p.directionName).sort();
-    expect(names).toEqual(['poetry', 'refusal']);
+    expect(names).toEqual(['refusal']);
     // Direction presets carry no SAE coordinates
     for (const d of directions) {
       expect(d.saeId).toBe('');
@@ -52,6 +52,5 @@ describe('STEERING_PRESETS', () => {
     expect(new Set(keys).size).toBe(keys.length);
     // Direction keys use the dedicated namespace
     expect(keys).toContain('gemma-3-4b-it::direction::refusal');
-    expect(keys).toContain('gemma-3-4b-it::direction::poetry');
   });
 });

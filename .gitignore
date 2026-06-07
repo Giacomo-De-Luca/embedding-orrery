@@ -96,3 +96,6 @@ yarn-error.log*
 interpretability/results/
 
 wordnet_senses.tsv
+
+# Local-only experiment (kept on disk, not tracked)
+interpretability_backend/interpret/experiments/poetry_directions/

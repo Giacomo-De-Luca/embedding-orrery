@@ -164,6 +164,8 @@ export function DashboardPanel({
   const tooltipFields = useVisualizationStore((s) => s.tooltipFields);
   const hideUnclustered = useVisualizationStore((s) => s.hideUnclustered);
   const nebulaMode = useVisualizationStore((s) => s.nebulaMode);
+  const showAxes = useVisualizationStore((s) => s.showAxes);
+  const selectedDimensions = useVisualizationStore((s) => s.selectedDimensions);
   const showClusterLabels = useVisualizationStore((s) => s.showClusterLabels);
   const hideFilteredPoints = useVisualizationStore((s) => s.hideFilteredPoints);
   const mutedPointOpacity = useVisualizationStore((s) => s.mutedPointOpacity);
@@ -568,6 +570,7 @@ export function DashboardPanel({
       onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
       topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
       customNumericRange={customNumericRange}
+      showAxes={showAxes}
     />
   ) : (
     <ScatterPlot3D
@@ -595,6 +598,8 @@ export function DashboardPanel({
       pointOpacity={pointOpacity}
       customNumericRange={customNumericRange}
       onPointContextMenu={saeInfo ? handlePointContextMenu : undefined}
+      showAxes={showAxes}
+      selectedDimensions={selectedDimensions}
     />
   );
 

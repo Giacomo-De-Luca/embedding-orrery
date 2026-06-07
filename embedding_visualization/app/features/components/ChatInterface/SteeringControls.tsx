@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronRight, Plus, X } from 'lucide-react';
+import { ChevronRight, Plus, Sparkles, X } from 'lucide-react';
+import { SteeringIdenticon } from './SteeringIdenticon';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Button } from '@/lib/ui-primitives/button';
 import { Slider } from '@/lib/ui-primitives/slider';
@@ -98,6 +99,16 @@ export function SteeringControls({ currentFeature }: SteeringControlsProps) {
                 key={key}
                 className="flex items-center gap-2 rounded-lg bg-muted/30 px-2.5 py-1.5"
               >
+                {/* Per-feature identicon — same visual language as the chat
+                    history avatars, seeded from this single feature's label. */}
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60 ring-1 ring-border/40">
+                  <SteeringIdenticon
+                    features={[f]}
+                    size={16}
+                    fallback={<Sparkles className="size-3 text-muted-foreground/70" />}
+                  />
+                </span>
+
                 <Badge
                   variant="outline"
                   className={cn(

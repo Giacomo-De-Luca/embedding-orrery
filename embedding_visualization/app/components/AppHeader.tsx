@@ -3,7 +3,7 @@
 import { Moon, Sun, Search, Upload, Settings2, BarChart3, Brain } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState, KeyboardEvent } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Combobox,
   ComboboxInput,
@@ -75,6 +75,7 @@ export function AppHeader({
   onToggleAnalytics,
   saeInfo: saeInfoProp,
 }: AppHeaderProps) {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
 
@@ -217,23 +218,20 @@ export function AppHeader({
               </ComboboxContent>
             </Combobox>
           ) : null}
-          <Link href={(() => {
+          <Button variant="outline" className="gap-2" onClick={() => {
             const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
-            return sae
+            const href = sae
               ? `/features?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
               : '/features';
-          })()}>
-            <Button variant="outline" className="gap-2">
-              <Brain className="w-4" />
-              <span className="hidden sm:inline">Features</span>
-            </Button>
-          </Link>
-          <Link href="/test-embed">
-            <Button variant="outline" className="gap-2 embeddingButton">
-              <Upload className=" w-4" />
-              <span className="hidden sm:inline">Embed</span>
-            </Button>
-          </Link>
+            router.push(href);
+          }}>
+            <Brain className="w-4" />
+            <span className="hidden sm:inline">Features</span>
+          </Button>
+          <Button variant="outline" className="gap-2 embeddingButton" onClick={() => router.push('/test-embed')}>
+            <Upload className=" w-4" />
+            <span className="hidden sm:inline">Embed</span>
+          </Button>
           <ModeToggle />
         </div>
       </div>

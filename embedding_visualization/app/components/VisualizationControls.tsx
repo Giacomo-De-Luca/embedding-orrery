@@ -51,7 +51,7 @@ export function VisualizationControls({
   const store = useVisualizationStore;
   const {
     method, mode, colorByField, selectedDimensions,
-    nebulaMode, hideUnclustered, nestedColorMode,
+    nebulaMode, hideUnclustered, nestedColorMode, showAxes,
     showClusterLabels, showAllClusterLabels, hideFilteredPoints, mutedPointOpacity,
     pointOpacity, distanceMetric, tooltipFields,
   } = store(useShallow((s) => ({
@@ -60,6 +60,7 @@ export function VisualizationControls({
     colorByField: s.colorByField,
     selectedDimensions: s.selectedDimensions,
     nebulaMode: s.nebulaMode,
+    showAxes: s.showAxes,
     hideUnclustered: s.hideUnclustered,
     nestedColorMode: s.nestedColorMode,
     showClusterLabels: s.showClusterLabels,
@@ -225,6 +226,16 @@ export function VisualizationControls({
                     />
                   </div>
                 )}
+              </div>
+              <div className="flex items-center space-x-2 pt-1">
+                <Checkbox
+                  id="show-axes"
+                  checked={showAxes}
+                  onCheckedChange={(checked) => store.getState().setFlag('showAxes', checked === true)}
+                />
+                <Label htmlFor="show-axes" className="font-normal cursor-pointer text-sm">
+                  Show axis lines
+                </Label>
               </div>
             </div>
           </>

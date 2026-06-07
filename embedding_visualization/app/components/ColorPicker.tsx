@@ -26,22 +26,18 @@ import {
 } from "@/lib/ui-primitives/select"
 import { cn } from "@/lib/utils/utils"
 
+type HslColor = { h: number; s: number; l: number; a: number }
+
 interface ColorPickerContextValue {
-  hue: number
-  saturation: number
-  lightness: number
-  alpha: number
+  color: HslColor
+  setColor: (patch: Partial<HslColor>) => void
   mode: string
-  setHue: (hue: number) => void
-  setSaturation: (saturation: number) => void
-  setLightness: (lightness: number) => void
-  setAlpha: (alpha: number) => void
   setMode: (mode: string) => void
 }
 
 const ColorPickerContext = createContext<ColorPickerContextValue | undefined>(undefined)
 
-export const useColorPicker = () => {
+const useColorPicker = () => {
   const context = useContext(ColorPickerContext)
 
   if (!context) {
@@ -67,54 +63,40 @@ export const ColorPicker = ({
   const selectedColor = Color(value)
   const defaultColor = Color(defaultValue)
 
-  const [hue, setHue] = useState(selectedColor.hue() || defaultColor.hue() || 0)
-  const [saturation, setSaturation] = useState(
-    selectedColor.saturationl() || defaultColor.saturationl() || 100,
-  )
-  const [lightness, setLightness] = useState(
-    selectedColor.lightness() || defaultColor.lightness() || 50,
-  )
-  const [alpha, setAlpha] = useState(selectedColor.alpha() * 100 || defaultColor.alpha() * 100)
+  const [color, setColorState] = useState<HslColor>({
+    h: selectedColor.hue() || defaultColor.hue() || 0,
+    s: selectedColor.saturationl() || defaultColor.saturationl() || 100,
+    l: selectedColor.lightness() || defaultColor.lightness() || 50,
+    a: selectedColor.alpha() * 100 || defaultColor.alpha() * 100,
+  })
   const [mode, setMode] = useState("hex")
 
-  // Update color when controlled value changes
+  // Ref keeps current color accessible in setColor without stale closures
+  const colorRef = useRef(color)
+  colorRef.current = color
+
+  // Sync state from controlled prop (no onChange — breaks the feedback loop)
   useEffect(() => {
     if (value) {
-      const color = Color(value)
-      const [h, s, l] = color.hsl().array()
-
-      setHue(h)
-      setSaturation(s)
-      setLightness(l)
-      setAlpha(color.alpha() * 100)
+      const c = Color(value)
+      const [h, s, l] = c.hsl().array()
+      setColorState({ h, s, l, a: c.alpha() * 100 })
     }
   }, [value])
 
-  // Notify parent of changes
-  useEffect(() => {
+  // User-driven update: merge patch into current color, set state, and notify parent
+  const setColor = useCallback((patch: Partial<HslColor>) => {
+    const next = { ...colorRef.current, ...patch }
+    setColorState(next)
     if (onChange) {
-      const color = Color.hsl(hue, saturation, lightness).alpha(alpha / 100)
-      const rgba = color.rgb().array()
-
-      onChange([rgba[0], rgba[1], rgba[2], alpha / 100])
+      const c = Color.hsl(next.h, next.s, next.l).alpha(next.a / 100)
+      const rgba = c.rgb().array()
+      onChange([rgba[0], rgba[1], rgba[2], next.a / 100])
     }
-  }, [hue, saturation, lightness, alpha, onChange])
+  }, [onChange])
 
   return (
-    <ColorPickerContext.Provider
-      value={{
-        hue,
-        saturation,
-        lightness,
-        alpha,
-        mode,
-        setHue,
-        setSaturation,
-        setLightness,
-        setAlpha,
-        setMode,
-      }}
-    >
+    <ColorPickerContext.Provider value={{ color, setColor, mode, setMode }}>
       <div className={cn("flex size-full flex-col gap-4", className)} {...(props as any)} />
     </ColorPickerContext.Provider>
   )
@@ -127,13 +109,13 @@ export const ColorPickerSelection = memo(({ className, ...props }: ColorPickerSe
   const [isDragging, setIsDragging] = useState(false)
   const [positionX, setPositionX] = useState(0)
   const [positionY, setPositionY] = useState(0)
-  const { hue, setSaturation, setLightness } = useColorPicker()
+  const { color, setColor } = useColorPicker()
 
   const backgroundGradient = useMemo(() => {
     return `linear-gradient(0deg, rgba(0,0,0,1), rgba(0,0,0,0)),
             linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)),
-            hsl(${hue}, 100%, 50%)`
-  }, [hue])
+            hsl(${color.h}, 100%, 50%)`
+  }, [color.h])
 
   const handlePointerMove = useCallback(
     (event: PointerEvent) => {
@@ -145,13 +127,12 @@ export const ColorPickerSelection = memo(({ className, ...props }: ColorPickerSe
       const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
       setPositionX(x)
       setPositionY(y)
-      setSaturation(x * 100)
+      const s = x * 100
       const topLightness = x < 0.01 ? 100 : 50 + 50 * (1 - x)
-      const lightness = topLightness * (1 - y)
-
-      setLightness(lightness)
+      const l = topLightness * (1 - y)
+      setColor({ s, l })
     },
-    [isDragging, setSaturation, setLightness],
+    [isDragging, setColor],
   )
 
   useEffect(() => {
@@ -199,15 +180,15 @@ ColorPickerSelection.displayName = "ColorPickerSelection"
 export type ColorPickerHueProps = ComponentProps<typeof Slider.Root>
 
 export const ColorPickerHue = ({ className, ...props }: ColorPickerHueProps) => {
-  const { hue, setHue } = useColorPicker()
+  const { color, setColor } = useColorPicker()
 
   return (
     <Slider.Root
       className={cn("relative flex h-4 w-full touch-none", className)}
       max={360}
-      onValueChange={([hue]) => setHue(hue)}
+      onValueChange={([h]) => setColor({ h })}
       step={1}
-      value={[hue]}
+      value={[color.h]}
       {...(props as any)}
     >
       <Slider.Track className="relative my-0.5 h-3 w-full grow rounded-full bg-[linear-gradient(90deg,#FF0000,#FFFF00,#00FF00,#00FFFF,#0000FF,#FF00FF,#FF0000)]">
@@ -221,15 +202,15 @@ export const ColorPickerHue = ({ className, ...props }: ColorPickerHueProps) => 
 export type ColorPickerAlphaProps = ComponentProps<typeof Slider.Root>
 
 export const ColorPickerAlpha = ({ className, ...props }: ColorPickerAlphaProps) => {
-  const { alpha, setAlpha } = useColorPicker()
+  const { color, setColor } = useColorPicker()
 
   return (
     <Slider.Root
       className={cn("relative flex h-4 w-full touch-none", className)}
       max={100}
-      onValueChange={([alpha]) => setAlpha(alpha)}
+      onValueChange={([a]) => setColor({ a })}
       step={1}
-      value={[alpha]}
+      value={[color.a]}
       {...(props as any)}
     >
       <Slider.Track
@@ -250,20 +231,16 @@ export const ColorPickerAlpha = ({ className, ...props }: ColorPickerAlphaProps)
 export type ColorPickerEyeDropperProps = ComponentProps<typeof Button>
 
 export const ColorPickerEyeDropper = ({ className, ...props }: ColorPickerEyeDropperProps) => {
-  const { setHue, setSaturation, setLightness, setAlpha } = useColorPicker()
+  const { setColor } = useColorPicker()
 
   const handleEyeDropper = async () => {
     try {
       // @ts-expect-error - EyeDropper API is experimental
       const eyeDropper = new EyeDropper()
       const result = await eyeDropper.open()
-      const color = Color(result.sRGBHex)
-      const [h, s, l] = color.hsl().array()
-
-      setHue(h)
-      setSaturation(s)
-      setLightness(l)
-      setAlpha(100)
+      const c = Color(result.sRGBHex)
+      const [h, s, l] = c.hsl().array()
+      setColor({ h, s, l, a: 100 })
     } catch (error) {
       console.error("EyeDropper failed:", error)
     }
@@ -366,20 +343,18 @@ const EditableNumberInput = ({ value, onChange, min = 0, max = 255, showPercent,
 export type ColorPickerFormatProps = HTMLAttributes<HTMLDivElement>
 
 export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProps) => {
-  const { hue, saturation, lightness, alpha, mode, setHue, setSaturation, setLightness, setAlpha } = useColorPicker()
-  const color = Color.hsl(hue, saturation, lightness, alpha / 100)
+  const { color, setColor, mode } = useColorPicker()
+  const colorObj = Color.hsl(color.h, color.s, color.l, color.a / 100)
 
   if (mode === "hex") {
-    const hex = color.hex()
+    const hex = colorObj.hex()
 
     const commitHex = (input: string) => {
       try {
         const cleaned = input.startsWith('#') ? input : `#${input}`
         const parsed = Color(cleaned)
         const [h, s, l] = parsed.hsl().array()
-        setHue(h)
-        setSaturation(s)
-        setLightness(l)
+        setColor({ h, s, l })
       } catch { /* ignore invalid hex */ }
     }
 
@@ -393,8 +368,8 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
       >
         <HexInput value={hex} onCommit={commitHex} className="rounded-r-none" />
         <EditableNumberInput
-          value={alpha}
-          onChange={setAlpha}
+          value={color.a}
+          onChange={(a) => setColor({ a })}
           min={0}
           max={100}
           showPercent
@@ -405,14 +380,14 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
   }
 
   if (mode === "rgb") {
-    const rgb = color.rgb().array().map(v => Math.round(v))
+    const rgb = colorObj.rgb().array().map(v => Math.round(v))
     const setChannel = (index: number, v: number) => {
       const newRgb = [...rgb]
       newRgb[index] = v
       try {
         const c = Color.rgb(newRgb[0], newRgb[1], newRgb[2])
         const [h, s, l] = c.hsl().array()
-        setHue(h); setSaturation(s); setLightness(l)
+        setColor({ h, s, l })
       } catch { /* ignore */ }
     }
 
@@ -435,8 +410,8 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
           />
         ))}
         <EditableNumberInput
-          value={alpha}
-          onChange={setAlpha}
+          value={color.a}
+          onChange={(a) => setColor({ a })}
           min={0}
           max={100}
           showPercent
@@ -447,7 +422,7 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
   }
 
   if (mode === "css") {
-    const rgb = color.rgb().array().map(v => Math.round(v))
+    const rgb = colorObj.rgb().array().map(v => Math.round(v))
 
     return (
       <div className={cn("w-full rounded-md shadow-sm", className)} {...(props as any)}>
@@ -455,27 +430,26 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
           className="h-8 w-full bg-secondary px-2 text-xs shadow-none"
           readOnly
           type="text"
-          value={`rgba(${rgb.join(", ")}, ${alpha}%)`}
+          value={`rgba(${rgb.join(", ")}, ${color.a}%)`}
         />
       </div>
     )
   }
 
   if (mode === "hsl") {
-    const hslValues = [Math.round(hue), Math.round(saturation), Math.round(lightness)]
+    const hslKeys: (keyof HslColor)[] = ['h', 's', 'l']
     const hslMax = [360, 100, 100]
-    const setters = [setHue, setSaturation, setLightness]
 
     return (
       <div
         className={cn("-space-x-px flex items-center rounded-md shadow-sm", className)}
         {...(props as any)}
       >
-        {hslValues.map((value, index) => (
+        {hslKeys.map((key, index) => (
           <EditableNumberInput
-            key={index}
-            value={value}
-            onChange={setters[index]}
+            key={key}
+            value={Math.round(color[key])}
+            onChange={(v) => setColor({ [key]: v })}
             min={0}
             max={hslMax[index]}
             className={cn(
@@ -485,8 +459,8 @@ export const ColorPickerFormat = ({ className, ...props }: ColorPickerFormatProp
           />
         ))}
         <EditableNumberInput
-          value={alpha}
-          onChange={setAlpha}
+          value={color.a}
+          onChange={(a) => setColor({ a })}
           min={0}
           max={100}
           showPercent

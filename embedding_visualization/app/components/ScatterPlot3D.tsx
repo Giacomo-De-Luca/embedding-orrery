@@ -138,6 +138,10 @@ interface ScatterPlot3DProps {
   customNumericRange?: CustomNumericRange | null;
   /** Callback when a point is right-clicked (contextmenu) */
   onPointContextMenu?: (point: Point3D, event: MouseEvent) => void;
+  /** Show axis lines from origin */
+  showAxes?: boolean;
+  /** Selected dimension indices for axis labels (manual mode) */
+  selectedDimensions?: number[];
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -179,6 +183,8 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   pointOpacity,
   customNumericRange,
   onPointContextMenu,
+  showAxes = false,
+  selectedDimensions,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hoveredPointRef = useRef<Point3D | null>(null);
@@ -561,11 +567,38 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       }
     }
 
+    // Axis lines from origin when showAxes is enabled
+    if (showAxes && bounds) {
+      const lineColor = isDark ? '#94a3b8' : '#475569';
+      const dims = selectedDimensions ?? [0, 1, 2];
+
+      // Full axis lines spanning the data range (null-separated segments)
+      traces.push({
+        x: [bounds.minX, bounds.maxX, null as any, 0, 0, null as any, 0, 0],
+        y: [0, 0, null as any, bounds.minY, bounds.maxY, null as any, 0, 0],
+        z: [0, 0, null as any, 0, 0, null as any, bounds.minZ, bounds.maxZ],
+        mode: 'lines' as const, type: 'scatter3d' as const,
+        line: { width: 5, color: lineColor },
+        hoverinfo: 'skip' as any, showlegend: false,
+      });
+
+      // Dimension labels at the positive ends
+      traces.push({
+        x: [bounds.maxX, 0, 0], y: [0, bounds.maxY, 0], z: [0, 0, bounds.maxZ],
+        mode: 'text' as const, type: 'scatter3d' as const,
+        text: [String(dims[0]), String(dims[1]), String(dims[2])],
+        textposition: 'top center' as any,
+        textfont: { family: 'Geist Mono, monospace', size: 14, color: lineColor },
+        hoverinfo: 'skip' as any, showlegend: false,
+      });
+    }
+
     return traces;
   }, [
     displayPoints, markerStyle, showOnlyHighlighted,
     categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, categoryField,
-    mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, pointOpacity, isDark
+    mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, pointOpacity, isDark,
+    showAxes, bounds, selectedDimensions
   ]);
 
   // Bounds of active (non-muted) points — computed directly from muting state
@@ -1133,12 +1166,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         center: defaultCenter,
         up: { x: 0, y: 0, z: 1 }
       },
-      xaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.x, autorange: false }) },
-      yaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.y, autorange: false }) },
-      zaxis: { title: { text: '' }, backgroundcolor: sceneBg, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.z, autorange: false }) },
+      xaxis: { title: { text: '' }, backgroundcolor: sceneBg, showbackground: !showAxes, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.x, autorange: false }) },
+      yaxis: { title: { text: '' }, backgroundcolor: sceneBg, showbackground: !showAxes, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.y, autorange: false }) },
+      zaxis: { title: { text: '' }, backgroundcolor: sceneBg, showbackground: !showAxes, showgrid: false, zeroline: false, showticklabels: false, showspikes: false, ...(axisRange && { range: axisRange.z, autorange: false }) },
     },
     margin: { l: 0, r: 0, t: 0, b: 0 },
-  }), [axisColor, axisRange, defaultEye, height, paperBg, sceneBg, width]);
+  }), [axisColor, axisRange, defaultEye, height, paperBg, sceneBg, width, showAxes]);
 
    
   const config = useMemo<Partial<Config>>(() => ({
