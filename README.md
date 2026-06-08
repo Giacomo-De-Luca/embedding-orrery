@@ -4,7 +4,16 @@ Orrery is an open-source platform for embedding visualization, automatic topic e
 
 > **Beta** the platform is functional and under active development, and is going to be sent to EMNLP as demo. If you use the platform or find bugs write me, I'm thankful for any preliminar testing! 
 
-![HarmBench safety benchmark with LLM-generated topic labels](gallery/harmbench.png)
+![WordNet 212k](gallery/geometry.png)
+
+## Gallery
+
+| | |
+|---|---|
+| ![WordNet 212k](gallery/meditation.png) | ![HarmBench](gallery/harmbench.png) |
+| WordNet 212k points with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
+| ![XKCD Colors](gallery/Gemini_XKCD_PCA.png) | ![Concreteness](gallery/concreteness.jpg) |
+| XKCD color words colored by actual hex values -- embedding space mirrors perceptual color space | NRC word norms colored by concreteness score -- psycholinguistic dimensions as spatial gradients |
 
 ## Quick Start
 
@@ -29,14 +38,7 @@ cd embedding_visualization && npm install && npm run dev
 
 See [`documentation/DOCKER.md`](documentation/DOCKER.md) for SAE cache warmup, volume management, and HuggingFace token options.
 
-## Gallery
 
-| | |
-|---|---|
-| ![WordNet 212k](gallery/meditation.png) | ![HarmBench](gallery/harmbench.png) |
-| WordNet 212k points with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
-| ![XKCD Colors](gallery/Gemini_XKCD_PCA.png) | ![Concreteness](gallery/concreteness.jpg) |
-| XKCD color words colored by actual hex values -- embedding space mirrors perceptual color space | NRC word norms colored by concreteness score -- psycholinguistic dimensions as spatial gradients |
 
 ## What It Does
 
