@@ -9,7 +9,7 @@ from ..clients.huggingface_client import PortionConfig
 from ..utils.resource_paths import CHROMA_DB_PATH as DB_PATH, DUCKDB_PATH  # noqa: F401
 
 # ========== Configuration Constants ==========
-TEXT_MODEL_NAME = "all-MiniLM-L6-v2"
+TEXT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 IMAGE_MODEL_NAME = "google/vit-base-patch16-384"
 
 
@@ -54,7 +54,7 @@ class EmbeddingModelConfig:
     """Configuration for embedding model."""
 
     provider: EmbeddingProvider = EmbeddingProvider.SENTENCE_TRANSFORMERS
-    model_name: str = "all-MiniLM-L6-v2"
+    model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     ollama_url: str | None = None  # Default: http://localhost:11434
     task: str | None = None  # QWEN: Query instruction prefix (used at query time only)
     task_type: str | None = (

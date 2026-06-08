@@ -38,7 +38,7 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = "cpu",
         normalize_embeddings: bool = False,
         prompt: str | None = None,

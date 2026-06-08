@@ -22,15 +22,35 @@ DIMENSIONS_FILE = Path(__file__).parent.parent / "utils" / "known_dimensions.jso
 _hf_logged_in = False
 
 
+def _get_hf_token() -> str | None:
+    """Return the first configured HuggingFace token alias."""
+    return (
+        os.getenv("HUGGINGFACE_API_KEY")
+        or os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    )
+
+
 def _ensure_hf_login():
-    """Login to HuggingFace Hub once per process, only if API key is available."""
+    """Login to HuggingFace Hub once per process, only if API key is available.
+
+    Called eagerly at module load so the .env token overwrites any stale
+    token cached at ~/.cache/huggingface/token.  Without this, the
+    transformers library silently sends the cached (possibly expired) token
+    on every Hub request — even for public models — causing them to fail.
+    """
     global _hf_logged_in
     if _hf_logged_in:
         return
-    hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
-    if hf_api_key:
-        login(token=hf_api_key, add_to_git_credential=False)
+    hf_token = _get_hf_token()
+    if hf_token:
+        login(token=hf_token, add_to_git_credential=False)
         _hf_logged_in = True
+
+
+# Login eagerly so the .env token replaces any stale cached token before
+# any model download is attempted.
+_ensure_hf_login()
 
 
 def _load_known_dimensions() -> dict[str, int]:
@@ -106,11 +126,18 @@ def create_embedding_function(
             SentenceTransformerEmbeddingFunction,
         )
 
+        hf_token = _get_hf_token()
+        if hf_token:
+            _ensure_hf_login()
+
+        st_kwargs = {"token": hf_token} if hf_token else {}
+
         try:
             ef = SentenceTransformerEmbeddingFunction(
                 model_name=model_name,
                 device=device,
                 prompt=config.prompt,
+                **st_kwargs,
             )
         except GatedRepoError:
             _ensure_hf_login()
@@ -118,6 +145,7 @@ def create_embedding_function(
                 model_name=model_name,
                 device=device,
                 prompt=config.prompt,
+                **st_kwargs,
             )
         dim = get_dimension(ef)
         return ef, dim

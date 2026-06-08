@@ -17,14 +17,6 @@ Orrery is an open-source platform for embedding visualization, automatic topic e
 
 ## Quick Start
 
-### Docker
-
-```bash
-docker compose up --build
-# Frontend: http://localhost:3000 (ships with demo datasets)
-# GraphQL: http://localhost:8000/graphql
-```
-
 ### Manual
 
 ```bash
@@ -35,6 +27,17 @@ uv sync
 # Frontend
 cd embedding_visualization && npm install && npm run dev
 ```
+
+### Docker
+
+```bash
+** Still to check if it works, prefer the manual install for now
+
+docker compose up --build
+# Frontend: http://localhost:3000 (ships with demo datasets)
+# GraphQL: http://localhost:8000/graphql
+```
+
 
 See [`documentation/DOCKER.md`](documentation/DOCKER.md) for SAE cache warmup, volume management, and HuggingFace token options.
 
