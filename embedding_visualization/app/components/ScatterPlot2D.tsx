@@ -803,8 +803,8 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             type: 'scattergl' as const,
             name: 'Connections',
             line: {
-              color: isDark ? 'rgba(130, 160, 200, 0.12)' : 'rgba(100, 130, 170, 0.15)',
-              width: 0.5,
+              color: isDark ? 'rgba(130, 160, 200, 0.12)' : 'rgba(37, 99, 235, 0.45)',
+              width: isDark ? 0.5 : 0.8,
             },
             hoverinfo: 'skip' as any,
             showlegend: false,
@@ -840,7 +840,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
           otherHighlights.forEach(point => {
             const similarity = highlightedIndices!.get(point.index) ?? 1.0;
             const luminosity = calculateLuminosity(similarity);
-            const colors = calculateSimilarityColors(similarity);
+            const colors = calculateSimilarityColors(similarity, isDark);
 
             hX.push(point.x);
             hY.push(point.y);

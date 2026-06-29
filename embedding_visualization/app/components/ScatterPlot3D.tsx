@@ -745,7 +745,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       allOverlayPoints.forEach(point => {
         const isSelected = renderedSelectedPoint && point.index === renderedSelectedPoint.index;
         const similarity = isSelected ? 1.0 : (highlightedIndices?.get(point.index) ?? 1.0);
-        const colors = calculateSimilarityColors(similarity);
+        const colors = calculateSimilarityColors(similarity, isDark);
 
         outerSizes.push(Math.max(markerStyle.size * (isSelected ? highlightScale.selectedOuterMultiplier : highlightScale.outerMultiplier), isSelected ? 35 : 30));
         outerColors.push(colors.outerGlow);
@@ -795,7 +795,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           traces.push({
             x: lineX, y: lineY, z: lineZ, mode: 'lines' as const, type: 'scatter3d' as const,
             name: 'Connections',
-            line: { color: isDark ? 'rgba(130, 160, 200, 0.60)' : 'rgba(100, 130, 170, 0.60)', width: 0.1 },
+            line: { color: isDark ? 'rgba(130, 160, 200, 0.60)' : 'rgba(37, 99, 235, 0.65)', width: isDark ? 0.1 : 1 },
             hoverinfo: 'skip' as any, showlegend: false
           });
         }

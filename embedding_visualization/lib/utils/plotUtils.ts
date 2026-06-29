@@ -195,23 +195,47 @@ export interface SimilarityColors {
  * - Medium similarity (0.5): Blended teal/bronze colors
  * - High similarity (1.0): Golden colors matching the selected point
  *
+ * The default (dark) palette uses near-white "glowing star" cores, which are invisible
+ * against a light background. When `isDark` is false we swap to deeper, more saturated
+ * cores/glows so highlighted points stay visible in light mode.
+ *
  * @param similarity Similarity score between 0 and 1
+ * @param isDark Whether the dark theme is active (default true for backwards compatibility)
  * @returns Color strings for each layer (core, inner glow, outer glow)
  */
-export function calculateSimilarityColors(similarity: number): SimilarityColors {
-  // Blue colors (low similarity)
-  const BLUE_CORE = '#e8f4ff';
-  const BLUE_GLOW = 'rgba(170, 200, 235, 0.35)';
-  const BLUE_OUTER = 'rgba(140, 180, 230, 0.15)';
+export function calculateSimilarityColors(similarity: number, isDark: boolean = true): SimilarityColors {
+  if (isDark) {
+    // Blue colors (low similarity) — bright glowing cores against a dark sky
+    const BLUE_CORE = '#e8f4ff';
+    const BLUE_GLOW = 'rgba(170, 200, 235, 0.35)';
+    const BLUE_OUTER = 'rgba(140, 180, 230, 0.15)';
 
-  // Golden colors (high similarity - matching selected point)
-  const GOLD_CORE = '#fff8e8';
-  const GOLD_GLOW = 'rgba(255, 223, 160, 0.35)';
-  const GOLD_OUTER = 'rgba(255, 215, 140, 0.15)';
+    // Golden colors (high similarity - matching selected point)
+    const GOLD_CORE = '#fff8e8';
+    const GOLD_GLOW = 'rgba(255, 223, 160, 0.35)';
+    const GOLD_OUTER = 'rgba(255, 215, 140, 0.15)';
+
+    return {
+      coreColor: interpolateHexColor(BLUE_CORE, GOLD_CORE, similarity),
+      glowColor: interpolateRgbaColor(BLUE_GLOW, GOLD_GLOW, similarity),
+      outerGlow: interpolateRgbaColor(BLUE_OUTER, GOLD_OUTER, similarity),
+    };
+  }
+
+  // Light mode — gold/near-white washes out on a white background, so we stay in the
+  // blue family throughout: a brighter sky blue for low similarity deepening to a strong
+  // navy for high similarity. Cores are fully opaque and dark enough to read on white.
+  const LOW_CORE = '#0284c7'; // sky-600
+  const LOW_GLOW = 'rgba(56, 189, 248, 0.55)'; // sky-400
+  const LOW_OUTER = 'rgba(14, 165, 233, 0.22)'; // sky-500
+
+  const HIGH_CORE = '#1e3a8a'; // blue-900
+  const HIGH_GLOW = 'rgba(37, 99, 235, 0.55)'; // blue-600
+  const HIGH_OUTER = 'rgba(29, 78, 216, 0.22)'; // blue-700
 
   return {
-    coreColor: interpolateHexColor(BLUE_CORE, GOLD_CORE, similarity),
-    glowColor: interpolateRgbaColor(BLUE_GLOW, GOLD_GLOW, similarity),
-    outerGlow: interpolateRgbaColor(BLUE_OUTER, GOLD_OUTER, similarity),
+    coreColor: interpolateHexColor(LOW_CORE, HIGH_CORE, similarity),
+    glowColor: interpolateRgbaColor(LOW_GLOW, HIGH_GLOW, similarity),
+    outerGlow: interpolateRgbaColor(LOW_OUTER, HIGH_OUTER, similarity),
   };
 }

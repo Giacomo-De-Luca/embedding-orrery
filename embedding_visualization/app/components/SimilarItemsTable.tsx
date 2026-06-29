@@ -95,12 +95,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         minSize: 80,
         maxSize: 150,
         cell: ({ row }) => (
-          <ScrollArea style={{ height: 100 }} className="rounded-md">
-            <div className="font-mono text-xs whitespace-nowrap overflow-x-auto">
-              {row.getValue('id')}
-            </div>
-            <ScrollBar orientation="horizontal" />
-          </ScrollArea>
+          <div className="font-mono text-xs max-h-[80px] overflow-y-auto">
+            {row.getValue('id')}
+          </div>
         ),
       },
       // Label column
@@ -111,12 +108,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         minSize: 100,
         maxSize: 250,
         cell: ({ row }) => (
-          <ScrollArea style={{ height: 100 }} className="rounded-md">
-            <div className="font-medium whitespace-nowrap overflow-x-auto">
-              {row.getValue('label')}
-            </div>
-            <ScrollBar orientation="horizontal" />
-          </ScrollArea>
+          <div className="font-medium max-h-[80px] overflow-y-auto">
+            {row.getValue('label')}
+          </div>
         ),
       },
       // Similarity column with progress bar
@@ -167,14 +161,11 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         cell: ({ row }) => {
           const category = row.getValue('category') as string;
           return category ? (
-            <ScrollArea style={{ height: 100 }} className="rounded-md">
-              <div className="whitespace-nowrap overflow-x-auto">
-                <Badge variant="outline" className="uppercase whitespace-nowrap">
-                  {getCategoryLabel(categoryField ?? null, category)}
-                </Badge>
-              </div>
-              <ScrollBar orientation="horizontal" />
-            </ScrollArea>
+            <div className="max-h-[80px] overflow-y-auto">
+              <Badge variant="outline" className="uppercase">
+                {getCategoryLabel(categoryField ?? null, category)}
+              </Badge>
+            </div>
           ) : null;
         },
       });
@@ -214,7 +205,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
               typeof v === 'object' ? JSON.stringify(v) : String(v)
             ).join(', ');
             return (
-              <div className="text-sm whitespace-normal line-clamp-3">
+              <div className="text-sm whitespace-normal max-h-[80px] overflow-y-auto">
                 {preview}{value.length > 2 ? ` (+${value.length - 2} more)` : ''}
               </div>
             );
@@ -222,14 +213,14 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
           // Handle objects
           if (typeof value === 'object') {
             return (
-              <div className="text-sm font-mono whitespace-normal line-clamp-3">
+              <div className="text-sm font-mono whitespace-normal max-h-[80px] overflow-y-auto">
                 {JSON.stringify(value)}
               </div>
             );
           }
           // Handle primitives
           return (
-            <div className="text-sm whitespace-normal line-clamp-3">
+            <div className="text-sm whitespace-normal max-h-[80px] overflow-y-auto">
               {String(value)}
             </div>
           );
