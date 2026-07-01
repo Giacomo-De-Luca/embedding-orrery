@@ -49,8 +49,11 @@ class AutoInterpretScorer:
 
     def score_all(self) -> pd.DataFrame:
         linspace_dir = self.run_dir / "linspace"
-        labels_dir = Path(self.agents_cfg.label_results_dir)
-        eval_dir = Path(self.agents_cfg.eval_results_dir)
+        # Per-store dirs (populated by the runner's tag-stripping sync) —
+        # clean filenames, no risk of cross-config collision in the
+        # shared global queue.
+        labels_dir = self.run_dir / "labels"
+        eval_dir = self.run_dir / "evaluator"
         ab = self._load_ab_split()
 
         rows: list[dict] = []
@@ -101,6 +104,10 @@ class AutoInterpretScorer:
 
     def push_to_label_store(self, scores: pd.DataFrame) -> int:
         if not self.cfg.write_to_label_store or scores.empty:
+            return 0
+        # Embedding dimensions have no SAE config to key the store by, so the
+        # push (which calls collect_cfg.to_sae_config()) doesn't apply.
+        if getattr(self.collect_cfg, "source_kind", "sae") != "sae":
             return 0
         keep = scores[scores["pearson"] >= self.cfg.min_pearson]
         if keep.empty:

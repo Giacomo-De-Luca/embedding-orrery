@@ -52,8 +52,12 @@ class HookManager:
     """
 
     def __init__(self) -> None:
-        self._saes: dict[tuple[int, HookType], SAEBase] = {}
-        self._configs: dict[tuple[int, HookType], SAEConfigT] = {}
+        # SAEs are keyed by (layer_index, hook_type, sae_id) where sae_id
+        # = config.identity() (e.g. "w16k_l0_medium"). The third slot lets
+        # two SAEs at the same (layer, hook_type) site coexist (e.g.
+        # Gemma L29 W16K + L29 W65K in one forward pass).
+        self._saes: dict[tuple[int, HookType, str], SAEBase] = {}
+        self._configs: dict[tuple[int, HookType, str], SAEConfigT] = {}
         self._handles: list[RemovableHandle] = []
         self.store = ActivationStore()
         self._prefill_done: bool = False
@@ -64,13 +68,41 @@ class HookManager:
     def add_sae(self, config: SAEConfigT) -> None:
         """Load an SAE and register it for hook attachment.
 
+        Two SAEs at the same ``(layer, hook_type)`` site are allowed when
+        both have ``read_only=True`` — they share one forward hook and
+        each produces an independent ``ActivationRecord``. Co-attaching a
+        non-read-only SAE at an already-occupied site is rejected because
+        the post-hook hidden state would be ambiguous.
+
         Args:
             config: SAE configuration. The SAE weights are downloaded
                     from HuggingFace on first call (cached thereafter).
         """
-        sae = load_sae(config)
-        key = (config.layer_index, config.hook_type)
-        self._saes[key] = sae
+        sae_id = config.identity()
+        key = (config.layer_index, config.hook_type, sae_id)
+        if key in self._saes:
+            raise ValueError(
+                f"SAE already registered at site (L{config.layer_index}, "
+                f"{config.hook_type.value}, {sae_id}). Use a different "
+                "width / l0_size or remove the duplicate."
+            )
+        site = (config.layer_index, config.hook_type)
+        existing_at_site = [
+            (sid, c) for (li, ht, sid), c in self._configs.items()
+            if (li, ht) == site
+        ]
+        if existing_at_site:
+            offenders = [sid for sid, c in existing_at_site if not c.read_only]
+            if not config.read_only:
+                offenders.append(f"new:{sae_id}")
+            if offenders:
+                raise ValueError(
+                    f"Cannot co-attach SAE {sae_id!r} at site "
+                    f"(L{config.layer_index}, {config.hook_type.value}): "
+                    f"every SAE sharing a site must have read_only=True "
+                    f"(offenders: {offenders})."
+                )
+        self._saes[key] = load_sae(config)
         self._configs[key] = config
 
     def add_steering(self, op: SteeringOp | list[SteeringOp]) -> None:
@@ -128,18 +160,36 @@ class HookManager:
         self._prefill_done = False
 
         self._resolve_steering(layers)
-        sae_keys = set(self._saes.keys())
 
-        for (layer_idx, hook_type), sae in self._saes.items():
+        # Group SAEs by (layer, hook_type) site so co-attached SAEs
+        # share a single forward hook (one forward pass through the
+        # layer, N SAE encodes).
+        sites: dict[
+            tuple[int, HookType], list[tuple[SAEBase, SAEConfigT, str]]
+        ] = {}
+        for (layer_idx, hook_type, sae_id), sae in self._saes.items():
+            cfg = self._configs[(layer_idx, hook_type, sae_id)]
+            sites.setdefault((layer_idx, hook_type), []).append(
+                (sae, cfg, sae_id),
+            )
+        site_keys = set(sites.keys())
+
+        for site_key, saes_at_site in sites.items():
+            layer_idx, hook_type = site_key
             if layer_idx >= len(layers):
                 raise ValueError(
-                    f"layer_index {layer_idx} out of range (model has {len(layers)} layers)"
+                    f"layer_index {layer_idx} out of range "
+                    f"(model has {len(layers)} layers)"
                 )
-            config = self._configs[(layer_idx, hook_type)]
             target = self._resolve_hook_target(layers[layer_idx], hook_type)
-            steer_ops = self._resolved_by_layer.get((layer_idx, hook_type), [])
+            steer_ops = self._resolved_by_layer.get(site_key, [])
 
-            if steer_ops and not config.read_only:
+            # When a single non-read-only SAE shares a site with steering
+            # ops, the steered hidden state will be replaced by the SAE's
+            # reconstruction. add_sae() forbids the multi-SAE variant of
+            # this — read_only is required at shared sites.
+            primary_cfg = saes_at_site[0][1]
+            if steer_ops and not primary_cfg.read_only and len(saes_at_site) == 1:
                 warnings.warn(
                     f"Layer {layer_idx} ({hook_type.value}) has both steering "
                     "ops and an SAE with read_only=False. The steered hidden "
@@ -148,12 +198,12 @@ class HookManager:
                 )
 
             handle = target.register_forward_hook(
-                self._make_sae_hook(sae, config, (layer_idx, hook_type), steer_ops)
+                self._make_sae_site_hook(site_key, saes_at_site, steer_ops),
             )
             self._handles.append(handle)
 
         for (layer_idx, hook_type), steer_ops in self._resolved_by_layer.items():
-            if (layer_idx, hook_type) in sae_keys:
+            if (layer_idx, hook_type) in site_keys:
                 continue
             if layer_idx >= len(layers):
                 raise ValueError(
@@ -184,8 +234,27 @@ class HookManager:
                 )
             layer = layers[op.layer_index]
             param = next(layer.parameters())
-            sae_key = op.sae_key or (op.layer_index, op.hook_type)
-            sae = self._saes.get(sae_key) if op.feature_index is not None else None
+            # SteeringOp.sae_key is a 2-tuple (layer, hook_type). Find any
+            # registered SAE at that site; warn if more than one matches
+            # (steering against a co-attached site is unusual — pick the
+            # first by registration order).
+            site = op.sae_key or (op.layer_index, op.hook_type)
+            sae = None
+            if op.feature_index is not None:
+                matches = [
+                    (k, s) for k, s in self._saes.items()
+                    if (k[0], k[1]) == site
+                ]
+                if matches:
+                    if len(matches) > 1:
+                        ids = [k[2] for k, _ in matches]
+                        warnings.warn(
+                            f"Steering op at (L{site[0]}, {site[1].value}) "
+                            f"matches {len(matches)} co-attached SAEs ({ids}); "
+                            "resolving against the first by registration order.",
+                            stacklevel=2,
+                        )
+                    sae = matches[0][1]
             resolved = resolve_op(op, sae, device=param.device, dtype=param.dtype)
             bucket_key = (op.layer_index, op.hook_type)
             self._resolved_by_layer.setdefault(bucket_key, []).append(resolved)
@@ -208,41 +277,60 @@ class HookManager:
         )
         return target
 
-    def _make_sae_hook(
+    def _make_sae_site_hook(
         self,
-        sae_ref: SAEBase,
-        cfg: SAEConfigT,
-        key: tuple[int, HookType],
+        site_key: tuple[int, HookType],
+        saes_at_site: list[tuple[SAEBase, SAEConfigT, str]],
         steer_ops: list[ResolvedSteeringOp],
     ):
+        """Combined forward hook that runs every SAE registered at ``site_key``.
+
+        When only one SAE is attached at the site, records are stored with
+        ``sae_id=""`` — backwards-compatible with the legacy single-SAE
+        callers that read via ``store.prefill(layer, hook_type)`` without
+        an ``sae_id`` argument. With two or more SAEs, each SAE's records
+        use its own ``identity()`` slug so they're individually addressable.
+        """
+        layer_idx, hook_type = site_key
+        # add_sae() enforces read_only=True at shared sites, so when
+        # len(saes_at_site) > 1 every config has read_only=True. The
+        # single-SAE branch still supports write-back (e.g. steering +
+        # SAE reconstruction replacing the output).
+        single_sae = len(saes_at_site) == 1
+
         def hook_fn(
             module: nn.Module,
             inputs: tuple,
             output: torch.Tensor,
         ) -> torch.Tensor | tuple | None:
-            # Skip if prefill_only and we already captured the prefill
-            if cfg.prefill_only and self._prefill_done:
-                return None
-
             with torch.no_grad():
                 hidden_states = output[0] if isinstance(output, tuple) else output
                 if steer_ops:
                     hidden_states = apply_steering(
-                        hidden_states, steer_ops, self.strength_multiplier
+                        hidden_states, steer_ops, self.strength_multiplier,
                     )
 
-                feature_acts, reconstruction = sae_ref(hidden_states)
-                self.store.record(
-                    key,
-                    feature_acts.detach(),
-                    reconstruction=reconstruction.detach(),
-                    collect_last_only=cfg.collect_last_only,
-                )
+                last_reconstruction = None
+                any_write = False
+                for sae_ref, cfg, sae_id in saes_at_site:
+                    if cfg.prefill_only and self._prefill_done:
+                        continue
+                    feature_acts, reconstruction = sae_ref(hidden_states)
+                    record_sae_id = "" if single_sae else sae_id
+                    self.store.record(
+                        (layer_idx, hook_type, record_sae_id),
+                        feature_acts.detach(),
+                        reconstruction=reconstruction.detach(),
+                        collect_last_only=cfg.collect_last_only,
+                    )
+                    if not cfg.read_only:
+                        any_write = True
+                        last_reconstruction = reconstruction
 
-                if not cfg.read_only:
+                if any_write:
                     if isinstance(output, tuple):
-                        return (reconstruction,) + output[1:]
-                    return reconstruction
+                        return (last_reconstruction,) + output[1:]
+                    return last_reconstruction
                 if steer_ops:
                     if isinstance(output, tuple):
                         return (hidden_states,) + output[1:]
