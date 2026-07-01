@@ -1,10 +1,11 @@
-"""Mean-of-difference candidate refusal directions per (intermediate, position, layer).
+"""Mean-of-difference candidate refusal directions per (site, position, layer).
 
 Adapted from `references/refusal_direction/pipeline/submodules/generate_directions.py`.
 The reference batches via HF tokenizer + ``register_forward_pre_hook``; we use
-`GemmaPytorchInference.cache_activations` to capture per-layer prefill
+the ``DirectionModel`` adapter's ``capture_means`` to capture per-layer prefill
 activations at the post-instruction positions and accumulate the mean in
-``float64`` to match the reference's numerical care.
+``float64`` to match the reference's numerical care. The adapter abstracts the
+backend (Gemma fork cache vs Qwen forward hooks).
 """
 
 from __future__ import annotations
@@ -12,52 +13,13 @@ from __future__ import annotations
 import json
 
 import torch
-from tqdm import tqdm
 
+from interpret.experiments.directions_common import CaptureSite, DirectionModel
 from interpret.experiments.refusal_directions.config import RefusalConfig
-from interpret.experiments.refusal_directions.tokens import format_chat
-
-
-def _accumulate_mean(
-    wrapper,
-    instructions: list[str],
-    intermediate: str,
-    n_layers: int,
-    d_model: int,
-    n_eoi: int,
-) -> torch.Tensor:
-    """Average post-instruction activations over a list of prompts.
-
-    Returns a tensor of shape ``(n_eoi, n_layers, d_model)`` in fp64 on CPU.
-    """
-    layers = set(range(n_layers))
-    intermediates = {intermediate}
-    n_samples = len(instructions)
-
-    accumulator = torch.zeros(
-        (n_eoi, n_layers, d_model), dtype=torch.float64, device="cpu"
-    )
-
-    with wrapper.cache_activations(
-        layers=layers, intermediates=intermediates, prefill=True
-    ) as get_cache:
-        for instruction in tqdm(instructions, desc=f"prefill {intermediate}"):
-            wrapper.reset_prefill_cache()
-            wrapper.generate_from_template(
-                format_chat(wrapper, instruction), output_len=1
-            )
-            cache = get_cache()
-            prefill = cache["prefill"]
-            for layer_idx in range(n_layers):
-                acts = prefill[layer_idx][intermediate]  # (1, seq_len, d_model)
-                tail = acts[0, -n_eoi:, :].to(torch.float64).cpu()
-                accumulator[:, layer_idx, :] += tail / n_samples
-
-    return accumulator
 
 
 def generate_directions(
-    wrapper,
+    model: DirectionModel,
     harmful: list[str],
     harmless: list[str],
     config: RefusalConfig,
@@ -67,32 +29,34 @@ def generate_directions(
 
     Returns ``{intermediate: Tensor(n_eoi, n_layers, d_model)}`` and writes
     each tensor to ``config.generate_dir`` as ``mean_diffs_<intermediate>.pt``.
+    Cached ``.pt`` files are reused; any missing intermediates are captured in a
+    single pass per class.
     """
     out_dir = config.generate_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     directions: dict[str, torch.Tensor] = {}
+    to_extract: list[str] = []
     for intermediate in config.intermediates:
         path = out_dir / f"mean_diffs_{intermediate}.pt"
         if path.exists():
             print(f"[generate_directions] reusing cached {path}")
             directions[intermediate] = torch.load(path, map_location="cpu")
-            continue
+        else:
+            to_extract.append(intermediate)
 
-        mean_h = _accumulate_mean(
-            wrapper, harmful, intermediate, config.n_layers, config.d_model, n_eoi,
-        )
-        mean_b = _accumulate_mean(
-            wrapper, harmless, intermediate, config.n_layers, config.d_model, n_eoi,
-        )
-        diff = mean_h - mean_b
-        if not torch.isfinite(diff).all():
-            raise RuntimeError(
-                f"Non-finite values in mean_diffs[{intermediate}]"
-            )
-
-        torch.save(diff, path)
-        directions[intermediate] = diff
+    if to_extract:
+        sites = tuple(CaptureSite.from_name(name) for name in to_extract)
+        mean_h = model.capture_means(harmful, sites, n_eoi)
+        mean_b = model.capture_means(harmless, sites, n_eoi)
+        for intermediate in to_extract:
+            diff = mean_h[intermediate] - mean_b[intermediate]
+            if not torch.isfinite(diff).all():
+                raise RuntimeError(
+                    f"Non-finite values in mean_diffs[{intermediate}]"
+                )
+            torch.save(diff, out_dir / f"mean_diffs_{intermediate}.pt")
+            directions[intermediate] = diff
 
     metadata_path = out_dir / "metadata.json"
     metadata = {

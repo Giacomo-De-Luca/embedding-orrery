@@ -22,10 +22,10 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
+from interpret.experiments.directions_common import DirectionModel
 from interpret.experiments.poetry_directions.config import PoetryConfig
 from interpret.experiments.refusal_directions import data as refusal_data
 from interpret.experiments.refusal_directions.evaluate import evaluate_dataset, is_refusal
-from interpret.experiments.refusal_directions.tokens import format_chat
 from interpret.utils.results_io import append_csv
 
 
@@ -45,7 +45,7 @@ def _baseline_completions_cache_path(cfg: PoetryConfig) -> Path:
 
 
 def _generate_baseline_csv(
-    wrapper,
+    model,
     dataset: list[dict],
     out_path: Path,
     cfg: PoetryConfig,
@@ -63,11 +63,7 @@ def _generate_baseline_csv(
     refusals: list[int] = []
     for item in tqdm(dataset, desc=f"{cfg.eval_dataset}/baseline (cached)"):
         prompt = item["instruction"]
-        response = wrapper.generate_from_template(
-            format_chat(wrapper, prompt),
-            output_len=cfg.max_new_tokens,
-            temperature=None,
-        )
+        response = model.generate(prompt, cfg.max_new_tokens)
         refusal = int(is_refusal(response))
         refusals.append(refusal)
         append_csv(
@@ -90,7 +86,7 @@ def _refusal_rate_from_csv(csv_path: Path) -> float:
 
 
 def _ensure_baseline(
-    wrapper,
+    model,
     dataset: list[dict],
     cfg: PoetryConfig,
 ) -> float:
@@ -109,13 +105,13 @@ def _ensure_baseline(
         return _refusal_rate_from_csv(target_path)
 
     print(f"[evaluate] computing baseline (will cache at {cache_path})")
-    rate = _generate_baseline_csv(wrapper, dataset, cache_path, cfg)
+    rate = _generate_baseline_csv(model, dataset, cache_path, cfg)
     shutil.copyfile(cache_path, target_path)
     return rate
 
 
 def evaluate_jailbreakbench(
-    wrapper,
+    model: DirectionModel,
     direction: torch.Tensor,
     selected_layer: int,
     coefficient: float,
@@ -132,7 +128,7 @@ def evaluate_jailbreakbench(
         dataset = refusal_data.sample(dataset, cfg.n_eval, cfg.seed)
 
     # 1. Baseline — shared cache.
-    baseline_rate = _ensure_baseline(wrapper, dataset, cfg)
+    baseline_rate = _ensure_baseline(model, dataset, cfg)
 
     # 2. actadd — per-experiment, no caching.
     summary_path = cfg.completions_dir / f"{cfg.eval_dataset}_summary.json"
@@ -142,7 +138,7 @@ def evaluate_jailbreakbench(
         actadd_rate = _refusal_rate_from_csv(actadd_csv)
     else:
         actadd_rates = evaluate_dataset(
-            wrapper,
+            model,
             dataset,
             direction,
             selected_layer,

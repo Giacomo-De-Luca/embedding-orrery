@@ -26,13 +26,14 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
 
-from interpret.experiments.poetry_directions.config import PoetryConfig
-from interpret.experiments.refusal_directions.select_direction import (
+from interpret.experiments.directions_common import (
+    DirectionModel,
     _additive_op,
     _kl_div,
     _make_manager,
     _score_dataset,
 )
+from interpret.experiments.poetry_directions.config import PoetryConfig
 from interpret.utils.results_io import append_csv
 
 _ZERO_NORM_TOL = 1e-8
@@ -90,7 +91,7 @@ def _baseline_cache_path(cfg: PoetryConfig) -> Path:
 
 
 def _load_or_compute_baselines(
-    wrapper,
+    model,
     harmful_val: list[str],
     harmless_val: list[str],
     refusal_toks: tuple[int, ...],
@@ -118,9 +119,9 @@ def _load_or_compute_baselines(
         print(f"[sweep] baseline cache mismatch at {cache_path}, recomputing")
 
     print("[sweep] computing baseline last-position logits (will cache)")
-    harmful_scores, _ = _score_dataset(wrapper, harmful_val, None, refusal_toks)
+    harmful_scores, _ = _score_dataset(model, harmful_val, None, refusal_toks)
     harmless_scores, harmless_logits = _score_dataset(
-        wrapper, harmless_val, None, refusal_toks
+        model, harmless_val, None, refusal_toks
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -195,7 +196,7 @@ def _plot_position_curves(
 
 
 def sweep_layers_coeffs(
-    wrapper,
+    model: DirectionModel,
     candidates: dict[str, torch.Tensor],
     harmful_val: list[str],
     harmless_val: list[str],
@@ -244,7 +245,7 @@ def sweep_layers_coeffs(
 
     baseline_harmful_scores, baseline_harmless_scores, baseline_harmless_logits = (
         _load_or_compute_baselines(
-            wrapper,
+            model,
             harmful_val,
             harmless_val,
             refusal_toks,
@@ -359,7 +360,7 @@ def sweep_layers_coeffs(
                         [_additive_op(direction, source_layer, coeff=coeff)]
                     )
                     bypass_scores, _ = _score_dataset(
-                        wrapper, harmful_val, manager, refusal_toks
+                        model, harmful_val, manager, refusal_toks
                     )
                     refusal_mean = float(
                         sum(bypass_scores) / max(len(bypass_scores), 1)
@@ -367,7 +368,7 @@ def sweep_layers_coeffs(
                     refusal_grid[source_pos, source_layer, c_idx] = refusal_mean
 
                     _, intervened_harmless_logits = _score_dataset(
-                        wrapper, harmless_val, manager, refusal_toks
+                        model, harmless_val, manager, refusal_toks
                     )
                     kls = [
                         _kl_div(b, a)

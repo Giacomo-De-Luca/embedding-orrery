@@ -7,34 +7,30 @@ from pathlib import Path
 
 import torch
 
+from interpret.experiments.directions_common import DirectionModel, build_direction_model
 from interpret.experiments.poetry_directions.config import PoetryConfig
 from interpret.experiments.poetry_directions.evaluate import evaluate_jailbreakbench
 from interpret.experiments.poetry_directions.extract import extract_direction
 from interpret.experiments.poetry_directions.sweep import sweep_layers_coeffs
 from interpret.experiments.refusal_directions import data as refusal_data
-from interpret.experiments.refusal_directions.tokens import (
-    compute_eoi_token_ids,
-    verify_refusal_tokens,
-)
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 
 
 class PoetryRunner:
     """Three-phase orchestrator: extract → sweep → evaluate.
 
     Each phase is idempotent: artifacts on disk are reused on rerun.
-    Optionally accepts a pre-loaded ``GemmaPytorchInference`` so the same
-    model instance can be reused across multiple experiments without
-    reloading weights.
+    Optionally accepts a pre-built ``DirectionModel`` so the same model
+    instance can be reused across multiple experiments without reloading
+    weights.
     """
 
     def __init__(
         self,
         config: PoetryConfig,
-        wrapper: GemmaPytorchInference | None = None,
+        model: DirectionModel | None = None,
     ) -> None:
         self.config = config
-        self._wrapper = wrapper
+        self._model = model
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self._save_config()
 
@@ -42,22 +38,37 @@ class PoetryRunner:
         with (self.config.output_dir / "config.json").open("w") as f:
             json.dump(self.config.to_dict(), f, indent=2)
 
-    def _ensure_wrapper(self) -> GemmaPytorchInference:
-        if self._wrapper is None:
-            self._wrapper = GemmaPytorchInference(self.config.model_name)
-        return self._wrapper
+    def _ensure_model(self) -> DirectionModel:
+        if self._model is None:
+            self._model = build_direction_model(self.config.model_name)
+        return self._model
 
     def run(self) -> Path:
         cfg = self.config
-        wrapper = self._ensure_wrapper()
-        verify_refusal_tokens(wrapper, ids=cfg.refusal_token_ids)
-        eoi_ids = compute_eoi_token_ids(wrapper)
+        model = self._ensure_model()
+
+        # Backend-derived dims override the (Gemma-shaped) config defaults;
+        # refusal ids are resolved against the live tokenizer.
+        cfg.n_layers = model.n_layers
+        cfg.d_model = model.d_model
+        cfg.refusal_token_ids = tuple(model.refusal_token_ids(cfg.refusal_token_ids))
+        self._save_config()
+
+        eoi_ids = model.eoi_token_ids()
         n_eoi = len(eoi_ids)
         with (cfg.output_dir / "tokens.json").open("w") as f:
-            json.dump({"eoi_token_ids": eoi_ids, "n_eoi": n_eoi}, f, indent=2)
+            json.dump(
+                {
+                    "eoi_token_ids": eoi_ids,
+                    "n_eoi": n_eoi,
+                    "refusal_token_ids": list(cfg.refusal_token_ids),
+                },
+                f,
+                indent=2,
+            )
 
         # 1. Extract per-intermediate mean-diff directions.
-        candidates = extract_direction(wrapper, cfg, n_eoi=n_eoi)
+        candidates = extract_direction(model, cfg, n_eoi=n_eoi)
 
         # 2. Sweep (intermediate, position, layer, coefficient) on val splits
         #    borrowed read-only from the refusal pipeline.
@@ -77,7 +88,7 @@ class PoetryRunner:
         )
         pos_labels = [str(tid) for tid in eoi_ids]
         selection = sweep_layers_coeffs(
-            wrapper,
+            model,
             candidates,
             harmful_val,
             harmless_val,
@@ -90,7 +101,7 @@ class PoetryRunner:
 
         # 3. JailbreakBench substring-ASR eval at the chosen (layer, coeff).
         eval_rates = evaluate_jailbreakbench(
-            wrapper,
+            model,
             direction,
             selected_layer,
             selected_coeff,

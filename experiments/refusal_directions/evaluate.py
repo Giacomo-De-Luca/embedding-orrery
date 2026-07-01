@@ -2,11 +2,12 @@
 
 The substring judge and prefix list are ported verbatim from
 `references/refusal_direction/pipeline/submodules/evaluate_jailbreak.py`.
+
+Model access is via a ``DirectionModel`` adapter, so this runs on Gemma or Qwen.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 from typing import Protocol
@@ -14,8 +15,12 @@ from typing import Protocol
 import torch
 from tqdm import tqdm
 
-from interpret.experiments.refusal_directions.select_direction import _ablation_ops, _additive_op
-from interpret.experiments.refusal_directions.tokens import format_chat
+from interpret.experiments.directions_common import (
+    DirectionModel,
+    _ablation_ops,
+    _additive_op,
+)
+from interpret.experiments.directions_common.scoring import _maybe_session
 from interpret.sae import HookManager
 from interpret.utils.results_io import append_csv
 
@@ -54,15 +59,6 @@ def is_refusal(response: str, prefixes: list[str] = _REFUSAL_PREFIXES) -> bool:
     return any(prefix.lower() in lowered for prefix in prefixes)
 
 
-@contextlib.contextmanager
-def _maybe_session(manager: HookManager | None, layers):
-    if manager is None:
-        yield
-        return
-    with manager.session(layers):
-        yield
-
-
 def _condition_manager(
     condition: str,
     direction: torch.Tensor,
@@ -83,7 +79,7 @@ def _condition_manager(
 
 
 def evaluate_dataset(
-    wrapper,
+    model: DirectionModel,
     dataset: list[dict],
     direction: torch.Tensor,
     selected_layer: int,
@@ -111,7 +107,7 @@ def evaluate_dataset(
 
     refusal_rates: dict[str, float] = {}
 
-    layers = wrapper.model.model.layers
+    layers = model.decoder_layers
     for condition, coeff in conditions.items():
         manager = _condition_manager(
             condition, direction, config.n_layers, selected_layer, coeff
@@ -124,11 +120,7 @@ def evaluate_dataset(
         with _maybe_session(manager, layers):
             for item in tqdm(dataset, desc=f"{dataset_label}/{condition}"):
                 prompt = item["instruction"]
-                response = wrapper.generate_from_template(
-                    format_chat(wrapper, prompt),
-                    output_len=config.max_new_tokens,
-                    temperature=None,
-                )
+                response = model.generate(prompt, config.max_new_tokens)
                 refusal = int(is_refusal(response))
                 refusals.append(refusal)
                 append_csv(
