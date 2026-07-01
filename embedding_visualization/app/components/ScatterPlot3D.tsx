@@ -795,7 +795,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           traces.push({
             x: lineX, y: lineY, z: lineZ, mode: 'lines' as const, type: 'scatter3d' as const,
             name: 'Connections',
-            line: { color: isDark ? 'rgba(130, 160, 200, 0.60)' : 'rgba(37, 99, 235, 0.65)', width: isDark ? 0.1 : 1 },
+            line: { color: isDark ? 'rgba(130, 160, 200, 0.60)' : 'rgba(71, 105, 155, 0.45)', width: isDark ? 0.1 : 0.75 },
             hoverinfo: 'skip' as any, showlegend: false
           });
         }

@@ -222,16 +222,19 @@ export function calculateSimilarityColors(similarity: number, isDark: boolean = 
     };
   }
 
-  // Light mode — gold/near-white washes out on a white background, so we stay in the
-  // blue family throughout: a brighter sky blue for low similarity deepening to a strong
-  // navy for high similarity. Cores are fully opaque and dark enough to read on white.
-  const LOW_CORE = '#0284c7'; // sky-600
-  const LOW_GLOW = 'rgba(56, 189, 248, 0.55)'; // sky-400
-  const LOW_OUTER = 'rgba(14, 165, 233, 0.22)'; // sky-500
+  // Light mode — dark mode's constellation reads as a uniform warm glow (bluish-white →
+  // golden-white cores), so the light analog stays within one warm family: soft amber for
+  // low similarity deepening to vivid orange for high/selected. A cool→warm hue travel
+  // (e.g. sky→amber) is avoided because RGB interpolation passes through muddy olive at
+  // mid similarity. Glow alphas are high because the glow layers render at trace opacity
+  // 0.15/0.3 and must survive on a white background (effective outer ≈ 0.15×0.8).
+  const LOW_CORE = '#fbbf24'; // amber-400
+  const LOW_GLOW = 'rgba(252, 211, 77, 0.85)'; // amber-300
+  const LOW_OUTER = 'rgba(253, 230, 138, 0.8)'; // amber-200
 
-  const HIGH_CORE = '#1e3a8a'; // blue-900
-  const HIGH_GLOW = 'rgba(37, 99, 235, 0.55)'; // blue-600
-  const HIGH_OUTER = 'rgba(29, 78, 216, 0.22)'; // blue-700
+  const HIGH_CORE = '#ea580c'; // orange-600
+  const HIGH_GLOW = 'rgba(249, 115, 22, 0.85)'; // orange-500
+  const HIGH_OUTER = 'rgba(251, 191, 36, 0.8)'; // amber-400
 
   return {
     coreColor: interpolateHexColor(LOW_CORE, HIGH_CORE, similarity),

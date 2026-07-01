@@ -1059,6 +1059,7 @@ class GenerateStreamInput:
     top_p: float = 0.95
     top_k: int = 64
     steering: list[SteeringInput] | None = None
+    seed: int | None = None  # When set, torch.manual_seed() before sampling for reproducible output
 
 
 @strawberry.type

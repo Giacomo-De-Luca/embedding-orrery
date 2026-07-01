@@ -803,7 +803,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             type: 'scattergl' as const,
             name: 'Connections',
             line: {
-              color: isDark ? 'rgba(130, 160, 200, 0.12)' : 'rgba(37, 99, 235, 0.45)',
+              color: isDark ? 'rgba(130, 160, 200, 0.12)' : 'rgba(71, 105, 155, 0.35)',
               width: isDark ? 0.5 : 0.8,
             },
             hoverinfo: 'skip' as any,

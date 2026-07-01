@@ -127,6 +127,8 @@ def embed_huggingface_dataset(
         # Load dataset portion. When multiple splits are requested they are
         # embedded into one collection in a single pass; each row is tagged with
         # its source split so metadata and IDs stay correct after length-sorting.
+        # Note: a non-ALL portion (FIRST_N/RANDOM_SAMPLE/ROW_RANGE) is applied
+        # independently to EACH split (e.g. FIRST_N=100 over 3 splits -> up to 300).
         splits = config.splits or [config.split]
         print(f"Loading dataset: {config.dataset_id} (splits: {', '.join(splits)})")
         rows, total_in_split = _load_rows_for_splits(

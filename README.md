@@ -1,8 +1,8 @@
-# Orrery: Interactive Embedding Visualisation with Sparse Autoencoder Interpretability
+# Orrery: Interactive Embedding Visualisation with SAE Interpretability
 
-Orrery is an open-source platform for embedding visualization, automatic topic extraction, and Sparse Autoencoder (SAE) interpretability. Embed data from any source, visualize up to 500k points at 60 fps for 8gb of vram, extract topics, and steer a language model live from the scatter plot. *Also perform SAE search on your dataset! Or visualise your data as a galaxy using the nebula mode!*
+Orrery is an open-source platform that unifies three things researchers usually keep in separate tools: interactive embedding visualisation, automatic topic extraction, and Sparse Autoencoder (SAE) interpretability. Embed data from any source, explore it in a 2D/3D scatter plot that stays fluid at hundreds of thousands of points, extract topics, and steer a language model live from the plot — without leaving the platform.
 
-> **Beta** the platform is functional and under active development, and is going to be sent to EMNLP as demo. If you use the platform or find bugs write me, I'm thankful for any preliminar testing! 
+> **Beta.** The platform is functional and under active development, and is being prepared as an EMNLP demo submission. If you try it or find bugs, please get in touch — early feedback is very welcome.
 
 ![WordNet 212k](gallery/geometry.png)
 
@@ -10,54 +10,45 @@ Orrery is an open-source platform for embedding visualization, automatic topic e
 
 | | |
 |---|---|
-| ![WordNet 212k](gallery/meditation.png) | ![HarmBench](gallery/harmbench.png) |
-| WordNet 212k points with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
+| ![Meditation](gallery/meditation.png) | ![HarmBench](gallery/harmbench.png) |
+| WordNet (212k senses) with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
 | ![XKCD Colors](gallery/Gemini_XKCD_PCA.png) | ![Concreteness](gallery/concreteness.jpg) |
-| XKCD color words colored by actual hex values -- embedding space mirrors perceptual color space | NRC word norms colored by concreteness score -- psycholinguistic dimensions as spatial gradients |
+| XKCD colour words coloured by their actual hex value — embedding space mirrors perceptual colour space | Word norms coloured by concreteness rating — a psycholinguistic dimension as a spatial gradient |
 
 ## Quick Start
-
-### Manual
 
 ```bash
 # Backend
 uv sync
-./start_backend.sh
+./start_backend.sh          # GraphQL at http://localhost:8000/graphql
 
 # Frontend
-cd embedding_visualization && npm install && npm run dev
+cd embedding_visualization && npm install && npm run dev   # http://localhost:3000
 ```
+
+The app ships with two small demo collections (an `emotion` sample and Gemini-embedded XKCD colours), so it works on a fresh clone with no data setup. Core features need no API keys — local SentenceTransformers, visualisation, topic extraction, and SAE analysis all run offline.
 
 ### Docker
 
 ```bash
-** Still to check if it works, prefer the manual install for now
-
-docker compose up --build
-# Frontend: http://localhost:3000 (ships with demo datasets)
-# GraphQL: http://localhost:8000/graphql
+docker compose up --build   # frontend :3000, GraphQL :8000
 ```
 
-
-See [`documentation/DOCKER.md`](documentation/DOCKER.md) for SAE cache warmup, volume management, and HuggingFace token options.
-
-
+Docker support is still being validated across machines — prefer the manual install if you hit trouble. See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
 
-**Embedding Visualization** -- Embed from HuggingFace Hub, local files (CSV/JSON/Parquet), images, or pre-computed vectors. Interactive 2D/3D WebGL scatter plots. Eight providers: SentenceTransformers (local, default), Gemini, OpenAI, Cohere, Ollama, QWEN, BGE, HuggingFace API.
+**Embedding Visualisation** — Embed from the HuggingFace Hub, local files (CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL 2D/3D scatter plots. Eight providers: SentenceTransformers (local, default), Gemini, OpenAI, Cohere, Ollama, QWEN, BGE, and the HuggingFace API. One dataset can carry multiple embeddings (different models or prompts) without duplication.
 
-**Topic Extraction** -- HDBSCAN clustering on projections with c-TF-IDF keywords and optional LLM labels (Gemini/OpenAI). Hierarchical reduction preserves subtopics with nested coloring.
+**Topic Extraction** — A BERTopic-style pipeline: HDBSCAN clustering (also K-means, GMM, spectral) with c-TF-IDF keywords and optional LLM labels (Gemini/OpenAI). Hierarchical reduction preserves subtopics with nested colouring.
 
-**Temporal Filtering** -- Auto-detects year/date fields. Draggable range picker filters the scatter plot, semantic search, and text search to a time window. Designed for diachronic analysis of historical corpora and literary collections.
+**SAE Feature Analysis** — Live inference on Gemma 3 with from-scratch JumpReLU/TopK SAE implementations. Capture per-token activations, highlight activated features on the scatter plot, apply additive steering, and chat with the steered model. Visualise the SAE feature space itself as a 3D plot — right-click any feature to inspect it and steer.
 
-**SAE Feature Analysis** -- Live inference on Gemma 3 with custom JumpReLU/TopK SAE implementations. Per-token activation capture, scatter plot highlighting, additive/ablation/orthogonal steering, and streaming chat. Visualize the SAE feature space as a 3D scatter plot -- right-click any feature to inspect it and steer the model.
+**Feature-Grounded Search** — Link a dataset to an SAE, compute per-document activations, then search by feature label: type "poetry" and Orrery matches SAE features by description and ranks documents by activation strength. Search grounded in the model's internal representations rather than lexical or vector similarity.
 
-**Feature-Grounded Search** -- Connect a dataset to an SAE, compute per-document activations, then search by feature label. Type "poetry" and the system finds features whose descriptions match, then ranks documents by activation strength. Mechanistic search -- not lexical, not semantic, but grounded in the model's internal representations.
+**Analytical Colouring** — Colour by any metadata field with categorical, sequential, diverging, and monochrome scales, including 60+ Crameri perceptually-uniform scientific colormaps. Makes linear-direction analyses (concreteness, valence, colour) directly visible.
 
-**Analytical Coloring** -- Color by any metadata field with 60+ Crameri perceptually-uniform scientific colormaps. Categorical, sequential, diverging, and monochrome scales.
-
-**Search** -- Cosine similarity search with topic and temporal scoping. Server-side text search across documents and metadata fields. Glow-effect highlighting on the scatter plot.
+**Search & Filtering** — Cosine similarity search (including click-a-point to find neighbours), server-side text search across chosen columns, and SAE feature search, all with topic and temporal scoping. Draggable temporal range picker for diachronic analysis. Glow-effect highlighting on the plot.
 
 ## Architecture
 
@@ -72,34 +63,34 @@ Data Sources --> Embedding Providers --> DuckDB (docs, metadata, projections, to
                                     Next.js Frontend
 ```
 
-**Dual-database design**: DuckDB is the central orchestrator. ChromaDB stores only dense vectors for similarity search. One dataset can have multiple vector collections (different embedding models).
+**Dual-database design**: DuckDB is the central orchestrator (documents, metadata, projections, topics, SAE data); ChromaDB stores only dense vectors for similarity search. Decoupling *datasets* from *collections* lets one dataset be embedded many ways — different models, prompts, or column combinations — without re-storing the documents.
 
 ## Pages
 
-- **`/`** -- Visualization dashboard (2D/3D scatter, search, topics, temporal filtering, analytical coloring)
-- **`/features`** -- SAE Feature Explorer (activation heatmaps, logit charts, prompt explorer, steering chat)
-- **`/test-embed`** -- Dataset management (embed, manage collections, extract topics, configure SAE links)
+- **`/`** — Visualisation dashboard (2D/3D scatter, semantic/text search, topics, temporal filtering, analytical colouring)
+- **`/features`** — SAE Feature Explorer (activation heatmaps, logit charts, prompt explorer, steering chat)
+- **`/test-embed`** — Dataset management (embed, manage collections, extract topics, configure SAE links)
 
 ## Environment Variables
 
-Core features work without API keys (local SentenceTransformers, visualization, topic extraction, SAE analysis).
+Optional — only needed for the corresponding provider or LLM labelling.
 
 | Variable | Used For |
 |----------|----------|
-| `GEMINI_API_KEY` | Gemini embedding + LLM topic labeling |
-| `CHROMA_OPENAI_API_KEY` | OpenAI embedding + LLM topic labeling |
+| `GEMINI_API_KEY` | Gemini embedding + LLM topic labelling |
+| `CHROMA_OPENAI_API_KEY` | OpenAI embedding + LLM topic labelling |
 | `CHROMA_COHERE_API_KEY` | Cohere embedding |
 | `HUGGINGFACE_API_KEY` | HuggingFace gated model access |
 
 ## Documentation
 
-- [`documentation/DATABASE_ARCHITECTURE.md`](documentation/DATABASE_ARCHITECTURE.md) -- DuckDB/ChromaDB schema and data flow
-- [`documentation/DOCKER.md`](documentation/DOCKER.md) -- Docker setup and SAE cache profile
-- [`documentation/SAE_ARCHITECTURE.md`](documentation/SAE_ARCHITECTURE.md) -- SAE storage, ingestion, GraphQL API
-- [`documentation/SAE_PIPELINE.md`](documentation/SAE_PIPELINE.md) -- Neuronpedia download-to-ingestion pipeline
-- [`documentation/INTERPRET_API.md`](documentation/INTERPRET_API.md) -- SAE inference, steering, streaming
-- [`documentation/LABEL_PLACEMENT_GUIDE.md`](documentation/LABEL_PLACEMENT_GUIDE.md) -- 3D label collision avoidance
-- [`documentation/NEBULA_CLUSTER_EFFECTS.md`](documentation/NEBULA_CLUSTER_EFFECTS.md) -- Cluster haze rendering
+- [`documentation/DATABASE_ARCHITECTURE.md`](documentation/DATABASE_ARCHITECTURE.md) — DuckDB/ChromaDB schema and data flow
+- [`documentation/DOCKER.md`](documentation/DOCKER.md) — Docker setup and SAE cache profile
+- [`documentation/SAE_ARCHITECTURE.md`](documentation/SAE_ARCHITECTURE.md) — SAE storage, ingestion, GraphQL API
+- [`documentation/SAE_PIPELINE.md`](documentation/SAE_PIPELINE.md) — Neuronpedia download-to-ingestion pipeline
+- [`documentation/INTERPRET_API.md`](documentation/INTERPRET_API.md) — SAE inference, steering, streaming
+- [`documentation/LABEL_PLACEMENT_GUIDE.md`](documentation/LABEL_PLACEMENT_GUIDE.md) — 3D label collision avoidance
+- [`documentation/NEBULA_CLUSTER_EFFECTS.md`](documentation/NEBULA_CLUSTER_EFFECTS.md) — Cluster haze rendering
 
 ## License
 

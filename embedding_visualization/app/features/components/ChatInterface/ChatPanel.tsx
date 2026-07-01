@@ -1,26 +1,33 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ChevronDown, Download, History, PanelRightIcon, RotateCcw } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Columns2, Dices, Download, History, PanelRightIcon, RotateCcw } from 'lucide-react';
 import { useLazyQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { Button } from '@/lib/ui-primitives/button';
+import { Input } from '@/lib/ui-primitives/input';
 import { Slider } from '@/lib/ui-primitives/slider';
-import { useScrollToBottom } from '@/lib/hooks/useScrollToBottom';
-import { useSteeringChat, type SteeringChatOptions } from '@/lib/hooks/useSteeringChat';
-import { cn } from '@/lib/utils/utils';
+import {
+  configKey,
+  useSteeringChat,
+  type SteeringChatOptions,
+} from '@/lib/hooks/useSteeringChat';
 import { downloadJson } from '@/lib/utils/downloadJson';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { STEERING_PRESETS } from '@/lib/utils/steeringPresets';
 import { GET_CHAT_SESSION, type ChatSessionQueryResult } from '@/lib/graphql/queries';
-import type { ChatMessage as ChatMessageType, ChatSessionSummary, SaeFeature, MessageVote } from '@/lib/types/types';
-import { ChatGreeting } from './ChatGreeting';
+import type {
+  ChatMessage as ChatMessageType,
+  ChatSessionSummary,
+  MessageVote,
+  SaeFeature,
+  SteeringConfig,
+} from '@/lib/types/types';
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
-import { ChatMessage } from './ChatMessage';
+import { ChatThread } from './ChatThread';
 import { SteeringControls } from './SteeringControls';
-import { ThinkingIndicator } from './ThinkingIndicator';
 
 interface ChatPanelProps {
   currentFeature: SaeFeature | null;
@@ -38,6 +45,9 @@ interface ChatPanelProps {
   loadedMessages?: ChatMessageType[] | null;
   onSelectModel?: (modelId: string, saeId: string) => void;
 }
+
+/** Baseline (no steering) config — stable identity so the baseline hook never auto-resets. */
+const EMPTY_CONFIG: SteeringConfig = { features: [] };
 
 export function ChatPanel({
   currentFeature,
@@ -57,7 +67,9 @@ export function ChatPanel({
   const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
   const [maxTokens, setMaxTokens] = useState(256);
   const [temperature, setTemperature] = useState(0.7);
+  const [seed, setSeed] = useState(42);
   const [showHistory, setShowHistory] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
   const prevLoadedRef = useRef<ChatMessageType[] | null | undefined>(undefined);
 
   const chatOptions: SteeringChatOptions = useMemo(
@@ -68,18 +80,56 @@ export function ChatPanel({
     [onUserMessageSent, onAssistantMessageComplete]
   );
 
-  const { messages, status, error, send, stop, reset, regenerate, editAndResend, loadMessages } =
-    useSteeringChat(steeringConfig, maxTokens, temperature, chatOptions);
-  const { containerRef, endRef, isAtBottom, scrollToBottom } = useScrollToBottom();
+  // Steered thread — the persisted conversation (receives the persistence callbacks).
+  const {
+    messages: steeredMessages,
+    status: steeredStatus,
+    error: steeredError,
+    send: steeredSend,
+    stop: steeredStop,
+    reset: steeredReset,
+    regenerate: steeredRegenerate,
+    editAndResend: steeredEdit,
+    loadMessages: steeredLoad,
+  } = useSteeringChat(steeringConfig, maxTokens, temperature, seed, chatOptions);
+
+  // Baseline thread — no steering, no persistence callbacks (ephemeral).
+  const {
+    messages: baselineMessages,
+    status: baselineStatus,
+    error: baselineError,
+    send: baselineSend,
+    stop: baselineStop,
+    reset: baselineReset,
+  } = useSteeringChat(EMPTY_CONFIG, maxTokens, temperature, seed);
+
   const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
-  // Load messages when a session is selected from history
+  // Sync the steered thread with the parent's `loadedMessages` signal. An empty
+  // array is the parent's new-chat/clear signal (see page.tsx `handleNewChat`);
+  // a non-empty array is a real saved-session load. Only a real session load —
+  // a single steered thread — drops out of compare mode and clears the baseline.
+  // (Guarding on length is essential: `handleToggleCompare` calls `onNewChat`,
+  // which sets `loadedMessages` to `[]`; an unguarded reset here would flip
+  // compare mode straight back off.)
   useEffect(() => {
     if (loadedMessages && loadedMessages !== prevLoadedRef.current) {
       prevLoadedRef.current = loadedMessages;
-      loadMessages(loadedMessages, steeringConfig);
+      steeredLoad(loadedMessages, steeringConfig);
+      if (loadedMessages.length > 0) {
+        setCompareMode(false);
+        baselineReset();
+      }
     }
-  }, [loadedMessages, loadMessages, steeringConfig]);
+  }, [loadedMessages, steeredLoad, steeringConfig, baselineReset]);
+
+  // Keep the baseline thread in lockstep with the steered thread's auto-reset:
+  // the steered hook clears itself when the (strength-filtered) steering config
+  // changes, so clear the baseline too. Constant "" on mount → no spurious fire.
+  const steeringKey = configKey(steeringConfig);
+  useEffect(() => {
+    baselineReset();
+  }, [steeringKey, baselineReset]);
 
   // Auto-load model-specific steering presets when the chat opens against
   // a model that has a preset bundle and no features are configured yet.
@@ -94,10 +144,10 @@ export function ChatPanel({
     setSteeringConfig({ features: presets });
   }, [modelId]);
 
-  const isEmpty = messages.length === 0;
-  const isLoadingModel = status === 'loading_model';
-  const isGenerating = status === 'generating';
-  const isBusy = isLoadingModel || isGenerating;
+  const steeredBusy = steeredStatus === 'loading_model' || steeredStatus === 'generating';
+  const baselineBusy = baselineStatus === 'loading_model' || baselineStatus === 'generating';
+  const isBusy = steeredBusy || (compareMode && baselineBusy);
+  const steeredEmpty = steeredMessages.length === 0;
 
   const handleVote = useCallback((messageId: string, isUpvoted: boolean) => {
     setVotes((prev) => {
@@ -112,14 +162,47 @@ export function ChatPanel({
     });
   }, []);
 
-  const handleRegenerate = useCallback((assistantMessageIndex: number) => {
-    for (let i = assistantMessageIndex - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        regenerate(assistantMessageIndex);
-        return;
+  // Fan the shared input out to both threads. Input is gated on !isBusy so both
+  // start from idle; useSteeringChat.send also no-ops unless status === 'idle'.
+  const handleSend = useCallback(
+    (content: string) => {
+      steeredSend(content);
+      if (compareMode) baselineSend(content);
+    },
+    [steeredSend, baselineSend, compareMode]
+  );
+
+  const handleStop = useCallback(() => {
+    steeredStop();
+    if (compareMode) baselineStop();
+  }, [steeredStop, baselineStop, compareMode]);
+
+  // Clear both threads and start a fresh session.
+  const handleNewChat = useCallback(() => {
+    steeredReset();
+    baselineReset();
+    onNewChat?.();
+  }, [steeredReset, baselineReset, onNewChat]);
+
+  // Toggling compare mode resets both threads for a clean side-by-side comparison.
+  const handleToggleCompare = useCallback(() => {
+    steeredReset();
+    baselineReset();
+    onNewChat?.();
+    setCompareMode((v) => !v);
+  }, [steeredReset, baselineReset, onNewChat]);
+
+  const handleRegenerate = useCallback(
+    (assistantMessageIndex: number) => {
+      for (let i = assistantMessageIndex - 1; i >= 0; i--) {
+        if (steeredMessages[i].role === 'user') {
+          steeredRegenerate(assistantMessageIndex);
+          return;
+        }
       }
-    }
-  }, [messages, regenerate]);
+    },
+    [steeredMessages, steeredRegenerate]
+  );
 
   // Download the active session as JSON (fetched fresh so per-message
   // steering snapshots are included even for messages saved this turn).
@@ -158,7 +241,7 @@ export function ChatPanel({
     }
   }, [activeSessionId, fetchSessionForDownload]);
 
-  const canDownload = !!activeSessionId && messages.length > 0;
+  const canDownload = !!activeSessionId && steeredMessages.length > 0;
 
   return (
     <div className="flex h-full">
@@ -178,10 +261,7 @@ export function ChatPanel({
               activeSessionId={activeSessionId}
               onSelectSession={(id) => onSelectSession?.(id)}
               onDeleteSession={(id) => onDeleteSession?.(id)}
-              onNewChat={() => {
-                reset();
-                onNewChat?.();
-              }}
+              onNewChat={handleNewChat}
             />
           </motion.div>
         )}
@@ -193,6 +273,15 @@ export function ChatPanel({
         <div className="flex items-center justify-between px-4 pt-4 pb-0">
           <h2 className="text-sm font-semibold">Steered Chat</h2>
           <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant={compareMode ? 'secondary' : 'ghost'}
+              onClick={handleToggleCompare}
+              className="size-7 text-muted-foreground"
+            >
+              <Columns2 className="size-3.5" />
+              <span className="sr-only">Toggle compare mode</span>
+            </Button>
             <Button
               size="icon"
               variant={showHistory ? 'secondary' : 'ghost'}
@@ -215,10 +304,7 @@ export function ChatPanel({
             <Button
               size="icon"
               variant="ghost"
-              onClick={() => {
-                reset();
-                onNewChat?.();
-              }}
+              onClick={handleNewChat}
               className="size-7 text-muted-foreground"
             >
               <RotateCcw className="size-3.5" />
@@ -273,95 +359,80 @@ export function ChatPanel({
               {temperature.toFixed(2)}
             </span>
           </div>
+          {/* One shared seed for both threads. It is re-applied verbatim each
+              turn (not advanced), so compare-mode differences stay attributable
+              to steering rather than sampling noise; dice for variety. */}
+          <div className="flex items-center gap-3">
+            <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Seed</span>
+            <Input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(Number(e.target.value) || 0)}
+              className="h-7 flex-1 font-mono text-[11px]"
+              aria-label="Generation seed"
+            />
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setSeed(Math.floor(Math.random() * 2 ** 31))}
+              className="size-7 shrink-0 text-muted-foreground"
+            >
+              <Dices className="size-3.5" />
+              <span className="sr-only">Randomize seed</span>
+            </Button>
+          </div>
         </div>
 
-        {/* Messages area */}
-        <div className="relative flex-1 overflow-hidden">
-          {isEmpty && (
-            <ChatGreeting featureCount={steeringConfig.features.length} />
-          )}
-
-          <div
-            ref={containerRef}
-            className="absolute inset-0 overflow-y-auto"
-          >
-            <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
-              {messages.map((msg, i) => {
-                // Skip the trailing empty assistant placeholder while busy —
-                // ThinkingIndicator already covers that slot, so rendering both
-                // produces two avatars. Restricted to the last message so earlier
-                // empty assistant turns (aborted, regen'd) still render.
-                if (
-                  isBusy &&
-                  i === messages.length - 1 &&
-                  msg.role === 'assistant' &&
-                  msg.content === '' &&
-                  (!msg.parts || msg.parts.length === 0)
-                ) {
-                  return null;
-                }
-                return (
-                  <ChatMessage
-                    key={msg.id}
-                    message={msg}
-                    messageIndex={i}
-                    isLast={i === messages.length - 1}
-                    isGenerating={isBusy}
-                    vote={votes.get(msg.id)}
-                    onVote={handleVote}
-                    onEdit={msg.role === 'user' ? editAndResend : undefined}
-                    onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(i) : undefined}
-                  />
-                );
-              })}
-
-              {isBusy && messages[messages.length - 1]?.content === '' && (
-                <ThinkingIndicator
-                  phase={isLoadingModel ? 'loading_model' : 'thinking'}
-                  features={steeringConfig.features}
-                />
-              )}
-
-              {error && (
-                <motion.div
-                  className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  {error}
-                </motion.div>
-              )}
-
-              <div ref={endRef} />
+        {/* Messages area — single thread, or steered vs. baseline side-by-side */}
+        {compareMode ? (
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col border-r border-border/30">
+              <div className="border-b border-border/30 px-4 py-1.5 text-center text-[11px] font-medium text-muted-foreground">
+                Steered
+              </div>
+              <ChatThread
+                messages={steeredMessages}
+                status={steeredStatus}
+                error={steeredError}
+                steeringFeatures={steeringConfig.features}
+                votes={votes}
+                onVote={handleVote}
+              />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="border-b border-border/30 px-4 py-1.5 text-center text-[11px] font-medium text-muted-foreground">
+                Baseline
+              </div>
+              <ChatThread
+                messages={baselineMessages}
+                status={baselineStatus}
+                error={baselineError}
+                steeringFeatures={EMPTY_CONFIG.features}
+                votes={votes}
+                onVote={handleVote}
+              />
             </div>
           </div>
-
-          {/* Scroll-to-bottom button */}
-          <button
-            onClick={() => scrollToBottom()}
-            className={cn(
-              'absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center justify-center',
-              'size-7 rounded-full border border-border/50 bg-card/90',
-              'shadow-[var(--shadow-float)] backdrop-blur-lg',
-              'transition-all duration-200',
-              isAtBottom
-                ? 'pointer-events-none scale-90 opacity-0'
-                : 'pointer-events-auto scale-100 opacity-100',
-            )}
-            aria-label="Scroll to bottom"
-          >
-            <ChevronDown className="size-3 text-muted-foreground" />
-          </button>
-        </div>
+        ) : (
+          <ChatThread
+            messages={steeredMessages}
+            status={steeredStatus}
+            error={steeredError}
+            steeringFeatures={steeringConfig.features}
+            votes={votes}
+            onVote={handleVote}
+            onEdit={steeredEdit}
+            onRegenerate={handleRegenerate}
+          />
+        )}
 
         {/* Input area */}
         <ChatInput
-          onSend={send}
-          onStop={stop}
+          onSend={handleSend}
+          onStop={handleStop}
           isGenerating={isBusy}
-          showSuggestions={isEmpty}
-          onSuggest={send}
+          showSuggestions={steeredEmpty}
+          onSuggest={handleSend}
           onSelectModel={onSelectModel}
         />
       </div>

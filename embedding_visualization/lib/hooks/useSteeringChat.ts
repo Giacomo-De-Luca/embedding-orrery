@@ -76,11 +76,42 @@ export function buildSteeringInputs(config: SteeringConfig) {
   }));
 }
 
+interface StreamTurn {
+  role: string;
+  content: string;
+}
+
+/** Assemble the GraphQL `GenerateStreamInput` payload.
+ *
+ * `seed` is coalesced to `null` (omit → non-deterministic sampling). Passing a
+ * concrete seed makes generation reproducible, so a steered and a baseline call
+ * sharing one seed differ only by steering, not by sampling noise.
+ *
+ * Exported for unit testing. */
+export function buildStreamInput(
+  turns: StreamTurn[],
+  steering: ReturnType<typeof buildSteeringInputs>,
+  maxTokens: number,
+  temperature: number,
+  seed?: number,
+) {
+  return {
+    turns,
+    steering,
+    outputLen: maxTokens,
+    temperature,
+    topP: DEFAULT_TOP_P,
+    topK: DEFAULT_TOP_K,
+    seed: seed ?? null,
+  };
+}
+
 
 export function useSteeringChat(
   config: SteeringConfig,
   maxTokens: number = DEFAULT_OUTPUT_LEN,
   temperature: number = 0.7,
+  seed?: number,
   options?: SteeringChatOptions,
 ): UseSteeringChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -212,14 +243,7 @@ export function useSteeringChat(
         const observable = apolloClient.subscribe<TokenChunkData>({
           query: GENERATE_STREAM,
           variables: {
-            input: {
-              turns,
-              steering,
-              outputLen: maxTokens,
-              temperature,
-              topP: DEFAULT_TOP_P,
-              topK: DEFAULT_TOP_K,
-            },
+            input: buildStreamInput(turns, steering, maxTokens, temperature, seed),
           },
         });
 
@@ -275,7 +299,7 @@ export function useSteeringChat(
 
       startStreaming();
     },
-    [config, status],
+    [config, status, maxTokens, temperature, seed],
   );
 
   const regenerate = useCallback(

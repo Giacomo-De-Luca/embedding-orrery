@@ -205,6 +205,10 @@ function FeaturesPageContent() {
 
   const handleNewChat = useCallback(() => {
     setActiveSessionId(null);
+    // Empty array (NOT null) is the new-chat/clear signal. ChatPanel's
+    // loadedMessages effect distinguishes it from a real session load by length
+    // (length 0 → clear only; length > 0 → load + drop compare mode). Compare
+    // mode's toggle relies on this — don't change [] to a sentinel/null here.
     setLoadedMessages([]);
   }, [setActiveSessionId]);
 

@@ -912,6 +912,7 @@ class InterpretService:
         top_k: int = 64,
         cancel_event: threading.Event | None = None,
         steering_specs: list[SteeringSpec] | None = None,
+        seed: int | None = None,
     ) -> None:
         """Run streaming chat generation, emitting tokens via token_emitter.
 
@@ -922,6 +923,12 @@ class InterpretService:
         Optional steering_specs activate SAE-based additive steering
         on one or more features during generation (same mechanism as
         ``generate_steered``).
+
+        When ``seed`` is set, the global PyTorch RNG is seeded immediately
+        before sampling so output is reproducible. The GPU lock serialises
+        streams, so a steered and a baseline call sharing one seed each get
+        an identical fresh RNG state — making their differences attributable
+        to steering rather than sampling noise.
         """
         wrapper = self._require_model()
 
@@ -966,6 +973,11 @@ class InterpretService:
                             event.text_delta,
                             event.is_done,
                         )
+
+            # Seed immediately before sampling so both code paths (pt/it) are
+            # covered and nothing consumes RNG between here and torch.multinomial.
+            if seed is not None:
+                torch.manual_seed(seed)
 
             if manager is not None:
                 with manager.session(wrapper.model.model.layers):

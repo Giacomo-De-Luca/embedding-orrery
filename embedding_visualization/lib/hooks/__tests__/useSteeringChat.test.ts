@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { configKey, buildSteeringInputs } from '../useSteeringChat';
+import { configKey, buildSteeringInputs, buildStreamInput } from '../useSteeringChat';
 import type { SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
 const SAE_PRESET: SteeringFeature = {
@@ -44,6 +44,12 @@ describe('buildSteeringInputs', () => {
     expect(buildSteeringInputs(config)).toBeNull();
   });
 
+  it('returns null for the empty baseline config (unsteered generation)', () => {
+    // The compare-mode baseline thread runs on { features: [] }; the backend
+    // treats null steering as an unsteered generation.
+    expect(buildSteeringInputs({ features: [] })).toBeNull();
+  });
+
   it('includes only non-zero entries when one preset is activated', () => {
     const config: SteeringConfig = {
       features: [SAE_PRESET, { ...REFUSAL_PRESET, strength: -1 }, POETRY_PRESET],
@@ -70,6 +76,31 @@ describe('buildSteeringInputs', () => {
     const inputs = buildSteeringInputs(config);
     expect(inputs![0].directionName).toBeNull();
     expect(inputs![0].featureIndex).toBe(197);
+  });
+});
+
+describe('buildStreamInput', () => {
+  const TURNS = [{ role: 'user', content: 'hi' }];
+
+  it('threads a concrete seed into the payload for reproducible sampling', () => {
+    const input = buildStreamInput(TURNS, null, 256, 0.7, 42);
+    expect(input.seed).toBe(42);
+    expect(input.outputLen).toBe(256);
+    expect(input.temperature).toBe(0.7);
+    expect(input.steering).toBeNull();
+  });
+
+  it('coalesces an omitted seed to null (non-deterministic)', () => {
+    expect(buildStreamInput(TURNS, null, 256, 0.7).seed).toBeNull();
+  });
+
+  it('a steered and a baseline call with the same seed share the seed', () => {
+    const steering = buildSteeringInputs({ features: [{ ...SAE_PRESET, strength: 800 }] });
+    const steered = buildStreamInput(TURNS, steering, 128, 0.8, 7);
+    const baseline = buildStreamInput(TURNS, null, 128, 0.8, 7);
+    expect(steered.seed).toBe(baseline.seed);
+    expect(steered.steering).not.toBeNull();
+    expect(baseline.steering).toBeNull();
   });
 });
 
