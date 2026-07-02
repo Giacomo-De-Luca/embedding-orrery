@@ -129,7 +129,11 @@ class _RawActivationCapture:
         self.prefill_only = prefill_only
         self.store = ActivationStore()
         self._handles: list[RemovableHandle] = []
-        self._captured: set[tuple[int, HookType]] = set()
+        # The store key widened to ``(layer, hook_type, sae_id)`` when SAEs
+        # became per-site-co-attachable. The raw capture path never has an
+        # SAE — leave the slot empty so ``store.prefill(layer, hook_type)``
+        # (which defaults ``sae_id=""``) reads the matching record back.
+        self._captured: set[tuple[int, HookType, str]] = set()
 
     @staticmethod
     def _resolve_target(layer: nn.Module, hook_type: HookType) -> nn.Module:
@@ -150,12 +154,12 @@ class _RawActivationCapture:
             return layer.post_attention_layernorm
         raise ValueError(f"unsupported hook_type: {hook_type}")
 
-    def _record(self, key: tuple[int, HookType], tensor: torch.Tensor) -> None:
+    def _record(self, key: tuple[int, HookType, str], tensor: torch.Tensor) -> None:
         with torch.no_grad():
             self.store.record(key, tensor.detach().clone())
         self._captured.add(key)
 
-    def _make_forward_hook(self, key: tuple[int, HookType]):
+    def _make_forward_hook(self, key: tuple[int, HookType, str]):
         def hook_fn(module: nn.Module, inputs: tuple, output):
             if self.prefill_only and key in self._captured:
                 return None
@@ -165,7 +169,7 @@ class _RawActivationCapture:
 
         return hook_fn
 
-    def _make_pre_forward_hook(self, key: tuple[int, HookType]):
+    def _make_pre_forward_hook(self, key: tuple[int, HookType, str]):
         def hook_fn(module: nn.Module, args: tuple):
             if self.prefill_only and key in self._captured:
                 return None
@@ -183,7 +187,7 @@ class _RawActivationCapture:
                 )
             for hook_type in self.hook_types:
                 target = self._resolve_target(decoder_layers[layer_idx], hook_type)
-                key = (layer_idx, hook_type)
+                key = (layer_idx, hook_type, "")
                 if hook_type in self._PRE_HOOK_TYPES:
                     handle = target.register_forward_pre_hook(self._make_pre_forward_hook(key))
                 else:
@@ -327,6 +331,21 @@ class Qwen3Inference:
         """Tokenize a string. Defaults to no special tokens (for offset use)."""
         return self._tokenizer.encode(text, add_special_tokens=add_special_tokens)
 
+    @property
+    def prepends_bos(self) -> bool:
+        """Whether ``generate_from_template`` sequences start with a BOS token.
+
+        Probed from the tokenizer rather than assumed: Qwen3/Qwen3.5
+        tokenizers define no BOS (``bos_token_id`` is None), so position 0
+        of a prefill is real content there — callers that mask the first
+        position (e.g. BOS-excluding aggregation) must check this first.
+        """
+        bos_id = self._tokenizer.bos_token_id
+        if bos_id is None:
+            return False
+        ids = self._tokenizer.encode("probe", add_special_tokens=True)
+        return len(ids) > 0 and ids[0] == bos_id
+
     def format_prompt(self, prompt: str | list[dict], enable_thinking: bool = True) -> str:
         """Apply Qwen3's chat template. Accepts a raw user string or a messages list.
 
@@ -366,6 +385,52 @@ class Qwen3Inference:
         messages = [{"role": role, "content": content} for role, content in turns]
         formatted = self.format_prompt(messages)
         return self._generate(formatted, output_len, temperature, top_p, top_k)
+
+    def generate_from_template(
+        self,
+        prompt: str,
+        output_len: int = 1,
+        add_bos: bool = True,
+        temperature: float | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+    ) -> str:
+        """Run the raw prompt through the model without chat-template wrapping.
+
+        Mirrors ``GemmaPytorchInference.generate_from_template`` so the
+        autointerpreter collector can call the same method on either
+        wrapper. Used when ``use_chat_template: false`` is set on the
+        base-model config (e.g. SAE feature-activation collection where
+        we want the raw ``"{word}: {definition}."`` template to reach the
+        model unwrapped).
+
+        ``add_bos`` controls the tokenizer's ``add_special_tokens`` flag.
+        Qwen3 tokenizers may or may not prepend a BOS depending on the
+        variant; explicit control keeps the collector's behaviour
+        identical to Gemma's collect path.
+        """
+        input_ids = self._tokenizer(
+            prompt,
+            return_tensors="pt",
+            add_special_tokens=add_bos,
+        ).input_ids.to(self.device)
+        do_sample = temperature is not None
+        gen_kwargs: dict = {
+            "max_new_tokens": output_len,
+            "do_sample": do_sample,
+            "pad_token_id": self._tokenizer.eos_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = temperature
+            gen_kwargs["top_p"] = top_p
+            gen_kwargs["top_k"] = top_k
+
+        with torch.no_grad():
+            output_ids = self.model.generate(input_ids=input_ids, **gen_kwargs)
+
+        prompt_len = input_ids.shape[1]
+        generated = output_ids[0, prompt_len:]
+        return self._tokenizer.decode(generated, skip_special_tokens=True)
 
     def _generate(
         self,

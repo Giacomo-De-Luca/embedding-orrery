@@ -112,13 +112,12 @@ class TopKFeatureExtractor:
         return rows, values
 
     def _row_meta(self, row_idx: int) -> dict:
+        # Only what the agent needs to interpret a sample. The prompt was
+        # "{word}: {definition}.", so word + definition fully convey it —
+        # echoing the literal ``prompt`` or the opaque ``synset_id`` would just
+        # multiply tokens. The full record stays in index.parquet (row_idx).
         row = self.index.iloc[row_idx]
-        return {
-            "word": row["word"],
-            "synset_id": row["synset_id"],
-            "definition": row["definition"],
-            "prompt": row["prompt"],
-        }
+        return {"word": row["word"], "definition": row["definition"]}
 
     def _topk_samples(
         self, rows: np.ndarray, values: np.ndarray, k: int,
@@ -145,10 +144,25 @@ class TopKFeatureExtractor:
         values: np.ndarray,
         feature_idx: int,
         n_rows_total: int,
+        exclude_rows: set[int] | frozenset = frozenset(),
     ) -> tuple[list[dict], list[float], bool]:
-        """Return (samples, true_activations, padded_with_zeros)."""
+        """Return (samples, true_activations, padded_with_zeros).
+
+        The eval set is **held out** from the interpreter: ``exclude_rows`` (the
+        top-k rows the label was written from) are dropped from the pool before
+        sampling, so the simulation score measures generalisation rather than
+        re-recognition of the label's own source words.
+        """
         n = self.cfg.eval_sample_count
         rng = np.random.default_rng(self.cfg.eval_shuffle_seed + feature_idx)
+
+        if exclude_rows:
+            excl = np.fromiter(exclude_rows, dtype=np.int64)
+            keep = ~np.isin(rows, excl)
+            rows = rows[keep]
+            values = values[keep]
+        else:
+            excl = np.empty(0, dtype=np.int64)
 
         if len(values) >= n:
             order = np.argsort(values)          # ascending
@@ -162,9 +176,10 @@ class TopKFeatureExtractor:
             order = np.argsort(values)
             chosen_rows = list(rows[order])
             chosen_vals = list(values[order])
+            # Exclude both the active rows and the held-out top-k from the zeros.
             zero_pool = np.setdiff1d(
                 np.arange(n_rows_total, dtype=np.int64),
-                rows,
+                np.concatenate([rows, excl]),
                 assume_unique=False,
             )
             need = n - len(chosen_rows)
@@ -209,8 +224,10 @@ class TopKFeatureExtractor:
             mean_nonzero = float(row_stats["mean_nonzero_activation"])
 
             top_samples = self._topk_samples(rows, values, self.cfg.top_k)
+            # Hold the label's source samples out of the eval set (non-circular).
+            exclude = {s["row_idx"] for s in top_samples}
             lin_samples, lin_truth, padded = self._linspace_samples(
-                rows, values, feature_idx, n_rows_total,
+                rows, values, feature_idx, n_rows_total, exclude,
             )
 
             base = {

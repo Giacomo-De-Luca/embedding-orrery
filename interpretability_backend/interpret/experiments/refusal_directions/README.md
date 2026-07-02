@@ -4,12 +4,19 @@ Replicates Arditi et al., *Refusal in Language Models Is Mediated by a Single Di
 
 The reference upstream lives at [`references/refusal_direction/`](../../../references/refusal_direction/) — we adapt only its two scientific scripts (`generate_directions.py`, `select_direction.py`) and reuse the dataset (relocated to [`resources/refusal_direction/`](../../../resources/refusal_direction/)).
 
+**Getting the data:** the splits + processed eval sets are gitignored (harmful prompts are not committed). Fetch them at a pinned upstream commit with `download_dataset.py`:
+
+```bash
+uv run python -m interpret.experiments.refusal_directions.download_dataset
+```
+
 ## Folder structure
 
 | File | Purpose |
 |---|---|
 | `config.py` | `RefusalConfig` dataclass — paths, sample counts, intermediates, refusal token IDs. |
 | `data.py` | Load `harmful_*` / `harmless_*` splits and processed eval sets from `resources/refusal_direction/`. |
+| `download_dataset.py` | Fetch the 14 split/processed JSONs from upstream at a pinned commit into the gitignored `resources/refusal_direction/` (config-driven, idempotent). |
 | `tokens.py` | Compute end-of-instruction (EOI) token IDs from the chat template; verify refusal token IDs against the SentencePiece tokenizer. |
 | `generate_directions.py` | Mean-of-difference candidate directions over `(intermediate, position, layer)`. |
 | `select_direction.py` | Three-metric sweep (bypass / induce / KL on harmless) + filter + best-direction selection. Produces matplotlib plots. |

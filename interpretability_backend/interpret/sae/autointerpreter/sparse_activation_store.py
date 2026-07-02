@@ -1,33 +1,35 @@
-"""Incremental sparse CSR storage for per-sample SAE feature activations.
+"""Sparse CSR shard storage for per-sample SAE feature activations.
 
-Designed for Stage 1 of the autointerpreter pipeline: each WordNet sample
-produces one dense activation vector ``(d_sae,)`` of which only ~100 entries
-are nonzero (JumpReLU SAEs have L0 ≈ 50-150). Storing all samples densely
-would cost tens of GB; the CSR format keeps it at a few hundred MB.
+Each WordNet sample produces one dense activation vector ``(d_sae,)`` of which
+only ~100 entries are nonzero (JumpReLU SAEs have L0 ≈ 50-150). Storing all
+samples densely would cost tens of GB; the CSR format keeps it at a few
+hundred MB.
 
-The store buffers rows in memory and flushes to disk as a single ``.npz``
-+ a parallel ``index.parquet`` on demand. It can also reload an existing
-run directory so Stage 2 consumers work directly on the sparse matrix.
+The buffered-append / append-only-shard flush / shard discovery /
+``index.parquet`` machinery lives in the shared :class:`ActivationStore` base;
+this class supplies only the CSR-specific buffering and serialization hooks.
+A legacy single-file ``activations.npz`` (from older load-stack-save runs) is
+recognised as an immutable base shard. See :class:`DenseActivationStore` for
+the embedding-dimension counterpart.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from scipy import sparse
 
+from interpret.sae.autointerpreter.activation_store import ActivationStore
 
-class SparseActivationStore:
+
+class SparseActivationStore(ActivationStore):
     """Buffered CSR builder with a parallel metadata index (parquet).
 
-    Rows are samples, columns are SAE features. Writes ``activations.npz``
-    (compressed CSR) and ``index.parquet`` under ``run_dir`` on ``flush()``.
+    Rows are samples, columns are SAE features. Each ``flush()`` writes one
+    new ``activations_batch_NNNNNN.npz`` shard under ``run_dir`` and appends to
+    ``index.parquet``.
 
     Usage::
 
@@ -38,118 +40,27 @@ class SparseActivationStore:
     """
 
     ACTIVATIONS_FILE = "activations.npz"
-    INDEX_FILE = "index.parquet"
+    SHARD_EXT = "npz"
 
-    def __init__(
-        self,
-        run_dir: Path,
-        n_features: int,
-        dtype: np.dtype = np.float16,
-    ) -> None:
-        self.run_dir = Path(run_dir)
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.n_features = int(n_features)
-        self.dtype = np.dtype(dtype)
+    # ── Buffer hooks ─────────────────────────────────────────────────────
 
-        # CSR buffers for pending (unflushed) rows.
+    def _init_buffers(self) -> None:
         self._data: list[np.ndarray] = []
         self._indices: list[np.ndarray] = []
         self._indptr: list[int] = [0]
-        self._pending_meta: list[dict[str, Any]] = []
-        self._rows_pending = 0
-        self._rows_flushed = self._count_existing_rows()
 
-    # ── Properties ───────────────────────────────────────────────────────
+    def _reset_buffers(self) -> None:
+        self._data = []
+        self._indices = []
+        self._indptr = [0]
 
-    @property
-    def n_rows(self) -> int:
-        """Total rows: already on disk plus buffered."""
-        return self._rows_flushed + self._rows_pending
-
-    @property
-    def activations_path(self) -> Path:
-        return self.run_dir / self.ACTIVATIONS_FILE
-
-    @property
-    def index_path(self) -> Path:
-        return self.run_dir / self.INDEX_FILE
-
-    # ── Public API ───────────────────────────────────────────────────────
-
-    def append(self, vector: np.ndarray, meta: dict[str, Any]) -> int:
-        """Buffer one sample. Returns the assigned row index."""
-        if vector.shape != (self.n_features,):
-            raise ValueError(
-                f"expected shape ({self.n_features},), got {vector.shape}"
-            )
+    def _buffer_row(self, vector: np.ndarray) -> None:
         nz = np.flatnonzero(vector)
         self._data.append(vector[nz].astype(self.dtype, copy=False))
         self._indices.append(nz.astype(np.int32, copy=False))
         self._indptr.append(self._indptr[-1] + len(nz))
-        row_idx = self.n_rows
-        enriched = dict(meta)
-        enriched.setdefault("row_idx", row_idx)
-        self._pending_meta.append(enriched)
-        self._rows_pending += 1
-        return row_idx
 
-    def flush(self) -> None:
-        """Persist buffered rows to disk. Safe to call repeatedly."""
-        if self._rows_pending == 0:
-            return
-
-        new_matrix = self._build_pending_csr()
-        if self._rows_flushed > 0 and self.activations_path.exists():
-            old = sparse.load_npz(self.activations_path)
-            combined = sparse.vstack([old, new_matrix], format="csr")
-        else:
-            combined = new_matrix
-        # Atomic write: save to a sibling .tmp then rename. A SIGKILL during
-        # the multi-MB save_npz used to truncate activations.npz and lose
-        # every prior flush (the file is rewritten in full each time).
-        # NOTE: scipy.sparse.save_npz auto-appends ".npz" if the path
-        # doesn't already end in it — so the temp must end in .npz too,
-        # otherwise we'd write to "...tmp.npz" and then try to rename a
-        # non-existent "...tmp".
-        tmp_npz = self.activations_path.with_name(
-            self.activations_path.stem + ".tmp.npz",
-        )
-        sparse.save_npz(tmp_npz, combined, compressed=True)
-        os.replace(tmp_npz, self.activations_path)
-
-        self._append_index(self._pending_meta)
-
-        self._rows_flushed += self._rows_pending
-        self._rows_pending = 0
-        self._data.clear()
-        self._indices.clear()
-        self._indptr = [0]
-        self._pending_meta.clear()
-
-    def existing_row_keys(self) -> set[tuple[str, str]]:
-        """Return ``(word, synset_id)`` pairs already stored (for resume)."""
-        if not self.index_path.exists():
-            return set()
-        tbl = pq.read_table(
-            self.index_path, columns=["word", "synset_id"],
-        ).to_pandas()
-        return set(zip(tbl["word"].tolist(), tbl["synset_id"].tolist()))
-
-    # ── Loaders (used by Stage 2 onward) ────────────────────────────────
-
-    @classmethod
-    def load_matrix(cls, run_dir: Path) -> sparse.csr_matrix:
-        path = Path(run_dir) / cls.ACTIVATIONS_FILE
-        return sparse.load_npz(path)
-
-    @classmethod
-    def load_index(cls, run_dir: Path) -> pd.DataFrame:
-        path = Path(run_dir) / cls.INDEX_FILE
-        return pq.read_table(path).to_pandas()
-
-    # ── Internals ────────────────────────────────────────────────────────
-
-    def _build_pending_csr(self) -> sparse.csr_matrix:
+    def _build_pending(self) -> sparse.csr_matrix:
         data = (
             np.concatenate(self._data) if self._data else np.empty(0, self.dtype)
         )
@@ -164,24 +75,104 @@ class SparseActivationStore:
             shape=(self._rows_pending, self.n_features),
         )
 
-    def _append_index(self, rows: list[dict[str, Any]]) -> None:
-        df_new = pd.DataFrame(rows)
-        if self.index_path.exists():
-            df_old = pq.read_table(self.index_path).to_pandas()
-            df = pd.concat([df_old, df_new], ignore_index=True)
-        else:
-            df = df_new
-        # Atomic write, same reasoning as flush(): a kill mid-write
-        # would otherwise leave an empty/partial parquet that desyncs
-        # against activations.npz.
-        tmp_index = self.index_path.with_name(self.index_path.name + ".tmp")
-        pq.write_table(
-            pa.Table.from_pandas(df, preserve_index=False), tmp_index,
-        )
-        os.replace(tmp_index, self.index_path)
+    # ── Shard serialization ──────────────────────────────────────────────
 
-    def _count_existing_rows(self) -> int:
-        if not self.activations_path.exists():
-            return 0
-        mat = sparse.load_npz(self.activations_path)
-        return mat.shape[0]
+    @classmethod
+    def _save_shard(cls, payload: sparse.csr_matrix, path: Path) -> None:
+        # Atomic write: save to a sibling .tmp.npz then rename. A SIGKILL
+        # mid-save leaves the shard absent rather than partially written.
+        # NOTE: scipy.sparse.save_npz auto-appends ".npz" if the path doesn't
+        # already end in it — so the temp must end in .npz too, otherwise we'd
+        # write to "...tmp.npz" and then try to rename a non-existent "...tmp".
+        tmp_npz = path.with_name(path.stem + ".tmp.npz")
+        sparse.save_npz(tmp_npz, payload, compressed=True)
+        os.replace(tmp_npz, path)
+
+    @classmethod
+    def _load_shard(cls, path: Path) -> sparse.csr_matrix:
+        return sparse.load_npz(path)
+
+    @classmethod
+    def _concat(cls, payloads: list[sparse.csr_matrix]) -> sparse.csr_matrix:
+        return sparse.vstack(payloads, format="csr")
+
+    @classmethod
+    def _shard_n_rows(cls, path: Path) -> int:
+        # Peek the shape array from the npz without decoding data/indices.
+        with np.load(path) as npz:
+            return int(npz["shape"][0])
+
+    # ── Streaming whole-matrix load ──────────────────────────────────────
+
+    @classmethod
+    def load_matrix(cls, run_dir: Path) -> sparse.csr_matrix:
+        """Concatenate every shard into one CSR via a streaming two-pass load.
+
+        Overrides the base class's list+``vstack`` path, which holds every
+        shard in memory simultaneously and then doubles peak usage by
+        re-concatenating their arrays — on a 65k-feature store with 425
+        shards this OOMs the process (~16 GB peak). The streaming load
+        below holds at most one shard plus the pre-allocated output at
+        any moment (~50 MB + ~150 MB → ~200 MB peak for the 65k case).
+
+        Pass 1 peeks each shard's ``shape`` array and the length of its
+        ``indices`` array (no data decoded) to learn ``total_rows`` and
+        ``total_nnz``. Pass 2 pre-allocates the output ``data``,
+        ``indices``, ``indptr`` arrays and copies one shard at a time into
+        the right slice, dropping each shard before loading the next.
+        """
+        run_dir = Path(run_dir)
+        paths = cls._discover_shard_paths(run_dir)
+        if not paths:
+            raise FileNotFoundError(f"No activation shards found under {run_dir}")
+        if len(paths) == 1:
+            return cls._load_shard(paths[0])
+
+        # Pass 1 — peek dimensions; never decode data.
+        n_cols: int | None = None
+        data_dtype: np.dtype | None = None
+        shard_info: list[tuple[int, int]] = []  # (n_rows, nnz)
+        total_rows = 0
+        total_nnz = 0
+        for p in paths:
+            with np.load(p) as npz:
+                shape = npz["shape"]
+                nrows, ncols = int(shape[0]), int(shape[1])
+                nnz = int(npz["indices"].shape[0])
+                if data_dtype is None:
+                    data_dtype = npz["data"].dtype
+            if n_cols is None:
+                n_cols = ncols
+            elif ncols != n_cols:
+                raise ValueError(
+                    f"shard column-count mismatch at {p}: {ncols} (expected {n_cols})"
+                )
+            shard_info.append((nrows, nnz))
+            total_rows += nrows
+            total_nnz += nnz
+
+        # Pass 2 — pre-allocate output, fill from each shard, drop shard.
+        out_data = np.empty(total_nnz, dtype=data_dtype)
+        out_indices = np.empty(total_nnz, dtype=np.int32)
+        out_indptr = np.empty(total_rows + 1, dtype=np.int64)
+        out_indptr[0] = 0
+        row_offset = 0
+        nnz_offset = 0
+        for p, (nr, nz) in zip(paths, shard_info):
+            m = sparse.load_npz(p)
+            if nz:
+                out_data[nnz_offset:nnz_offset + nz] = m.data
+                out_indices[nnz_offset:nnz_offset + nz] = m.indices
+            # m.indptr is length nr+1 and starts at 0; shift and skip leading 0
+            # so subsequent shards' indptr continues from this shard's last nnz.
+            out_indptr[row_offset + 1:row_offset + 1 + nr] = (
+                m.indptr[1:].astype(np.int64, copy=False) + nnz_offset
+            )
+            row_offset += nr
+            nnz_offset += nz
+            del m  # drop before loading the next shard
+
+        return sparse.csr_matrix(
+            (out_data, out_indices, out_indptr),
+            shape=(total_rows, n_cols),
+        )

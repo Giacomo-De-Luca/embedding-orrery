@@ -110,6 +110,15 @@ class GemmaScopeSAEConfig:
     def d_sae(self) -> int:
         return WIDTH_TO_D_SAE[self.width]
 
+    def identity(self) -> str:
+        """Stable per-(family, width, l0) slug.
+
+        Used by HookManager / ActivationStore as the third element of
+        ``(layer, hook_type, sae_id)`` keys so two SAEs at the same
+        ``(layer, hook_type)`` site can be disambiguated.
+        """
+        return f"w{self.width}_l0_{self.l0_size}"
+
 
 # Backwards-compatible alias. Existing imports `from interpret.sae import
 # SAEConfig` continue to work and resolve to the Gemma-scope config —
@@ -143,6 +152,7 @@ class QwenScopeModelInfo:
 # first download (the loader's shape check is the safety net for ``d_in``).
 QWEN_SCOPE_MODELS: dict[str, QwenScopeModelInfo] = {
     "1.7B": QwenScopeModelInfo("Qwen3", "Base", 2048, ("32k",), (50, 100), 28),
+    "2B": QwenScopeModelInfo("Qwen3.5", "Base", 2048, ("32k",), (50, 100), 24),
     "8B": QwenScopeModelInfo("Qwen3", "Base", 4096, ("64k",), (50, 100), 36),
     "27B": QwenScopeModelInfo("Qwen3.5", None, 5120, ("80k",), (50, 100), 64),
 }
@@ -208,6 +218,18 @@ class QwenScopeSAEConfig:
         return QWEN_SCOPE_MODELS[self.model_size].variant
 
     @property
+    def neuronpedia_model_id(self) -> str:
+        """Stable model id for ``FeatureLabelStore`` keying.
+
+        Qwen-scope has no Neuronpedia listing; the name keeps the attribute
+        contract that ``FeatureLabelStore.params_from_config`` reads. E.g.
+        ``qwen3.5-2B-base``.
+        """
+        info = QWEN_SCOPE_MODELS[self.model_size]
+        base = f"{info.family.lower()}-{self.model_size}"
+        return f"{base}-{info.variant.lower()}" if info.variant else base
+
+    @property
     def repo_id(self) -> str:
         """HuggingFace repository ID for SAE weights."""
         info = QWEN_SCOPE_MODELS[self.model_size]
@@ -225,3 +247,7 @@ class QwenScopeSAEConfig:
     @property
     def d_sae(self) -> int:
         return WIDTH_TO_D_SAE[self.width]
+
+    def identity(self) -> str:
+        """Stable per-(width, k) slug (Qwen-scope uses TopK, not L0)."""
+        return f"w{self.width}_l0_{self.k}"

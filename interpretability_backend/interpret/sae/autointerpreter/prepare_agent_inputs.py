@@ -8,6 +8,17 @@
   them into the eval task's ``input_folder``. Also records the A/B split
   decision (zero-fraction hint on/off per feature) so the scorer can slice
   correlations by arm.
+
+Filename tagging (global queue dirs only):
+  Files written into the shared agent queue dirs are prefixed
+  ``{tag}__feature_NNNNNN.json`` so chained configs cannot collide on the
+  same feature index across different SAEs (e.g. feature 1567 may be in
+  both an L9 w16k draw and an L29 w16k draw — without tagging the second
+  config's label would be skipped because init_jobs sees the prior
+  config's output file with the same name). Per-store ``topk/``,
+  ``linspace/``, ``labels/``, and ``evaluator/`` dirs keep clean
+  ``feature_NNNNNN.json`` names — the tag never reaches the persistent
+  archive; the runner strips it when syncing global → per-store.
 """
 
 from __future__ import annotations
@@ -23,15 +34,57 @@ import pyarrow.parquet as pq
 
 from interpret.sae.autointerpreter.config import AgentStageConfig
 
+TAG_SEP = "__"
+
+
+def tagged_name(tag: str, base: str) -> str:
+    """Prepend a per-config tag to a feature filename.
+
+    ``tagged_name("L9_w16k", "feature_001567.json")`` → ``"L9_w16k__feature_001567.json"``.
+    Empty tag returns ``base`` unchanged (for back-compat with untagged paths).
+    """
+    if not tag:
+        return base
+    return f"{tag}{TAG_SEP}{base}"
+
+
+def strip_tag(name: str) -> tuple[str, str]:
+    """Split ``"tag__feature_NNNNNN.json"`` into ``(tag, "feature_NNNNNN.json")``.
+
+    Returns ``("", name)`` when no tag separator is present. The separator is
+    a double underscore so single-underscore-containing tags survive (e.g.
+    ``"L29_w65k_resid_post_max_prefill"``).
+    """
+    if TAG_SEP not in name:
+        return ("", name)
+    tag, _, base = name.partition(TAG_SEP)
+    return (tag, base)
+
+
+def _parse_feature_idx(filename: str) -> int:
+    """Parse the feature index from a (possibly tagged) filename."""
+    _, base = strip_tag(Path(filename).name)
+    stem = Path(base).stem
+    return int(stem.split("_")[-1])
+
 
 class AgentInputWriter:
     """Populates the AgentSystem input folders from a Stage 2 run directory."""
 
     AB_SPLIT_FILE = "ab_split.parquet"
 
-    def __init__(self, run_dir: Path, agents: AgentStageConfig) -> None:
+    def __init__(
+        self,
+        run_dir: Path,
+        agents: AgentStageConfig,
+        tag: str | None = None,
+    ) -> None:
         self.run_dir = Path(run_dir)
         self.agents = agents
+        # Per-config tag used to prefix global-queue filenames. Defaults to
+        # the run dir's basename, which is unique across chained configs
+        # (e.g. ``L29_w16k_resid_post_max_prefill`` vs ``L29_w16k_resid_post``).
+        self.tag = tag if tag is not None else self.run_dir.name
 
     # ── Stage 3 (label) ──────────────────────────────────────────────────
 
@@ -41,7 +94,7 @@ class AgentInputWriter:
         dst.mkdir(parents=True, exist_ok=True)
         n = 0
         for f in sorted(src.glob("feature_*.json")):
-            shutil.copy2(f, dst / f.name)
+            shutil.copy2(f, dst / tagged_name(self.tag, f.name))
             n += 1
         return n
 
@@ -59,7 +112,11 @@ class AgentInputWriter:
 
     def write_evaluator_inputs(self) -> dict:
         linspace_dir = self.run_dir / "linspace"
-        labels_dir = Path(self.agents.label_results_dir)
+        # Always read labels from the per-store ``labels/`` dir. The runner
+        # ensures it is populated (with clean, untagged filenames) by the
+        # label-stage sync; this keeps eval-input pairing free of cross-config
+        # collisions even when configs share global queue dirs.
+        labels_dir = self.run_dir / "labels"
         dst = Path(self.agents.eval_input_dir)
         dst.mkdir(parents=True, exist_ok=True)
 
@@ -100,7 +157,7 @@ class AgentInputWriter:
             if show_hint:
                 payload["zero_fraction"] = linspace.get("zero_fraction")
 
-            (dst / linspace_path.name).write_text(
+            (dst / tagged_name(self.tag, linspace_path.name)).write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
@@ -121,8 +178,3 @@ class AgentInputWriter:
         out = self.run_dir / self.AB_SPLIT_FILE
         df = pd.DataFrame(records)
         pq.write_table(pa.Table.from_pandas(df, preserve_index=False), out)
-
-
-def _parse_feature_idx(filename: str) -> int:
-    stem = Path(filename).stem
-    return int(stem.split("_")[-1])

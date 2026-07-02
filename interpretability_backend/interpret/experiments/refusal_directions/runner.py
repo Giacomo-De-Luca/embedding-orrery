@@ -7,16 +7,12 @@ from pathlib import Path
 
 import torch
 
+from interpret.experiments.directions_common import DirectionModel, build_direction_model
 from interpret.experiments.refusal_directions import data
 from interpret.experiments.refusal_directions.config import RefusalConfig
 from interpret.experiments.refusal_directions.evaluate import evaluate_dataset
 from interpret.experiments.refusal_directions.generate_directions import generate_directions
 from interpret.experiments.refusal_directions.select_direction import select_direction
-from interpret.experiments.refusal_directions.tokens import (
-    compute_eoi_token_ids,
-    verify_refusal_tokens,
-)
-from interpret.inference.gemma_pytorch import GemmaPytorchInference
 
 
 class RefusalRunner:
@@ -24,7 +20,8 @@ class RefusalRunner:
 
     Phases:
 
-    1. Load Gemma-3, compute EOI tokens, sample harmful/harmless splits.
+    1. Load the model (Gemma or Qwen via the adapter), resolve refusal + EOI
+       tokens, sample harmful/harmless splits.
     2. Mean-of-difference candidate directions over `cfg.intermediates`.
     3. Three-metric sweep + selection of the best direction.
     4. Greedy completions on the JailbreakBench eval set under
@@ -33,8 +30,11 @@ class RefusalRunner:
     Each phase is idempotent: artifacts on disk are reused on rerun.
     """
 
-    def __init__(self, config: RefusalConfig) -> None:
+    def __init__(
+        self, config: RefusalConfig, model: DirectionModel | None = None
+    ) -> None:
         self.config = config
+        self._model = model
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self._save_config()
 
@@ -46,13 +46,29 @@ class RefusalRunner:
     def run(self) -> Path:
         cfg = self.config
 
-        wrapper = GemmaPytorchInference(cfg.model_name)
-        verify_refusal_tokens(wrapper, ids=cfg.refusal_token_ids)
-        eoi_ids = compute_eoi_token_ids(wrapper)
+        model = self._model or build_direction_model(cfg.model_name)
+
+        # Backend-derived dims override the (Gemma-shaped) config defaults so the
+        # pipeline is correct on any model. Refusal ids are resolved against the
+        # live tokenizer (Gemma verifies; Qwen recomputes).
+        cfg.n_layers = model.n_layers
+        cfg.d_model = model.d_model
+        cfg.refusal_token_ids = tuple(model.refusal_token_ids(cfg.refusal_token_ids))
+        self._save_config()
+
+        eoi_ids = model.eoi_token_ids()
         n_eoi = len(eoi_ids)
 
         with (cfg.output_dir / "tokens.json").open("w") as f:
-            json.dump({"eoi_token_ids": eoi_ids, "n_eoi": n_eoi}, f, indent=2)
+            json.dump(
+                {
+                    "eoi_token_ids": eoi_ids,
+                    "n_eoi": n_eoi,
+                    "refusal_token_ids": list(cfg.refusal_token_ids),
+                },
+                f,
+                indent=2,
+            )
 
         # 1. Sample data
         harmful_train = data.sample(
@@ -78,7 +94,7 @@ class RefusalRunner:
 
         # 2. Generate candidate directions
         candidates = generate_directions(
-            wrapper,
+            model,
             data.instructions_only(harmful_train),
             data.instructions_only(harmless_train),
             cfg,
@@ -88,7 +104,7 @@ class RefusalRunner:
         # 3. Select the best direction
         pos_labels = [str(tid) for tid in eoi_ids]
         selection = select_direction(
-            wrapper,
+            model,
             candidates,
             data.instructions_only(harmful_val),
             data.instructions_only(harmless_val),
@@ -103,7 +119,7 @@ class RefusalRunner:
         if cfg.n_eval is not None:
             harmful_eval = data.sample(harmful_eval, cfg.n_eval, cfg.seed)
         harmful_rates = evaluate_dataset(
-            wrapper,
+            model,
             harmful_eval,
             direction,
             selected_layer,
@@ -119,7 +135,7 @@ class RefusalRunner:
             cfg.seed,
         )
         harmless_rates = evaluate_dataset(
-            wrapper,
+            model,
             harmless_test,
             direction,
             selected_layer,

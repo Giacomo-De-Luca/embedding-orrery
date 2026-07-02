@@ -194,6 +194,26 @@ class GemmaPytorchInference:
         """The inner GemmaModel (contains the decoder layers and cache state)."""
         return self.model.model
 
+    @property
+    def decoder_layers(self):
+        """The decoder-layer ModuleList — entry point for raw forward-hook attachment.
+
+        Mirrors ``Qwen3Inference.decoder_layers`` so the autointerpreter
+        collector can ``manager.session(wrapper.decoder_layers)`` on either
+        wrapper without knowing which family it has.
+        """
+        return self.model.model.layers
+
+    @property
+    def prepends_bos(self) -> bool:
+        """Whether generation sequences start with a BOS token.
+
+        Mirrors ``Qwen3Inference.prepends_bos``. The forked
+        ``gemma_pytorch`` generate path always prepends Gemma's ``<bos>``,
+        so position 0 of every prefill is the BOS token here.
+        """
+        return True
+
     def configure_cache(
         self,
         layers: set[int] | None = None,
@@ -262,9 +282,12 @@ class GemmaPytorchInference:
         """
         gm = self._gemma_model
         result = {}
-        if gm.cache_prefill and gm._prefill_cache:
+        # Gate on capture state, not layer-cache truthiness: a final_norm-only
+        # configuration leaves the per-layer dict empty while the final_norm
+        # tensor is populated.
+        if gm.cache_prefill and (gm._prefill_cache or gm._prefill_final_norm is not None):
             result["prefill"] = self._build_cache_dict(gm._prefill_cache, gm._prefill_final_norm)
-        if gm.cache_last and gm._last_cache:
+        if gm.cache_last and (gm._last_cache or gm._last_final_norm is not None):
             result["last"] = self._build_cache_dict(gm._last_cache, gm._last_final_norm)
         return result
 

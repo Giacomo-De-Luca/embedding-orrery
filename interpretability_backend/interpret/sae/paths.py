@@ -3,9 +3,10 @@
 All paths are derived from a ``GemmaScopeSAEConfig`` so there are no
 hardcoded model IDs or directory names scattered across the codebase.
 
-The default resource root is ``interpretability_backend/resources/``. Docker
-sets ``ORRERY_RESOURCE_DIR`` so downloaded SAE artifacts live in a named
-volume rather than in the image or repository.
+The resource root defaults to ``interpretability_backend/resources/`` — two
+levels above this file's package directory — but can be overridden via the
+``ORRERY_RESOURCE_DIR`` environment variable. Docker sets this so downloaded SAE
+artifacts land in a named volume rather than being baked into the image/repo.
 """
 
 import os

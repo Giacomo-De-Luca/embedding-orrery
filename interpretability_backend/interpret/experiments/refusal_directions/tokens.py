@@ -1,54 +1,39 @@
-"""Gemma-3 SentencePiece helpers for the refusal-direction pipeline.
+"""Backward-compatible token/template helpers — thin shims over ``DirectionModel``.
 
-The paper extracts mean activations at every "post-instruction" position —
-the tokens that close the user turn and open the model turn. For Gemma the
-chat template ends with ``<end_of_turn>\\n<start_of_turn>model\\n``; tokenising
-that suffix gives the position window. The reference implementation does the
-same: see [gemma_model.py:108](references/refusal_direction/pipeline/model_utils/gemma_model.py#L108).
+The chat template, end-of-instruction window, and refusal-token resolution are
+now backend-specific and live on the ``DirectionModel`` adapter
+(``interpret.experiments.directions_common.model_adapter``). These free
+functions delegate to it so existing call sites (and notebooks) that import
+``format_chat`` / ``compute_eoi_token_ids`` / ``verify_refusal_tokens`` keep
+working — they accept the adapter as the first argument in place of the old
+raw wrapper.
 """
 
 from __future__ import annotations
 
-import warnings
+from interpret.experiments.directions_common import DirectionModel
+from interpret.experiments.directions_common.model_adapter import GemmaDirectionModel
 
-EOI_TEMPLATE_SUFFIX = "<end_of_turn>\n<start_of_turn>model\n"
+# Preserved for callers/notebooks that referenced the constant directly.
+EOI_TEMPLATE_SUFFIX = GemmaDirectionModel.EOI_TEMPLATE_SUFFIX
 
 
-def compute_eoi_token_ids(wrapper) -> list[int]:
-    """Tokenise the end-of-instruction suffix and return its token IDs.
+def compute_eoi_token_ids(model: DirectionModel) -> list[int]:
+    """Token ids of the end-of-instruction window (mean-capture slice size)."""
+    return model.eoi_token_ids()
 
-    The list length is the number of post-instruction positions to slice
-    activations at when computing the mean-of-difference direction.
+
+def format_chat(model: DirectionModel, instruction: str) -> str:
+    """Apply the model's chat template to a single user instruction."""
+    return model.format_chat(instruction)
+
+
+def verify_refusal_tokens(
+    model: DirectionModel, ids: tuple[int, ...] = (235285,)
+) -> tuple[int, ...]:
+    """Resolve/verify the refusal-cue token ids for this model.
+
+    Gemma verifies the configured ids map to ``"I"`` (returns them unchanged,
+    warning on drift); Qwen recomputes ids for its own tokenizer.
     """
-    return wrapper.tokenize(EOI_TEMPLATE_SUFFIX, bos=False)
-
-
-def format_chat(wrapper, instruction: str) -> str:
-    """Apply the Gemma-3 chat template via the wrapper's static helper.
-
-    Note: ``GemmaPytorchInference.format_prompt`` includes a trailing ``\\n``
-    after ``<start_of_turn>model``; ``GemmaPytorchInference.generate`` does
-    not. This pipeline always feeds the model via ``generate_from_template``
-    so that the template matches the reference paper (and so that
-    ``EOI_TEMPLATE_SUFFIX`` is exactly the suffix the model sees).
-    """
-    return wrapper.format_prompt(instruction)
-
-
-def verify_refusal_tokens(wrapper, ids: tuple[int, ...] = (235285,)) -> tuple[int, ...]:
-    """Sanity-check that the configured refusal token IDs map to ``"I"``.
-
-    Returns the IDs unchanged. Emits a warning (rather than raising) if the
-    SentencePiece vocab differs from the Gemma 1/2 default — Gemma 3 may
-    have re-numbered, in which case the caller should override
-    ``RefusalConfig.refusal_token_ids`` after inspecting the warning.
-    """
-    expected = wrapper.tokenize("I", bos=False)
-    if tuple(expected) != tuple(ids):
-        warnings.warn(
-            f"Refusal token mismatch: configured {ids}, "
-            f"tokeniser produced {expected} for 'I'. "
-            "Update RefusalConfig.refusal_token_ids if this is wrong.",
-            stacklevel=2,
-        )
-    return ids
+    return model.refusal_token_ids(ids)

@@ -4,21 +4,30 @@ Adapted from `references/refusal_direction/pipeline/submodules/select_direction.
 
 For every candidate ``(intermediate, position, layer)``:
 
-* **bypass score**  — refusal score on harmful_val under ablation at every
-  ``(layer, hook_type)`` for ``hook_type in {RESID_POST, ATTN_OUT, MLP_OUT}``;
+* **bypass score**  — refusal score on harmful_val under the bypass
+  intervention. ``cfg.bypass_mode == "ablation"`` uses three-site projection
+  ablation at every ``(layer, hook_type)`` for
+  ``hook_type in {RESID_POST, ATTN_OUT, MLP_OUT}`` (Arditi's recipe).
+  ``cfg.bypass_mode == "actadd"`` uses a single additive op at the source
+  layer with ``cfg.actadd_bypass_coeff`` — required when full ablation
+  collapses the residual stream (Gemma-3, Qwen3);
 * **induce score** — refusal score on harmless_val under additive steering at
   the source layer (RESID_POST);
-* **KL on harmless** — KL between baseline last-position logits and ablated
-  last-position logits over harmless_val.
+* **KL on harmless** — KL between baseline last-position logits and intervened
+  last-position logits over harmless_val (under the same bypass intervention).
 
 Filtering follows the paper: drop the top ``prune_layer_pct`` of layers, drop
 KL > kl_threshold, drop induce score < induce_refusal_threshold. The remaining
 direction with the lowest refusal score under ablation wins.
+
+Model access is via a ``DirectionModel`` adapter, so the same sweep runs on
+Gemma or Qwen. The scoring + steering primitives live in
+``interpret.experiments.directions_common`` and are re-exported here for
+backward compatibility.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import math
 from pathlib import Path
@@ -27,143 +36,86 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
 
+# Shared primitives (re-exported: existing imports of these names from this
+# module — e.g. poetry sweep.py, prior_refusal_eval.py — keep working).
+from interpret.experiments.directions_common import (
+    DirectionModel,
+    _ablation_ops,
+    _additive_op,
+    _bypass_ops,
+    _kl_div,
+    _make_manager,
+    _refusal_score,
+    _score_dataset,
+)
 from interpret.experiments.refusal_directions.config import RefusalConfig
-from interpret.experiments.refusal_directions.tokens import format_chat
-from interpret.sae import HookManager, HookType, SteeringMode, SteeringOp
 
-_REFUSAL_EPSILON = 1e-8
-_KL_EPSILON = 1e-6
+__all__ = [
+    "select_direction",
+    "_ablation_ops",
+    "_additive_op",
+    "_bypass_ops",
+    "_make_manager",
+    "_score_dataset",
+    "_refusal_score",
+    "_kl_div",
+]
+
 _ZERO_NORM_TOL = 1e-8
 
 
-def _last_position_logits(wrapper, prompt: str) -> torch.Tensor:
-    """Forward pass on `prompt`; return last-position logits (CPU, fp32).
+def _eval_signature(config: RefusalConfig) -> dict:
+    """Identify the cfg knobs that change what the sweep computes.
 
-    Captures the post-final-norm hidden state via `cache_activations` and
-    applies the model's tied embedding (with optional softcap) — the same
-    logit pipeline that ``Sampler`` uses inside ``model.generate``. Any
-    `HookManager.session(...)` opened by the caller is in effect during this
-    forward pass; this function does not manage hooks itself, so callers can
-    keep a steering session open across an entire batch.
+    Used to invalidate cached ``direction_evaluations.json`` when any of these
+    change. Plotting / threshold knobs (``kl_threshold``, ``prune_layer_pct``,
+    ``induce_refusal_threshold``) are NOT part of the signature — they only
+    affect the filter, so the cache survives threshold-tuning reruns.
     """
-    # `cache_activations` only emits a "prefill" key when `_prefill_cache`
-    # is non-empty (gemma_pytorch.py:236 — empty dict is falsy). We don't
-    # use the per-layer cache here, but we need at least one layer in the
-    # set so the prefill snapshot is taken and `final_norm` makes it through.
-    with wrapper.cache_activations(
-        layers={0}, intermediates={"final_norm"}, prefill=True
-    ) as get_cache:
-        wrapper.reset_prefill_cache()
-        wrapper.generate_from_template(
-            format_chat(wrapper, prompt), output_len=1
+    return {
+        "bypass_mode": config.bypass_mode,
+        "actadd_bypass_coeff": config.actadd_bypass_coeff,
+        "n_val": config.n_val,
+        "intermediates": list(config.intermediates),
+        "refusal_token_ids": list(config.refusal_token_ids),
+        "seed": config.seed,
+    }
+
+
+def _load_cached_evals(
+    out_dir: Path, signature: dict
+) -> list[dict] | None:
+    """Return cached evaluation rows if the sidecar signature matches; else None."""
+    evals_path = out_dir / "direction_evaluations.json"
+    meta_path = out_dir / "direction_evaluations_meta.json"
+    if not (evals_path.exists() and meta_path.exists()):
+        return None
+    with meta_path.open() as f:
+        cached_sig = json.load(f)
+    if cached_sig != signature:
+        print(
+            "[select_direction] cached evaluations don't match cfg "
+            f"(diff: cached={cached_sig} vs current={signature}); will re-sweep"
         )
-        cache = get_cache()
-
-    final_norm = cache["prefill"]["final_norm"]  # (1, seq_len, d_model), CPU
-    embed = wrapper.model.text_token_embedder.weight  # (vocab, d_model)
-    last = final_norm[0, -1, :].to(embed.device, embed.dtype)
-    logits = last @ embed.T
-    cap = getattr(wrapper.config, "final_logit_softcapping", None)
-    if cap is not None:
-        logits = torch.tanh(logits / cap) * cap
-    return logits.detach().to("cpu", torch.float32)
-
-
-@contextlib.contextmanager
-def _maybe_session(manager: HookManager | None, layers):
-    """Open a HookManager session if one was provided, else a no-op."""
-    if manager is None:
-        yield
-        return
-    with manager.session(layers):
-        yield
-
-
-def _score_dataset(
-    wrapper,
-    prompts: list[str],
-    manager: HookManager | None,
-    refusal_toks: tuple[int, ...],
-) -> tuple[list[float], list[torch.Tensor]]:
-    """Run forward over `prompts` once, returning (refusal_scores, last_logits)."""
-    layers = wrapper.model.model.layers
-    scores: list[float] = []
-    logits_list: list[torch.Tensor] = []
-    with _maybe_session(manager, layers):
-        for prompt in prompts:
-            logits = _last_position_logits(wrapper, prompt)
-            scores.append(_refusal_score(logits, refusal_toks))
-            logits_list.append(logits)
-    return scores, logits_list
-
-
-def _refusal_score(logits: torch.Tensor, refusal_toks: tuple[int, ...]) -> float:
-    """Reference score: log P(refusal_tok) - log(1 - P(refusal_tok))."""
-    logits = logits.to(torch.float64)
-    probs = torch.softmax(logits, dim=-1)
-    refusal_p = probs[list(refusal_toks)].sum().item()
-    nonref_p = max(1.0 - refusal_p, _REFUSAL_EPSILON)
-    return math.log(refusal_p + _REFUSAL_EPSILON) - math.log(nonref_p)
-
-
-def _kl_div(p_logits: torch.Tensor, q_logits: torch.Tensor) -> float:
-    """KL(p || q) at a single position."""
-    p = torch.softmax(p_logits.to(torch.float64), dim=-1)
-    q = torch.softmax(q_logits.to(torch.float64), dim=-1)
-    return torch.sum(
-        p * (torch.log(p + _KL_EPSILON) - torch.log(q + _KL_EPSILON))
-    ).item()
-
-
-def _ablation_ops(direction: torch.Tensor, n_layers: int) -> list[SteeringOp]:
-    """Three-site ablation ops: every layer × {RESID_POST, ATTN_OUT, MLP_OUT}.
-
-    ``strength=0.0`` triggers full projection ablation — the formula
-    ``h + (strength - 1) * (h @ v) * v`` reduces to ``h - (h @ v) * v`` when
-    strength is zero (see ``interpret/sae/steering.py``).
-
-    Boundary divergence vs. the reference: the reference attaches a
-    forward-pre-hook on each decoder layer (operating on the layer *input* —
-    same residual point as the previous layer's output), whereas this project
-    attaches a forward-hook on the layer *output*. The two coincide on every
-    inter-layer boundary; they differ at the extremes:
-    - layer 0 *input* is ablated by the reference but not by us;
-    - the residual *after* the final layer (input to the final norm) is
-      ablated by us but not by the reference.
-    Net effect on Gemma-3-4b is a 1-of-34 site offset.
-    """
-    ops: list[SteeringOp] = []
-    for layer in range(n_layers):
-        for hook_type in (HookType.RESID_POST, HookType.ATTN_OUT, HookType.MLP_OUT):
-            ops.append(
-                SteeringOp(
-                    layer_index=layer,
-                    mode=SteeringMode.ABLATION,
-                    vector=direction.detach().clone(),
-                    strength=0.0,
-                    hook_type=hook_type,
-                )
-            )
-    return ops
-
-
-def _additive_op(
-    direction: torch.Tensor, layer: int, coeff: float
-) -> SteeringOp:
-    return SteeringOp(
-        layer_index=layer,
-        mode=SteeringMode.ADDITIVE,
-        vector=direction.detach().clone(),
-        strength=coeff,
-        hook_type=HookType.RESID_POST,
+        return None
+    with evals_path.open() as f:
+        rows = json.load(f)
+    print(
+        f"[select_direction] reusing cached {evals_path} "
+        f"({len(rows)} candidates; bypass_mode={signature['bypass_mode']}). "
+        "Plots and direction selection re-derive from this cache."
     )
+    return rows
 
 
-def _make_manager(ops: list[SteeringOp]) -> HookManager:
-    manager = HookManager()
-    if ops:
-        manager.add_steering(ops)
-    return manager
+def _save_evals_with_meta(
+    out_dir: Path, rows: list[dict], signature: dict
+) -> None:
+    """Atomically write both the rows and the signature sidecar."""
+    with (out_dir / "direction_evaluations.json").open("w") as f:
+        json.dump(rows, f, indent=2)
+    with (out_dir / "direction_evaluations_meta.json").open("w") as f:
+        json.dump(signature, f, indent=2)
 
 
 def _plot_refusal_scores(
@@ -202,66 +154,26 @@ def _plot_refusal_scores(
     plt.close(fig)
 
 
-def _filter(
-    refusal_score: float,
-    induce_score: float,
-    kl_score: float,
-    layer: int,
-    n_layers: int,
-    config: RefusalConfig,
-) -> bool:
-    """Reference filter — returns True to discard the direction."""
-    if any(math.isnan(s) for s in (refusal_score, induce_score, kl_score)):
-        return True
-    if layer >= int(n_layers * (1.0 - config.prune_layer_pct)):
-        return True
-    if kl_score > config.kl_threshold:
-        return True
-    if induce_score < config.induce_refusal_threshold:
-        return True
-    return False
-
-
-def select_direction(
-    wrapper,
+def _run_sweep(
+    model: DirectionModel,
     candidates: dict[str, torch.Tensor],
     harmful_val: list[str],
     harmless_val: list[str],
+    baseline_harmful: torch.Tensor,
+    baseline_harmless: torch.Tensor,
+    baseline_harmless_logits: list[torch.Tensor],
     pos_labels: list[str],
     config: RefusalConfig,
-) -> dict:
-    """Run the full sweep over `candidates` and pick the best direction.
+    out_dir: Path,
+) -> list[dict]:
+    """Run the (intermediate, position, layer) sweep and write per-intermediate plots.
 
-    `candidates[intermediate]` has shape ``(n_pos, n_layers, d_model)``.
-
-    Returns a dict with keys ``intermediate``, ``position``, ``layer``,
-    ``direction`` (the chosen 1-D tensor) and writes plots + JSON outputs to
-    ``config.select_dir``.
+    Returns the flat list of evaluation rows. Side effects: writes
+    ``ablation_scores_<intermediate>.png`` / ``actadd_scores_<intermediate>.png``
+    / ``kl_div_scores_<intermediate>.png`` into ``out_dir`` for each intermediate.
     """
-    out_dir = config.select_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    direction_path = config.output_dir / "direction.pt"
-    metadata_path = config.output_dir / "direction_metadata.json"
-    if direction_path.exists() and metadata_path.exists():
-        print(f"[select_direction] reusing cached {direction_path}")
-        with metadata_path.open() as f:
-            metadata = json.load(f)
-        return {**metadata, "direction": torch.load(direction_path, map_location="cpu")}
-
     n_layers = config.n_layers
     refusal_toks = config.refusal_token_ids
-
-    print("[select_direction] computing baseline refusal scores")
-    baseline_harmful_scores, _ = _score_dataset(
-        wrapper, harmful_val, None, refusal_toks
-    )
-    baseline_harmful = torch.tensor(baseline_harmful_scores)
-    baseline_harmless_scores, baseline_harmless_logits = _score_dataset(
-        wrapper, harmless_val, None, refusal_toks
-    )
-    baseline_harmless = torch.tensor(baseline_harmless_scores)
-
     all_rows: list[dict] = []
 
     for intermediate, candidate_tensor in candidates.items():
@@ -277,16 +189,14 @@ def select_direction(
         for source_pos in range(n_pos):
             for source_layer in tqdm(
                 range(n_layers),
-                desc=f"sweep {intermediate} pos={source_pos - n_pos}",
+                desc=f"sweep[{config.bypass_mode}] {intermediate} pos={source_pos - n_pos}",
             ):
                 direction = candidate_tensor[source_pos, source_layer].to(
                     torch.float32
                 )
                 if direction.norm().item() < _ZERO_NORM_TOL:
-                    # Layer 0's pre_attn (and any other position whose
-                    # mean diff happens to vanish — e.g. when every prompt
-                    # has identical token IDs at that EOI position before
-                    # any attention has run) yields a zero direction. Score
+                    # Layer 0's pre_attn (and any other position whose mean
+                    # diff happens to vanish) yields a zero direction. Score
                     # as NaN so the filter discards it.
                     all_rows.append(
                         {
@@ -300,18 +210,28 @@ def select_direction(
                     )
                     continue
 
-                # Bypass: ablate at every layer × hook_type, score on harmful_val.
-                ablation_mgr = _make_manager(_ablation_ops(direction, n_layers))
+                # Bypass: cfg.bypass_mode picks ablation (every layer × 3 sites,
+                # paper recipe) or actadd (single op at source_layer, used when
+                # full ablation collapses the residual stream — Gemma-3, Qwen3).
+                bypass_mgr = _make_manager(
+                    _bypass_ops(
+                        direction,
+                        n_layers,
+                        source_layer,
+                        config.bypass_mode,
+                        actadd_coeff=config.actadd_bypass_coeff,
+                    )
+                )
                 ablated_scores, _ = _score_dataset(
-                    wrapper, harmful_val, ablation_mgr, refusal_toks
+                    model, harmful_val, bypass_mgr, refusal_toks
                 )
                 ablation_refusal[source_pos, source_layer] = float(
                     sum(ablated_scores) / max(len(ablated_scores), 1)
                 )
 
-                # KL on harmless under the same ablation (re-uses the manager).
+                # KL on harmless under the same intervention.
                 _, ablated_harmless_logits = _score_dataset(
-                    wrapper, harmless_val, ablation_mgr, refusal_toks
+                    model, harmless_val, bypass_mgr, refusal_toks
                 )
                 kl_vals = [
                     _kl_div(b, a)
@@ -326,7 +246,7 @@ def select_direction(
                     [_additive_op(direction, source_layer, coeff=1.0)]
                 )
                 induce_scores, _ = _score_dataset(
-                    wrapper, harmless_val, induce_mgr, refusal_toks
+                    model, harmless_val, induce_mgr, refusal_toks
                 )
                 induce_refusal[source_pos, source_layer] = float(
                     sum(induce_scores) / max(len(induce_scores), 1)
@@ -351,7 +271,7 @@ def select_direction(
             ablation_refusal,
             baseline_harmful.mean().item(),
             pos_labels,
-            f"Ablation on harmful — {intermediate}",
+            f"Bypass ({config.bypass_mode}) on harmful — {intermediate}",
             out_dir / f"ablation_scores_{intermediate}.png",
         )
         _plot_refusal_scores(
@@ -365,12 +285,103 @@ def select_direction(
             kl_scores,
             0.0,
             pos_labels,
-            f"KL divergence under ablation — {intermediate}",
+            f"KL divergence under bypass ({config.bypass_mode}) — {intermediate}",
             out_dir / f"kl_div_scores_{intermediate}.png",
         )
 
-    with (out_dir / "direction_evaluations.json").open("w") as f:
-        json.dump(all_rows, f, indent=2)
+    return all_rows
+
+
+def _filter(
+    refusal_score: float,
+    induce_score: float,
+    kl_score: float,
+    layer: int,
+    n_layers: int,
+    config: RefusalConfig,
+) -> bool:
+    """Reference filter — returns True to discard the direction."""
+    if any(math.isnan(s) for s in (refusal_score, induce_score, kl_score)):
+        return True
+    if layer >= int(n_layers * (1.0 - config.prune_layer_pct)):
+        return True
+    if kl_score > config.kl_threshold:
+        return True
+    if induce_score < config.induce_refusal_threshold:
+        return True
+    return False
+
+
+def select_direction(
+    model: DirectionModel,
+    candidates: dict[str, torch.Tensor],
+    harmful_val: list[str],
+    harmless_val: list[str],
+    pos_labels: list[str],
+    config: RefusalConfig,
+) -> dict:
+    """Run the full sweep over `candidates` and pick the best direction.
+
+    `candidates[intermediate]` has shape ``(n_pos, n_layers, d_model)``.
+
+    Returns a dict with keys ``intermediate``, ``position``, ``layer``,
+    ``direction`` (the chosen 1-D tensor) and writes plots + JSON outputs to
+    ``config.select_dir``.
+    """
+    out_dir = config.select_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    signature = _eval_signature(config)
+    direction_path = config.output_dir / "direction.pt"
+    metadata_path = config.output_dir / "direction_metadata.json"
+    if direction_path.exists() and metadata_path.exists():
+        with metadata_path.open() as f:
+            metadata = json.load(f)
+        cached_sig = metadata.get("eval_signature")
+        if cached_sig == signature:
+            print(f"[select_direction] reusing cached {direction_path}")
+            return {
+                **{k: v for k, v in metadata.items() if k != "eval_signature"},
+                "direction": torch.load(direction_path, map_location="cpu"),
+            }
+        print(
+            f"[select_direction] cached direction.pt was selected under "
+            f"different cfg (cached={cached_sig}, current={signature}); "
+            "re-selecting from cached evaluations if available."
+        )
+
+    n_layers = config.n_layers
+    refusal_toks = config.refusal_token_ids
+
+    cached_rows = _load_cached_evals(out_dir, signature)
+    if cached_rows is not None:
+        all_rows = list(cached_rows)
+        # Plots can't be regenerated without re-running the sweep (they need
+        # per-(pos, layer) score grids that aren't reconstructed here). The
+        # PNGs from the original sweep remain on disk.
+    else:
+        print("[select_direction] computing baseline refusal scores")
+        baseline_harmful_scores, _ = _score_dataset(
+            model, harmful_val, None, refusal_toks
+        )
+        baseline_harmful = torch.tensor(baseline_harmful_scores)
+        baseline_harmless_scores, baseline_harmless_logits = _score_dataset(
+            model, harmless_val, None, refusal_toks
+        )
+        baseline_harmless = torch.tensor(baseline_harmless_scores)
+        all_rows = _run_sweep(
+            model,
+            candidates,
+            harmful_val,
+            harmless_val,
+            baseline_harmful,
+            baseline_harmless,
+            baseline_harmless_logits,
+            pos_labels,
+            config,
+            out_dir,
+        )
+        _save_evals_with_meta(out_dir, all_rows, signature)
 
     filtered = [
         row
@@ -408,12 +419,13 @@ def select_direction(
         "refusal_score": best["refusal_score"],
         "induce_score": best["induce_score"],
         "kl_score": best["kl_score"],
+        "eval_signature": signature,
     }
     with (config.output_dir / "direction_metadata.json").open("w") as f:
         json.dump(metadata, f, indent=2)
     torch.save(direction, config.output_dir / "direction.pt")
 
     return {
-        **metadata,
+        **{k: v for k, v in metadata.items() if k != "eval_signature"},
         "direction": direction,
     }

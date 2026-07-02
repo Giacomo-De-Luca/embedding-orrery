@@ -241,13 +241,15 @@ class SAEPipelineRunner:
 
         if self.config.skip_extract:
             print("\n[3/3] Skipping decoder vector extraction")
+            # Check if parquet already exists
             if output_path.exists():
                 result.features_parquet = output_path
             return
 
-        # Skip if parquet already exists (avoids re-downloading SAE weights)
+        # Skip re-extraction if the parquet already exists — avoids a costly
+        # re-download + re-extract of the SAE weights.
         if output_path.exists():
-            print(f"\n[3/3] Decoder vector parquet already exists: {output_path.name}")
+            print(f"\n[3/3] Decoder vectors parquet already exists: {output_path}")
             result.features_parquet = output_path
             if progress_callback:
                 progress_callback("extract_vectors", 1, 1)
