@@ -38,7 +38,11 @@ function styleTextSelection(cd) {
         }
     }
 
-    scene.glText[index].update(opts);
+    // scene.glText may still be the `true` placeholder set in calc.js
+    // if styling happens before the dirty plot call creates the gl-text objects
+    if(scene.glText && scene.glText !== true && scene.glText[index]) {
+        scene.glText[index].update(opts);
+    }
 }
 
 module.exports = {

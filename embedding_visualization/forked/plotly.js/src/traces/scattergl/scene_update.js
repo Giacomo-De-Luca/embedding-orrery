@@ -2,6 +2,14 @@
 
 var Lib = require('../../lib');
 
+// regl components are first marked as needed with the placeholder `true`
+// (see calc.js) and only replaced by real objects in the dirty plot call
+// (see plot.js). A drag can call scene.update/draw inside that window,
+// so treat the placeholder as "not ready yet".
+function isReady(component) {
+    return component && component !== true;
+}
+
 // make sure scene exists on subplot, return it
 module.exports = function sceneUpdate(gd, subplot) {
     var scene = subplot._scene;
@@ -50,12 +58,12 @@ module.exports = function sceneUpdate(gd, subplot) {
         scene.update = function update(opt) {
             var opts = Lib.repeat(opt, scene.count);
 
-            if(scene.fill2d) scene.fill2d.update(opts);
-            if(scene.scatter2d) scene.scatter2d.update(opts);
-            if(scene.line2d) scene.line2d.update(opts);
-            if(scene.error2d) scene.error2d.update(opts.concat(opts));
-            if(scene.select2d) scene.select2d.update(opts);
-            if(scene.glText) {
+            if(isReady(scene.fill2d)) scene.fill2d.update(opts);
+            if(isReady(scene.scatter2d)) scene.scatter2d.update(opts);
+            if(isReady(scene.line2d)) scene.line2d.update(opts);
+            if(isReady(scene.error2d)) scene.error2d.update(opts.concat(opts));
+            if(isReady(scene.select2d)) scene.select2d.update(opts);
+            if(isReady(scene.glText)) {
                 for(var i = 0; i < scene.count; i++) {
                     scene.glText[i].update(opt);
                 }
@@ -75,17 +83,17 @@ module.exports = function sceneUpdate(gd, subplot) {
             var unselectBatch = scene.unselectBatch;
 
             for(var i = 0; i < count; i++) {
-                if(fill2d && scene.fillOrder[i]) {
+                if(isReady(fill2d) && scene.fillOrder[i]) {
                     fill2d.draw(scene.fillOrder[i]);
                 }
-                if(line2d && scene.lineOptions[i]) {
+                if(isReady(line2d) && scene.lineOptions[i]) {
                     line2d.draw(i);
                 }
-                if(error2d) {
+                if(isReady(error2d)) {
                     if(scene.errorXOptions[i]) error2d.draw(i);
                     if(scene.errorYOptions[i]) error2d.draw(i + count);
                 }
-                if(scatter2d && scene.markerOptions[i]) {
+                if(isReady(scatter2d) && scene.markerOptions[i]) {
                     if(unselectBatch[i].length) {
                         var arg = Lib.repeat([], scene.count);
                         arg[i] = unselectBatch[i];
@@ -94,12 +102,12 @@ module.exports = function sceneUpdate(gd, subplot) {
                         scatter2d.draw(i);
                     }
                 }
-                if(glText[i] && scene.textOptions[i]) {
+                if(isReady(glText) && glText[i] && scene.textOptions[i]) {
                     glText[i].render();
                 }
             }
 
-            if(select2d) {
+            if(isReady(select2d)) {
                 select2d.draw(selectBatch);
             }
 

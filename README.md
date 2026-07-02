@@ -1,12 +1,22 @@
 # Orrery: Interactive Embedding Visualisation with SAE Interpretability
 
-Orrery is an open-source platform that unifies three things researchers usually keep in separate tools: interactive embedding visualisation, automatic topic extraction, and Sparse Autoencoder (SAE) interpretability. Embed data from any source, explore it in a 2D/3D scatter plot that stays fluid at hundreds of thousands of points, extract topics, and steer a language model live from the plot — without leaving the platform.
+![Status: Beta](https://img.shields.io/badge/status-beta-orange) ![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
+
+Orrery is an open-source vector visualisation platform with native Sparse Autoencoder (SAE) support, built for data exploration and interpretability research. The platform provides two end-to-end pipelines. The first turns any dataset into an explorable 3D constellation by embedding, projecting, clustering, auto-labelling the clusters, and (optionally) collecting SAE activations for the dataset.
+
+The second visualises SAE decoder vectors as constellation points. Each feature-point can be examined in a Neuronpedia-inspired dashboard and used directly to steer the model.
+
+The application runs at 60 FPS with 250k points — animations and nebula mode included — on 8 GB of VRAM.
 
 > **Beta.** The platform is functional and under active development, and is being prepared as an EMNLP demo submission. If you try it or find bugs, please get in touch — early feedback is very welcome.
 
 ![WordNet 212k](gallery/geometry.png)
 
 ## Gallery
+
+![SAE Feature Explorer with steered chat](gallery/poetry.jpg)
+
+*Find a feature, inspect it, steer the model — on one page: with the "poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite job?" in verse.*
 
 | | |
 |---|---|
@@ -37,6 +47,10 @@ docker compose up --build   # frontend :3000, GraphQL :8000
 Docker support is still being validated across machines — prefer the manual install if you hit trouble. See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
+
+![The corpus pipeline](gallery/pipeline.png)
+
+*The corpus pipeline: from raw dataset (or pre-computed vectors) to a labelled, SAE-annotated constellation.*
 
 **Embedding Visualisation** — Embed from the HuggingFace Hub, local files (CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL 2D/3D scatter plots. Eight providers: SentenceTransformers (local, default), Gemini, OpenAI, Cohere, Ollama, QWEN, BGE, and the HuggingFace API. One dataset can carry multiple embeddings (different models or prompts) without duplication.
 

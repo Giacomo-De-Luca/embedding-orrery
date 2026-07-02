@@ -44,7 +44,9 @@ module.exports = function select(searchInfo, selectionTester) {
         }
     }
 
-    if(hasMarkers) {
+    // scene.scatter2d may still be the `true` placeholder set in calc.js
+    // if selection happens before the dirty plot call creates the regl object
+    if(hasMarkers && scene.scatter2d && scene.scatter2d !== true) {
         var scatter2d = scene.scatter2d;
 
         if(!els.length && !unels.length) {

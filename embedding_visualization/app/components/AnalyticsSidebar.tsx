@@ -10,7 +10,7 @@ import {
 } from '@/lib/ui-primitives/sidebar';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
-import { CategoryBarChart } from './charts/CategoryBarChart';
+import { CategoryBarList } from './charts/CategoryBarList';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
@@ -81,7 +81,7 @@ export function AnalyticsSidebar({
     return activeCategoryValues.filter(v => !noiseValues.has(v));
   }, [effectiveAnalysisField, activeCategoryValues]);
 
-  const filteredCounts = useMemo(() => {
+  const denoisedCategoryCounts = useMemo(() => {
     if (filteredCategoryValues.length === activeCategoryValues.length) return activeCategoryCounts;
     const counts: Record<string, number> = {};
     for (const v of filteredCategoryValues) {
@@ -92,7 +92,7 @@ export function AnalyticsSidebar({
 
   // Filtered counts per category: reuse shared computation when field matches, compute locally otherwise.
   // Uses combinedMutedIndices (text search + temporal) for consistency with scatter plot muting.
-  const searchMatchCounts = useMemo(() => {
+  const activeFilterCounts = useMemo(() => {
     // When analysis field follows colorByField, reuse the pre-computed counts from DashboardPanel
     if (!isOverridden && sharedFilteredCounts) return sharedFilteredCounts;
     // Otherwise compute locally using combinedMutedIndices (covers both text + temporal filters)
@@ -172,12 +172,12 @@ export function AnalyticsSidebar({
       <SidebarContent className="gap-0">
         <div className="p-4 space-y-6">
           {hasCategoricalData && (
-            <CategoryBarChart
+            <CategoryBarList
               categoryField={effectiveAnalysisField}
               categoryValues={filteredCategoryValues}
-              categoryCounts={filteredCounts}
+              categoryCounts={denoisedCategoryCounts}
               categoricalPalette={categoricalPalette}
-              searchMatchCounts={searchMatchCounts}
+              filteredCounts={activeFilterCounts}
               colorFieldOptions={colorFieldOptions}
               analysisField={analysisField}
               onAnalysisFieldChange={handleAnalysisFieldChange}
@@ -187,7 +187,7 @@ export function AnalyticsSidebar({
           )}
 
           {!hasCategoricalData && colorFieldOptions && colorFieldOptions.length > 0 && (
-            <CategoryBarChart
+            <CategoryBarList
               categoryField={null}
               categoryValues={[]}
               categoryCounts={{}}
@@ -210,7 +210,7 @@ export function AnalyticsSidebar({
                 temporalCounts={temporalCounts}
                 categoryField={hasStackedTemporalData ? colorByField : null}
                 categoryValues={hasStackedTemporalData ? filteredCategoryValues : undefined}
-                categoryCounts={hasStackedTemporalData ? filteredCounts : undefined}
+                categoryCounts={hasStackedTemporalData ? denoisedCategoryCounts : undefined}
                 crossTabData={hasStackedTemporalData ? crossTabData : undefined}
                 categoricalPalette={categoricalPalette}
                 mutedCategories={mutedCategories}
