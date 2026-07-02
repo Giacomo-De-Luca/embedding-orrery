@@ -1,0 +1,88 @@
+# Combined Gemma stage-1 collect — three SAEs in one forward pass.
+#
+# One Gemma-3-4b-it forward per WordNet sample captures activations for:
+#   L9  resid_post W16K l0_medium
+#   L29 resid_post W16K l0_medium
+#   L29 resid_post W65K l0_medium  ← co-attached with L29 W16K thanks to
+#                                    the HookManager (layer, hook, sae_id)
+#                                    key widening.
+#
+# Layout: per-SAE subdirs under ``run_dir`` (see ``sae_subdir()`` in
+# autointerpreter/config.py). Stages 2-5 are skipped — downstream
+# sweeps are driven by separate per-SAE configs (or by flipping the
+# stages flags below and re-running this file).
+#
+# Expected runtime on MPS: ~7 h (≈212 k samples × ~8 samples/s; one
+# forward pass + 3 SAE encodes each ≈ 1-3 ms).
+# Expected output sizes:
+#   L9_w16k_resid_post/activations.npz   ≈ 200 MB
+#   L29_w16k_resid_post/activations.npz  ≈ 200 MB
+#   L29_w65k_resid_post/activations.npz  ≈ 800 MB
+# Safe to interrupt: ``resume: true`` skips samples already in every
+# per-SAE store (intersection); per-store appends are gated by their
+# own seen-set so partial-flush states converge.
+
+run_slug: full_gemma_L9-16k_L29-16k_L29-65k
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-it
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 9,  hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "65k", l0_size: medium, model_size: "4b", variant: it }
+  aggregation: last_token
+  limit: null
+  pos_filter: null
+  prompt_template: "{word}: {definition}."
+  add_bos: true
+  use_chat_template: false
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 500
+  resume: true
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  feature_indices: null
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  label_workers: 5
+  label_reps_per_worker: 100
+  eval_workers: 5
+  eval_reps_per_worker: 100
+  show_zero_fraction_to_evaluator: ab
+  poll_interval_seconds: 30
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+  fail_on_queue_errors: true
+
+score:
+  write_to_label_store: true
+  label_store_dir: resources/sae_labels/neuronpedia_gemma-3-4b-it
+  method_name: autointerpret
+  min_pearson: 0.3
+  report_ab_split: true
+
+stages:
+  skip_collect: false
+  skip_topk: true
+  skip_label: true
+  skip_eval: true
+  skip_score: true

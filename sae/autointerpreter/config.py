@@ -57,6 +57,13 @@ DimSelect = Literal["all", "top_variance"]
 # Python process was invoked from.
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
+# Toolkit root (the `interpret/` package in the parent repo; the repo root in
+# a standalone astrolabe checkout). Anchors toolkit-internal resources — the
+# agent_system job queue/launcher and the autointerpret YAML configs — so the
+# agent stages keep working when the toolkit is extracted on its own.
+TOOLKIT_ROOT: Path = Path(__file__).resolve().parents[2]
+AGENT_SYSTEM_DIR: Path = TOOLKIT_ROOT / "agent_system"
+
 
 @dataclass
 class SAESpec:

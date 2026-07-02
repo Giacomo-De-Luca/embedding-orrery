@@ -1,0 +1,61 @@
+# v4: SIGNED-mode labelling of 50 embeddinggemma-300M dimensions with SONNET.
+# "Entire scale": each dimension is one signed axis (both poles together,
+# most-negative → most-positive), labelled by embed-axis agents (signed
+# −10..+10 eval). All v3 fixes apply:
+#   - HELD-OUT eval (linspace excludes the interpreter's top-k source samples).
+#   - reps_per_worker: 1  -> one fresh agent per dimension.
+#   - embed-axis agents at effort: high; evaluator now uses DECIMAL scores and
+#     is told the eval samples are LINEARLY spaced across the value range.
+# Reuses the activations collected by full_embed_embeddinggemma.yaml.
+# 50 random dims: numpy default_rng(42).choice(768, 50, replace=False), sorted.
+run_slug: emb_embeddinggemma_signed_50_sonnet_v4
+
+collect:
+  source_kind: embedding
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  embedding:
+    provider: sentence_transformers
+    model_name: google/embeddinggemma-300M
+    device: mps
+    normalize: false
+    prompt: STS
+    activation_dtype: float16
+
+extract:
+  dim_mode: signed
+  select: all
+  top_k: 60                 # signed: 30 most-positive + 30 most-negative shown
+  eval_sample_count: 50
+  activations_run_dir: resources/sae_autointerpret/emb_embeddinggemma_signed_full
+  feature_indices: [48, 51, 62, 64, 68, 69, 94, 125, 135, 146, 170, 209, 270,
+    274, 299, 313, 316, 331, 332, 337, 340, 369, 377, 383, 407, 417, 471, 478,
+    479, 506, 519, 525, 533, 537, 557, 576, 580, 597, 613, 618, 621, 625, 648,
+    668, 684, 687, 712, 731, 741, 759]
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  model_override: sonnet
+  label_workers: 5
+  label_reps_per_worker: 1   # one dimension per fresh agent session
+  eval_workers: 5
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true         # reuse the already-collected gemma activations
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

@@ -1,0 +1,57 @@
+# Smoke run: raw residual-stream autointerpret on gemma-3-4b-it (SIGNED mode).
+# Tiny slice (300 WordNet entries, 3 of the 2560 dims, single L29 site) to
+# exercise the residual collect → dense extract → embed-axis agents → score
+# path cheaply before launching the full collect.
+run_slug: resid_gemma_L29_smoke
+
+collect:
+  source_kind: residual
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+  use_chat_template: false
+  aggregation: last_token
+  limit: 300
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  flush_every: 100
+  resume: true
+  residual:
+    activation_dtype: float32   # f16 overflows: late-layer Gemma residuals exceed 65504
+    sites:
+      - layer_index: 29
+        intermediate: post_mlp
+
+extract:
+  dim_mode: signed
+  select: all
+  top_k: 20                          # 10 most-positive + 10 most-negative
+  eval_sample_count: 50
+  feature_indices: [3, 7, 14]        # smoke: 3 of 2560 dims
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  label_workers: 1
+  label_reps_per_worker: 10
+  eval_workers: 1
+  eval_reps_per_worker: 10
+  show_zero_fraction_to_evaluator: "off"
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

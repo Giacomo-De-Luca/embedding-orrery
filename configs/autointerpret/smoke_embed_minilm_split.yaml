@@ -1,0 +1,58 @@
+# Smoke run: autointerpret on all-MiniLM-L6-v2 embedding dimensions (SPLIT mode).
+# Each selected dimension becomes two non-negative half-features (pos = max(0,x)
+# at feature index 2*dim, neg = max(0,-x) at 2*dim+1), scored with the 0-10
+# rubric — directly comparable to SAE features. Reuses the same collected
+# activations as the signed run via activations_run_dir (no re-embedding) when
+# pointed at an existing emb_minilm_* run; here it collects its own slice.
+run_slug: emb_minilm_split_smoke
+
+collect:
+  source_kind: embedding
+  limit: 500
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  resume: true
+  embedding:
+    provider: sentence_transformers
+    model_name: all-MiniLM-L6-v2
+    device: mps
+    normalize: false
+    prompt: null
+    activation_dtype: float32
+    embed_batch_size: 64
+
+extract:
+  dim_mode: split                    # two non-negative half-features per dim
+  select: all
+  top_k: 20
+  eval_sample_count: 50
+  feature_indices: [0, 1, 2, 3, 4]   # dim indices; each emits features 2d and 2d+1
+  # activations_run_dir: resources/sae_autointerpret/emb_minilm_signed_smoke
+  #   ^ uncomment + set stages.skip_collect:true to reuse a prior pass.
+
+agents:
+  label_task: autointerpret-embed-dim-label
+  eval_task: autointerpret-embed-dim-eval
+  label_workers: 1
+  label_reps_per_worker: 10
+  eval_workers: 1
+  eval_reps_per_worker: 10
+  show_zero_fraction_to_evaluator: "ab"
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-dim-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-dim-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-dim-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-dim-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: 0.3
+  report_ab_split: true
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

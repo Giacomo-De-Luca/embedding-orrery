@@ -1,0 +1,101 @@
+# Label + evaluate 200 Qwen3.5-2B L20 W32K L0=50 SAE features with SONNET.
+#
+# First labeling pass for this SAE: runs IN PLACE on the run dir produced by
+# full_qwen3.5_2B_L20_32k.yaml (same run_slug, skip_collect) — topk/linspace/
+# labels/evaluator/scores land next to the activations, matching the layout
+# of the original Gemma full runs. Methodology mirrors the held-out reruns
+# (rerun_gemma_*_heldout.yaml): sonnet agents, one fresh agent per feature
+# (reps_per_worker: 1), 200 label + 200 eval = 400 agent sessions, 5
+# concurrent, zero-fraction hint off.
+#
+# feature_indices must be a RANDOM seeded draw from the density-eligible
+# features (per feedback: random, not variance/index-ordered). It can only
+# be drawn once the full collect has produced feature_stats.parquet:
+#
+#   uv run python -c "
+#   import pandas as pd, numpy as np
+#   stats = pd.read_parquet('resources/sae_autointerpret/full_qwen3.5_2B_L20_w32k_l0_50/feature_stats.parquet')
+#   elig = stats.loc[(stats.density >= 1e-5) & (stats.density <= 0.3) & (stats.nnz >= 50), 'feature_idx'].to_numpy()
+#   print(sorted(np.random.default_rng(42).choice(elig, 200, replace=False).tolist()))"
+#
+# Paste the result into extract.feature_indices below. WARNING: do not run
+# this config while feature_indices is null — null means "all eligible
+# features", which would queue thousands of sonnet agent sessions.
+
+run_slug: full_qwen3.5_2B_L20_w32k_l0_50
+
+collect:
+  base_model:
+    family: qwen
+    checkpoint: Qwen/Qwen3.5-2B-Base
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: qwen, layer_index: 20, hook_type: resid_post, model_size: "2B", width: "32k", k: 50 }
+  aggregation: last_token
+  output_root: resources/sae_autointerpret
+  prompt_template: "{word}: {definition}."
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  # Seeded random draw of 200 from the 6,259 density-eligible features
+  # (collect finished 2026-06-11 with all 212,478 WordNet samples; draw
+  # command in the header comment, numpy default_rng(42), sorted).
+  feature_indices: [212, 673, 925, 1080, 1150, 1354, 1972, 2138, 2248, 2536,
+    2632, 2790, 2889, 2933, 2990, 2992, 3060, 3204, 3543, 3763, 3901, 4070,
+    4105, 4155, 4499, 4513, 4972, 5002, 5155, 5290, 5295, 5390, 5396, 5805,
+    6133, 6257, 6405, 6444, 6943, 7289, 7318, 7622, 7744, 7828, 7972, 8960,
+    9049, 9066, 9187, 9315, 9561, 9863, 9876, 10046, 10422, 10441, 10542,
+    10886, 11134, 11279, 11320, 11379, 11718, 11833, 11867, 11905, 11929,
+    12579, 12596, 12952, 13324, 13368, 13408, 13474, 13757, 13913, 14085,
+    14181, 14230, 14317, 14326, 14379, 14424, 14448, 14507, 14554, 14851,
+    15091, 15114, 15168, 15350, 15371, 15501, 15521, 15540, 16206, 16209,
+    16454, 16498, 16573, 16584, 16601, 16687, 16917, 17562, 17716, 17904,
+    18143, 18148, 18344, 18349, 18494, 18513, 18576, 18778, 19668, 19961,
+    20264, 20337, 20602, 20614, 20638, 20682, 20849, 21274, 21599, 21672,
+    21706, 21792, 21810, 21850, 22033, 22157, 22196, 22277, 22495, 22505,
+    22645, 22833, 22848, 22853, 22890, 23418, 23439, 23613, 23838, 23903,
+    24269, 24276, 24338, 24549, 24705, 24739, 24853, 24983, 25184, 25210,
+    25240, 25413, 25526, 25531, 25713, 25762, 25940, 25982, 26263, 26436,
+    26535, 26661, 26668, 26734, 26738, 26811, 27056, 27197, 27314, 27567,
+    27586, 27663, 28108, 28384, 28689, 28777, 29273, 29353, 29410, 29811,
+    30189, 30605, 30971, 30978, 31011, 31418, 31513, 31898, 31948, 32193,
+    32424, 32553, 32620]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  model_override: sonnet
+  label_workers: 5
+  label_reps_per_worker: 1
+  eval_workers: 5
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  # No Neuronpedia label store exists for Qwen-scope; keep all scores for
+  # analysis instead of pushing labels.
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true     # reuse the activations from the full collect
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

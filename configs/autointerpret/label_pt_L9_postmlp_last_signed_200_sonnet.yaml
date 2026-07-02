@@ -1,0 +1,75 @@
+# SIGNED-mode labelling of 200 RAW residual dims (last_token) with SONNET.
+# Store source: resources/sae_autointerpret/full_gemma_pt_L9-16k_L29-16k_L29-65k_dual/L9_post_mlp_last_token  (checkpoint: google/gemma-3-4b-pt)
+# last_token preserves the signed bipolar signal (max_prefill would crush the
+# negative pole — see prepare_label_configs_dense.py header). 200 dims of
+# 2560 drawn with default_rng(123), shared across all dense runs.
+run_slug: label_pt_L9_postmlp_last_signed_200_sonnet
+
+collect:
+  source_kind: residual
+  checkpoint: google/gemma-3-4b-pt
+  aggregation: last_token
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  residual:
+    activation_dtype: float32
+    aggregation: last_token
+    sites:
+      - layer_index: 9
+        intermediate: post_mlp
+
+extract:
+  dim_mode: signed
+  select: all
+  top_k: 60                 # signed: 30 most-positive + 30 most-negative shown
+  eval_sample_count: 50
+  activations_run_dir: resources/sae_autointerpret/full_gemma_pt_L9-16k_L29-16k_L29-65k_dual/L9_post_mlp_last_token
+  feature_indices: [
+    3, 7, 14, 18, 35, 36, 38, 55, 59, 77,
+    79, 127, 147, 174, 176, 186, 190, 195, 198, 237,
+    290, 314, 346, 351, 354, 387, 398, 410, 416, 425,
+    436, 444, 445, 458, 459, 481, 493, 508, 510, 511,
+    521, 529, 555, 556, 575, 581, 582, 583, 588, 603,
+    620, 626, 634, 635, 639, 645, 657, 659, 675, 694,
+    719, 730, 751, 757, 763, 766, 770, 790, 808, 822,
+    824, 835, 857, 867, 872, 903, 918, 936, 940, 953,
+    978, 983, 986, 999, 1001, 1016, 1023, 1035, 1049, 1056,
+    1059, 1067, 1071, 1078, 1079, 1082, 1088, 1100, 1102, 1125,
+    1137, 1152, 1170, 1187, 1197, 1215, 1220, 1221, 1226, 1238,
+    1239, 1243, 1244, 1247, 1269, 1282, 1285, 1299, 1325, 1329,
+    1331, 1344, 1367, 1401, 1403, 1407, 1422, 1425, 1433, 1437,
+    1445, 1451, 1496, 1506, 1513, 1526, 1533, 1556, 1576, 1611,
+    1645, 1652, 1668, 1759, 1770, 1772, 1773, 1775, 1871, 1872,
+    1874, 1884, 1890, 1893, 1906, 1909, 1916, 1926, 1940, 1949,
+    1966, 2001, 2011, 2031, 2032, 2050, 2064, 2066, 2077, 2085,
+    2086, 2096, 2102, 2107, 2117, 2128, 2149, 2163, 2192, 2220,
+    2221, 2222, 2232, 2242, 2245, 2263, 2278, 2292, 2305, 2334,
+    2363, 2408, 2419, 2421, 2435, 2438, 2453, 2499, 2541, 2551]
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  model_override: sonnet
+  label_workers: 20
+  label_reps_per_worker: 1
+  eval_workers: 20
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

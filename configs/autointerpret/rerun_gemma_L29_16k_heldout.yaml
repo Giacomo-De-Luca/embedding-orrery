@@ -1,0 +1,78 @@
+# Held-out + thinking re-run of the Gemma L29 w16k SAE on the SAME 200 features
+# the original sonnet run scored — a paired held-out-vs-original comparison.
+#
+# Reuses the activations collected by full_gemma_3saes.yaml (the
+# full_gemma_L9-16k_L29-16k_L29-65k/L29_w16k_resid_post subdir), staged into this
+# run dir as read-only SYMLINKS so the original run is never modified. Because
+# extract runs here (skip_topk: false), the eval set is regenerated with the
+# now-landed held-out fix in extract_top_k.py (linspace disjoint from top-k).
+#
+# Agents: sonnet at effort:high (set in the .claude/agents/*.md frontmatter),
+# one fresh agent per feature (reps_per_worker: 1). 200 label + 200 eval = 400
+# agent sessions, 5 concurrent.
+run_slug: rerun_gemma_L29_16k_heldout
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-it
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+  aggregation: last_token
+  output_root: resources/sae_autointerpret
+  prompt_template: "{word}: {definition}."
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  # The exact 200 features scored by the original sonnet run (paired comparison).
+  feature_indices: [4, 5, 19, 21, 23, 24, 26, 29, 33, 35, 40, 42, 44, 46, 48, 52,
+    55, 57, 58, 59, 67, 68, 69, 80, 83, 94, 99, 104, 106, 108, 111, 118, 121, 129,
+    130, 138, 141, 150, 151, 166, 168, 173, 175, 176, 177, 183, 187, 194, 201, 205,
+    210, 215, 218, 219, 230, 231, 235, 237, 238, 239, 241, 243, 245, 248, 251, 252,
+    256, 259, 265, 276, 279, 282, 284, 286, 287, 289, 294, 295, 300, 306, 307, 310,
+    312, 314, 323, 326, 327, 330, 337, 339, 346, 347, 349, 355, 358, 361, 368, 389,
+    390, 397, 398, 399, 413, 414, 416, 423, 430, 431, 437, 438, 439, 446, 455, 459,
+    469, 471, 472, 478, 479, 483, 494, 498, 510, 512, 516, 517, 520, 521, 523, 524,
+    528, 531, 536, 537, 539, 540, 545, 546, 549, 551, 554, 555, 557, 562, 568, 569,
+    575, 578, 579, 580, 583, 584, 585, 588, 589, 591, 594, 595, 598, 601, 602, 604,
+    605, 608, 611, 614, 615, 624, 626, 630, 631, 634, 637, 639, 643, 644, 647, 648,
+    649, 651, 652, 653, 654, 655, 656, 658, 663, 665, 666, 667, 670, 673, 674, 675,
+    676, 677, 678, 681, 683, 684]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  model_override: sonnet
+  label_workers: 5
+  label_reps_per_worker: 1
+  eval_workers: 5
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true     # reuse the staged (symlinked) activations
+  skip_topk: false       # re-extract → regenerates the HELD-OUT eval set
+  skip_label: false
+  skip_eval: false
+  skip_score: false

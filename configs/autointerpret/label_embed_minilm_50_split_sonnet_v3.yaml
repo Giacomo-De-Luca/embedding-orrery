@@ -1,0 +1,59 @@
+# v3: corrected split-mode labelling of 50 MiniLM dimensions with SONNET.
+# Same 50 random dims (seed 42) and split mode as v2, but with every fix:
+#   - HELD-OUT eval: the linspace eval set excludes the interpreter's top-k
+#     source samples (DenseFeatureExtractor now does this), so the Pearson
+#     measures generalisation, not circular re-recognition.
+#   - reps_per_worker: 1  -> one FRESH agent per dimension (no context bleed).
+#   - embed-dim agents at effort: high, decimal + linear-distribution rubric.
+# Reuses the activations collected by full_embed_minilm.yaml (no re-embedding).
+run_slug: emb_minilm_split_50_sonnet_v3
+
+collect:
+  source_kind: embedding
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  embedding:
+    provider: sentence_transformers
+    model_name: all-MiniLM-L6-v2
+    device: mps
+    normalize: false
+    prompt: null
+    activation_dtype: float16
+
+extract:
+  dim_mode: split
+  select: all
+  top_k: 30                 # one-sided: 30 examples of the shown half
+  eval_sample_count: 50
+  activations_run_dir: resources/sae_autointerpret/emb_minilm_signed_full
+  feature_indices: [23, 25, 29, 32, 33, 45, 61, 65, 69, 83, 103, 132, 134, 145,
+    146, 148, 159, 161, 164, 169, 177, 180, 181, 197, 204, 220, 231, 236, 238,
+    250, 255, 259, 260, 264, 275, 280, 285, 291, 296, 297, 298, 307, 318, 327,
+    331, 337, 340, 341, 368, 376]
+
+agents:
+  label_task: autointerpret-embed-dim-label
+  eval_task: autointerpret-embed-dim-eval
+  model_override: sonnet
+  label_workers: 5
+  label_reps_per_worker: 1   # one dimension per fresh agent session
+  eval_workers: 5
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-dim-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-dim-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-dim-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-dim-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true         # reuse the already-collected activations
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

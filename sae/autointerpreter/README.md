@@ -1,7 +1,7 @@
 # SAE Autointerpreter
 
 Generate and evaluate per-feature labels for **Gemma-scope and Qwen-scope
-SAEs** using WordNet as a probing corpus and the `scripts/AgentSystem/`
+SAEs** using WordNet as a probing corpus and the `interpret/agent_system/`
 concurrent job queue for two roles of LLM agents (LabelInterpreter +
 Evaluator).
 
@@ -225,7 +225,7 @@ resources/sae_autointerpret/full_gemma_L9-16k_L29-16k_L29-65k/
   mode: same 0–10 non-negative rubric as the SAE agents, neutral wording, input
   carries `{dim, half}`.
 
-Task configs: `scripts/AgentSystem/tasks/autointerpret-{label,eval}.json` (SAE)
+Task configs: `interpret/agent_system/tasks/autointerpret-{label,eval}.json` (SAE)
 and `autointerpret-embed-{axis,dim}-{label,eval}.json` (embedding). Select via
 `agents.label_task` / `agents.eval_task` (and the matching `*_dir` fields) in
 the config — see `configs/autointerpret/smoke_embed_minilm*.yaml`.

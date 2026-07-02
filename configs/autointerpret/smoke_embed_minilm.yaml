@@ -1,0 +1,53 @@
+# Smoke run: autointerpret on all-MiniLM-L6-v2 embedding dimensions (SIGNED mode).
+# Tiny slice (500 WordNet entries, 5 of the 384 dims) to exercise the full
+# embedding pipeline cheaply. For split mode see smoke_embed_minilm_split.yaml.
+run_slug: emb_minilm_signed_smoke
+
+collect:
+  source_kind: embedding
+  limit: 500
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  resume: true
+  embedding:
+    provider: sentence_transformers
+    model_name: all-MiniLM-L6-v2     # 384-dim, plain encoder (no prompt)
+    device: mps
+    normalize: false
+    prompt: null
+    activation_dtype: float32
+    embed_batch_size: 64
+
+extract:
+  dim_mode: signed                   # one feature/dim, both poles, signed eval
+  select: all
+  top_k: 20                          # 10 most-positive + 10 most-negative
+  eval_sample_count: 50
+  feature_indices: [0, 1, 2, 3, 4]   # smoke: 5 of 384 dims; null = all
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  label_workers: 1
+  label_reps_per_worker: 10
+  eval_workers: 1
+  eval_reps_per_worker: 10
+  show_zero_fraction_to_evaluator: "off"   # no meaningful zero fraction (signed)
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false        # embedding dims have no SAE config to key on
+  min_pearson: -1.0                  # keep all (signed correlations can be negative)
+  report_ab_split: false
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

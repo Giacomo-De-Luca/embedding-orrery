@@ -1,0 +1,63 @@
+# Steering-based autointerpreter — overnight run.
+# Steer the top-100 (by Pearson) already-labelled L9 w16k features, generate
+# answers to 4 probe questions across the 800/1000/1200/1400 strength sweep, and
+# judge each with Sonnet. ~6.3h generation + ~10-15 min judging on MPS.
+#
+#   uv run python -m interpret.sae.autointerpreter.steering.run
+
+base_model:
+  family: gemma
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+
+sae:
+  family: gemma
+  layer_index: 9
+  hook_type: resid_post
+  width: "16k"
+  l0_size: medium
+  model_size: "4b"
+  variant: it
+
+direction:
+  kind: w_dec_parquet        # no download — decoder rows already extracted
+  w_dec_parquet_path: resources/sae_vectors/w_dec_layer9_resid_post_w16384.parquet
+
+features:
+  from_scores_parquet: resources/sae_autointerpret/full_gemma_L9-16k_L29-16k_L29-65k/L9_w16k_resid_post/scores.parquet
+  top_n: 100
+  sort_by: pearson           # pearson | spearman | feature_idx
+
+generation:
+  questions:
+    - "What is your favourite job?"
+    - "How do you feel?"
+    - "Tell me a story."
+    - "What are the values in life?"
+  strengths: [800, 1000, 1200, 1400]
+  include_baseline: true
+  max_tokens: 128
+  temperature: null          # greedy (deterministic, shareable baseline)
+  mode: additive
+  normalise: false
+  max_abs_strength: 2000.0    # Gemma-3 collapses above ~2000
+
+judge:
+  task: steering-judge
+  workers: 4
+  reps_per_worker: 40
+  model_override: sonnet
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  input_dir: resources/jobs/steering-judge/input
+  results_dir: resources/jobs/steering-judge/queue/results
+
+output:
+  output_root: resources/sae_autointerpret_steering
+  run_slug: steering_L9_16k_top100
+
+stages:
+  skip_generate: false
+  skip_judge: false
+  skip_aggregate: false

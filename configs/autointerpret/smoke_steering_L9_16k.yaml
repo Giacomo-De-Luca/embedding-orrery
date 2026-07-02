@@ -1,0 +1,57 @@
+# Steering autointerpreter — cheap end-to-end smoke (2 features, 1 question,
+# 2 strengths, 48 tokens). Validates the whole loop before the overnight run.
+# Run the three incremental passes from the README (generate / judge / aggregate).
+
+base_model:
+  family: gemma
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+
+sae:
+  family: gemma
+  layer_index: 9
+  hook_type: resid_post
+  width: "16k"
+  l0_size: medium
+  model_size: "4b"
+  variant: it
+
+direction:
+  kind: w_dec_parquet
+  w_dec_parquet_path: resources/sae_vectors/w_dec_layer9_resid_post_w16384.parquet
+
+features:
+  # 1055 = "informal slang for excellent", 591 = "definitions with trailing colon"
+  # (both exist in the L9 scores parquet, so the activation-label merge is exercised).
+  feature_indices: [1055, 591]
+  from_scores_parquet: resources/sae_autointerpret/full_gemma_L9-16k_L29-16k_L29-65k/L9_w16k_resid_post/scores.parquet
+
+generation:
+  questions:
+    - "How do you feel?"
+  strengths: [1000, 1400]
+  include_baseline: true
+  max_tokens: 48
+  temperature: null
+  mode: additive
+  normalise: false
+
+judge:
+  task: steering-judge
+  workers: 1
+  reps_per_worker: 4
+  model_override: sonnet
+  poll_interval_seconds: 10
+  fail_on_queue_errors: false
+  input_dir: resources/jobs/steering-judge/input
+  results_dir: resources/jobs/steering-judge/queue/results
+
+output:
+  output_root: resources/sae_autointerpret_steering
+  run_slug: smoke_steering_L9_16k
+
+stages:
+  skip_generate: false
+  skip_judge: false
+  skip_aggregate: false

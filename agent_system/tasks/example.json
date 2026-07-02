@@ -1,0 +1,27 @@
+{
+    "_comment": "Example task config. Copy this file and modify for your task.",
+    "_comment_fields": "Fields starting with _ are stripped by the config loader.",
+
+    "task_name": "example",
+
+    "_comment_agent": "Name of the Claude Code agent definition in .claude/agents/<agent>.md",
+    "agent": "example-worker",
+
+    "_comment_model": "Claude model to use. Default: opus",
+    "model": "opus",
+
+    "_comment_input": "Folder containing input files. Each file = one work item. Any format.",
+    "input_folder": "resources/example_input/",
+
+    "_comment_output": "Optional. If set, files already present here are skipped during init.",
+    "output_folder": "resources/example_output/",
+
+    "_comment_jobs": "Where the manifest, results, and logs are stored.",
+    "jobs_folder": "resources/jobs/example/",
+
+    "_comment_stale": "Minutes before an uncompleted in-progress item is reset to pending. Default: 30",
+    "stale_timeout_minutes": 30,
+
+    "_comment_on_complete": "Optional shell command run when ALL items are done. Supports {jobs_folder}, {input_folder}, {output_folder} substitution.",
+    "on_complete": null
+}

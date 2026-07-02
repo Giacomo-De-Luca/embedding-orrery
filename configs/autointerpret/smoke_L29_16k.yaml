@@ -1,0 +1,75 @@
+# Smoke-test slice for the autointerpreter — collect only.
+#
+# Validates the Stage 1 path (Gemma3-4b-it forward + Gemma-scope SAE L29
+# w16k hook + sparse CSR store) on 1 000 WordNet entries without spending
+# any Claude budget on the agent stages. The downstream `skip_*` flags
+# leave topk/label/eval/score wired but inactive — flip them off in
+# follow-up runs to drive the rest of the pipeline.
+
+run_slug: smoke_L29_16k_last
+
+collect:
+  layer_index: 29
+  hook_type: resid_post
+  width: "16k"
+  l0_size: medium
+  model_size: "4b"
+  variant: it
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+  aggregation: last_token
+  limit: 1000
+  pos_filter: null
+  prompt_template: "{word}: {definition}."
+  add_bos: true
+  use_chat_template: false
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 200
+  resume: true
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 5
+  # Hand-picked 5 features (moderate density 30-100 nonzeros, high mean
+  # activation) so the single label agent finishes in ~1 min. Bump or set
+  # to null once the loop is validated.
+  feature_indices: [14009, 459, 1290, 1291, 752]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  label_workers: 1
+  label_reps_per_worker: 5
+  eval_workers: 1
+  eval_reps_per_worker: 5
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 10
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: false
+  label_store_dir: resources/sae_labels/neuronpedia_gemma-3-4b-it
+  method_name: autointerpret_smoke
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  # Collect + extract + label already produced artifacts on disk; the
+  # queue's init step idempotently skips re-queueing finished items.
+  # Now drive eval (Stage 4) + score (Stage 5).
+  skip_collect: true
+  skip_topk: true
+  skip_label: true
+  skip_eval: false
+  skip_score: false

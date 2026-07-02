@@ -1,6 +1,6 @@
 """Stages 2 & 3 — drive the LLM judge over the generations, then aggregate.
 
-``AgentQueueDriver`` wraps the ``scripts/AgentSystem`` job queue + launcher (the
+``AgentQueueDriver`` wraps the ``interpret/agent_system`` job queue + launcher (the
 same mechanism ``AutoInterpretRunner`` uses, factored out as a runner-agnostic
 class). ``SteeringJudgeInputWriter`` populates the judge's input folder (resetting
 the manifest first, the single most common cause of a silent no-op re-run).
@@ -17,14 +17,14 @@ import sys
 import time
 from pathlib import Path
 
-from interpret.sae.autointerpreter.config import PROJECT_ROOT
+from interpret.sae.autointerpreter.config import AGENT_SYSTEM_DIR
 from interpret.sae.autointerpreter.steering.config import (
     SteeringJudgeConfig,
     resolve_path,
 )
 
-JOB_QUEUE = PROJECT_ROOT / "scripts" / "AgentSystem" / "job_queue.py"
-LAUNCHER = PROJECT_ROOT / "scripts" / "AgentSystem" / "launch_agents.sh"
+JOB_QUEUE = AGENT_SYSTEM_DIR / "job_queue.py"
+LAUNCHER = AGENT_SYSTEM_DIR / "launch_agents.sh"
 
 
 class AgentQueueDriver:

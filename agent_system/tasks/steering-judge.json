@@ -1,0 +1,10 @@
+{
+    "task_name": "steering-judge",
+    "agent": "sae-steering-judge",
+    "model": "sonnet",
+    "input_folder": "resources/jobs/steering-judge/{variant}/input/",
+    "output_folder": "resources/jobs/steering-judge/{variant}/queue/results/",
+    "jobs_folder": "resources/jobs/steering-judge/{variant}/queue/",
+    "stale_timeout_minutes": 20,
+    "on_complete": null
+}
