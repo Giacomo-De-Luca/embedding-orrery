@@ -57,6 +57,238 @@ DimSelect = Literal["all", "top_variance"]
 # Python process was invoked from.
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
+# Toolkit root (the `interpret/` package in the parent repo; the repo root in
+# a standalone astrolabe checkout). Anchors toolkit-internal resources — the
+# agent_system job queue/launcher and the autointerpret YAML configs — so the
+# agent stages keep working when the toolkit is extracted on its own.
+TOOLKIT_ROOT: Path = Path(__file__).resolve().parents[2]
+AGENT_SYSTEM_DIR: Path = TOOLKIT_ROOT / "agent_system"
+
+
+@dataclass
+class SAESpec:
+    """One SAE to capture during a collect pass.
+
+    ``family`` discriminates between Gemma-scope and Qwen-scope; the
+    family-specific fields below are then consumed by :meth:`to_sae_config`.
+    Defaults match the historical single-Gemma path so a yaml that omits
+    family-specific fields still works for Gemma.
+    """
+
+    family: Family = "gemma"
+    layer_index: int = 29
+    hook_type: str = "resid_post"
+    # Shared (Gemma "16k"/"65k"/"262k", Qwen "32k"/"64k"/"80k").
+    width: str = "16k"
+    # Gemma-specific.
+    l0_size: str = "medium"
+    model_size: str = "4b"
+    variant: str = "it"
+    # Qwen-specific (``model_size`` is reused — for Qwen e.g. ``"1.7B"``).
+    k: int = 50
+
+    def to_sae_config(self):
+        """Build the right ``SAEConfig`` subclass for this spec."""
+        if self.family == "gemma":
+            return GemmaScopeSAEConfig(
+                layer_index=self.layer_index,
+                hook_type=HookType(self.hook_type),
+                width=self.width,
+                l0_size=self.l0_size,
+                model_size=self.model_size,
+                variant=self.variant,
+            )
+        if self.family == "qwen":
+            return QwenScopeSAEConfig(
+                layer_index=self.layer_index,
+                hook_type=HookType(self.hook_type),
+                model_size=self.model_size,
+                width=self.width,
+                k=self.k,
+            )
+        raise ValueError(f"Unsupported SAE family: {self.family!r}")
+
+
+@dataclass
+class BaseModelSpec:
+    """Base-LM identification — selects the wrapper used by the collector.
+
+    Defaults to the historical Gemma-3-4b-it path. Switch ``family`` to
+    ``"qwen"`` and update ``checkpoint`` (e.g. ``"Qwen/Qwen3-1.7B-Base"``)
+    to run a Qwen pass.
+    """
+
+    family: Family = "gemma"
+    checkpoint: str = "google/gemma-3-4b-it"
+    device: str = "mps"
+    dtype: str = "bfloat16"
+    add_bos: bool = True
+    use_chat_template: bool = False
+
+
+@dataclass
+class EmbeddingSourceSpec:
+    """Sentence-transformer embedding source for the autointerpreter.
+
+    Produces one pooled (dense, signed) vector per WordNet prompt via the
+    project's embedding factory (``scripts/utils/embedding_database``). A
+    sentence-transformer pools internally, so no per-token ``aggregation``
+    applies on this path.
+    """
+
+    provider: str = "sentence_transformers"
+    model_name: str = "all-MiniLM-L6-v2"
+    device: str = "mps"
+    normalize: bool = False
+    # Prompt preset/string forwarded to the encoder. For EmbeddingGemma use the
+    # sentence-similarity preset ``"STS"``; leave ``None`` for plain encoders
+    # (e.g. all-MiniLM-L6-v2). Known preset names are passed as ``prompt_name``.
+    prompt: str | None = None
+    activation_dtype: Literal["float16", "float32"] = "float32"
+    embed_batch_size: int = 64
+
+
+# Capture points exposed by the forked gemma_pytorch per-layer activation
+# cache, plus the top-level post-final-RMSNorm output.
+RESIDUAL_INTERMEDIATES = {"pre_attn", "post_attn", "mlp_out", "post_mlp", "final_norm"}
+
+
+@dataclass
+class ResidualSiteSpec:
+    """One residual-stream capture point for a raw-dimension collect pass.
+
+    ``intermediate`` names a point in the per-layer cache (``pre_attn`` /
+    ``post_attn`` / ``mlp_out`` / ``post_mlp``) or the top-level
+    ``final_norm`` (after the final RMSNorm — ``layer_index`` is ignored
+    there). ``post_mlp`` at layer L is the layer's output, i.e. the same
+    ``resid_post`` site the Gemma-scope SAEs read, so raw dims collected
+    there are directly comparable to that layer's SAE features.
+    """
+
+    layer_index: int = 29
+    intermediate: str = "post_mlp"
+
+
+@dataclass
+class ResidualSourceSpec:
+    """Raw residual-stream source (no SAE): dense, signed hidden-state dims.
+
+    The base LM comes from the usual ``base_model`` / flat checkpoint fields
+    and ``aggregation`` applies across prefill tokens exactly as on the SAE
+    path. Each site lands in its own :class:`DenseActivationStore`, so the
+    downstream stages treat it like an embedding run (``signed``/``split``
+    dim modes, embed-axis/embed-dim agents).
+    """
+
+    sites: list[ResidualSiteSpec] = field(
+        default_factory=lambda: [ResidualSiteSpec()],
+    )
+    # float32 by default: Gemma-3 late-layer residual components exceed the
+    # float16 max (65504) — a float16 store silently saturates to inf.
+    activation_dtype: Literal["float16", "float32"] = "float32"
+    # Aggregation override for the residual capture: a single mode, a list
+    # of modes, or ``None``. ``None`` inherits the collect-level
+    # ``aggregation`` (the full list on the SAE side-capture path; the
+    # single resolved mode on the standalone residual path). A list writes
+    # one store per (site, aggregation) — e.g. last_token + max_prefill raw
+    # residuals captured during one SAE pass. Multi-mode is honoured only on
+    # the SAE side-capture path; the standalone residual collector is
+    # single-store and rejects a list.
+    aggregation: Aggregation | list[Aggregation] | None = None
+
+
+def residual_subdir(site: ResidualSiteSpec) -> str:
+    """Directory name for one residual site inside a multi-site umbrella run."""
+    if site.intermediate == "final_norm":
+        return "final_norm"
+    return f"L{site.layer_index}_{site.intermediate}"
+
+
+def normalize_aggregations(
+    value: str | list[str] | tuple[str, ...] | None,
+    default: list[str],
+) -> list[str]:
+    """Coerce a str/list/None aggregation field to a validated, unique list.
+
+    ``None`` returns ``default`` (already validated). A str becomes a
+    one-element list. Raises on empty, unknown, or duplicate modes — the
+    same rules as :meth:`AutoInterpretCollectConfig.resolve_aggregations`.
+    """
+    if value is None:
+        return list(default)
+    aggs = list(value) if isinstance(value, (list, tuple)) else [value]
+    if not aggs:
+        raise ValueError("aggregation must name at least one mode")
+    valid = {"last_token", "mean_prefill", "max_prefill"}
+    for agg in aggs:
+        if agg not in valid:
+            raise ValueError(f"aggregation invalid: {agg!r}; valid: {sorted(valid)}")
+    if len(set(aggs)) != len(aggs):
+        raise ValueError(f"aggregation contains duplicates: {aggs}")
+    return aggs
+
+
+def residual_unit_layout(
+    sites: list[ResidualSiteSpec], aggregations: list[str],
+) -> list[tuple[ResidualSiteSpec, str, str]]:
+    """On-disk layout for every (residual site, aggregation) store.
+
+    Returns ``(site, aggregation, subdir_name)`` triples in site-major
+    order. With one aggregation the subdir is the bare ``residual_subdir``
+    (so a single-mode side-capture keeps the historical ``final_norm`` /
+    ``L9_post_mlp`` names); with several it is suffixed ``_<aggregation>``.
+    Unlike the SAE layout there is no root-level (``None``) case — residual
+    side-capture always lands in a named subdir, since ``run_dir`` belongs
+    to the SAE layout.
+    """
+    multi_agg = len(aggregations) > 1
+    layout: list[tuple[ResidualSiteSpec, str, str]] = []
+    for site in sites:
+        for agg in aggregations:
+            base = residual_subdir(site)
+            layout.append((site, agg, f"{base}_{agg}" if multi_agg else base))
+    return layout
+
+
+def sae_subdir(spec: SAESpec) -> str:
+    """Directory name for an SAE's outputs inside a multi-SAE umbrella run.
+
+    Includes layer + width + hook_type to be unique across every
+    combination we expect to mix in one pass (e.g. Gemma L9 W16K +
+    L29 W16K + L29 W65K all resid_post).
+    """
+    return f"L{spec.layer_index}_w{spec.width}_{spec.hook_type}"
+
+
+def sae_unit_layout(
+    specs: list[SAESpec], aggregations: list[str],
+) -> list[tuple[SAESpec, str, str | None]]:
+    """On-disk layout for every (SAE, aggregation) store of a collect pass.
+
+    Returns ``(spec, aggregation, subdir_name)`` triples in spec-major
+    order; ``subdir_name`` is ``None`` for the legacy single-store layout
+    (everything directly under ``run_dir``). Shared by the collector and
+    the runner so the store writer and the downstream stages can never
+    disagree about where a store lives:
+
+    - 1 SAE × 1 aggregation  → legacy root layout (``None``).
+    - N SAEs × 1 aggregation → ``L{n}_w{w}_{hook}`` (historical multi-SAE).
+    - any × M aggregations   → ``L{n}_w{w}_{hook}_{aggregation}``.
+    """
+    multi = len(specs) * len(aggregations) > 1
+    multi_agg = len(aggregations) > 1
+    layout: list[tuple[SAESpec, str, str | None]] = []
+    for spec in specs:
+        for agg in aggregations:
+            if not multi:
+                sub = None
+            elif multi_agg:
+                sub = f"{sae_subdir(spec)}_{agg}"
+            else:
+                sub = sae_subdir(spec)
+            layout.append((spec, agg, sub))
+    return layout
+
 
 @dataclass
 class SAESpec:

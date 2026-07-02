@@ -1,0 +1,80 @@
+# Label + eval + score 200 SAE features (max_prefill) with SONNET, in place.
+# Store: full_gemma_L9-16k_L29-16k_L29-65k_max/L29_w16k_resid_post (gemma-3-4b-it).
+# Reuses the heldout-rerun feature set (the no-contamination prior
+# IT labelling: linspace disjoint from top-k), keeping the band survivors
+# and topping up to 200 from band-eligible features. Lets the same
+# features be scored under max_prefill for a paired comparison.
+# Density band [0.0001, 0.1], nnz>=20; draw seed 42.
+run_slug: full_gemma_L9-16k_L29-16k_L29-65k_max/L29_w16k_resid_post
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-it
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+  aggregation: max_prefill
+  output_root: resources/sae_autointerpret
+  prompt_template: "{word}: {definition}."
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 0.0001
+  density_max: 0.1
+  require_min_nonzero: 20
+  feature_indices: [
+    19, 21, 24, 29, 33, 35, 42, 44, 46, 48,
+    55, 68, 80, 83, 104, 108, 118, 121, 141, 150,
+    151, 166, 173, 183, 187, 210, 215, 219, 230, 231,
+    235, 237, 239, 248, 251, 252, 265, 279, 286, 287,
+    294, 295, 300, 312, 326, 330, 337, 339, 346, 347,
+    355, 358, 361, 390, 397, 399, 414, 423, 437, 438,
+    439, 471, 472, 498, 516, 520, 545, 546, 549, 551,
+    554, 555, 562, 568, 578, 579, 580, 583, 588, 589,
+    594, 598, 601, 602, 604, 605, 608, 611, 614, 615,
+    624, 626, 631, 634, 639, 644, 647, 651, 652, 655,
+    665, 666, 667, 670, 673, 674, 676, 678, 681, 683,
+    1135, 1567, 1652, 1823, 1994, 2066, 2129, 2165, 2239, 2806,
+    2856, 3303, 3419, 3485, 3790, 3945, 4027, 4127, 4573, 4585,
+    5426, 6016, 6220, 6298, 6672, 6820, 6862, 6892, 6912, 7429,
+    7593, 7875, 7983, 8008, 8070, 8118, 8169, 8180, 8401, 8447,
+    8497, 8599, 8924, 8935, 9126, 9337, 9650, 9690, 9792, 9979,
+    10892, 10906, 11067, 11204, 11508, 11599, 11686, 11767, 11866, 11942,
+    11974, 12158, 12428, 12582, 12603, 12793, 12805, 12830, 12994, 13008,
+    13120, 13134, 13188, 13379, 13723, 13802, 13928, 13929, 13959, 14205,
+    14235, 14663, 14765, 14958, 15220, 15233, 15497, 15875, 15897, 15920]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  model_override: sonnet
+  label_workers: 15
+  label_reps_per_worker: 1
+  eval_workers: 15
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

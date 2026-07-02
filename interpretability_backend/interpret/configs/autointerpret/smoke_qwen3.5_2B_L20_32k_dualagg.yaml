@@ -1,0 +1,68 @@
+# Smoke test for multi-aggregation collect: 20 WordNet entries through
+# Qwen3.5-2B with the L20 W32K L0=50 SAE, writing TWO stores from one
+# forward pass (last_token + max_prefill subdirs). Qwen has no BOS, so
+# max_prefill aggregates over all positions here; the BOS-skip path is
+# exercised by the Gemma smoke instead.
+
+run_slug: smoke_qwen3.5_2B_L20_dualagg
+
+collect:
+  base_model:
+    family: qwen
+    checkpoint: Qwen/Qwen3.5-2B-Base
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: qwen, layer_index: 20, hook_type: resid_post, model_size: "2B", width: "32k", k: 50 }
+  aggregation: [last_token, max_prefill]
+  limit: 20
+  pos_filter: null
+  prompt_template: "{word}: {definition}."
+  add_bos: true
+  use_chat_template: false
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 500
+  resume: true
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 5
+  eval_sample_count: 10
+  eval_shuffle_seed: 42
+  density_min: 0.0
+  density_max: 1.0
+  require_min_nonzero: 1
+  feature_indices: null
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  label_workers: 1
+  label_reps_per_worker: 1
+  eval_workers: 1
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 10
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+  fail_on_queue_errors: true
+
+score:
+  write_to_label_store: false
+  label_store_dir: resources/sae_labels/qwen3.5_2B_base
+  method_name: autointerpret
+  min_pearson: 0.3
+  report_ab_split: true
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: true
+  skip_eval: true
+  skip_score: true

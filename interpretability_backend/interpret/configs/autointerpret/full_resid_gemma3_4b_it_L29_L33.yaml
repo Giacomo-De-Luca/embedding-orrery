@@ -1,0 +1,41 @@
+# Full collect: RAW residual-stream activations of gemma-3-4b-it over the
+# whole WordNet corpus (~212k samples). No SAE — stores the dense, signed
+# 2560-dim hidden state per prompt, at two sites in ONE forward pass:
+#   - L29 post_mlp  = resid_post at layer 29, the exact site the Gemma-scope
+#                     L29 SAEs read (direct raw-dims-vs-SAE comparison);
+#   - L33 post_mlp  = resid_post at the last decoder layer (34 layers, 0-33).
+# Collect only — labelling 2560 dims is not the plan; the 200-dim signed
+# label run reuses these activations via extract.activations_run_dir (see
+# label_resid_gemma3_4b_it_L29_200_signed_sonnet.yaml).
+# Long MPS run (~same wall-clock as the original SAE collect): launch under
+# caffeinate, don't pipe through tail (masks the exit code); resume-safe.
+run_slug: resid_gemma3_4b_it_L29_L33
+
+collect:
+  source_kind: residual
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+  use_chat_template: false          # raw "{word}: {definition}." prompt, no chat markers
+  aggregation: last_token           # matches the SAE collect runs
+  limit: null                       # full corpus
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  flush_every: 5000                 # 5000 rows x 2560 x f32 ≈ 51 MB per shard
+                                    # (full corpus: 212k x 2560 x f32 ≈ 2.2 GB per site)
+  resume: true
+  residual:
+    activation_dtype: float32   # f16 overflows: late-layer Gemma residuals exceed 65504
+    sites:
+      - layer_index: 29
+        intermediate: post_mlp
+      - layer_index: 33
+        intermediate: post_mlp
+
+stages:
+  skip_collect: false
+  skip_topk: true                   # downstream runs separately on 200 dims
+  skip_label: true
+  skip_eval: true
+  skip_score: true

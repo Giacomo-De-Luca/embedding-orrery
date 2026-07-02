@@ -42,7 +42,7 @@ uv run python -m interpret.sae.autointerpreter.steering.run   # edits: main() ->
 | `label_similarity.py` | `LabelAgreementAnalyzer` | Post-hoc: embed the steering vs activation `short_name` (sentence-transformer cosine), add a `label_cosine` column, and report the agree/partial/diverge split. |
 
 Agent + task (outside the package, fixed contracts):
-`.claude/agents/sae-steering-judge.md`, `scripts/AgentSystem/tasks/steering-judge.json`.
+`.claude/agents/sae-steering-judge.md`, `interpret/agent_system/tasks/steering-judge.json`.
 Configs: `configs/autointerpret/steering_L9_16k.yaml` (overnight),
 `smoke_steering_L9_16k.yaml` (smoke).
 

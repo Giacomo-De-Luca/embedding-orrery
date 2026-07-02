@@ -1,0 +1,77 @@
+# Held-out + thinking re-run of the Gemma L9 w16k SAE — de-contaminated.
+#
+# Mirrors rerun_gemma_L29_16k_heldout.yaml. Reuses the activations collected by
+# full_gemma_3saes.yaml (the full_gemma_L9-16k_L29-16k_L29-65k/L9_16k subdir),
+# staged into this run dir as read-only SYMLINKS so the original run is never
+# modified. extract runs here (skip_topk: false), so the eval set is regenerated
+# with the held-out fix in extract_top_k.py (linspace disjoint from top-k).
+#
+# Agents: sonnet at effort:high (.claude/agents/*.md frontmatter), one fresh
+# agent per feature (reps_per_worker: 1). 200 label + 200 eval agent sessions,
+# 5 concurrent.
+run_slug: rerun_gemma_L9_16k_heldout
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-it
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 9, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+  aggregation: last_token
+  output_root: resources/sae_autointerpret
+  prompt_template: "{word}: {definition}."
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  feature_indices: [
+    15, 59, 75, 102, 111, 149, 192, 252, 259, 266, 295, 416, 446, 448, 478, 541,
+    577, 585, 591, 610, 619, 621, 687, 693, 698, 705, 707, 708, 718, 722, 726, 729,
+    734, 737, 742, 747, 748, 753, 756, 758, 767, 790, 792, 794, 827, 832, 848, 855,
+    878, 887, 894, 896, 903, 933, 944, 945, 968, 989, 993, 996, 1012, 1047, 1055, 1058,
+    1064, 1066, 1071, 1072, 1077, 1085, 1088, 1092, 1095, 1097, 1110, 1120, 1122, 1132, 1134, 1141,
+    1152, 1156, 1158, 1166, 1171, 1178, 1183, 1185, 1187, 1193, 1200, 1228, 1246, 1248, 1258, 1260,
+    1262, 1263, 1269, 1271, 1273, 1276, 1277, 1283, 1297, 1301, 1330, 1332, 1340, 1377, 1380, 1383,
+    1399, 1401, 1407, 1411, 1413, 1427, 1429, 1431, 1441, 1444, 1462, 1465, 1466, 1472, 1476, 1478,
+    1480, 1488, 1489, 1494, 1505, 1510, 1513, 1518, 1536, 1545, 1547, 1553, 1557, 1558, 1559, 1561,
+    1564, 1567, 1569, 1580, 1587, 1593, 1599, 1603, 1620, 1621, 1625, 1628, 1629, 1631, 1634, 1640,
+    1645, 1649, 1650, 1657, 1659, 1667, 1670, 1671, 1676, 1678, 1687, 1694, 1697, 1712, 1714, 1742,
+    1744, 1746, 1753, 1757, 1765, 1770, 1775, 1776, 1785, 1788, 1789, 1806, 1810, 1814, 1817, 1823,
+    1824, 1830, 1833, 1840, 1842, 1843, 1857, 1860]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  model_override: sonnet
+  label_workers: 5
+  label_reps_per_worker: 1
+  eval_workers: 5
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true     # reuse the staged (symlinked) activations
+  skip_topk: false       # re-extract -> regenerates the HELD-OUT eval set
+  skip_label: false
+  skip_eval: false
+  skip_score: false

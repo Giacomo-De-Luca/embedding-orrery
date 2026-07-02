@@ -1,0 +1,64 @@
+# Debug-slice autointerpreter run: layer 29, width 16k, last-token aggregation,
+# 5 000 WordNet samples. Use this to validate the pipeline end-to-end before
+# committing GPU-hours to the full corpus.
+
+run_slug: debug_L29_16k_last
+
+collect:
+  layer_index: 29
+  hook_type: resid_post
+  width: "16k"
+  l0_size: medium
+  model_size: "4b"
+  variant: it
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+  aggregation: last_token          # last_token | mean_prefill | max_prefill
+  limit: 5000
+  pos_filter: null                 # null = all POS
+  prompt_template: "{word}: {definition}."
+  add_bos: true
+  use_chat_template: false
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 1000
+  resume: true
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  feature_indices: null            # null = all features passing filter
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  label_workers: 5
+  label_reps_per_worker: 100
+  eval_workers: 5
+  eval_reps_per_worker: 100
+  show_zero_fraction_to_evaluator: ab   # on | off | ab
+  poll_interval_seconds: 15
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: true
+  label_store_dir: resources/sae_labels/neuronpedia_gemma-3-4b-it
+  method_name: autointerpret
+  min_pearson: 0.3
+  report_ab_split: true
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

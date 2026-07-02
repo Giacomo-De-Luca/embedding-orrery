@@ -1,0 +1,34 @@
+# Tiny multi-SAE smoke — 10 samples, all three Gemma SAEs.
+# Used to verify the Phase A/B/C refactor end-to-end before launching
+# the full ~7 h pass. Stages 2-5 skipped.
+
+run_slug: smoke_gemma_3saes
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-it
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 9,  hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: it }
+    - { family: gemma, layer_index: 29, hook_type: resid_post, width: "65k", l0_size: medium, model_size: "4b", variant: it }
+  aggregation: last_token
+  limit: 10
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 5
+  resume: false
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+stages:
+  skip_collect: false
+  skip_topk: true
+  skip_label: true
+  skip_eval: true
+  skip_score: true

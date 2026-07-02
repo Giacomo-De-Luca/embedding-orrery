@@ -1,0 +1,63 @@
+# Label + evaluate 100 MiniLM embedding dimensions (SIGNED axes) with SONNET.
+# Reuses the activations collected by full_embed_minilm.yaml (no re-embedding):
+# skip_collect + extract.activations_run_dir point at that run. Writes its own
+# topk/linspace/labels/evaluator/scores under a separate run_dir.
+#
+# Labels 100 RANDOM dimensions (of MiniLM's 384), an unbiased sample for the
+# monosemanticity baseline. The indices below are a fixed seeded draw
+# (numpy default_rng(42).choice(384, 100, replace=False), sorted) so the run is
+# reproducible and auditable. Re-draw with a different seed to sample again.
+run_slug: emb_minilm_signed_100_sonnet
+
+collect:
+  source_kind: embedding
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  embedding:
+    provider: sentence_transformers
+    model_name: all-MiniLM-L6-v2
+    device: mps
+    normalize: false
+    prompt: null
+    activation_dtype: float16
+
+extract:
+  dim_mode: signed
+  select: all               # feature_indices below picks the random 100
+  top_k: 20                 # 10 most-positive + 10 most-negative samples shown
+  eval_sample_count: 50
+  activations_run_dir: resources/sae_autointerpret/emb_minilm_signed_full
+  feature_indices: [14, 20, 22, 25, 26, 27, 29, 36, 38, 46, 52, 53, 56, 58, 59,
+    65, 67, 71, 82, 89, 91, 109, 113, 114, 116, 119, 122, 125, 126, 127, 130,
+    136, 139, 141, 143, 146, 147, 152, 154, 155, 157, 159, 163, 165, 166, 168,
+    170, 171, 176, 186, 187, 199, 203, 204, 214, 218, 221, 225, 226, 229, 232,
+    234, 235, 241, 243, 246, 247, 248, 254, 256, 257, 259, 260, 266, 275, 282,
+    283, 285, 286, 288, 290, 296, 302, 306, 310, 311, 317, 318, 320, 334, 336,
+    340, 342, 343, 362, 369, 371, 376, 382, 383]
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  model_override: sonnet     # overrides the task JSON's haiku for both stages
+  label_workers: 5
+  label_reps_per_worker: 100
+  eval_workers: 5
+  eval_reps_per_worker: 100
+  show_zero_fraction_to_evaluator: "off"
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true         # reuse the already-collected activations
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

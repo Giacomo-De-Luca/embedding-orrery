@@ -1,0 +1,10 @@
+{
+    "task_name": "autointerpret-eval",
+    "agent": "sae-label-evaluator",
+    "model": "haiku",
+    "input_folder": "resources/jobs/autointerpret-eval/{variant}/input/",
+    "output_folder": "resources/jobs/autointerpret-eval/{variant}/queue/results/",
+    "jobs_folder": "resources/jobs/autointerpret-eval/{variant}/queue/",
+    "stale_timeout_minutes": 10,
+    "on_complete": null
+}

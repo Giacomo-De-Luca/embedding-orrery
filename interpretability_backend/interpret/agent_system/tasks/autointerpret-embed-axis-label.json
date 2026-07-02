@@ -1,0 +1,10 @@
+{
+    "task_name": "autointerpret-embed-axis-label",
+    "agent": "embed-axis-interpreter",
+    "model": "haiku",
+    "input_folder": "resources/jobs/autointerpret-embed-axis-label/{variant}/input/",
+    "output_folder": "resources/jobs/autointerpret-embed-axis-label/{variant}/queue/results/",
+    "jobs_folder": "resources/jobs/autointerpret-embed-axis-label/{variant}/queue/",
+    "stale_timeout_minutes": 10,
+    "on_complete": null
+}

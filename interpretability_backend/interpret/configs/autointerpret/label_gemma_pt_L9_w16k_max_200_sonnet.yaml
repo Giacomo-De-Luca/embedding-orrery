@@ -1,0 +1,76 @@
+# Label + eval + score 200 SAE features (max_prefill) with SONNET, in place.
+# Store: full_gemma_pt_L9-16k_L29-16k_L29-65k_dual/L9_w16k_resid_post_max_prefill (gemma-3-4b-pt).
+# Density band [0.0001, 0.1], nnz>=20; draw seed 42.
+run_slug: full_gemma_pt_L9-16k_L29-16k_L29-65k_dual/L9_w16k_resid_post_max_prefill
+
+collect:
+  base_model:
+    family: gemma
+    checkpoint: google/gemma-3-4b-pt
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: gemma, layer_index: 9, hook_type: resid_post, width: "16k", l0_size: medium, model_size: "4b", variant: pt }
+  aggregation: max_prefill
+  output_root: resources/sae_autointerpret
+  prompt_template: "{word}: {definition}."
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 0.0001
+  density_max: 0.1
+  require_min_nonzero: 20
+  feature_indices: [
+    132, 421, 555, 608, 642, 741, 1108, 1211, 1306, 1458,
+    1537, 1669, 1728, 1743, 1778, 1779, 1780, 1815, 1890, 2056,
+    2174, 2259, 2381, 2393, 2432, 2604, 2613, 2803, 2818, 2924,
+    2964, 2985, 3065, 3071, 3251, 3402, 3471, 3571, 3585, 3847,
+    4004, 4021, 4177, 4255, 4286, 4356, 4792, 4855, 4863, 4926,
+    5024, 5159, 5304, 5305, 5418, 5599, 5655, 5793, 5898, 5954,
+    5988, 6040, 6179, 6234, 6263, 6298, 6542, 6562, 6722, 6868,
+    6884, 6906, 6930, 7059, 7140, 7227, 7262, 7282, 7309, 7331,
+    7332, 7371, 7394, 7444, 7449, 7531, 7655, 7681, 7708, 7756,
+    7761, 7834, 7848, 7867, 8202, 8321, 8353, 8424, 8428, 8436,
+    8481, 8654, 8972, 9031, 9133, 9245, 9254, 9316, 9320, 9330,
+    9405, 9413, 9459, 9560, 10042, 10178, 10345, 10398, 10537, 10545,
+    10548, 10561, 10667, 10828, 10971, 11002, 11009, 11033, 11035, 11070,
+    11174, 11229, 11255, 11328, 11387, 11417, 11472, 11570, 11573, 11595,
+    11633, 11883, 11908, 11974, 12108, 12136, 12316, 12368, 12483, 12548,
+    12573, 12645, 12651, 12692, 12753, 12773, 12781, 12860, 12902, 12929,
+    12991, 13016, 13085, 13121, 13288, 13366, 13385, 13471, 13510, 13517,
+    13520, 13551, 13656, 13755, 13796, 13929, 13950, 13994, 14287, 14382,
+    14534, 14598, 14748, 14845, 14861, 14988, 15175, 15333, 15542, 15549,
+    15551, 15684, 15735, 15957, 16013, 16039, 16137, 16216, 16288, 16364]
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  model_override: sonnet
+  label_workers: 15
+  label_reps_per_worker: 1
+  eval_workers: 15
+  eval_reps_per_worker: 1
+  show_zero_fraction_to_evaluator: "off"
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: true
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false

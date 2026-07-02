@@ -14,11 +14,12 @@ This package is part of the self-contained `interpret/` toolkit and carries no
 parent-repo dependencies. Project-specific bits plug in from outside via two
 extension points:
 
-- **Manifest builders** — concrete, dataset-specific builders live with their
-  data (e.g. this repo's colour/Glasgow builders in
-  `scripts.interpretability.probing.manifests`) and are named from the YAML by
-  dotted path (`"module:Class"`), resolved by `ManifestSpec.resolve`. The engine
-  ships only the abstract `manifests.manifest_base.ManifestBuilder`.
+- **Manifest builders** — named from the YAML by dotted path (`"module:Class"`),
+  resolved by `ManifestSpec.resolve`. The toolkit ships the abstract
+  `manifests.manifest_base.ManifestBuilder` plus a few self-contained concrete
+  builders (`feature_csv`, `glasgow`, `xkcd`). Builders that need external image
+  assets (colour patches, THINGS-coloured) live with their host project (e.g.
+  `scripts.interpretability.probing.manifests`).
 - **Distance metrics** — an optional probe-evaluation metric (e.g.
   `val_lab_distance`, mean CIEDE2000 over LAB targets) is selected via a probe
   spec's `distance:` dotted path, resolved to an
@@ -194,7 +195,7 @@ output_dir: resources/experiments/glasgow_psycholinguistic_norms
 
 # Manifest: Python path string to a ManifestBuilder subclass + kwargs.
 manifest:
-  path: scripts.interpretability.probing.manifests.glasgow:GlasgowManifestBuilder
+  path: interpret.probing.manifests.glasgow:GlasgowManifestBuilder
   kwargs:
     glasgow_only: false
 
@@ -392,7 +393,7 @@ encoder over different manifests would otherwise collide.
 1. Decide on a name describing the *manifest + targets* (not the backbones
    or probes — those are config knobs). Example: `glasgow_imageability_only`.
 2. Create `scripts/interpretability/experiments/<name>/experiment.yaml`.
-3. Reference an existing manifest builder (`scripts.interpretability.probing.manifests.glasgow:GlasgowManifestBuilder`)
+3. Reference an existing manifest builder (`interpret.probing.manifests.glasgow:GlasgowManifestBuilder`)
    or implement a new one in `probing/manifests/`.
 4. Pick extraction names. If reusing a previously-extracted activation
    (e.g. `gemma_glasgow`), use the same `name` and matching config — the

@@ -1,0 +1,65 @@
+# Steering autointerpreter — non-Pearson run.
+# 100 seeded-random *active* L9/16k features (density band [0.001, 0.02], to drop
+# dead/ultra-sparse and ubiquitous features), labelled by their Neuronpedia label
+# rather than activation-autointerpret Pearson. Two strengths to save time.
+# ~3.1h generation + judging.
+#
+#   uv run python -m interpret.sae.autointerpreter.steering.run  (point main() here)
+
+base_model:
+  family: gemma
+  checkpoint: google/gemma-3-4b-it
+  device: mps
+  dtype: bfloat16
+
+sae:
+  family: gemma
+  layer_index: 9
+  hook_type: resid_post
+  width: "16k"
+  l0_size: medium
+  model_size: "4b"
+  variant: it
+
+direction:
+  kind: w_dec_parquet
+  w_dec_parquet_path: resources/sae_vectors/w_dec_layer9_resid_post_w16384.parquet
+
+features:
+  random_sample: 100
+  random_seed: 42
+  density_min: 0.001
+  density_max: 0.02
+
+generation:
+  questions:
+    - "What is your favourite job?"
+    - "How do you feel?"
+    - "Tell me a story."
+    - "What are the values in life?"
+  strengths: [1000, 1200]
+  include_baseline: true
+  max_tokens: 128
+  temperature: null
+  mode: additive
+  normalise: false
+  max_abs_strength: 2000.0
+
+judge:
+  task: steering-judge
+  workers: 4
+  reps_per_worker: 40
+  model_override: sonnet
+  poll_interval_seconds: 15
+  fail_on_queue_errors: false
+  input_dir: resources/jobs/steering-judge/input
+  results_dir: resources/jobs/steering-judge/queue/results
+
+output:
+  output_root: resources/sae_autointerpret_steering
+  run_slug: steering_L9_16k_random100
+
+stages:
+  skip_generate: false
+  skip_judge: false
+  skip_aggregate: false

@@ -1,0 +1,10 @@
+{
+    "task_name": "autointerpret-embed-axis-eval",
+    "agent": "embed-axis-evaluator",
+    "model": "haiku",
+    "input_folder": "resources/jobs/autointerpret-embed-axis-eval/{variant}/input/",
+    "output_folder": "resources/jobs/autointerpret-embed-axis-eval/{variant}/queue/results/",
+    "jobs_folder": "resources/jobs/autointerpret-embed-axis-eval/{variant}/queue/",
+    "stale_timeout_minutes": 10,
+    "on_complete": null
+}

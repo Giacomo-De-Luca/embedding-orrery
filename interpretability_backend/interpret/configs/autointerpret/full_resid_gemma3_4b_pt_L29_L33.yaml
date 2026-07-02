@@ -1,0 +1,35 @@
+# Same as full_resid_gemma3_4b_it_L29_L33.yaml but on the PRE-TRAINED
+# (non-instruction-tuned) gemma-3-4b-pt checkpoint, for an it-vs-base
+# comparison of raw residual dimensions. The checkpoint is HF-gated and
+# ~8 GB — it downloads to the HF cache on first run.
+# Note: the Gemma-scope SAEs were trained on the *it* residual stream, so
+# only the raw-dim halves of the comparison apply here.
+run_slug: resid_gemma3_4b_pt_L29_L33
+
+collect:
+  source_kind: residual
+  checkpoint: google/gemma-3-4b-pt
+  device: mps
+  dtype: bfloat16
+  use_chat_template: false
+  aggregation: last_token
+  limit: null
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  flush_every: 5000
+  resume: true
+  residual:
+    activation_dtype: float32   # f16 overflows: late-layer Gemma residuals exceed 65504
+    sites:
+      - layer_index: 29
+        intermediate: post_mlp
+      - layer_index: 33
+        intermediate: post_mlp
+
+stages:
+  skip_collect: false
+  skip_topk: true
+  skip_label: true
+  skip_eval: true
+  skip_score: true

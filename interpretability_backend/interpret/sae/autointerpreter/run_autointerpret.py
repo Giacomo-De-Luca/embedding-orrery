@@ -7,7 +7,7 @@ Entry point for one or more experiments. Stages::
 Any stage can be skipped via ``stages.skip_*`` flags, and each experiment
 runs in its own ``run_dir = output_root/<run_slug>/``.
 
-The agent stages shell out to the existing ``scripts/AgentSystem`` job
+The agent stages shell out to the existing ``interpret/agent_system`` job
 queue and launcher, then poll for completion. No CLI flags — edit
 :func:`main` or call :func:`run_from_yaml` directly.
 
@@ -40,7 +40,8 @@ from interpret.sae.autointerpreter.collect_activations import ActivationCollecto
 from interpret.sae.autointerpreter.collect_embeddings import EmbeddingCollector
 from interpret.sae.autointerpreter.collect_residuals import ResidualCollector
 from interpret.sae.autointerpreter.config import (
-    PROJECT_ROOT,
+    AGENT_SYSTEM_DIR,
+    TOOLKIT_ROOT,
     AgentStageConfig,
     AutoInterpretCollectConfig,
     AutoInterpretConfig,
@@ -54,8 +55,8 @@ from interpret.sae.autointerpreter.extract_top_k import TopKFeatureExtractor
 from interpret.sae.autointerpreter.prepare_agent_inputs import AgentInputWriter
 from interpret.sae.autointerpreter.score_autointerpret import AutoInterpretScorer
 
-JOB_QUEUE = PROJECT_ROOT / "scripts" / "AgentSystem" / "job_queue.py"
-LAUNCHER = PROJECT_ROOT / "scripts" / "AgentSystem" / "launch_agents.sh"
+JOB_QUEUE = AGENT_SYSTEM_DIR / "job_queue.py"
+LAUNCHER = AGENT_SYSTEM_DIR / "launch_agents.sh"
 
 
 @dataclass
@@ -446,7 +447,7 @@ def run_from_yaml(path: Path | str) -> None:
 def main() -> None:
     """Default run. Edit ``inputs.config_path`` to point at your YAML."""
     inputs = RunnerInputs(
-        config_path=PROJECT_ROOT / "configs" / "autointerpret" / "debug_L29_16k.yaml",
+        config_path=TOOLKIT_ROOT / "configs" / "autointerpret" / "debug_L29_16k.yaml",
     )
     run_from_yaml(inputs.config_path)
 

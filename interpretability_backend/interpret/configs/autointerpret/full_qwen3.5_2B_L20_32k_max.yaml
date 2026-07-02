@@ -1,0 +1,77 @@
+# max_prefill re-collect of Qwen3.5-2B L20 W32K L0=50.
+#
+# Redo of full_qwen3.5_2B_L20_32k.yaml with aggregation: max_prefill —
+# the original last_token run remains untouched under
+# full_qwen3.5_2B_L20_w32k_l0_50/ (new run_slug, no overwrite). Qwen has
+# no BOS token, so position 0 is real content and the max runs over the
+# whole prefill (the BOS skip only engages on wrappers that prepend one).
+#
+# Expected runtime on MPS: ~7 h (212,478 samples at ~8 samples/s).
+# Safe to interrupt: resume skips samples already in the on-disk index.
+
+run_slug: full_qwen3.5_2B_L20_w32k_l0_50_max
+
+collect:
+  base_model:
+    family: qwen
+    checkpoint: Qwen/Qwen3.5-2B-Base
+    device: mps
+    dtype: bfloat16
+    add_bos: true
+    use_chat_template: false
+  saes:
+    - { family: qwen, layer_index: 20, hook_type: resid_post, model_size: "2B", width: "32k", k: 50 }
+  aggregation: max_prefill
+  limit: null
+  pos_filter: null
+  prompt_template: "{word}: {definition}."
+  add_bos: true
+  use_chat_template: false
+  output_root: resources/sae_autointerpret
+  activation_dtype: float16
+  sparse_threshold: 1.0e-6
+  flush_every: 500
+  resume: true
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+
+extract:
+  top_k: 50
+  eval_sample_count: 50
+  eval_shuffle_seed: 42
+  density_min: 1.0e-5
+  density_max: 0.3
+  require_min_nonzero: 50
+  feature_indices: null
+
+agents:
+  label_task: autointerpret-label
+  eval_task: autointerpret-eval
+  label_workers: 5
+  label_reps_per_worker: 100
+  eval_workers: 5
+  eval_reps_per_worker: 100
+  show_zero_fraction_to_evaluator: ab
+  poll_interval_seconds: 30
+  label_input_dir: resources/jobs/autointerpret-label/input
+  label_results_dir: resources/jobs/autointerpret-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-eval/input
+  eval_results_dir: resources/jobs/autointerpret-eval/queue/results
+  fail_on_queue_errors: true
+
+score:
+  # Off until a label store for Qwen-scope is deliberately initialised:
+  # the push writes under the SAE config's model id into label_store_dir
+  # unconditionally (there is no dir/model-id mismatch guard), and
+  # FeatureLabelStore requires the dir to already exist.
+  write_to_label_store: false
+  label_store_dir: resources/sae_labels/qwen3.5_2B_base
+  method_name: autointerpret
+  min_pearson: 0.3
+  report_ab_split: true
+
+stages:
+  skip_collect: false
+  skip_topk: true
+  skip_label: true
+  skip_eval: true
+  skip_score: true

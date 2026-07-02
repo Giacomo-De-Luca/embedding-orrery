@@ -1,0 +1,56 @@
+# Full run: autointerpret on ALL 768 google/embeddinggemma-300M embedding
+# dimensions (SIGNED mode) over the whole WordNet corpus.
+# embeddinggemma is HF-gated — the collector logs in on GatedRepoError; ensure
+# HUGGINGFACE_API_KEY is set in the environment / .env.
+# Uses the sentence-similarity preset (prompt: STS), NOT Retrieval-document:
+# we want glosses placed by symmetric semantic similarity.
+run_slug: emb_embeddinggemma_signed_full
+
+collect:
+  source_kind: embedding
+  limit: null
+  prompt_template: "{word}: {definition}."
+  output_root: resources/sae_autointerpret
+  wordnet_xml_path: resources/dictionaries/english-wordnet-2024.xml
+  flush_every: 20000
+  resume: true
+  embedding:
+    provider: sentence_transformers
+    model_name: google/embeddinggemma-300M     # 768-dim
+    device: mps
+    normalize: false
+    prompt: STS                                 # sentence-similarity preset
+    activation_dtype: float16
+    embed_batch_size: 64
+
+extract:
+  dim_mode: signed
+  select: all                                   # all 768 dims
+  top_k: 20
+  eval_sample_count: 50
+  feature_indices: null
+
+agents:
+  label_task: autointerpret-embed-axis-label
+  eval_task: autointerpret-embed-axis-eval
+  label_workers: 5
+  label_reps_per_worker: 100
+  eval_workers: 5
+  eval_reps_per_worker: 100
+  show_zero_fraction_to_evaluator: "off"
+  label_input_dir: resources/jobs/autointerpret-embed-axis-label/input
+  label_results_dir: resources/jobs/autointerpret-embed-axis-label/queue/results
+  eval_input_dir: resources/jobs/autointerpret-embed-axis-eval/input
+  eval_results_dir: resources/jobs/autointerpret-embed-axis-eval/queue/results
+
+score:
+  write_to_label_store: false
+  min_pearson: -1.0
+  report_ab_split: false
+
+stages:
+  skip_collect: false
+  skip_topk: false
+  skip_label: false
+  skip_eval: false
+  skip_score: false
