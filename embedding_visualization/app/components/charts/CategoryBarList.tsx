@@ -40,6 +40,12 @@ function formatPct(fraction: number): string {
   return pct < 1 ? '<1%' : `${pct}%`;
 }
 
+/** Proportional bar width, floored to a small chip so tiny categories don't look clipped. */
+function barWidth(fraction: number): string {
+  if (fraction <= 0) return '0px';
+  return `max(${(fraction * 100).toFixed(2)}%, 0.5rem)`;
+}
+
 interface CategoryBarListProps {
   categoryField: string | null;
   categoryValues: string[];
@@ -118,7 +124,7 @@ export function CategoryBarList({
 
   return (
     <Card className="gap-0 border-0 bg-transparent py-0 shadow-none">
-      <CardHeader className="gap-1.5 px-0 pb-2">
+      <CardHeader className="gap-2 px-0 pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="min-w-0 truncate text-sm">
             {hasData ? `${displayName} Distribution` : 'Distribution'}
@@ -215,14 +221,14 @@ export function CategoryBarList({
                         {filterActive && (
                           <span
                             aria-hidden
-                            className="absolute inset-y-0 left-0 rounded-sm transition-[width] duration-300"
-                            style={{ width: `${row.trackFraction * 100}%`, backgroundColor: color, opacity: 0.15 }}
+                            className="absolute inset-y-0 left-0 rounded-l-sm rounded-r-full transition-[width] duration-300"
+                            style={{ width: barWidth(row.trackFraction), backgroundColor: color, opacity: 0.15 }}
                           />
                         )}
                         <span
                           aria-hidden
-                          className="absolute inset-y-0 left-0 rounded-sm transition-[width] duration-300"
-                          style={{ width: `${fillFraction * 100}%`, backgroundColor: color, opacity: 0.35 }}
+                          className="absolute inset-y-0 left-0 rounded-l-sm rounded-r-full transition-[width] duration-300"
+                          style={{ width: barWidth(fillFraction), backgroundColor: color, opacity: 0.35 }}
                         />
                         <span className={cn('relative z-10 min-w-0 flex-1 truncate text-xs', isMuted && 'line-through')}>
                           {row.label}
@@ -247,7 +253,7 @@ export function CategoryBarList({
             <p className="text-xs text-muted-foreground">No categories match the filter.</p>
           )}
           {onCategoryToggle && rows.length > 0 && (
-            <p className="pt-1.5 text-[10px] text-muted-foreground/70">
+            <p className="pt-2 text-[10px] text-muted-foreground/70">
               Click to isolate · Shift+click to toggle
             </p>
           )}

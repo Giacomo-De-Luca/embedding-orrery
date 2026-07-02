@@ -1,19 +1,33 @@
-# Topic-Quality Evaluation
+# Evaluation
 
-Standalone metrics for scoring extracted topics, plus a config-driven runner. This
-package is intentionally decoupled from the extraction pipeline and from the
+Standalone metrics for scoring embedding analyses, plus config-driven runners.
+This package is intentionally decoupled from the extraction pipeline and from the
 GraphQL/DuckDB layers — it reads existing data, computes scores, and reports them.
 Persisting metrics to DuckDB or exposing them over GraphQL is deliberately **not**
 done here yet (a later decision).
+
+Two independent evaluators live here:
+
+1. **Topic quality** — `TopicQualityEvaluator` (this file, below).
+2. **Projection fidelity** — `ProjectionFidelityEvaluator`: how faithfully a
+   projection (UMAP/PCA) preserves the embedding geometry and, for colour
+   datasets, perceptual colour distance, via the Mantel test. See the dedicated
+   section at the end of this README and
+   [`documentation/PROJECTION_FIDELITY.md`](../../documentation/PROJECTION_FIDELITY.md)
+   for methodology + results.
 
 ## Structure
 
 | File | Purpose |
 |---|---|
-| `quality_metrics.py` | `TopicQualityEvaluator` — the metric implementations (pure, no DB/model). |
-| `run_evaluation.py` | Config-driven runner: loads current labels + projections + embeddings, evaluates, prints a report, writes JSON. |
+| `quality_metrics.py` | `TopicQualityEvaluator` — topic metric implementations (pure, no DB/model). |
+| `run_evaluation.py` | Config-driven topic-quality runner: loads current labels + projections + embeddings, evaluates, prints a report, writes JSON. |
 | `eval_config.toml` | Which collections to evaluate and the metric parameters. |
-| `evaluation_results.json` | Output (generated). |
+| `evaluation_results.json` | Topic-quality output (generated). |
+| `projection_fidelity.py` | `ProjectionFidelityEvaluator` — Mantel-test projection fidelity (pure, no DB/model). |
+| `run_projection_fidelity.py` | Config-driven fidelity runner: loads projections + item metadata + embeddings, evaluates, prints a report, writes JSON. |
+| `projection_fidelity_config.toml` | Collections, projections, colour field, and Mantel parameters. |
+| `projection_fidelity_results.json` | Projection-fidelity output (generated). |
 
 ## Run
 
@@ -57,8 +71,34 @@ persisted with an extraction. When re-scoring stored labels here it is therefore
 `null`; it is populated only inside a fresh-extraction flow that still holds the
 fitted model.
 
+## Projection fidelity (Mantel test)
+
+`ProjectionFidelityEvaluator` scores how well a projection preserves a reference
+distance structure, via a Mantel test (Spearman rank correlation between two
+pairwise-distance structures + a permutation significance test).
+
+```bash
+# with the backend stopped (DuckDB is single-writer)
+uv run python -m interpretability_backend.evaluation.run_projection_fidelity
+```
+
+| Statistic | Measures | Notes |
+|---|---|---|
+| **Global ρ** | Whole distance ordering preserved | Spearman over all `N·(N−1)/2` pairs. |
+| **kNN-local ρ** | Local neighbourhoods preserved | Neighbours taken in the *reference* space; `k` configurable. |
+| **Permutation z / p_emp** | Significance vs a relabelling null | `n_perms` joint row/col permutations of the target. |
+
+References: **embedding** (cosine) and, for colour datasets, **perceptual colour**
+(CIEDE2000 via `colour_field`). Targets: the configured projections
+(`umap_3d`, `pca_3d`, …). scikit-image is imported lazily and only needed for the
+colour reference. Full methodology + the `xkcd_hilbert_gemini` results (UMAP-3D
+preserves perceptual colour at ρ = 0.60; PCA-3D preserves embedding *global*
+geometry better; UMAP wins *local*) are in
+[`documentation/PROJECTION_FIDELITY.md`](../../documentation/PROJECTION_FIDELITY.md).
+
 ## Tests
 Unit tests (synthetic data, no DB/model):
 ```bash
 uv run pytest interpretability_backend/unit_tests/test_topic_quality_metrics.py -v
+uv run pytest interpretability_backend/unit_tests/test_projection_fidelity.py -v
 ```

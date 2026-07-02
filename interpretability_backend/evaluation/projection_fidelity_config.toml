@@ -1,0 +1,31 @@
+# Projection-fidelity (Mantel) evaluation config.
+# Run: uv run python -m interpretability_backend.evaluation.run_projection_fidelity
+# Override path with the ORRERY_PROJECTION_FIDELITY_CONFIG env var.
+
+# Collections (ChromaDB collection names) to evaluate. Each must have the listed
+# projections and embeddings.
+collections = ["xkcd_hilbert_gemini"]
+
+# Which projections to score against the reference structures.
+# Any of: pca_2d, pca_3d, umap_2d, umap_3d
+projection_types = ["umap_3d", "pca_3d"]
+
+# Item-metadata field holding a hex colour ("#rrggbb"). If present and valid, a
+# perceptual (CIEDE2000) colour reference is added. Set to "" to disable colour.
+colour_field = "colour_code"
+
+# kNN neighbourhood size for the local Spearman probe.
+k = 10
+
+# Permutations for the significance test (0 disables it).
+n_perms = 1000
+
+# RNG seed (permutation test + subsampling).
+seed = 42
+
+# Max items used (cost guard; pairwise distances are O(N^2)). Collections larger
+# than this are randomly subsampled to this many items.
+sample_size = 2000
+
+# Where the JSON results are written.
+output_path = "interpretability_backend/evaluation/projection_fidelity_results.json"

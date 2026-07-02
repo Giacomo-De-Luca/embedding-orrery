@@ -14,9 +14,7 @@ The application runs at 60 FPS with 250k points — animations and nebula mode i
 
 ## Gallery
 
-![SAE Feature Explorer with steered chat](gallery/poetry.jpg)
 
-*Find a feature, inspect it, steer the model — on one page: with the "poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite job?" in verse.*
 
 | | |
 |---|---|
@@ -24,6 +22,10 @@ The application runs at 60 FPS with 250k points — animations and nebula mode i
 | WordNet (212k senses) with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
 | ![XKCD Colors](gallery/Gemini_XKCD_PCA.png) | ![Concreteness](gallery/concreteness.jpg) |
 | XKCD colour words coloured by their actual hex value — embedding space mirrors perceptual colour space | Word norms coloured by concreteness rating — a psycholinguistic dimension as a spatial gradient |
+
+![SAE Feature Explorer with steered chat](gallery/poetry.jpg)
+
+*Find a feature in the scatterplot, inspect it, steer the model: with the "poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite job?" in verse.*
 
 ## Quick Start
 
