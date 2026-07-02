@@ -725,7 +725,7 @@ export function DashboardPanel({
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <Link
-            href={`/features?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
+            href={`/sae?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
             className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
             onClick={() => setContextMenu(null)}
           >

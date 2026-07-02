@@ -121,7 +121,7 @@ export function SaeLinkSection({
               Linked
             </Badge>
             <Link
-              href={`/features?modelId=${encodeURIComponent(linkedModelId)}&saeId=${encodeURIComponent(linkedSaeId)}`}
+              href={`/sae?modelId=${encodeURIComponent(linkedModelId)}&saeId=${encodeURIComponent(linkedSaeId)}`}
               className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
             >
               Open in Feature Explorer

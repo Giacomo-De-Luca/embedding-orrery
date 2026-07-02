@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import type { SaeFeature } from '@/lib/types/types';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { UPDATE_SAE_FEATURE_LABEL } from '@/lib/graphql/mutations';
-import { InlineEditableField } from '@/app/test-embed/components/InlineEditableField';
+import { InlineEditableField } from '@/app/collections/components/InlineEditableField';
 import { LogitBarChart } from './LogitBarChart';
 
 interface FeatureDetailCardProps {

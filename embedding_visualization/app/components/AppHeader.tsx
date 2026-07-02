@@ -220,15 +220,15 @@ export function AppHeader({
           <Link href={(() => {
             const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
             return sae
-              ? `/features?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
-              : '/features';
+              ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
+              : '/sae';
           })()}>
             <Button variant="outline" className="gap-2">
               <Brain className="w-4" />
               <span className="hidden sm:inline">Features</span>
             </Button>
           </Link>
-          <Link href="/test-embed">
+          <Link href="/collections">
             <Button variant="outline" className="gap-2 embeddingButton">
               <Upload className=" w-4" />
               <span className="hidden sm:inline">Embed</span>

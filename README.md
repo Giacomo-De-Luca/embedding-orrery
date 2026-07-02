@@ -4,7 +4,7 @@
 
 Orrery is an open-source vector visualisation platform with native Sparse Autoencoder (SAE) support, built for data exploration and interpretability research. The platform provides two end-to-end pipelines. The first turns any dataset into an explorable 3D constellation by embedding, projecting, clustering, auto-labelling the clusters, and (optionally) collecting SAE activations for the dataset.
 
-The second visualises SAE decoder vectors as constellation points. Each feature-point can be examined in a Neuronpedia-inspired dashboard and used directly to steer the model.
+The second visualises SAE decoder vectors as constellation points in a 3 dimensional space. The constellation can be explored visually, via texual and semantic search, or highlighting points activated by a prompt. Interesting feature-point can be diretly examined in a Neuronpedia-inspired dashboard and used directly to steer the model.
 
 The application runs at 60 FPS with 250k points — animations and nebula mode included — on 8 GB of VRAM.
 
@@ -84,8 +84,8 @@ Data Sources --> Embedding Providers --> DuckDB (docs, metadata, projections, to
 ## Pages
 
 - **`/`** — Visualisation dashboard (2D/3D scatter, semantic/text search, topics, temporal filtering, analytical colouring)
-- **`/features`** — SAE Feature Explorer (activation heatmaps, logit charts, prompt explorer, steering chat)
-- **`/test-embed`** — Dataset management (embed, manage collections, extract topics, configure SAE links)
+- **`/sae`** — SAE Feature Explorer (activation heatmaps, logit charts, prompt explorer, steering chat)
+- **`/collections`** — Dataset management (embed, manage collections, extract topics, configure SAE links)
 
 ## Environment Variables
 
