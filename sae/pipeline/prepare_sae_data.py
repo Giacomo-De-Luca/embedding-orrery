@@ -237,12 +237,22 @@ class SAEPipelineRunner:
         result: SAEPipelineResult,
         progress_callback: ProgressCallback,
     ) -> None:
+        output_path = sae_paths.vectors_parquet_path(self.config.sae)
+
         if self.config.skip_extract:
             print("\n[3/3] Skipping decoder vector extraction")
             # Check if parquet already exists
-            parquet_path = sae_paths.vectors_parquet_path(self.config.sae)
-            if parquet_path.exists():
-                result.features_parquet = parquet_path
+            if output_path.exists():
+                result.features_parquet = output_path
+            return
+
+        # Skip re-extraction if the parquet already exists — avoids a costly
+        # re-download + re-extract of the SAE weights.
+        if output_path.exists():
+            print(f"\n[3/3] Decoder vectors parquet already exists: {output_path}")
+            result.features_parquet = output_path
+            if progress_callback:
+                progress_callback("extract_vectors", 1, 1)
             return
 
         print("\n[3/3] Extracting decoder vectors + merging with labels")
@@ -252,7 +262,6 @@ class SAEPipelineRunner:
         if progress_callback:
             progress_callback("extract_vectors", 0, 1)
 
-        output_path = sae_paths.vectors_parquet_path(self.config.sae)
         extract_and_merge(
             self.config.sae,
             output_path,
