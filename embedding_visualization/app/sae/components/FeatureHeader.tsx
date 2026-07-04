@@ -5,21 +5,17 @@ import { Input } from '@/lib/ui-primitives/input';
 import { Button } from '@/lib/ui-primitives/button';
 import { Search, ArrowLeft, ArrowRight } from 'lucide-react';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
-import { SaeSelector } from './SaeSelector';
-import type { SaeSelectors } from '../hooks/useSaeSelectors';
+import { SaeMultiSelect } from './SaeMultiSelect';
+import type { SaeOption } from '../hooks/useSaeSelection';
 
 interface FeatureHeaderProps {
-  // Selector state (from useSaeSelectors)
-  selectors: SaeSelectors;
+  // Selection state (from useSaeSelection)
+  modelId: string | null;
   modelOptions: string[];
-  layerOptions: string[];
-  hookTypeOptions: string[];
-  widthOptions: string[];
-  onModelChange: (v: string | null) => void;
-  onLayerChange: (v: string | null) => void;
-  onHookTypeChange: (v: string | null) => void;
-  onWidthChange: (v: string | null) => void;
-  resolvedCount: number;
+  onModelChange: (modelId: string) => void;
+  saeOptions: SaeOption[];
+  selectedSaeIds: string[];
+  onSaeIdsChange: (saeIds: string[]) => void;
   isSingleSae: boolean;
 
   // Feature navigation
@@ -41,19 +37,15 @@ interface FeatureHeaderProps {
 }
 
 /**
- * Header bar with cascading SAE selectors, feature index input, and search.
+ * Header bar with the model + SAE multi-select, feature index input, and search.
  */
 export function FeatureHeader({
-  selectors,
+  modelId,
   modelOptions,
-  layerOptions,
-  hookTypeOptions,
-  widthOptions,
   onModelChange,
-  onLayerChange,
-  onHookTypeChange,
-  onWidthChange,
-  resolvedCount,
+  saeOptions,
+  selectedSaeIds,
+  onSaeIdsChange,
   isSingleSae,
   featureIndex,
   onFeatureIndexChange,
@@ -111,18 +103,14 @@ export function FeatureHeader({
 
   return (
     <div className="space-y-2">
-      {/* Row 1: SAE selectors */}
-      <SaeSelector
-        selectors={selectors}
+      {/* Row 1: Model + SAE multi-select */}
+      <SaeMultiSelect
+        modelId={modelId}
         modelOptions={modelOptions}
-        layerOptions={layerOptions}
-        hookTypeOptions={hookTypeOptions}
-        widthOptions={widthOptions}
         onModelChange={onModelChange}
-        onLayerChange={onLayerChange}
-        onHookTypeChange={onHookTypeChange}
-        onWidthChange={onWidthChange}
-        resolvedCount={resolvedCount}
+        saeOptions={saeOptions}
+        selectedSaeIds={selectedSaeIds}
+        onSaeIdsChange={onSaeIdsChange}
       />
 
       {/* Row 2: Feature navigation + search */}

@@ -59,6 +59,7 @@ from .types import (
     SaeActivationQuantileGroup,
     SaeFeature,
     SaeFeatureSearchResult,
+    SaeLayerSpecInput,
     # SAE types
     SaeLogitEntry,
     SaeModelInfo,
@@ -133,6 +134,7 @@ __all__ = [
     "HookTypeEnum",
     "ModelStatus",
     "RunPromptActivationsInput",
+    "SaeLayerSpecInput",
     "GenerateSteeredInput",
     "RunPromptHighlightInput",
     "InterpretActiveFeature",

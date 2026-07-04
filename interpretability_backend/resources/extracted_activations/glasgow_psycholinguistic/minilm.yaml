@@ -1,0 +1,12 @@
+config:
+  batch_size: 64
+  device: null
+  layers: null
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+  name: minilm
+  pooling: cls
+  type: encoder
+meta:
+  python_version: '3.12'
+  timestamp: '2026-07-03T14:27:59'
+  torch_version: 2.9.0

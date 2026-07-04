@@ -18,7 +18,7 @@ npm run build
 npm start
 ```
 
-**First Launch**: The first time you open the app, there are no collections to display. Click the "Embed" button in the top-right header to navigate to `/test-embed` and create your first collection from HuggingFace datasets or local files.
+**First Launch**: The first time you open the app, there are no collections to display. Click the "Embed" button in the top-right header to navigate to `/collections` and create your first collection from HuggingFace datasets or local files.
 
 ## Features
 
@@ -101,7 +101,7 @@ npm start
 embedding_visualization/
 ├── app/
 │   ├── components/           # 22 UI components
-│   ├── test-embed/           # Dataset embedding interface
+│   ├── collections/           # Dataset embedding interface
 │   │   ├── page.tsx
 │   │   └── components/       # 17 embedding-specific components
 │   ├── page.tsx              # Main visualization dashboard
@@ -144,7 +144,7 @@ embedding_visualization/
 - `VisualizationStatus`: Visualization status display
 - `AppFooter`: Footer component
 
-**Embedding Interface** (app/test-embed/components/ - 17 components):
+**Embedding Interface** (app/collections/components/ - 17 components):
 - `HuggingFaceTab`: Complete HuggingFace dataset embedding UI
 - `LocalFileTab`: Local file embedding UI
 - `CollectionManagerTab`: Collection management with edit/delete
@@ -206,11 +206,11 @@ DashboardPanel → render plots + sidebar + tables
 **Core Types** (lib/types/types.ts):
 - `EmbeddingData`: metadata, ids, documents, itemMetadata, projections, displayConfig
 - `Point2D/Point3D`: x, y, z, id, label, document, category, index, metadata
-- `VisualizationState`: method, mode, colorByField, colorScaleType, sequentialScaleName, divergingScaleName, monochromeColor, searchQuery, distanceMetric, showOnlyHighlighted, showLabels, showContours, mutedCategories, tooltipFields, hideUnclustered, categoricalPalette
+- Visualization state lives in the **Zustand store** (`lib/stores/useVisualizationStore.ts`), not a types.ts interface — method, mode, colorByField, the `ColorScale` union, mutedCategories, tooltipFields, hideUnclustered, categoricalPalette, etc.
+- `ColorScale`: discriminated union `{ type: 'categorical' } | { type: 'sequential'; scaleName } | { type: 'diverging'; scaleName } | { type: 'monochrome'; baseColor }` (replaces the old flat colorScaleType/sequentialScaleName/divergingScaleName/monochromeColor fields)
 - `DisplayConfig`: labelField, categoryField, categoryValues, categoryName
 - `SemanticSearchResult`: id, label, document, category, similarity, distance, metadata
 - `HighlightMap`: Map<index, similarity>
-- `ColorScaleType`: `'categorical' | 'sequential' | 'diverging' | 'monochrome'`
 
 ## Configuration
 
@@ -291,7 +291,7 @@ npm run test    # Run tests (if configured)
 **No Data Shown**:
 - Ensure the backend is running at `http://localhost:8000`
 - Check browser console for GraphQL errors
-- Verify collections exist: Navigate to `/test-embed` → Collection Manager tab
+- Verify collections exist: Navigate to `/collections` → Collection Manager tab
 - Try embedding a test dataset (e.g., "emotion" or "squad" from HuggingFace)
 
 **Network Error / GraphQL Connection Failed**:

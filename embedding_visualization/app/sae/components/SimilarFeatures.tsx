@@ -4,14 +4,18 @@ import { useEffect, useMemo } from 'react';
 import { useLazyQuery } from '@apollo/client/react';
 import { SEMANTIC_SEARCH } from '@/lib/graphql/queries';
 import { Spinner } from '@/lib/ui-primitives/spinner';
-import { FeatureSearchResults, type SemanticFeatureResult } from './FeatureSearchResults';
+import {
+  FeatureSearchResults,
+  type SemanticFeatureResult,
+  type SelectedFeatureRef,
+} from './FeatureSearchResults';
 
 interface SimilarFeaturesProps {
   collectionName: string;
   featureIndex: number;
   featureLabel: string | null;
   onSelectFeature: (index: number, modelId?: string, saeId?: string) => void;
-  selectedIndex: number | null;
+  selectedFeature: SelectedFeatureRef | null;
 }
 
 interface SemanticSearchResult {
@@ -27,7 +31,7 @@ export function SimilarFeatures({
   featureIndex,
   featureLabel,
   onSelectFeature,
-  selectedIndex,
+  selectedFeature,
 }: SimilarFeaturesProps) {
   const [fetchSimilar, { data, loading }] = useLazyQuery<{
     semanticSearch: SemanticSearchResult[];
@@ -78,7 +82,7 @@ export function SimilarFeatures({
         <FeatureSearchResults
           results={[]}
           onSelect={onSelectFeature}
-          selectedIndex={selectedIndex}
+          selectedFeature={selectedFeature}
           mode="semantic"
           semanticResults={results}
         />

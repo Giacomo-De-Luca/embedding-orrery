@@ -21,6 +21,8 @@ DuckDB handles everything that's relational: documents, metadata, projections, t
 
 ## DuckDB Schema
 
+> **Note**: beyond the tables documented below, `_ensure_schema()` also creates the SAE tables (`sae_features`, `sae_activations`, `sae_document_activations` — documented in `SAE_ARCHITECTURE.md`) and the chat-history tables `chat_sessions` / `chat_messages` (per-message `steering_snapshot` JSON; CRUD via `create_chat_session` / `list_chat_sessions` / `get_chat_session_with_messages` / `save_chat_message` / `delete_chat_session` in `duckdb_client.py`).
+
 ### Global Tables (small, registry-style)
 
 ```

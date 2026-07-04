@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html as html_module
 import warnings
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,16 +45,22 @@ _DEFAULT_LABELS_DIR = Path("resources/sae_labels/neuronpedia_gemma-3-4b-it")
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
+
 @dataclass
 class PromptExplorerConfig:
     """Configuration for PromptExplorer. Edit fields or pass to constructor.
 
     The ``wrapper`` must be a loaded :class:`GemmaPytorchInference` instance.
+
+    SAEs to hook are given either as ``layers`` (all at the shared ``width``)
+    or, for mixed widths — including two widths at the same layer — as
+    explicit ``saes`` (layer, width) specs, which take precedence.
     """
 
     wrapper: GemmaPytorchInference
     layers: list[int] = field(default_factory=lambda: [9, 17, 22, 29])
     width: str = "16k"
+    saes: list[tuple[int, str]] | None = None
     top_k: int = 10
     density_threshold: float = 0.01
     labels_dir: Path = _DEFAULT_LABELS_DIR
@@ -61,8 +68,31 @@ class PromptExplorerConfig:
     model_size: str = "4b"
     variant: str = "it"
 
+    def effective_saes(self) -> list[tuple[int, str]]:
+        """The (layer, width) specs to hook: explicit ``saes`` or layers × width."""
+        if self.saes:
+            return list(self.saes)
+        return [(layer, self.width) for layer in self.layers]
+
+
+def _store_read_plan(
+    configs: list[SAEConfig],
+) -> list[tuple[SAEConfig, str]]:
+    """Per-config ActivationStore read key, mirroring HookManager's write rule.
+
+    A ``(layer, hook_type)`` site with a single SAE records under
+    ``sae_id=""`` (legacy fast path); a shared site records each SAE under
+    its ``identity()`` slug. Reads must match, or ``store.prefill`` returns
+    ``None``.
+    """
+    site_counts = Counter((c.layer_index, c.hook_type) for c in configs)
+    return [
+        (c, c.identity() if site_counts[(c.layer_index, c.hook_type)] > 1 else "") for c in configs
+    ]
+
 
 # ── Result dataclasses ───────────────────────────────────────────────────────
+
 
 @dataclass
 class ActiveFeature:
@@ -175,43 +205,61 @@ class LayerResult:
 
 @dataclass
 class PromptResult:
-    """Top-level result from :meth:`PromptExplorer.run_prompt`."""
+    """Top-level result from :meth:`PromptExplorer.run_prompt`.
+
+    ``layers`` is keyed by ``(layer_index, width)`` so two SAEs at the same
+    layer (e.g. L9 16k + L9 65k) hold separate entries.
+    """
 
     prompt: str
     token_strings: list[str]
-    layers: dict[int, LayerResult]
+    layers: dict[tuple[int, str], LayerResult]
     generated_text: str | None = None
 
     def layer(self, idx: int) -> LayerResult:
-        return self.layers[idx]
+        """The unique LayerResult for a layer index.
 
-    def token(self, position: int) -> dict[int, TokenFeatures]:
-        """All layers' features for one token position."""
-        return {
-            layer_idx: lr.token(position)
-            for layer_idx, lr in self.layers.items()
-        }
+        Raises ``ValueError`` when the layer was hooked at several widths —
+        index ``layers[(layer, width)]`` directly in that case.
+        """
+        matches = [lr for (layer, _w), lr in self.layers.items() if layer == idx]
+        if not matches:
+            raise KeyError(idx)
+        if len(matches) > 1:
+            widths = sorted(w for layer, w in self.layers if layer == idx)
+            raise ValueError(
+                f"Layer {idx} has {len(matches)} SAEs (widths: {', '.join(widths)}); "
+                f"use PromptResult.layers[(layer, width)] instead."
+            )
+        return matches[0]
+
+    def token(self, position: int) -> dict[tuple[int, str], TokenFeatures]:
+        """All hooked SAEs' features for one token position."""
+        return {key: lr.token(position) for key, lr in self.layers.items()}
+
+    @staticmethod
+    def _key_str(key: tuple[int, str]) -> str:
+        layer, width = key
+        return f"{layer}/{width}"
 
     def __repr__(self) -> str:
-        layer_strs = ", ".join(str(l) for l in sorted(self.layers))
-        return (
-            f"PromptResult({len(self.token_strings)} tokens, "
-            f"layers=[{layer_strs}])"
-        )
+        layer_strs = ", ".join(self._key_str(k) for k in sorted(self.layers))
+        return f"PromptResult({len(self.token_strings)} tokens, layers=[{layer_strs}])"
 
     def _repr_html_(self) -> str:
         esc = html_module.escape
+        layer_strs = ", ".join(self._key_str(k) for k in sorted(self.layers))
         parts = [
             f"<div style='font-family:sans-serif'>"
             f"<h3>PromptExplorer result</h3>"
             f"<p><b>Prompt:</b> {esc(self.prompt)}</p>"
             f"<p><b>Tokens:</b> {len(self.token_strings)} | "
-            f"<b>Layers:</b> {', '.join(str(l) for l in sorted(self.layers))}</p>"
+            f"<b>Layers:</b> {layer_strs}</p>"
         ]
         if self.generated_text:
             parts.append(f"<p><b>Generated:</b> {esc(self.generated_text)}</p>")
-        for layer_idx in sorted(self.layers):
-            parts.append(self.layers[layer_idx]._repr_html_())
+        for key in sorted(self.layers):
+            parts.append(self.layers[key]._repr_html_())
         parts.append("</div>")
         return "\n".join(parts)
 
@@ -249,7 +297,10 @@ class FeatureDetail:
         # Logits tables
         if self.top_logits or self.bottom_logits:
             parts.append("<div style='display:flex;gap:24px;margin:8px 0'>")
-            for title, logits in [("Top logits", self.top_logits), ("Bottom logits", self.bottom_logits)]:
+            for title, logits in [
+                ("Top logits", self.top_logits),
+                ("Bottom logits", self.bottom_logits),
+            ]:
                 if not logits:
                     continue
                 rows = "".join(
@@ -286,7 +337,7 @@ class FeatureDetail:
                 parts.append(
                     f"<div style='margin:6px 0;padding:6px;background:#f8f8f8;"
                     f"border-left:3px solid #4a90d9;font-size:0.9em'>"
-                    f"<b>#{i+1}</b> max={ex.max_value:.1f} "
+                    f"<b>#{i + 1}</b> max={ex.max_value:.1f} "
                     f"@ token {ex.max_token_index}<br>"
                     f"<span style='font-family:monospace'>{esc(ex.context)}</span>"
                     f"</div>"
@@ -297,6 +348,7 @@ class FeatureDetail:
 
 
 # ── Explorer ─────────────────────────────────────────────────────────────────
+
 
 class PromptExplorer:
     """Run prompts through Gemma + SAE hooks and explore per-token features.
@@ -332,17 +384,26 @@ class PromptExplorer:
     def neuronpedia(self) -> NeuronpediaExplorer:
         if self._neuronpedia is None:
             from interpret.sae.feature_labels import _width_as_int
+
+            specs = self._config.effective_saes()
+            widths = {w for _, w in specs}
+            if len(widths) != 1:
+                raise ValueError(
+                    "NeuronpediaExplorer supports a single width; config resolves "
+                    f"to widths {sorted(widths)}. Use a single-width "
+                    "PromptExplorerConfig for feature inspection."
+                )
             self._neuronpedia = NeuronpediaExplorer(
-                layers=self._config.layers,
-                width=_width_as_int(self._config.width),
+                layers=[layer for layer, _ in specs],
+                width=_width_as_int(next(iter(widths))),
                 labels_dir=self._config.labels_dir,
             )
         return self._neuronpedia
 
     def __repr__(self) -> str:
+        specs = ", ".join(f"{layer}/{w}" for layer, w in self._config.effective_saes())
         return (
-            f"PromptExplorer(layers={self._config.layers}, "
-            f"width={self._config.width!r}, "
+            f"PromptExplorer(saes=[{specs}], "
             f"top_k={self._config.top_k}, "
             f"density_threshold={self._config.density_threshold})"
         )
@@ -355,10 +416,7 @@ class PromptExplorer:
 
         Must match the formatting in GemmaPytorchInference.generate().
         """
-        return (
-            f"<start_of_turn>user\n{prompt}<end_of_turn>\n"
-            f"<start_of_turn>model"
-        )
+        return f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
 
     def _tokenize_to_strings(self, formatted_prompt: str) -> list[str]:
         """Tokenize a formatted prompt and return per-token string pieces."""
@@ -382,7 +440,10 @@ class PromptExplorer:
         return self._config.variant == "pt"
 
     def run_prompt(
-        self, prompt: str, output_len: int = 1, top_k: int | None = None,
+        self,
+        prompt: str,
+        output_len: int = 1,
+        top_k: int | None = None,
     ) -> PromptResult:
         """Run a prompt through Gemma with SAE hooks and collect features.
 
@@ -397,21 +458,23 @@ class PromptExplorer:
         """
         k = top_k if top_k is not None else self._config.top_k
 
-        # Build SAE configs and hook manager
-        sae_configs: dict[int, SAEConfig] = {}
+        # Build SAE configs and hook manager — one per (layer, width) spec.
+        # Two widths at the same layer co-attach at one site (read_only).
+        sae_configs: list[SAEConfig] = []
         manager = HookManager()
-        for layer in self._config.layers:
+        for layer, width in self._config.effective_saes():
             cfg = SAEConfig(
                 layer_index=layer,
-                width=self._config.width,
+                width=width,
                 model_size=self._config.model_size,
                 variant=self._config.variant,
                 device=str(self._wrapper.device),
                 prefill_only=True,
                 read_only=True,
             )
-            sae_configs[layer] = cfg
+            sae_configs.append(cfg)
             manager.add_sae(cfg)
+        read_plan = _store_read_plan(sae_configs)
 
         # Base models: pass raw text (no chat template).
         # IT models: wrap in chat template as before.
@@ -424,13 +487,18 @@ class PromptExplorer:
         # Run inference with hooks
         with manager.session(self._wrapper.model.model.layers) as store:
             generated = self._wrapper.generate_from_template(
-                formatted, output_len=output_len,
+                formatted,
+                output_len=output_len,
             )
 
-            # Collect per-layer results
-            layer_results: dict[int, LayerResult] = {}
-            for layer, cfg in sae_configs.items():
-                record = store.prefill(layer=layer)
+            # Collect per-SAE results, keyed by (layer, width)
+            layer_results: dict[tuple[int, str], LayerResult] = {}
+            for cfg, read_sae_id in read_plan:
+                record = store.prefill(
+                    layer=cfg.layer_index,
+                    hook_type=cfg.hook_type,
+                    sae_id=read_sae_id,
+                )
                 if record is None:
                     continue
 
@@ -438,9 +506,10 @@ class PromptExplorer:
                 feature_acts = record.feature_acts[0]
                 if feature_acts.shape[0] != len(token_strings):
                     warnings.warn(
-                        f"Layer {layer}: feature_acts has {feature_acts.shape[0]} "
-                        f"positions but tokenizer produced {len(token_strings)} "
-                        f"tokens — token labels may be misaligned.",
+                        f"Layer {cfg.layer_index}: feature_acts has "
+                        f"{feature_acts.shape[0]} positions but tokenizer "
+                        f"produced {len(token_strings)} tokens — token labels "
+                        f"may be misaligned.",
                         stacklevel=2,
                     )
                 if self._config.skip_labels:
@@ -449,11 +518,14 @@ class PromptExplorer:
                     mask = None
                     if k > 0:
                         per_token = self._unlabelled_top_k_per_token(
-                            feature_acts, k=k, mask=mask,
+                            feature_acts,
+                            k=k,
+                            mask=mask,
                         )
                     else:
                         per_token = self._unlabelled_all_nonzero_per_token(
-                            feature_acts, mask=mask,
+                            feature_acts,
+                            mask=mask,
                         )
                     densities = torch.zeros(feature_acts.shape[1])
                 else:
@@ -467,20 +539,28 @@ class PromptExplorer:
                     try:
                         if k > 0:
                             per_token = self.label_store.label_top_k_per_token(
-                                feature_acts, *params, k=k, mask=mask,
+                                feature_acts,
+                                *params,
+                                k=k,
+                                mask=mask,
                             )
                         else:
                             per_token = self._all_nonzero_per_token(
-                                feature_acts, params, mask,
+                                feature_acts,
+                                params,
+                                mask,
                             )
                     except FileNotFoundError:
                         if k > 0:
                             per_token = self._unlabelled_top_k_per_token(
-                                feature_acts, k=k, mask=mask,
+                                feature_acts,
+                                k=k,
+                                mask=mask,
                             )
                         else:
                             per_token = self._unlabelled_all_nonzero_per_token(
-                                feature_acts, mask=mask,
+                                feature_acts,
+                                mask=mask,
                             )
 
                     try:
@@ -499,13 +579,17 @@ class PromptExplorer:
                         for idx, act_val, label in features_at_pos
                     ]
                     tok_str = token_strings[pos] if pos < len(token_strings) else f"[{pos}]"
-                    tokens_list.append(TokenFeatures(
-                        token=tok_str, position=pos, features=active,
-                    ))
+                    tokens_list.append(
+                        TokenFeatures(
+                            token=tok_str,
+                            position=pos,
+                            features=active,
+                        )
+                    )
 
-                layer_results[layer] = LayerResult(
-                    layer=layer,
-                    width=self._config.width,
+                layer_results[(cfg.layer_index, cfg.width)] = LayerResult(
+                    layer=cfg.layer_index,
+                    width=cfg.width,
                     tokens=tokens_list,
                     feature_acts=feature_acts.cpu(),
                 )
@@ -531,7 +615,7 @@ class PromptExplorer:
                 acts = torch.where(mask.cpu(), acts, torch.tensor(float("-inf")))
             topk = torch.topk(acts, k=min(k, acts.shape[0]))
             token_feats = []
-            for val, idx in zip(topk.values, topk.indices):
+            for val, idx in zip(topk.values, topk.indices, strict=True):
                 if val.item() == float("-inf") or val.item() <= 0:
                     break
                 token_feats.append((idx.item(), float(val), ""))
@@ -559,10 +643,9 @@ class PromptExplorer:
             order = vals.argsort(descending=True)
             sorted_idx = nonzero_idx[order]
             sorted_vals = vals[order]
-            result.append([
-                (idx.item(), float(sorted_vals[i]), "")
-                for i, idx in enumerate(sorted_idx)
-            ])
+            result.append(
+                [(idx.item(), float(sorted_vals[i]), "") for i, idx in enumerate(sorted_idx)]
+            )
         return result
 
     def _all_nonzero_per_token(
@@ -591,10 +674,9 @@ class PromptExplorer:
             # Batch label lookup
             indices = sorted_idx.tolist()
             labels = self.label_store.get_labels(indices, *params)
-            result.append([
-                (idx, float(sorted_vals[i]), labels.get(idx, ""))
-                for i, idx in enumerate(indices)
-            ])
+            result.append(
+                [(idx, float(sorted_vals[i]), labels.get(idx, "")) for i, idx in enumerate(indices)]
+            )
         return result
 
     # ── Feature inspection ───────────────────────────────────────────────
@@ -638,7 +720,9 @@ class PromptExplorer:
         # Similar features
         try:
             similar = self.label_store.find_similar_features(
-                feature_index, *params, k=top_k_similar,
+                feature_index,
+                *params,
+                k=top_k_similar,
             )
         except (ValueError, RuntimeError):
             similar = []
@@ -646,7 +730,9 @@ class PromptExplorer:
         # Top activation documents from Neuronpedia
         try:
             examples = self.neuronpedia.get_top_activations(
-                feature_index, layer=layer, k=top_k_docs,
+                feature_index,
+                layer=layer,
+                k=top_k_docs,
             )
         except FileNotFoundError:
             examples = []

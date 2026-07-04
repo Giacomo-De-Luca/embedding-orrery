@@ -54,6 +54,21 @@ def _n_items_from_pairs(n_pairs: int) -> int:
     return int((1 + math.isqrt(1 + 8 * n_pairs)) // 2)
 
 
+def _condensed_length(d) -> int:
+    """Length of ``d`` if it is a valid 1-D condensed distance vector, else ``-1``.
+
+    A condensed vector must be 1-D with a triangular-number length ``N*(N-1)/2``;
+    anything else (2-D matrices, scalars, non-triangular lengths) returns ``-1`` so
+    the caller can skip it without ``squareform`` ever raising.
+    """
+    arr = np.asarray(d)
+    if arr.ndim != 1 or arr.shape[0] <= 0:
+        return -1
+    length = int(arr.shape[0])
+    n = _n_items_from_pairs(length)
+    return length if n * (n - 1) // 2 == length else -1
+
+
 class ProjectionFidelityEvaluator:
     """Mantel-based fidelity of projections against reference distance structures.
 
@@ -131,9 +146,12 @@ class ProjectionFidelityEvaluator:
         degenerate comparisons carry ``None`` metrics.
         """
         all_dists = {**references, **targets}
-        # Determine the common condensed length; drop mismatched vectors.
-        lengths = {name: np.asarray(d).shape[0] for name, d in all_dists.items()}
-        n_pairs = max(lengths.values()) if lengths else 0
+        # Validate each vector is a proper condensed distance (1-D, triangular
+        # length); invalid ones get length -1 and are dropped, so squareform below
+        # can never raise. Then keep only those sharing the common (max) length.
+        lengths = {name: _condensed_length(d) for name, d in all_dists.items()}
+        valid_lengths = [length for length in lengths.values() if length > 0]
+        n_pairs = max(valid_lengths) if valid_lengths else 0
         usable = {
             name: np.asarray(d, dtype=np.float64)
             for name, d in all_dists.items()
@@ -142,10 +160,11 @@ class ProjectionFidelityEvaluator:
         for name in lengths:
             if name not in usable:
                 logger.warning(
-                    "Distance %r has %d pairs (expected %d); skipping",
+                    "Distance %r is not a usable condensed vector of length %d "
+                    "(got %d); skipping",
                     name,
-                    lengths[name],
                     n_pairs,
+                    lengths[name],
                 )
 
         # Square matrices for the kNN probe (built once per distance vector).
@@ -202,7 +221,11 @@ class ProjectionFidelityEvaluator:
                 result["knn_rho"] = _clean(k_rho)
                 result["knn_k"] = k
 
-            if self.n_perms > 0:
+            # Only run the null test when the observed correlation is defined:
+            # on a constant (degenerate) reference the observed rho is NaN, and
+            # `NaN >= NaN` is False, which would report a misleading empirical
+            # p = 0.0 ("maximally significant"). Keep the whole result None instead.
+            if self.n_perms > 0 and result["global_rho"] is not None:
                 perm = MantelTest.permutation_test(d_ref, d_tgt, self.n_perms, seed=self.seed)
                 result["perm_z"] = _clean(perm.z_score)
                 result["perm_empirical_p"] = _clean(perm.empirical_p)

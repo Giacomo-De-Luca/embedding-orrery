@@ -52,12 +52,34 @@ const ICON_MAXIMIZE = {
   path: 'M8 3H5a2 2 0 0 0-2 2v3 M21 8V5a2 2 0 0 0-2-2h-3 M3 16v3a2 2 0 0 0 2 2h3 M16 21h3a2 2 0 0 0 2-2v-3',
 };
 
+const ICON_CAMERA = {
+  width: 24,
+  height: 24,
+  path: 'M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z M9 13a3 3 0 1 0 6 0a3 3 0 1 0-6 0',
+};
+
+/** Minimal ref shape so this util stays free of React imports. */
+type RefLike<T> = { current: T | null };
+
+/** Screenshot button appended to a group when a handler ref is provided. */
+function screenshotButton(onScreenshotRef: RefLike<(gd: any) => void>): ModeBarButtonAny {
+  return {
+    name: 'downloadImage',
+    title: '',
+    icon: ICON_CAMERA,
+    click: (gd: any) => {
+      onScreenshotRef.current?.(gd);
+    },
+  } as ModeBarButtonAny;
+}
+
 // ---------------------------------------------------------------------------
 // Button builders
 // ---------------------------------------------------------------------------
 
 export function build3DModeBarButtons(
   plotlyLib: any,
+  onScreenshotRef?: RefLike<(gd: any) => void>,
 ): ModeBarButtonAny[][] {
   // Helper: read the live camera from glplot so relayout preserves the current view
   const getCurrentCamera = (gd: any) => {
@@ -115,12 +137,14 @@ export function build3DModeBarButtons(
           if (plotlyLib) plotlyLib.relayout(gd, { 'scene.camera': gd._fullLayout?.scene?._scene?.viewInitial?.camera });
         },
       },
+      ...(onScreenshotRef ? [screenshotButton(onScreenshotRef)] : []),
     ] as ModeBarButtonAny[],
   ];
 }
 
 export function build2DModeBarButtons(
   plotlyLib: any,
+  onScreenshotRef?: RefLike<(gd: any) => void>,
 ): ModeBarButtonAny[][] {
   return [
     [
@@ -156,6 +180,7 @@ export function build2DModeBarButtons(
           if (plotlyLib) plotlyLib.relayout(gd, { 'xaxis.autorange': true, 'yaxis.autorange': true });
         },
       },
+      ...(onScreenshotRef ? [screenshotButton(onScreenshotRef)] : []),
     ] as ModeBarButtonAny[],
   ];
 }

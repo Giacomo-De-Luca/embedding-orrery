@@ -33,6 +33,8 @@ import {
 
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { build2DModeBarButtons } from '../../lib/utils/plotlyIcons';
+import { capture2DPlot } from '../../lib/utils/plotCapture';
+import { toast } from 'sonner';
 
 type PlotlyData = Partial<PlotData>;
 
@@ -83,6 +85,8 @@ interface ScatterPlot2DProps {
   onPointContextMenu?: (point: Point2D, event: MouseEvent) => void;
   /** Show axis lines, grid, and tick labels */
   showAxes?: boolean;
+  /** Called with the composited plot canvas when the modebar screenshot button is clicked */
+  onScreenshot?: (canvas: HTMLCanvasElement) => void;
 }
 
 
@@ -112,6 +116,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   customNumericRange,
   onPointContextMenu,
   showAxes = false,
+  onScreenshot,
 }: ScatterPlot2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphDivRef = useRef<any>(null);
@@ -169,6 +174,25 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   useEffect(() => {
     import('plotly.js').then((lib) => { plotlyLibRef.current = lib.default; setPlotlyReady(true); });
   }, []);
+
+  // Modebar screenshot: routed through a ref (reassigned every render) because
+  // the config memo only rebuilds on [plotlyReady], so a plain closure would go stale.
+  const screenshotHandlerRef = useRef<((gd: any) => void) | null>(null);
+  screenshotHandlerRef.current = (gd: any) => {
+    if (!onScreenshot || !containerRef.current || !plotlyLibRef.current) return;
+    capture2DPlot({
+      gd: gd ?? graphDivRef.current,
+      plotlyLib: plotlyLibRef.current,
+      container: containerRef.current,
+      labelCanvas: labelCanvasRef.current,
+      isDark,
+    })
+      .then(onScreenshot)
+      .catch((err) => {
+        console.error('Screenshot failed:', err);
+        toast.error('Screenshot failed');
+      });
+  };
 
   const axisColor = isDark ? '#e2e8f0' : '#0f172a';
   const gridColor = isDark ? '#334155' : '#e5e7eb';
@@ -1362,7 +1386,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     displaylogo: false,
     responsive: true,
     scrollZoom: true,
-    modeBarButtons: build2DModeBarButtons(plotlyLibRef.current),
+    modeBarButtons: build2DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
   }), [plotlyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClick = (event: PlotMouseEvent) => {

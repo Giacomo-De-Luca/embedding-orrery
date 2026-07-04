@@ -52,13 +52,14 @@ listed in `eval_config.toml`.
 | **Coherence U_Mass** | Keyword co-occurrence | ≤ 0, higher (closer to 0) better | gensim `CoherenceModel`. |
 
 ### Projection vs embedding space
-Clustering currently runs on the 2D/3D projection (UMAP/PCA). A silhouette on those
-same coordinates is partly circular (it scores the space clustering optimized in).
-The embedding-space silhouette is the more meaningful "are these clusters real?"
-number. The extraction pipeline also supports clustering on the original embeddings
-directly via `TopicExtractionConfig(cluster_on="embedding")` — BERTopic reports that
-UMAP-then-cluster is usually better, so this is opt-in and the default stays
-`"projection"`.
+Clustering space is selected by `TopicExtractionConfig.cluster_on`; the **default is
+`"cluster_umap"`** (a fresh BERTopic-style 5-D UMAP on the raw vectors before
+HDBSCAN), with `"projection"` (stored 2D/3D viz coords) and `"embedding"`
+(L2-normalised raw vectors) as alternatives. For extractions clustered on the
+projection, a silhouette on those same coordinates is partly circular (it scores
+the space clustering optimized in) — the embedding-space silhouette is the more
+meaningful "are these clusters real?" number. This circularity caveat does not
+apply to the default `cluster_umap` mode.
 
 ### Coherence uses no embedding model
 C_v / U_Mass are computed against the documents themselves via gensim, so no

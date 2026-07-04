@@ -3,8 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useQuery, useLazyQuery, useApolloClient } from '@apollo/client/react';
-import Link from 'next/link';
-import { ArrowLeft, Sparkles, Sun, Moon } from 'lucide-react';
+import { Sparkles, Sun, Moon, X } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 import {
@@ -23,12 +22,16 @@ import type {
 import { FeatureHeader } from './components/FeatureHeader';
 import { FeatureDetailCard } from './components/FeatureDetailCard';
 import { ActivationExamples } from './components/ActivationExamples';
-import { FeatureSearchResults, type SemanticFeatureResult } from './components/FeatureSearchResults';
+import {
+  FeatureSearchResults,
+  type SemanticFeatureResult,
+  type SelectedFeatureRef,
+} from './components/FeatureSearchResults';
 import { FeatureStatistics } from './components/FeatureStatistics';
 import { SimilarFeatures } from './components/SimilarFeatures';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
-import { Separator } from '@/lib/ui-primitives/separator';
+import { PageNav } from '@/app/components/PageNav';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { RUN_PROMPT_ACTIVATIONS } from '@/lib/graphql/mutations';
@@ -40,7 +43,9 @@ import { SteeringIdenticon } from './components/ChatInterface/SteeringIdenticon'
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { PromptTokenActivations, type SelectedTokenInfo } from './components/PromptTokenActivations';
 import { useChatSessions } from '@/lib/hooks/useChatSessions';
-import { useSaeSelectors } from './hooks/useSaeSelectors';
+import { useSaeSelection } from './hooks/useSaeSelection';
+import { attachSaeIdentity, poolPromptFeatures, MAX_POOLED_ROWS } from './utils/promptPooling';
+import { serializeSaesParam } from './utils/saeSelection';
 import type { ChatMessage } from '@/lib/types/types';
 
 /** Shape of a single collection's fan-out semantic search result. */
@@ -90,18 +95,31 @@ function FeaturesPageContent() {
   const router = useRouter();
   const apolloClient = useApolloClient();
 
-  // URL state — supports both legacy (?modelId=&saeId=) and multi-SAE (?model=&layer=&hookType=&width=)
-  const modelIdParam = searchParams.get('modelId');
-  const saeIdParam = searchParams.get('saeId');
-  const featureParam = searchParams.get('featureIndex');
-  const modelParam = searchParams.get('model');
-  const layerParam = searchParams.get('layer');
-  const hookTypeParam = searchParams.get('hookType');
-  const widthParam = searchParams.get('width');
+  // URL params — multi (?model=&saes=), legacy single (?modelId=&saeId=),
+  // and the old dimension format (?model=&layer=&hookType=&width=).
+  // Snapshot on mount only; the URL-sync effect owns the URL afterwards.
+  const urlParams = useMemo(() => ({
+    saes: searchParams.get('saes'),
+    model: searchParams.get('model'),
+    modelId: searchParams.get('modelId'),
+    saeId: searchParams.get('saeId'),
+    layer: searchParams.get('layer'),
+    hookType: searchParams.get('hookType'),
+    width: searchParams.get('width'),
+    featureIndex: searchParams.get('featureIndex'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
 
-  // Local state
-  const [featureIndex, setFeatureIndex] = useState<number | null>(
-    featureParam != null ? parseInt(featureParam, 10) : null,
+  // The feature open in the detail pane — independent of the SAE selection,
+  // so clicking search results never rewrites the selection or the results.
+  const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureRef | null>(() =>
+    urlParams.modelId && urlParams.saeId && urlParams.featureIndex != null
+      ? {
+          modelId: urlParams.modelId,
+          saeId: urlParams.saeId,
+          featureIndex: parseInt(urlParams.featureIndex, 10),
+        }
+      : null,
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'semantic' | 'prompt'>('text');
@@ -219,91 +237,42 @@ function FeaturesPageContent() {
   );
   const models = useMemo(() => modelsData?.saeModels ?? [], [modelsData]);
 
-  // Build initial selectors from URL params (legacy or multi-SAE format)
-  const initialSelectors = useMemo(() => {
-    if (modelIdParam && saeIdParam) {
-      // Legacy format: reverse-parse saeId into individual selectors
-      const parsed = parseSaeId(saeIdParam);
-      return {
-        model: modelIdParam,
-        layer: String(parsed.layerIndex),
-        hookType: parsed.hookType as string,
-        width: parsed.width,
-      };
-    }
-    // Multi-SAE format: read individual selector params (null = "All")
-    return {
-      model: modelParam,
-      layer: layerParam,
-      hookType: hookTypeParam,
-      width: widthParam,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Cascading SAE selectors
+  // Selection: one model + a multi-select over its SAEs (defaults to all)
   const {
-    selectors,
+    modelId,
+    saeIds,
     setModel,
-    setLayer,
-    setHookType,
-    setWidth,
+    setSaeIds,
+    selectSingle,
     modelOptions,
-    layerOptions,
-    hookTypeOptions,
-    widthOptions,
-    resolvedSaePairs,
+    saeOptions,
+    pairs,
     isSingleSae,
-    singleModelId,
     singleSaeId,
     totalFeatureCount,
-  } = useSaeSelectors(models, initialSelectors);
+  } = useSaeSelection(models, urlParams);
 
-  // Aliases reading from the selector hook (for queries, URL sync, etc.)
-  const modelId = singleModelId;
-  const saeId = singleSaeId;
-
-  // Bridge useSaeSelectors output into the Zustand store (single source of truth).
-  // Always propagate the model selector value so the chat knows which model to
-  // load, even when multiple SAEs are resolved. saeId is only set when exactly
-  // one SAE is resolved (needed for label lookups / prompt search).
+  // Bridge selection into the Zustand store (single source of truth for chat).
+  // The model is always known; saeId only when exactly one SAE is selected.
   useEffect(() => {
-    const effectiveModelId = singleModelId ?? selectors.model ?? null;
-    const effectiveSaeId = isSingleSae ? singleSaeId : null;
-    useModelIdentityStore.getState().setIdentity(effectiveModelId, effectiveSaeId);
-  }, [isSingleSae, singleModelId, singleSaeId, selectors.model]);
+    useModelIdentityStore.getState().setIdentity(modelId, isSingleSae ? singleSaeId : null);
+  }, [modelId, isSingleSae, singleSaeId]);
 
-  // Handle model selection from the chat input — updates selectors only; bridge effect syncs store
+  // Handle model selection from the chat input — narrows to that single SAE
   const handleSelectModel = useCallback((newModelId: string, newSaeId: string) => {
-    const parsed = parseSaeId(newSaeId);
-    setModel(newModelId);
-    setLayer(String(parsed.layerIndex));
-    setHookType(parsed.hookType);
-    setWidth(parsed.width);
-  }, [setModel, setLayer, setHookType, setWidth]);
+    selectSingle(newModelId, newSaeId);
+  }, [selectSingle]);
 
-  // Auto-select first model when no URL params and models load
-  useEffect(() => {
-    if (!modelIdParam && !saeIdParam && models.length > 0 && resolvedSaePairs.length === 0) {
-      const first = models[0];
-      const parsed = parseSaeId(first.saeId);
-      setModel(first.modelId);
-      setLayer(String(parsed.layerIndex));
-      setHookType(parsed.hookType);
-      setWidth(parsed.width);
-    }
-  }, [models, modelIdParam, saeIdParam, resolvedSaePairs.length, setModel, setLayer, setHookType, setWidth]);
+  // Semantic collections available for the current selection (fan-out targets)
+  const semanticCollections = useMemo(() => getSemanticCollections(pairs), [pairs]);
+  const hasAnySemanticCollection = semanticCollections.length > 0;
 
-  // Semantic collection: single-SAE mode uses direct lookup, multi-SAE checks all resolved
-  const semanticCollectionName = useMemo(
-    () => isSingleSae && modelId && saeId ? getSemanticCollectionName(`${modelId}::${saeId}`) : null,
-    [isSingleSae, modelId, saeId],
-  );
-  const hasAnySemanticCollection = useMemo(
-    () => isSingleSae
-      ? !!semanticCollectionName
-      : getSemanticCollections(resolvedSaePairs).length > 0,
-    [isSingleSae, semanticCollectionName, resolvedSaePairs],
+  // Semantic collection for the feature open in the detail pane
+  const detailSemanticCollection = useMemo(
+    () => selectedFeature
+      ? getSemanticCollectionName(`${selectedFeature.modelId}::${selectedFeature.saeId}`)
+      : null,
+    [selectedFeature],
   );
 
   const [fetchFeature, { data: featureData, loading: featureLoading }] = useLazyQuery<{
@@ -318,12 +287,7 @@ function FeaturesPageContent() {
     saeFeatureSearch: SaeFeatureSearchResult[];
   }>(SEARCH_SAE_FEATURES);
 
-  // Semantic search (single-collection)
-  const [fetchSemanticSearch, { data: semanticSearchData, loading: semanticSearchLoading }] = useLazyQuery<{
-    semanticSearch: Array<{ id: string; document: string | null; metadata: Record<string, unknown>; similarity: number }>;
-  }>(SEMANTIC_SEARCH);
-
-  // Densities (for histogram, fetched once per model/sae)
+  // Densities (for histogram, fetched once per detail model/sae)
   const [fetchDensities, { data: densitiesData, loading: densitiesLoading }] = useLazyQuery<{
     saeFeatureDensities: number[];
   }>(GET_SAE_FEATURE_DENSITIES, { fetchPolicy: 'cache-first' });
@@ -339,161 +303,118 @@ function FeaturesPageContent() {
   const allDensities = densitiesData?.saeFeatureDensities ?? [];
   const quantileGroups = quantilesData?.saeActivationsByQuantile;
 
-  // Semantic search results mapped to display format (single-collection)
-  const singleSemanticResults: SemanticFeatureResult[] = useMemo(() => {
-    if (!semanticSearchData?.semanticSearch) return [];
-    return semanticSearchData.semanticSearch.map((r) => ({
-      featureIndex: Number(r.metadata?.index ?? 0),
-      label: r.document ?? null,
-      density: (r.metadata?.density as number) ?? null,
-      similarity: r.similarity,
-    }));
-  }, [semanticSearchData]);
+  // Semantic results come from the fan-out (also for a single SAE — one target)
+  const semanticSearchResults = mergedSemanticResults;
 
-  // Active semantic results: use fan-out results when multi-SAE, single otherwise
-  const semanticSearchResults = !isSingleSae && mergedSemanticResults.length > 0
-    ? mergedSemanticResults
-    : singleSemanticResults;
+  // Prompt layers tagged with their SAE identity (resolved from the selection)
+  const attachedPromptLayers = useMemo(
+    () => promptActivations && modelId
+      ? attachSaeIdentity(promptActivations.layers, modelId, pairs)
+      : [],
+    [promptActivations, modelId, pairs],
+  );
 
-  // Derive ranked feature list from per-token activations using selected pooling strategy
-  const promptSearchAsSemanticResults: SemanticFeatureResult[] = useMemo(() => {
-    if (!promptActivations || promptActivations.layers.length === 0) return [];
+  // Ranked feature list pooled across all hooked SAEs
+  const promptSearchAsSemanticResults: SemanticFeatureResult[] = useMemo(
+    () => poolPromptFeatures(attachedPromptLayers, promptPooling, promptMaxDensity),
+    [attachedPromptLayers, promptPooling, promptMaxDensity],
+  );
 
-    const featureMap = new Map<number, { activation: number; label: string; density: number | null }>();
-
-    for (const layer of promptActivations.layers) {
-      const tokens = layer.tokens;
-      if (tokens.length === 0) continue;
-
-      if (promptPooling === 'last') {
-        // Last token only
-        const lastToken = tokens[tokens.length - 1];
-        for (const feat of lastToken.features) {
-          featureMap.set(feat.index, { activation: feat.activation, label: feat.label, density: feat.density });
-        }
-      } else {
-        // Accumulate per-feature across all tokens
-        const accumulator = new Map<number, { sum: number; count: number; max: number; label: string; density: number | null }>();
-        for (const token of tokens) {
-          for (const feat of token.features) {
-            const existing = accumulator.get(feat.index);
-            if (existing) {
-              existing.sum += feat.activation;
-              existing.count += 1;
-              if (feat.activation > existing.max) existing.max = feat.activation;
-            } else {
-              accumulator.set(feat.index, {
-                sum: feat.activation, count: 1, max: feat.activation,
-                label: feat.label, density: feat.density,
-              });
-            }
-          }
-        }
-        for (const [idx, { sum, count, max, label, density }] of accumulator) {
-          const activation = promptPooling === 'mean' ? sum / count : max;
-          featureMap.set(idx, { activation, label, density });
-        }
-      }
-    }
-
-    // Filter by density threshold (exclude ultra-common features)
-    const filtered = [...featureMap.entries()].filter(([, { density }]) => {
-      if (density === null) return true;
-      return density <= promptMaxDensity;
-    });
-
-    // Sort by activation descending
-    const sorted = filtered
-      .sort(([, a], [, b]) => b.activation - a.activation);
-    if (sorted.length === 0) return [];
-    const maxAct = sorted[0][1].activation;
-    return sorted.map(([featureIndex, { activation, label, density }]) => ({
-      featureIndex,
-      label: label || null,
-      density,
-      similarity: maxAct > 0 ? activation / maxAct : 1,
-    }));
-  }, [promptActivations, promptPooling, promptMaxDensity]);
-
-  // Clear stale fan-out / prompt results when selectors change
+  // Clear stale fan-out / prompt results when the selection changes
   useEffect(() => {
     setMergedSemanticResults([]);
     setPromptActivations(null);
     setPromptSearchError(null);
     setSelectedTokenInfo(null);
-  }, [resolvedSaePairs]);
+  }, [pairs]);
 
   // ---------- Effects ----------
 
-  // Fetch feature + activations when index or model changes (single SAE only)
-  useEffect(() => {
-    if (modelId && saeId && featureIndex != null) {
-      fetchFeature({ variables: { modelId, saeId, featureIndex } });
-      fetchActivations({ variables: { modelId, saeId, featureIndex, limit: 20 } });
-    }
-  }, [modelId, saeId, featureIndex, fetchFeature, fetchActivations]);
+  const detailModelId = selectedFeature?.modelId ?? null;
+  const detailSaeId = selectedFeature?.saeId ?? null;
+  const detailFeatureIndex = selectedFeature?.featureIndex ?? null;
 
-  // Fetch densities once when model/sae changes (single SAE only)
+  // Fetch feature + activations when the detail target changes
   useEffect(() => {
-    if (modelId && saeId) {
-      fetchDensities({ variables: { modelId, saeId } });
+    if (detailModelId && detailSaeId && detailFeatureIndex != null) {
+      fetchFeature({ variables: { modelId: detailModelId, saeId: detailSaeId, featureIndex: detailFeatureIndex } });
+      fetchActivations({ variables: { modelId: detailModelId, saeId: detailSaeId, featureIndex: detailFeatureIndex, limit: 20 } });
     }
-  }, [modelId, saeId, fetchDensities]);
+  }, [detailModelId, detailSaeId, detailFeatureIndex, fetchFeature, fetchActivations]);
 
-  // Sync URL
+  // Fetch densities once per detail model/sae (histogram context)
   useEffect(() => {
+    if (detailModelId && detailSaeId) {
+      fetchDensities({ variables: { modelId: detailModelId, saeId: detailSaeId } });
+    }
+  }, [detailModelId, detailSaeId, fetchDensities]);
+
+  // Sync URL — legacy single-SAE params for cross-link compat, multi otherwise
+  useEffect(() => {
+    if (!modelId) return; // selection not initialized yet
     const params = new URLSearchParams();
-    if (isSingleSae && modelId && saeId) {
+    if (isSingleSae && singleSaeId) {
       params.set('modelId', modelId);
-      params.set('saeId', saeId);
-      if (featureIndex != null) params.set('featureIndex', featureIndex.toString());
+      params.set('saeId', singleSaeId);
+      if (
+        selectedFeature &&
+        selectedFeature.modelId === modelId &&
+        selectedFeature.saeId === singleSaeId
+      ) {
+        params.set('featureIndex', selectedFeature.featureIndex.toString());
+      }
     } else {
-      // Multi-SAE mode: encode individual selectors
-      if (selectors.model) params.set('model', selectors.model);
-      if (selectors.layer) params.set('layer', selectors.layer);
-      if (selectors.hookType) params.set('hookType', selectors.hookType);
-      if (selectors.width) params.set('width', selectors.width);
+      params.set('model', modelId);
+      params.set('saes', serializeSaesParam(saeIds));
     }
     const newSearch = `?${params.toString()}`;
     if (newSearch !== window.location.search) {
       router.replace(newSearch, { scroll: false });
     }
-  }, [isSingleSae, modelId, saeId, featureIndex, selectors, router]);
+  }, [modelId, saeIds, isSingleSae, singleSaeId, selectedFeature, router]);
 
   // ---------- Handlers ----------
 
+  // Index input / prev-next browsing (single-SAE mode only)
   const handleFeatureIndexChange = useCallback((index: number) => {
-    setFeatureIndex(index);
-  }, []);
+    if (modelId && singleSaeId) {
+      setSelectedFeature({ modelId, saeId: singleSaeId, featureIndex: index });
+    }
+  }, [modelId, singleSaeId]);
 
   const handleSearch = useCallback(async () => {
     const q = searchQuery.trim();
     if (!q) return;
 
     if (searchMode === 'prompt') {
-      // Prompt activation search via runPromptActivations (gives both ranked list + token strip)
-      if (!isSingleSae || !modelId || !saeId) return;
+      // Prompt activation search: ONE runPromptActivations call hooks every
+      // selected SAE (same model) in a single forward pass.
+      if (!modelId || pairs.length === 0) return;
       if (promptSearchLoading) return;
       setPromptSearchLoading(true);
       setPromptSearchError(null);
+      setSelectedTokenInfo(null);
       try {
-        const { checkpoint: storeCheckpt, parsedSae } = useModelIdentityStore.getState();
+        const { checkpoint: storeCheckpt } = useModelIdentityStore.getState();
         const loadErr = await ensureModelLoaded(storeCheckpt ?? undefined);
         if (loadErr) {
           setPromptSearchError(loadErr);
           setPromptSearchLoading(false);
           return;
         }
+        const saes = pairs.map((p) => {
+          const parsed = parseSaeId(p.saeId);
+          return { layer: parsed.layerIndex, width: parsed.width };
+        });
         const { data } = await apolloClient.mutate<{ runPromptActivations: PromptActivationsResult }>({
           mutation: RUN_PROMPT_ACTIVATIONS,
           variables: {
             input: {
               prompt: q,
-              layers: parsedSae ? [parsedSae.layerIndex] : [],
-              width: parsedSae?.width ?? '16k',
+              saes,
               topK: 0,
-              modelId: modelId,
-              saeId: saeId,
+              modelId,
+              saeId: isSingleSae ? singleSaeId : null,
               skipChatTemplate,
               filterMode: activationFilterMode,
             },
@@ -512,102 +433,94 @@ function FeaturesPageContent() {
         setPromptSearchLoading(false);
       }
     } else if (searchMode === 'semantic') {
-      if (isSingleSae && semanticCollectionName) {
-        // Single SAE semantic search
-        fetchSemanticSearch({
-          variables: { collectionName: semanticCollectionName, query: q, nResults: 50 },
-        });
-      } else if (!isSingleSae) {
-        // Fan-out semantic search across resolved SAEs
-        const collections = getSemanticCollections(resolvedSaePairs);
-        if (collections.length === 0) return;
+      // Fan-out semantic search across the selected SAEs' embedded collections
+      if (semanticCollections.length === 0) return;
 
-        setSemanticFanoutLoading(true);
-        try {
-          const promises = collections.map(({ modelId: mId, saeId: sId, collectionName }): Promise<FanoutResult> =>
-            apolloClient.query<{ semanticSearch: FanoutResult['results'] }>({
-              query: SEMANTIC_SEARCH,
-              variables: { collectionName, query: q, nResults: 50 },
-            }).then(({ data }) => ({
+      setSemanticFanoutLoading(true);
+      try {
+        const promises = semanticCollections.map(({ modelId: mId, saeId: sId, collectionName }): Promise<FanoutResult> =>
+          apolloClient.query<{ semanticSearch: FanoutResult['results'] }>({
+            query: SEMANTIC_SEARCH,
+            variables: { collectionName, query: q, nResults: 50 },
+          }).then(({ data }) => ({
+            modelId: mId,
+            saeId: sId,
+            results: (data?.semanticSearch ?? []) as FanoutResult['results'],
+          })),
+        );
+
+        const allResults = await Promise.allSettled(promises);
+        const merged: SemanticFeatureResult[] = [];
+        for (const r of allResults) {
+          if (r.status !== 'fulfilled') continue;
+          const { modelId: mId, saeId: sId, results } = r.value;
+          for (const item of results) {
+            merged.push({
+              featureIndex: Number(item.metadata?.index ?? 0),
+              label: item.document ?? null,
+              density: (item.metadata?.density as number) ?? null,
+              similarity: item.similarity,
               modelId: mId,
               saeId: sId,
-              results: (data?.semanticSearch ?? []) as FanoutResult['results'],
-            })),
-          );
-
-          const allResults = await Promise.allSettled(promises);
-          const merged: SemanticFeatureResult[] = [];
-          for (const r of allResults) {
-            if (r.status !== 'fulfilled') continue;
-            const { modelId: mId, saeId: sId, results } = r.value;
-            for (const item of results) {
-              merged.push({
-                featureIndex: Number(item.metadata?.index ?? 0),
-                label: item.document ?? null,
-                density: (item.metadata?.density as number) ?? null,
-                similarity: item.similarity,
-                modelId: mId,
-                saeId: sId,
-              });
-            }
+            });
           }
-          merged.sort((a, b) => b.similarity - a.similarity);
-          setMergedSemanticResults(merged.slice(0, 50));
-        } finally {
-          setSemanticFanoutLoading(false);
         }
+        merged.sort((a, b) => b.similarity - a.similarity);
+        setMergedSemanticResults(merged.slice(0, 50));
+      } finally {
+        setSemanticFanoutLoading(false);
       }
     } else {
-      // Text search
-      if (isSingleSae && modelId && saeId) {
-        fetchSearch({ variables: { modelId, saeId, query: q, limit: 50 } });
-      } else {
-        // Cross-SAE text search
-        const saeIds = resolvedSaePairs.map((p) => p.saeId);
-        const selectedModel = selectors.model; // null if "All models"
-        fetchSearch({
-          variables: {
-            modelId: selectedModel,
-            saeIds: saeIds.length > 0 ? saeIds : undefined,
-            query: q,
-            limit: 50,
-          },
-        });
-      }
+      // Text search across the selected SAEs (model always set → no cross-model
+      // ambiguity for saeIds shared between models)
+      if (!modelId || saeIds.length === 0) return;
+      fetchSearch({
+        variables: { modelId, saeIds, query: q, limit: 50 },
+      });
     }
   }, [
-    searchQuery, searchMode, isSingleSae, modelId, saeId,
-    semanticCollectionName, resolvedSaePairs, selectors.model,
-    fetchSearch, fetchSemanticSearch, apolloClient, promptSearchLoading,
+    searchQuery, searchMode, modelId, pairs, saeIds, isSingleSae, singleSaeId,
+    semanticCollections, fetchSearch, apolloClient, promptSearchLoading,
     skipChatTemplate, activationFilterMode,
   ]);
 
+  // Open a feature in the detail pane — never rewrites the SAE selection
   const handleSearchSelect = useCallback((index: number, resultModelId?: string, resultSaeId?: string) => {
-    if (resultModelId && resultSaeId && !isSingleSae) {
-      // Cross-SAE result: drill into that specific SAE
-      const parsed = parseSaeId(resultSaeId);
-      setModel(resultModelId);
-      setLayer(String(parsed.layerIndex));
-      setHookType(parsed.hookType);
-      setWidth(parsed.width);
+    const targetModelId = resultModelId ?? (isSingleSae ? modelId : null);
+    const targetSaeId = resultSaeId ?? (isSingleSae ? singleSaeId : null);
+    if (targetModelId && targetSaeId) {
+      setSelectedFeature({ modelId: targetModelId, saeId: targetSaeId, featureIndex: index });
     }
-    setFeatureIndex(index);
-  }, [isSingleSae, setModel, setLayer, setHookType, setWidth]);
+  }, [isSingleSae, modelId, singleSaeId]);
 
   const handleRequestQuantiles = useCallback(() => {
-    if (modelId && saeId && featureIndex != null) {
+    if (detailModelId && detailSaeId && detailFeatureIndex != null) {
       fetchQuantiles({
-        variables: { modelId, saeId, featureIndex, nQuantiles: 5, perQuantileLimit: 5 },
+        variables: {
+          modelId: detailModelId,
+          saeId: detailSaeId,
+          featureIndex: detailFeatureIndex,
+          nQuantiles: 5,
+          perQuantileLimit: 5,
+        },
       });
     }
-  }, [modelId, saeId, featureIndex, fetchQuantiles]);
+  }, [detailModelId, detailSaeId, detailFeatureIndex, fetchQuantiles]);
 
   // Max feature index for navigation bounds (single SAE only)
   const maxFeatureIndex = isSingleSae ? totalFeatureCount : undefined;
 
   // Collection link for cross-navigation (single SAE only)
-  const collectionLink = isSingleSae && modelId && saeId
-    ? SAE_TO_COLLECTION[`${modelId}::${saeId}`] ?? null
+  const collectionLink = isSingleSae && modelId && singleSaeId
+    ? SAE_TO_COLLECTION[`${modelId}::${singleSaeId}`] ?? null
+    : null;
+
+  // Header index input reflects the open feature when it belongs to the single selection
+  const headerFeatureIndex = isSingleSae &&
+    selectedFeature &&
+    selectedFeature.modelId === modelId &&
+    selectedFeature.saeId === singleSaeId
+    ? selectedFeature.featureIndex
     : null;
 
   // Active search results depend on mode
@@ -616,7 +529,7 @@ function FeaturesPageContent() {
   const activeSearchLoading = isPromptSearch
     ? promptSearchLoading
     : isSemanticSearch
-      ? (isSingleSae ? semanticSearchLoading : semanticFanoutLoading)
+      ? semanticFanoutLoading
       : searchLoading;
   const hasActiveResults = isPromptSearch
     ? promptSearchAsSemanticResults.length > 0
@@ -629,7 +542,7 @@ function FeaturesPageContent() {
       ? semanticSearchResults.length
       : searchResults.length;
 
-  // Show SAE badge in results when multi-SAE
+  // Show SAE badge in results when multiple SAEs are selected
   const showSaeBadge = !isSingleSae;
 
   // ---------- Render ----------
@@ -643,14 +556,7 @@ function FeaturesPageContent() {
       <div className="flex h-full flex-1 min-w-0 flex-col">
         {/* Top nav */}
         <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
-          <Link
-            href="/"
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Visualization
-          </Link>
-          <Separator orientation="vertical" className="h-5" />
+          <PageNav variant="solid" size="sm" />
           <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
           <ModeToggle />
         </header>
@@ -668,18 +574,14 @@ function FeaturesPageContent() {
               </div>
             ) : (
               <FeatureHeader
-                  selectors={selectors}
+                  modelId={modelId}
                   modelOptions={modelOptions}
-                  layerOptions={layerOptions}
-                  hookTypeOptions={hookTypeOptions}
-                  widthOptions={widthOptions}
                   onModelChange={setModel}
-                  onLayerChange={setLayer}
-                  onHookTypeChange={setHookType}
-                  onWidthChange={setWidth}
-                  resolvedCount={resolvedSaePairs.length}
+                  saeOptions={saeOptions}
+                  selectedSaeIds={saeIds}
+                  onSaeIdsChange={setSaeIds}
                   isSingleSae={isSingleSae}
-                  featureIndex={isSingleSae ? featureIndex : null}
+                  featureIndex={headerFeatureIndex}
                   onFeatureIndexChange={handleFeatureIndexChange}
                   searchQuery={searchQuery}
                   onSearchQueryChange={setSearchQuery}
@@ -689,7 +591,7 @@ function FeaturesPageContent() {
                   searchMode={searchMode}
                   onSearchModeChange={setSearchMode}
                   hasSemanticSearch={hasAnySemanticCollection}
-                  hasPromptSearch={isSingleSae}
+                  hasPromptSearch={pairs.length > 0}
                 />
             )}
           </div>
@@ -704,24 +606,42 @@ function FeaturesPageContent() {
                   {isPromptSearch && promptActivations && (
                     <div className="shrink-0 mb-2">
                       <PromptTokenActivations
-                        layers={promptActivations.layers}
+                        layers={attachedPromptLayers}
                         tokenStrings={promptActivations.tokenStrings}
+                        selectedTokenIdx={selectedTokenInfo?.tokenIdx ?? null}
                         onTokenSelect={setSelectedTokenInfo}
-                        highlightedFeatureIndex={featureIndex}
+                        highlightedFeatureIndex={detailFeatureIndex}
+                        highlightedFeatureSaeId={detailSaeId}
                         highlightedFeatureLabel={feature?.label}
-                        onClearHighlight={() => setFeatureIndex(null)}
+                        onClearHighlight={() => setSelectedFeature(null)}
                       />
                     </div>
                   )}
 
-                  {/* Header */}
-                  <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide shrink-0 mb-1">
-                    {isPromptSearch && selectedTokenInfo
-                      ? `Token "${selectedTokenInfo.token}" features (${selectedTokenInfo.features.length})`
-                      : hasActiveResults
-                        ? `${isPromptSearch ? 'Prompt' : isSemanticSearch ? 'Semantic' : 'Search'} Results (${activeResultCount})`
-                        : 'Search Features'}
-                  </h3>
+                  {/* Header (+ reset from token view back to whole-prompt pooling) */}
+                  <div className="flex items-center gap-2 shrink-0 mb-1">
+                    <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      {isPromptSearch && selectedTokenInfo
+                        ? `Token "${selectedTokenInfo.token}" features (${selectedTokenInfo.features.length})`
+                        : hasActiveResults
+                          ? `${isPromptSearch ? 'Prompt' : isSemanticSearch ? 'Semantic' : 'Search'} Results (${
+                              isPromptSearch && activeResultCount === MAX_POOLED_ROWS
+                                ? `top ${MAX_POOLED_ROWS}`
+                                : activeResultCount
+                            })`
+                          : 'Search Features'}
+                    </h3>
+                    {isPromptSearch && selectedTokenInfo && (
+                      <button
+                        onClick={() => setSelectedTokenInfo(null)}
+                        className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground rounded px-1 py-0.5 hover:bg-muted transition-colors"
+                        title="Back to pooled results for the whole prompt"
+                      >
+                        <X className="h-3 w-3" />
+                        All tokens
+                      </button>
+                    )}
+                  </div>
 
                   {isPromptSearch && promptSearchError && (
                     <p className="text-xs text-destructive shrink-0">{promptSearchError}</p>
@@ -826,20 +746,22 @@ function FeaturesPageContent() {
                       <FeatureSearchResults
                         results={[]}
                         onSelect={handleSearchSelect}
-                        selectedIndex={featureIndex}
+                        selectedFeature={selectedFeature}
                         mode="prompt"
                         semanticResults={selectedTokenInfo.features.map((f) => ({
                           featureIndex: f.index,
                           label: f.label || null,
                           density: f.density,
                           similarity: f.activation,
+                          modelId: selectedTokenInfo.modelId,
+                          saeId: selectedTokenInfo.saeId,
                         }))}
                       />
                     ) : hasActiveResults ? (
                       <FeatureSearchResults
                         results={searchResults}
                         onSelect={handleSearchSelect}
-                        selectedIndex={featureIndex}
+                        selectedFeature={selectedFeature}
                         mode={searchMode}
                         semanticResults={
                           isPromptSearch ? promptSearchAsSemanticResults
@@ -850,9 +772,11 @@ function FeaturesPageContent() {
                       />
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        {!isSingleSae
-                          ? `Search across ${resolvedSaePairs.length} SAEs, or select a single SAE to browse features.`
-                          : 'Search by label or browse with the arrow buttons.'}
+                        {pairs.length === 0
+                          ? 'Select at least one SAE to search.'
+                          : !isSingleSae
+                            ? `Search across ${pairs.length} SAEs — click a result to open it in the detail pane.`
+                            : 'Search by label or browse with the arrow buttons.'}
                       </p>
                     )}
                   </div>
@@ -860,11 +784,13 @@ function FeaturesPageContent() {
 
                 {/* Right: Feature detail + statistics + similar + activations */}
                 <div className="lg:col-span-2 overflow-y-auto space-y-4">
-                  {!isSingleSae ? (
+                  {selectedFeature == null ? (
                     <div className="text-center py-8 text-muted-foreground text-sm">
-                      {resolvedSaePairs.length > 1
-                        ? `${resolvedSaePairs.length} SAEs selected. Use the search to find features across them, or narrow the selectors to browse a single SAE.`
-                        : 'No SAEs match the current selection.'}
+                      {pairs.length > 1
+                        ? `${pairs.length} SAEs selected. Use the search to find features across them — clicking a result opens it here without changing your selection.`
+                        : pairs.length === 0
+                          ? 'No SAEs selected.'
+                          : 'Select a feature to view details.'}
                     </div>
                   ) : featureLoading ? (
                     <div className="flex justify-center py-8">
@@ -876,8 +802,14 @@ function FeaturesPageContent() {
                         <FeatureDetailCard
                           feature={feature}
                           onLabelUpdated={() => {
-                            if (modelId && saeId && featureIndex != null) {
-                              fetchFeature({ variables: { modelId, saeId, featureIndex } });
+                            if (detailModelId && detailSaeId && detailFeatureIndex != null) {
+                              fetchFeature({
+                                variables: {
+                                  modelId: detailModelId,
+                                  saeId: detailSaeId,
+                                  featureIndex: detailFeatureIndex,
+                                },
+                              });
                             }
                           }}
                         />
@@ -891,13 +823,17 @@ function FeaturesPageContent() {
                         hoveredActivationValue={hoveredActivationValue}
                       />
 
-                      {semanticCollectionName && (
+                      {detailSemanticCollection && (
                         <SimilarFeatures
-                          collectionName={semanticCollectionName}
+                          collectionName={detailSemanticCollection}
                           featureIndex={feature.featureIndex}
                           featureLabel={feature.label}
-                          onSelectFeature={handleSearchSelect}
-                          selectedIndex={featureIndex}
+                          onSelectFeature={(index: number) => {
+                            if (detailModelId && detailSaeId) {
+                              setSelectedFeature({ modelId: detailModelId, saeId: detailSaeId, featureIndex: index });
+                            }
+                          }}
+                          selectedFeature={selectedFeature}
                         />
                       )}
 
@@ -923,13 +859,9 @@ function FeaturesPageContent() {
                         )}
                       </div>
                     </>
-                  ) : featureIndex != null ? (
-                    <div className="text-center py-8 text-muted-foreground text-sm">
-                      Feature #{featureIndex} not found.
-                    </div>
                   ) : (
                     <div className="text-center py-8 text-muted-foreground text-sm">
-                      Select a feature to view details.
+                      Feature #{selectedFeature.featureIndex} not found.
                     </div>
                   )}
                 </div>

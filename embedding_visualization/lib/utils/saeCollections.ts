@@ -33,6 +33,20 @@ const SAE_ENTRIES: SaeEntry[] = [
     modelId: 'gemma-3-4b-it',
     saeId: '9-gemmascope-2-res-16k',
   },
+  // Label collections whose vectors ARE the label embeddings — they serve as
+  // their own semantic-search target (verified: items carry metadata.index).
+  {
+    collectionName: 'sae_4b_22_res_16k_labels',
+    modelId: 'gemma-3-4b-it',
+    saeId: '22-gemmascope-2-res-16k',
+    embeddedCollectionName: 'sae_4b_22_res_16k_labels',
+  },
+  {
+    collectionName: 'sae_1b_pt_22_res_16k_labels',
+    modelId: 'gemma-3-1b',
+    saeId: '22-gemmascope-2-res-16k',
+    embeddedCollectionName: 'sae_1b_pt_22_res_16k_labels',
+  },
 ];
 
 /** Collection name -> SAE model/layer (used by visualization to detect SAE collections) */
@@ -144,4 +158,13 @@ export function parseSaeId(saeId: string): ParsedSaeId {
   const width = parts[4] ?? '16k';
   const hookType = NEURONPEDIA_TO_HOOK[hookAbbrev] ?? 'RESID_POST';
   return { layerIndex, hookType, width };
+}
+
+/**
+ * Build a Neuronpedia-format saeId from structured components — the inverse
+ * of parseSaeId. Matches the backend's `neuronpedia_source_id` derivation
+ * (interpret/sae/source_ids.py).
+ */
+export function buildSaeId(layerIndex: number, hookType: HookType, width: string): string {
+  return `${layerIndex}-gemmascope-2-${HOOK_TYPE_SHORT[hookType]}-${width}`;
 }

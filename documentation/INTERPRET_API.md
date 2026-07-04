@@ -87,7 +87,16 @@ mutation RunPromptActivations($input: RunPromptActivationsInput!) {
 | `prompt` | `String!` | — | Raw user prompt (chat template applied automatically) |
 | `layers` | `[Int!]` | `[9, 17, 22, 29]` | Which decoder layers to attach SAE hooks |
 | `width` | `String!` | `"16k"` | SAE width: `"16k"`, `"32k"`, `"65k"`, `"262k"` |
+| `saes` | `[SaeLayerSpecInput!]` | `null` | Explicit `(layer, width)` SAE specs — takes precedence over `layers` + `width`. Supports mixed widths, **including two widths at the same layer** (co-attached at one hook site), all captured in a single forward pass. |
 | `topK` | `Int!` | `10` | Number of top features per token |
+
+`SaeLayerSpecInput`: `{ layer: Int!, width: String! = "16k" }`. Example — hook L9-16k, L9-65k and L22-16k at once:
+
+```json
+{ "saes": [ {"layer": 9, "width": "16k"}, {"layer": 9, "width": "65k"}, {"layer": 22, "width": "16k"} ] }
+```
+
+Each result entry in `layers[]` is identified by its `(layer, width)` pair. With multiple specs, leave `saeId` unset so each layer derives its own width-aware sae_id for DuckDB label lookup.
 
 #### Response
 
@@ -480,7 +489,7 @@ type TokenChunk {
 
 ## Frontend Integration Task List
 
-Everything below is for a future frontend agent. The backend is complete and tested. The GraphQL playground at `http://localhost:8000/graphql` can be used to verify all operations.
+> **STATUS (2026-07): IMPLEMENTED — kept for historical reference only.** The frontend described below has been fully built: `useSteeringChat.ts` is a complete streaming implementation over the `generateStream` subscription (with abort, regenerate, seeded compare mode, and steering-config change detection — no `fetchSteeringChat()` stub remains), and the components live under `app/sae/components/` (ModelStatusButton, PromptTokenActivations, SteeringControls, the ChatInterface family). Note also that the GraphQL type reference above predates several schema additions — e.g. `SteeringInput.directionName`, `GenerateStreamInput.seed`, `RunPromptActivationsInput.modelId/saeId/skipChatTemplate/filterMode`, `ModelStatus.variant/modelSize` — check `backend/API/types.py` for the current schema.
 
 ### 1. GraphQL operations
 

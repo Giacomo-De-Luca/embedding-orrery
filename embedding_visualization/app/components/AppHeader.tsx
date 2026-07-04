@@ -1,9 +1,9 @@
 'use client';
 
-import { Moon, Sun, Search, Upload, Settings2, BarChart3, Brain } from 'lucide-react';
+import { Moon, Sun, Search, Settings2, BarChart3 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState, KeyboardEvent } from 'react';
-import Link from 'next/link';
+import { PageNav } from './PageNav';
 import {
   Combobox,
   ComboboxInput,
@@ -91,6 +91,12 @@ export function AppHeader({
   };
 
   const isExpanded = activePanel !== null;
+
+  // Context-carrying deep link: keep model/SAE params when the collection has a mapping
+  const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
+  const saeHref = sae
+    ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
+    : undefined;
 
   return (
     <header
@@ -217,23 +223,7 @@ export function AppHeader({
               </ComboboxContent>
             </Combobox>
           ) : null}
-          <Link href={(() => {
-            const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
-            return sae
-              ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
-              : '/sae';
-          })()}>
-            <Button variant="outline" className="gap-2">
-              <Brain className="w-4" />
-              <span className="hidden sm:inline">Features</span>
-            </Button>
-          </Link>
-          <Link href="/collections">
-            <Button variant="outline" className="gap-2 embeddingButton">
-              <Upload className=" w-4" />
-              <span className="hidden sm:inline">Embed</span>
-            </Button>
-          </Link>
+          <PageNav variant="glass" saeHref={saeHref} />
           <ModeToggle />
         </div>
       </div>

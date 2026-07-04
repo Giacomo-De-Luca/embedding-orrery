@@ -9,7 +9,7 @@ import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
 
 /**
- * iOS-style pill tab bar: rounded-full container with icon+label items and a
+ * iOS-style pill tab bar: rounded container with icon+label items and a
  * capsule that marks the active item.
  *
  * The capsule slides between items (motion `layoutId`) only while an instance
@@ -34,11 +34,11 @@ export interface PillNavItem {
   match?: 'exact' | 'prefix';
 }
 
-const pillNavVariants = cva('flex items-center gap-0.5 rounded-full p-1', {
+const pillNavVariants = cva('flex items-center gap-0.5 rounded-xl p-1', {
   variants: {
     variant: {
       /** Floating over a canvas — frosted glass, matches the `circular` button variant. */
-      glass: 'bg-secondary/30 backdrop-blur-md border-glass shadow-[var(--shadow-float)]',
+      glass: 'backdrop-blur-md  shadow-[var(--shadow-float)]',
       /** Inline in a document-style header — nothing behind it to blur. */
       solid: 'border bg-muted',
     },
@@ -47,7 +47,7 @@ const pillNavVariants = cva('flex items-center gap-0.5 rounded-full p-1', {
 });
 
 const pillNavItemVariants = cva(
-  'relative flex items-center rounded-full font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+  'relative flex items-center rounded-lg font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
   {
     variants: {
       size: {
@@ -111,7 +111,7 @@ export function PillNav({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 className={cn(
-                  'absolute inset-0 rounded-full shadow-sm',
+                  'absolute inset-0 rounded-lg shadow-sm',
                   variant === 'glass' ? 'bg-background/80 backdrop-blur-sm' : 'bg-background',
                 )}
                 transition={

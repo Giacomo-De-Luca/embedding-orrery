@@ -1,12 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
 import { useQuery } from '@apollo/client/react';
 import { useEmbedDataset } from '@/lib/hooks/useEmbedDataset';
-import { Button } from '@/lib/ui-primitives/button';
 import { GET_COLLECTIONS } from '@/lib/graphql/queries';
+import { PageNav } from '@/app/components/PageNav';
 
 // Import tab components
 import { DataSourceTabs, type DataSourceTab } from './components/DataSourceTabs';
@@ -105,14 +103,9 @@ export default function TestEmbedPage() {
 
   return (
     <div className="container mx-auto p-6 max-w-6xl">
-      {/* Header with back link */}
-      <div className="mb-4">
-        <Link href="/">
-          <Button variant="ghost" size="sm" className="gap-2">
-            <ArrowLeft className="h-4 w-4" />
-            Back to Visualization
-          </Button>
-        </Link>
+      {/* Page navigation */}
+      <div className="mb-4 flex">
+        <PageNav variant="solid" />
       </div>
       <h1 className="text-3xl font-bold mb-2">Dataset Embedding</h1>
       <p className="text-muted-foreground mb-6">

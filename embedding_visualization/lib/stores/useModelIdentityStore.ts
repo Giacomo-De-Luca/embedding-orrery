@@ -56,7 +56,7 @@ export interface ModelIdentityState {
 // ---------------------------------------------------------------------------
 
 export interface ModelIdentityActions {
-  /** Set the resolved model/SAE identity (called by useSaeSelectors bridge). */
+  /** Set the resolved model/SAE identity (called by useSaeSelection bridge). */
   setIdentity: (modelId: string | null, saeId: string | null) => void;
 
   /** Sync backend model status from MODEL_STATUS query result. */
@@ -125,34 +125,36 @@ export const useModelIdentityStore = create<ModelIdentityStore>()(
       //   (a) No features → nothing to sync
       //   (b) Same model, different SAE → update SAE-derived fields on SAE features
       //       only; direction presets are SAE-agnostic and are left untouched
-      //   (c) Different model → clear features (they reference the wrong model)
+      //   (c) Different model → clear features (they reference the wrong model).
+      //       Checked independently of saeId — multi-SAE selections pass
+      //       saeId=null but still switch models.
       const { steeringConfig } = get();
       if (steeringConfig.features.length === 0) return;
+      const currentModelId = steeringConfig.features[0]?.modelId;
+      if (modelId && currentModelId !== modelId) {
+        // Case (c): different model
+        set({ steeringConfig: { features: [] } });
+        return;
+      }
       if (modelId && saeId && parsed.parsedSae) {
-        const currentModelId = steeringConfig.features[0]?.modelId;
         const currentSaeId = steeringConfig.features[0]?.saeId;
-        if (currentModelId !== modelId || currentSaeId !== saeId) {
-          if (currentModelId === modelId) {
-            // Case (b): same model, different SAE — remap SAE features only
-            set({
-              steeringConfig: {
-                features: steeringConfig.features.map((f) =>
-                  f.directionName
-                    ? f
-                    : {
-                        ...f,
-                        saeId,
-                        layerIndex: parsed.parsedSae!.layerIndex,
-                        hookType: parsed.parsedSae!.hookType,
-                        width: parsed.parsedSae!.width,
-                      },
-                ),
-              },
-            });
-          } else {
-            // Case (c): different model
-            set({ steeringConfig: { features: [] } });
-          }
+        if (currentSaeId !== saeId) {
+          // Case (b): same model, different SAE — remap SAE features only
+          set({
+            steeringConfig: {
+              features: steeringConfig.features.map((f) =>
+                f.directionName
+                  ? f
+                  : {
+                      ...f,
+                      saeId,
+                      layerIndex: parsed.parsedSae!.layerIndex,
+                      hookType: parsed.parsedSae!.hookType,
+                      width: parsed.parsedSae!.width,
+                    },
+              ),
+            },
+          });
         }
       }
     },

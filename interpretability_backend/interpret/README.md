@@ -84,9 +84,13 @@ Each non-trivial subdirectory has its own README:
    tqdm                   long-loop progress
    requests               Neuronpedia downloads
    pandas, numpy, scipy   analysis + sparse activation store
+   scikit-image           perceptual colour distance (CIEDE2000) in utils/distances
    matplotlib             sweep plots in experiments
    pyarrow                parquet decoder-vector outputs
    pyyaml                 config loading
+   omegaconf              probing-engine experiment config loading
+   seaborn                probing-engine result figures
+   scikit-learn           probing-engine probes (ridge/lasso/svr/logreg)
 
    # Required by the gemma_pytorch fork
    absl-py
@@ -146,7 +150,10 @@ Two utilities live inside the toolkit deliberately:
 - [`utils/wordnet_parser.py`](utils/wordnet_parser.py) — only the autointerpreter uses it; lives here so the toolkit remains self-contained.
 - [`utils/results_io.py`](utils/results_io.py) — incremental CSV / JSON checkpointing helpers. Intentional duplicate of any equivalent in the parent project.
 
-No other utilities cross the toolkit boundary.
+Two utilities are additionally imported from **outside** the toolkit by the standalone evaluation package (`interpretability_backend/evaluation/projection_fidelity.py`):
+
+- [`utils/mantel.py`](utils/mantel.py) — `MantelTest` (global/kNN Spearman + permutation test)
+- [`utils/distances.py`](utils/distances.py) — pairwise CIEDE2000 colour distances
 
 ## Conventions
 

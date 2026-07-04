@@ -1,0 +1,86 @@
+# Glasgow psycholinguistic probing experiment.
+#
+# Probes several embedding spaces for the nine Glasgow norms over the ~4.7k
+# Glasgow words, and compares which model + probe family recovers each norm best.
+# Run from interpretability_backend/ so the CWD-relative resources/ paths resolve:
+#
+#   cd interpretability_backend
+#   uv run python -m interpret.probing.orchestrator \
+#     experiments/glasgow_psycholinguistic/experiment.yaml
+#
+# Data (gitignored) must live at resources/psycolinguistics/:
+#   - glasgow_norm.csv     (word + the nine norm columns)
+#   - concreteness.tsv     (Brysbaert; loaded unconditionally by the builder)
+
+name: glasgow_psycholinguistic
+output_dir: resources/probing_results/glasgow_psycholinguistic
+
+manifest:
+  path: "interpret.probing.manifests.glasgow:GlasgowManifestBuilder"
+  kwargs:
+    # Restrict samples to the ~4.7k Glasgow words. Set false to take the union
+    # with the ~40k Brysbaert concreteness words (much heavier extraction).
+    glasgow_only: true
+    default_targets:
+      [concreteness, imageability, valence, arousal, dominance, familiarity, aoa, semsize, gender]
+
+extractions:
+  # Light HF encoders — mean/cls-pooled per-layer hidden states. `layers: null`
+  # auto-selects first/middle/last. Both are small and fast; run live rather than
+  # from precomputed vectors.
+  - name: minilm
+    type: encoder
+    model_name: sentence-transformers/all-MiniLM-L6-v2
+    pooling: cls
+    batch_size: 64
+    layers: null
+  - name: embeddinggemma_mean
+    type: encoder
+    model_name: google/embeddinggemma-300M
+    pooling: mean
+    batch_size: 64
+    layers: null
+
+  # --- Heavier / precomputed extractions (commented; enable as needed) ---------
+  # Gemma-3-4b residual activations (needs the 4b model + GPU):
+  # - name: gemma_glasgow
+  #   type: gemma
+  #   layers: [0, 9, 17, 22, 29, 33]
+  #   intermediates: [post_mlp]
+  #   token_position: word_last          # requires prompt_template with {word}
+  #   prompt_template: "{word}"
+  #   prompt_column: word
+  #   hidden_size: 2560
+  #
+  # GEMINI (precomputed API vectors — "later" path, needs GEMINI_API_KEY):
+  #   The encoder path can't call the Gemini API. Instead embed the 4.7k words
+  #   once, write a CSV (word + the 9 norm columns + 3072 gemini feature cols),
+  #   point a FeatureCSVManifestBuilder at it, and use a csv_features extraction:
+  #   - name: gemini_3072
+  #     type: csv_features
+  #     intermediate_label: gemini
+  #     feature_columns: null            # null => manifest.feature_columns
+  #   (swap `manifest.path` to
+  #    "interpret.probing.manifests.feature_csv:FeatureCSVManifestBuilder").
+  #   See experiments/glasgow_psycholinguistic/README.md "Gemini path".
+
+targets:
+  - {source: glasgow, column: concreteness, task_type: regression}
+  - {source: glasgow, column: imageability, task_type: regression}
+  - {source: glasgow, column: valence,      task_type: regression}
+  - {source: glasgow, column: arousal,      task_type: regression}
+  - {source: glasgow, column: dominance,    task_type: regression}
+  - {source: glasgow, column: familiarity,  task_type: regression}
+  - {source: glasgow, column: aoa,          task_type: regression}
+  - {source: glasgow, column: semsize,      task_type: regression}
+  - {source: glasgow, column: gender,       task_type: regression}
+
+probes:
+  # Linear (ridge), sparse-linear (lasso, saves directions for feature analysis),
+  # nonlinear (SVR rbf — wins for small encoders), closed-form mass-mean
+  # (median-split difference-of-means direction), and a small MLP.
+  - {type: sklearn, kind: ridge, alpha: 1.0}
+  - {type: sklearn, kind: lasso, alpha: 0.01, save_directions: true}
+  - {type: sklearn, kind: svr,   C: 1.0, kernel: rbf}
+  - {type: sklearn, kind: massmean}
+  - {type: mlp, hidden_dims: [256], epochs: 100, patience: 10, learning_rate: 0.001}

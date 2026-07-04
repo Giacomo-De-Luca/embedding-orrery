@@ -440,9 +440,7 @@ class Mutation:
         dataset_name = topic_data.get("dataset_name", input.collection_name)
         sample_ids = item_ids[:10]
         if sample_ids:
-            docs_rows = db.get_items_columns(
-                dataset_name, ("document",), where_ids=sample_ids
-            )
+            docs_rows = db.get_items_columns(dataset_name, ("document",), where_ids=sample_ids)
             sample_docs = [r[0] for r in docs_rows if r[0]]
         else:
             sample_docs = []
@@ -629,10 +627,12 @@ class Mutation:
 
                 # Cleanup source files if requested
                 if input.delete_source_files:
+
                     def _cleanup():
                         Path(result["features_parquet"]).unlink(missing_ok=True)
                         if result.get("activations_jsonl"):
                             Path(result["activations_jsonl"]).unlink(missing_ok=True)
+
                     await asyncio.to_thread(_cleanup)
 
             except Exception as e:
@@ -721,6 +721,7 @@ class Mutation:
     ) -> PromptActivationsResponse:
         """Run a prompt through the model with SAE hooks and return per-token features."""
         service = get_interpret_service()
+        saes = [(s.layer, s.width) for s in input.saes] if input.saes else None
         try:
             async with service._lock:
                 result = await asyncio.wait_for(
@@ -734,6 +735,7 @@ class Mutation:
                         input.sae_id,
                         input.skip_chat_template,
                         input.filter_mode.value,
+                        saes,
                     ),
                     timeout=120.0,
                 )
@@ -1032,9 +1034,7 @@ class Mutation:
             )
 
     @strawberry.mutation
-    def delete_document_activations(
-        self, collection_name: str, info=None
-    ) -> int:
+    def delete_document_activations(self, collection_name: str, info=None) -> int:
         """Delete all precomputed SAE document activations for a collection."""
         db = get_duckdb_client()
         return db.delete_document_activations(collection_name)
@@ -1047,9 +1047,7 @@ class Mutation:
     def create_chat_session(self, input: CreateChatSessionInput, info=None) -> ChatSessionInfo:
         """Create a new chat session."""
         db = get_duckdb_client()
-        config_str = (
-            json.dumps(input.config) if not isinstance(input.config, str) else input.config
-        )
+        config_str = json.dumps(input.config) if not isinstance(input.config, str) else input.config
         data = db.create_chat_session(input.id, input.title, config_str)
         return ChatSessionInfo(
             id=data["id"],

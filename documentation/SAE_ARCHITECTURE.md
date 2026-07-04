@@ -134,10 +134,10 @@ ingest_sae_activations(jsonl_path, model_id, sae_id, batch_size, progress_callba
 
 ## Frontend
 
-### Feature Explorer Page (`/features`)
+### Feature Explorer Page (`/sae`)
 
 ```
-app/features/
+app/sae/
   page.tsx                       — orchestration: URL state, GraphQL queries, layout
   components/
     FeatureHeader.tsx             — model/SAE selector, feature index nav (prev/next),
@@ -175,7 +175,7 @@ SaeFeatureSearchResult { feature, activationCount }
 
 ### Collection ↔ SAE Mapping (`lib/utils/saeCollections.ts`)
 
-Single source of truth for bidirectional mapping between visualization collections and SAE identifiers. All files import from here — no duplication.
+Mapping between visualization collections and SAE identifiers. **Primary lookup is dynamic**: `getSaeInfoFromMetadata()` reads `sae_model_id`/`sae_id` from the collection's DuckDB metadata (written by `prepareSaeData`). The hardcoded `SAE_ENTRIES` table below is the **fallback** for legacy collections only (`getSaeInfo()`), used as `getSaeInfoFromMetadata(metadata) ?? getSaeInfo(name)`.
 
 ```typescript
 SAE_ENTRIES[]           — [{collectionName, modelId, saeId}, ...]
@@ -190,11 +190,11 @@ SAE_FEATURE_INDEX_FIELD — metadata field name ("index") for cross-linking
 **Visualization → Features** (right-click):
 - `ScatterPlot2D`/`ScatterPlot3D` track the hovered point in a ref
 - On `contextmenu`, if the point has SAE metadata (`index` field), a context menu appears with "View Feature #N"
-- Clicking navigates to `/features?modelId=...&saeId=...&featureIndex=N`
+- Clicking navigates to `/sae?modelId=...&saeId=...&featureIndex=N`
 - The `saeInfo` prop is threaded: `page.tsx` → `DashboardPanel` → scatter plots
 
 **Visualization → Features** (header button):
-- `AppHeader` has a "Features" button that links to `/features`
+- `AppHeader` has a "Features" button that links to `/sae`
 - When the selected collection is an SAE collection, the link includes `modelId`/`saeId` params
 
 **Features → Visualization**:
@@ -204,7 +204,7 @@ SAE_FEATURE_INDEX_FIELD — metadata field name ("index") for cross-linking
 
 The features page reads and writes URL search params for deep-linking:
 ```
-/features?modelId=gemma-3-4b-it&saeId=9-gemmascope-2-res-16k&featureIndex=42
+/sae?modelId=gemma-3-4b-it&saeId=9-gemmascope-2-res-16k&featureIndex=42
 ```
 
 ## Planned Enhancements

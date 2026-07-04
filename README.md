@@ -96,6 +96,7 @@ Optional — only needed for the corresponding provider or LLM labelling.
 | `GEMINI_API_KEY` | Gemini embedding + LLM topic labelling |
 | `CHROMA_OPENAI_API_KEY` | OpenAI embedding + LLM topic labelling |
 | `CHROMA_COHERE_API_KEY` | Cohere embedding |
+| `CHROMA_HUGGINGFACE_API_KEY` | HuggingFace API embedding provider |
 | `HUGGINGFACE_API_KEY` | HuggingFace gated model access |
 
 ## Documentation

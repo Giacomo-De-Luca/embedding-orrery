@@ -1,0 +1,71 @@
+[
+  {
+    "n_items": 954,
+    "n_pairs": 454581,
+    "k": 10,
+    "n_perms": 1000,
+    "comparisons": [
+      {
+        "reference": "embedding (cosine)",
+        "target": "umap_3d",
+        "kind": "fidelity",
+        "global_rho": 0.28689741126871654,
+        "global_p": 0.0,
+        "knn_rho": 0.3379800337210447,
+        "knn_k": 10,
+        "perm_z": 28.73204690746331,
+        "perm_empirical_p": 0.0,
+        "perm_n": 1000
+      },
+      {
+        "reference": "embedding (cosine)",
+        "target": "pca_3d",
+        "kind": "fidelity",
+        "global_rho": 0.4907061646837551,
+        "global_p": 0.0,
+        "knn_rho": 0.24848314278617753,
+        "knn_k": 10,
+        "perm_z": 48.3918328964058,
+        "perm_empirical_p": 0.0,
+        "perm_n": 1000
+      },
+      {
+        "reference": "colour (CIEDE2000)",
+        "target": "umap_3d",
+        "kind": "fidelity",
+        "global_rho": 0.601197252343151,
+        "global_p": 0.0,
+        "knn_rho": 0.2010400336412287,
+        "knn_k": 10,
+        "perm_z": 120.74880658793658,
+        "perm_empirical_p": 0.0,
+        "perm_n": 1000
+      },
+      {
+        "reference": "colour (CIEDE2000)",
+        "target": "pca_3d",
+        "kind": "fidelity",
+        "global_rho": 0.4748505642830505,
+        "global_p": 0.0,
+        "knn_rho": 0.12292652657228724,
+        "knn_k": 10,
+        "perm_z": 97.01687921239693,
+        "perm_empirical_p": 0.0,
+        "perm_n": 1000
+      },
+      {
+        "reference": "embedding (cosine)",
+        "target": "colour (CIEDE2000)",
+        "kind": "baseline",
+        "global_rho": 0.2898100201336196,
+        "global_p": 0.0,
+        "knn_rho": 0.27912424972695404,
+        "knn_k": 10,
+        "perm_z": 33.433446401308544,
+        "perm_empirical_p": 0.0,
+        "perm_n": 1000
+      }
+    ],
+    "collection_name": "xkcd_hilbert_gemini"
+  }
+]

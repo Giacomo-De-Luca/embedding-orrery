@@ -80,12 +80,13 @@ _DEFAULT_LAYERS = [9, 17, 22, 29]  # fallback for unknown sizes
 # co-located with each ``.pt`` are provenance only; layer + model binding
 # live here as the runtime source of truth.
 
+
 @dataclass(frozen=True)
 class DirectionPreset:
     name: str
-    file: str       # filename inside DIRECTIONS_DIR
-    layer: int      # applied at RESID_POST of this layer
-    model_id: str   # gated to this model only
+    file: str  # filename inside DIRECTIONS_DIR
+    layer: int  # applied at RESID_POST of this layer
+    model_id: str  # gated to this model only
 
 
 DIRECTION_REGISTRY: dict[str, DirectionPreset] = {
@@ -114,8 +115,8 @@ class ModelStatusResult:
     loaded: bool
     model_name: str | None = None
     device: str | None = None
-    variant: str | None = None      # "it" (instruction-tuned) or "pt" (pretrained/base)
-    model_size: str | None = None   # "4b", "12b", etc.
+    variant: str | None = None  # "it" (instruction-tuned) or "pt" (pretrained/base)
+    model_size: str | None = None  # "4b", "12b", etc.
 
 
 @dataclass
@@ -235,7 +236,7 @@ class InterpretService:
         name = checkpoint.rsplit("/", 1)[-1]  # "gemma-3-4b-it"
         # Remove "gemma-3-" prefix if present
         if name.startswith("gemma-3-"):
-            name = name[len("gemma-3-"):]  # "4b-it" or "1b"
+            name = name[len("gemma-3-") :]  # "4b-it" or "1b"
         parts = name.split("-", 1)
         model_size = parts[0]  # "4b"
         variant = parts[1] if len(parts) > 1 else "pt"  # "it" or default "pt"
@@ -273,7 +274,9 @@ class InterpretService:
         self._model_size, self._variant = self._parse_checkpoint(checkpoint)
         checkpoint = self._normalize_checkpoint(checkpoint, self._model_size, self._variant)
         logger.info("Loading model %s ...", checkpoint)
-        self._wrapper = GemmaPytorchInference(checkpoint, model_size=self._model_size, precision="bfloat16")
+        self._wrapper = GemmaPytorchInference(
+            checkpoint, model_size=self._model_size, precision="bfloat16"
+        )
         self._model_name = checkpoint
         self._prompt_explorer = None  # rebuilt lazily
         logger.info("Model loaded on %s", self._wrapper.device)
@@ -382,9 +385,7 @@ class InterpretService:
             if d_sae is None:
                 raise ValueError(f"Unknown SAE width '{spec.width}'")
             if not 0 <= spec.feature_index < d_sae:
-                raise ValueError(
-                    f"feature_index {spec.feature_index} out of range [0, {d_sae})"
-                )
+                raise ValueError(f"feature_index {spec.feature_index} out of range [0, {d_sae})")
 
             sae_key = (spec.layer, spec.hook_type, spec.width)
             if sae_key not in seen_sae_keys:
@@ -414,21 +415,20 @@ class InterpretService:
 
     def _get_prompt_explorer(
         self,
-        layers: list[int],
-        width: str,
+        saes: list[tuple[int, str]],
         top_k: int,
     ) -> PromptExplorer:
         """Return a PromptExplorer, creating one lazily.
 
-        A new explorer is created whenever the requested config differs
-        from the cached one, or when no explorer exists yet.
+        A new explorer is created whenever the requested (layer, width)
+        specs or top_k differ from the cached one, or when no explorer
+        exists yet.
         """
         wrapper = self._require_model()
 
         need_rebuild = (
             self._prompt_explorer is None
-            or self._prompt_explorer.config.layers != layers
-            or self._prompt_explorer.config.width != width
+            or self._prompt_explorer.config.effective_saes() != saes
             or self._prompt_explorer.config.top_k != top_k
         )
         if need_rebuild:
@@ -441,8 +441,7 @@ class InterpretService:
             )
             config = PromptExplorerConfig(
                 wrapper=wrapper,
-                layers=layers,
-                width=width,
+                saes=saes,
                 top_k=top_k,
                 skip_labels=True,
                 model_size=self._model_size,
@@ -467,9 +466,7 @@ class InterpretService:
     # UC1: Prompt activations
     # ------------------------------------------------------------------
 
-    def _find_prompt_token_range(
-        self, token_strings: list[str], prompt: str
-    ) -> tuple[int, int]:
+    def _find_prompt_token_range(self, token_strings: list[str], prompt: str) -> tuple[int, int]:
         """Find the start/end indices of the actual user prompt tokens.
 
         For IT models, the chat template wraps as:
@@ -527,9 +524,7 @@ class InterpretService:
             else:
                 coverage = fired[prompt_start:prompt_end].sum(dim=0).float() / n
 
-        exclude = set(
-            torch.nonzero(coverage >= self.COVERAGE_THRESHOLD, as_tuple=True)[0].tolist()
-        )
+        exclude = set(torch.nonzero(coverage >= self.COVERAGE_THRESHOLD, as_tuple=True)[0].tolist())
 
         # Dead/near-dead features below density floor
         for idx, (_, density) in label_map.items():
@@ -548,6 +543,7 @@ class InterpretService:
         db_sae_id: str | None = None,
         skip_chat_template: bool = False,
         filter_mode: str = "neuronpedia",
+        saes: list[tuple[int, str]] | None = None,
     ) -> PromptActivationsResult:
         """Run a prompt through the model with SAE hooks.
 
@@ -557,17 +553,30 @@ class InterpretService:
         Args:
             db_model_id: DuckDB model_id for label lookup (from frontend selector).
             db_sae_id: DuckDB sae_id for label lookup (from frontend selector).
+                Only meaningful for single-SAE calls; with multiple specs pass
+                ``None`` so each layer derives its own width-aware sae_id.
             skip_chat_template: If True, treat the prompt as raw text even for
                 instruction-tuned models (skip BOS only, no chat wrapping).
             filter_mode: One of ``"neuronpedia"``, ``"coverage_bos"``,
                 ``"coverage_no_bos"``. Controls how features are filtered.
+            saes: Explicit (layer, width) SAE specs — hooks all of them in a
+                single forward pass (two widths at one layer co-attach).
+                Takes precedence over ``layers`` + ``width``.
         """
         from backend.API.duckdb_instance import get_duckdb_client
 
         self._require_model()
-        effective_layers = layers if layers else _DEFAULT_LAYERS_BY_SIZE.get(
-            self._model_size, _DEFAULT_LAYERS
-        )
+        if saes:
+            specs = [(int(layer), str(w)) for layer, w in saes]
+        else:
+            effective_layers = (
+                layers if layers else _DEFAULT_LAYERS_BY_SIZE.get(self._model_size, _DEFAULT_LAYERS)
+            )
+            specs = [(layer, width) for layer in effective_layers]
+        if len(specs) > 1:
+            # A single db_sae_id would mislabel every other spec — force the
+            # per-spec width-aware derivation below.
+            db_sae_id = None
 
         # Mode-specific top-k: NEURONPEDIA caps at 50, coverage modes need all
         if filter_mode == "neuronpedia":
@@ -575,7 +584,7 @@ class InterpretService:
         else:
             effective_top_k = 0  # all nonzero
 
-        explorer = self._get_prompt_explorer(effective_layers, width, effective_top_k)
+        explorer = self._get_prompt_explorer(specs, effective_top_k)
         prompt_result = explorer.run_prompt(prompt, output_len=1, top_k=effective_top_k)
 
         # Determine which token positions belong to the actual prompt
@@ -583,9 +592,7 @@ class InterpretService:
         if skip_chat_template:
             prompt_start, prompt_end = 1, len(all_token_strings)
         else:
-            prompt_start, prompt_end = self._find_prompt_token_range(
-                all_token_strings, prompt
-            )
+            prompt_start, prompt_end = self._find_prompt_token_range(all_token_strings, prompt)
         prompt_token_strings = all_token_strings[prompt_start:prompt_end]
 
         # Use frontend-provided identifiers (authoritative), fall back to derived
@@ -594,19 +601,15 @@ class InterpretService:
         db = get_duckdb_client()
 
         layer_results: list[LayerActivationsResult] = []
-        for layer_idx in sorted(prompt_result.layers.keys()):
-            lr = prompt_result.layers[layer_idx]
+        for key in sorted(prompt_result.layers.keys()):
+            lr = prompt_result.layers[key]
+            layer_idx, layer_width = key
 
             # Filter to only prompt token positions
-            prompt_tokens = [
-                tf for tf in lr.tokens
-                if prompt_start <= tf.position < prompt_end
-            ]
+            prompt_tokens = [tf for tf in lr.tokens if prompt_start <= tf.position < prompt_end]
 
             # Gather all unique feature indices for this layer
-            all_indices: list[int] = list({
-                f.index for tf in prompt_tokens for f in tf.features
-            })
+            all_indices: list[int] = list({f.index for tf in prompt_tokens for f in tf.features})
 
             # Batch fetch labels + densities from DuckDB
             if db_sae_id:
@@ -615,16 +618,14 @@ class InterpretService:
                 sae_id = neuronpedia_source_id(
                     GemmaScopeSAEConfig(
                         layer_index=layer_idx,
-                        width=width,
+                        width=layer_width,
                         model_size=self._model_size,
                         variant=self._variant,
                     )
                 )
             label_map: dict[int, tuple[str, float | None]] = {}
             if all_indices:
-                label_map = db.get_sae_feature_labels_batch(
-                    model_id, sae_id, all_indices
-                )
+                label_map = db.get_sae_feature_labels_batch(model_id, sae_id, all_indices)
 
             # Compute exclusion set for coverage modes
             if filter_mode in ("coverage_bos", "coverage_no_bos"):
@@ -705,11 +706,15 @@ class InterpretService:
         # --- Baseline (no steering) ---
         if self._variant == "pt":
             baseline_text = wrapper.generate_from_template(
-                prompt, output_len=output_len, temperature=temperature,
+                prompt,
+                output_len=output_len,
+                temperature=temperature,
             )
         else:
             baseline_text = wrapper.generate(
-                prompt, output_len=output_len, temperature=temperature,
+                prompt,
+                output_len=output_len,
+                temperature=temperature,
             )
 
         # --- Steered ---
@@ -717,11 +722,15 @@ class InterpretService:
         with manager.session(wrapper.model.model.layers):
             if self._variant == "pt":
                 steered_text = wrapper.generate_from_template(
-                    prompt, output_len=output_len, temperature=temperature,
+                    prompt,
+                    output_len=output_len,
+                    temperature=temperature,
                 )
             else:
                 steered_text = wrapper.generate(
-                    prompt, output_len=output_len, temperature=temperature,
+                    prompt,
+                    output_len=output_len,
+                    temperature=temperature,
                 )
 
         return SteeredGenerationResult(

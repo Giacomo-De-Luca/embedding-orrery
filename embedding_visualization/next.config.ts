@@ -1,3 +1,4 @@
+import path from "path";
 import type { NextConfig } from "next";
 
 const isDockerBuild = process.env.ORRERY_DOCKER_BUILD === "1";
@@ -25,10 +26,12 @@ const nextConfig: NextConfig = {
   },
 
   webpack: (config) => {
-    // glslify is a browserify shader compiler that regl-scatter2d lists as a
-    // dependency but never calls at runtime (shaders are pre-compiled).
-    // Ignoring it silences "Critical dependency" warnings from webpack.
-    config.resolve.alias['glslify'] = false;
+    // The regl-* packages wrap their pre-compiled shaders in runtime
+    // glslify() calls, so glslify cannot be aliased to `false` (that makes
+    // createScatter() throw and scattergl render nothing). The stub keeps
+    // webpack's "Critical dependency" warnings silenced while behaving as
+    // the tagged-template join glslify performs at runtime.
+    config.resolve.alias['glslify'] = path.resolve(__dirname, 'glslify-runtime-stub.js');
     return config;
   },
 };

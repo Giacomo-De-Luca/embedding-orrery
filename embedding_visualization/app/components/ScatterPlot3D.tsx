@@ -19,6 +19,8 @@ import { buildDataToSceneMatrix, getSceneNormalization } from '../utils/rendedin
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
+import { capture3DPlot } from '../../lib/utils/plotCapture';
+import { toast } from 'sonner';
 
 type PlotlyData = Partial<PlotData>;
 
@@ -142,6 +144,8 @@ interface ScatterPlot3DProps {
   showAxes?: boolean;
   /** Selected dimension indices for axis labels (manual mode) */
   selectedDimensions?: number[];
+  /** Called with the composited plot canvas when the modebar screenshot button is clicked */
+  onScreenshot?: (canvas: HTMLCanvasElement) => void;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -185,6 +189,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   onPointContextMenu,
   showAxes = false,
   selectedDimensions,
+  onScreenshot,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hoveredPointRef = useRef<Point3D | null>(null);
@@ -1076,6 +1081,25 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   // Keep ref in sync so the camera animation can call renderLabels on completion
   renderLabelsRef.current = renderLabels;
 
+  // Modebar screenshot: routed through a ref (reassigned every render) because
+  // the config memo only rebuilds on [plotlyLoaded], so a plain closure would go stale.
+  const screenshotHandlerRef = useRef<((gd: any) => void) | null>(null);
+  screenshotHandlerRef.current = (gd: any) => {
+    if (!onScreenshot || !containerRef.current) return;
+    capture3DPlot({
+      gd: gd ?? graphDivRef.current,
+      container: containerRef.current,
+      hazeCanvas: hazeCanvasRef.current,
+      labelCanvas: labelCanvasRef.current,
+      isDark,
+    })
+      .then(onScreenshot)
+      .catch((err) => {
+        console.error('Screenshot failed:', err);
+        toast.error('Screenshot failed');
+      });
+  };
+
   // rAF-based camera polling: detect camera changes during 3D rotation/zoom/pan
   // (onRelayout does NOT fire during 3D mouse interaction)
   useEffect(() => {
@@ -1178,7 +1202,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
-    modeBarButtons: build3DModeBarButtons(plotlyLibRef.current),
+    modeBarButtons: build3DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
   }), [plotlyLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- FULLY IMPERATIVE PLOTLY MANAGEMENT ---

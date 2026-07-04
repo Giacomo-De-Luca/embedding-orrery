@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
 import type { LayerActivationsResult, ActiveFeatureResult } from '@/lib/graphql/mutations';
@@ -9,15 +9,28 @@ export interface SelectedTokenInfo {
   tokenIdx: number;
   token: string;
   features: ActiveFeatureResult[];
+  /** SAE identity of the layer tab the token was selected in. */
+  modelId?: string;
+  saeId?: string;
 }
 
+/** Layer result optionally tagged with its SAE identity (attachSaeIdentity). */
+export type TokenStripLayer = LayerActivationsResult & {
+  modelId?: string;
+  saeId?: string;
+};
+
 interface PromptTokenActivationsProps {
-  layers: LayerActivationsResult[];
+  layers: TokenStripLayer[];
   tokenStrings: string[];
-  /** Called when a token is selected (click) or deselected (click again). */
+  /** Controlled token selection — index within the active layer tab. */
+  selectedTokenIdx: number | null;
+  /** Called when a token is selected (click) or deselected (click again / tab switch). */
   onTokenSelect?: (info: SelectedTokenInfo | null) => void;
   /** When set, color tokens by this feature's activation instead of max across all. */
   highlightedFeatureIndex?: number | null;
+  /** SAE of the highlighted feature — auto-focuses the matching layer tab. */
+  highlightedFeatureSaeId?: string | null;
   /** Label of the highlighted feature (for the indicator). */
   highlightedFeatureLabel?: string | null;
   /** Called when the user clears the feature highlight. */
@@ -26,7 +39,8 @@ interface PromptTokenActivationsProps {
 
 /**
  * Interactive token strip with heatmap coloring by activation intensity.
- * Hover shows numeric activation value. Click selects/deselects a token.
+ * Hover shows numeric activation value. Click selects/deselects a token
+ * (selection is controlled by the parent via `selectedTokenIdx`).
  *
  * When `highlightedFeatureIndex` is set, colors tokens by that single
  * feature's activation per token (instead of max across all features).
@@ -34,22 +48,53 @@ interface PromptTokenActivationsProps {
 export function PromptTokenActivations({
   layers,
   tokenStrings,
+  selectedTokenIdx,
   onTokenSelect,
   highlightedFeatureIndex,
+  highlightedFeatureSaeId,
   highlightedFeatureLabel,
   onClearHighlight,
 }: PromptTokenActivationsProps) {
   const [selectedLayer, setSelectedLayer] = useState<number>(0);
-  const [selectedTokenIdx, setSelectedTokenIdx] = useState<number | null>(null);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const lastAutoFocusRef = useRef<string | null>(null);
 
   const layerData = layers[selectedLayer];
   const isFeatureHighlighted = highlightedFeatureIndex != null;
+  // Single-feature coloring only applies on the tab of the feature's own SAE —
+  // the same index in another SAE is an unrelated feature.
+  const highlightAppliesToLayer =
+    isFeatureHighlighted &&
+    (!highlightedFeatureSaeId || layerData?.saeId === highlightedFeatureSaeId);
+
+  // Two widths at one layer are distinct tabs — disambiguate the labels
+  const showWidth = useMemo(() => new Set(layers.map((l) => l.width)).size > 1, [layers]);
+  const tabLabel = useCallback(
+    (l: TokenStripLayer) => (showWidth ? `${l.layer} · ${l.width}` : `${l.layer}`),
+    [showWidth],
+  );
+
+  // Auto-focus the layer tab matching the highlighted feature's SAE — once
+  // per highlight identity, so the user can still switch tabs afterward.
+  useEffect(() => {
+    if (highlightedFeatureIndex == null || !highlightedFeatureSaeId) {
+      lastAutoFocusRef.current = null;
+      return;
+    }
+    const key = `${highlightedFeatureSaeId}::${highlightedFeatureIndex}`;
+    if (lastAutoFocusRef.current === key) return;
+    lastAutoFocusRef.current = key;
+    const idx = layers.findIndex((l) => l.saeId === highlightedFeatureSaeId);
+    if (idx >= 0 && idx !== selectedLayer) {
+      setSelectedLayer(idx);
+      onTokenSelect?.(null);
+    }
+  }, [highlightedFeatureIndex, highlightedFeatureSaeId, layers, selectedLayer, onTokenSelect]);
 
   // Per-token activation values: either for a single feature or max across all
   const tokenActivations = useMemo(() => {
     if (!layerData) return [];
-    if (isFeatureHighlighted) {
+    if (highlightAppliesToLayer) {
       return layerData.tokens.map((t) => {
         const feat = t.features.find((f) => f.index === highlightedFeatureIndex);
         return feat?.activation ?? 0;
@@ -59,14 +104,13 @@ export function PromptTokenActivations({
       if (t.features.length === 0) return 0;
       return Math.max(...t.features.map((f) => f.activation));
     });
-  }, [layerData, highlightedFeatureIndex]);
+  }, [layerData, highlightedFeatureIndex, highlightAppliesToLayer]);
 
   const globalMax = useMemo(() => Math.max(...tokenActivations, 0.01), [tokenActivations]);
 
   const handleTokenClick = useCallback((i: number) => {
     if (!layerData) return;
     const newIdx = i === selectedTokenIdx ? null : i;
-    setSelectedTokenIdx(newIdx);
     if (newIdx === null) {
       onTokenSelect?.(null);
     } else {
@@ -77,6 +121,8 @@ export function PromptTokenActivations({
           tokenIdx: newIdx,
           token: tokenStrings[tokenData.position] ?? tokenData.token,
           features: sorted,
+          modelId: layerData.modelId,
+          saeId: layerData.saeId,
         });
       }
     }
@@ -93,8 +139,8 @@ export function PromptTokenActivations({
           <div className="flex gap-1 flex-wrap">
             {layers.map((l, i) => (
               <button
-                key={l.layer}
-                onClick={() => { setSelectedLayer(i); setSelectedTokenIdx(null); onTokenSelect?.(null); }}
+                key={`${l.layer}-${l.width}`}
+                onClick={() => { setSelectedLayer(i); onTokenSelect?.(null); }}
                 className={cn(
                   'px-2 py-0.5 text-[10px] rounded border transition-colors',
                   i === selectedLayer
@@ -102,7 +148,7 @@ export function PromptTokenActivations({
                     : 'bg-muted/50 text-muted-foreground border-border hover:bg-muted',
                 )}
               >
-                {l.layer}
+                {tabLabel(l)}
               </button>
             ))}
           </div>
@@ -112,7 +158,8 @@ export function PromptTokenActivations({
       {/* Token strip */}
       <div className="border rounded-md p-2 bg-card">
         <p className="text-[10px] text-muted-foreground mb-1">
-          Click a token to see its features (Layer {layerData.layer})
+          Click a token to see its features (Layer {layerData.layer}
+          {showWidth ? `, ${layerData.width}` : ''})
         </p>
         <div className="relative leading-relaxed font-mono text-xs flex flex-wrap">
           {layerData.tokens.map((tokenData, i) => {
@@ -143,7 +190,7 @@ export function PromptTokenActivations({
                 {isHovered && (
                   <span className="absolute z-10 -mt-7 px-1.5 py-0.5 text-[10px] bg-popover text-popover-foreground border rounded shadow-md whitespace-nowrap pointer-events-none">
                     {tokenActivations[i].toFixed(2)}
-                    {isFeatureHighlighted
+                    {highlightAppliesToLayer
                       ? ` — #${highlightedFeatureIndex}`
                       : ` (${tokenData.features.length} features)`}
                   </span>

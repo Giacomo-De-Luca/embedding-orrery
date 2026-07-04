@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState, useEffect, useDeferredValue } from 'react';
+import { useCallback, useMemo, useState, useEffect, useDeferredValue, useRef } from 'react';
 import {
   ResizableHandle,
   ResizablePanel,
@@ -26,6 +26,9 @@ import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
+import { drawLegendOverlay } from '../../lib/utils/plotCapture';
+import { downloadCanvasPng } from '../../lib/utils/downloadJson';
+import { toast } from 'sonner';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
@@ -539,11 +542,27 @@ export function DashboardPanel({
   const legendDragHandle = (
     <div
       ref={legendDragRef}
+      data-export-exclude
       className="h-3 w-full cursor-ns-resize flex items-center justify-center group pointer-events-auto"
     >
       <div className="h-0.5 w-8 rounded-full bg-border group-hover:bg-foreground/30 transition-colors" />
     </div>
   );
+
+  // Modebar screenshot: the plot component delivers its composited canvas;
+  // rasterize the live legend DOM onto it at its on-screen position, then download.
+  const legendOverlayRef = useRef<HTMLDivElement>(null);
+  const handleScreenshot = useCallback(async (plotCanvas: HTMLCanvasElement) => {
+    try {
+      if (legendOverlayRef.current) {
+        await drawLegendOverlay(plotCanvas, legendOverlayRef.current);
+      }
+    } catch (err) {
+      console.error('Legend capture failed:', err);
+      toast.error('Legend capture failed — exported the plot only');
+    }
+    downloadCanvasPng(plotCanvas, `${collectionName ?? 'embedding'}-${mode}.png`);
+  }, [collectionName, mode]);
 
   const plot = is2D ? (
     <ScatterPlot2D
@@ -571,6 +590,7 @@ export function DashboardPanel({
       topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
       customNumericRange={customNumericRange}
       showAxes={showAxes}
+      onScreenshot={handleScreenshot}
     />
   ) : (
     <ScatterPlot3D
@@ -600,6 +620,7 @@ export function DashboardPanel({
       onPointContextMenu={saeInfo ? handlePointContextMenu : undefined}
       showAxes={showAxes}
       selectedDimensions={selectedDimensions}
+      onScreenshot={handleScreenshot}
     />
   );
 
@@ -616,7 +637,7 @@ export function DashboardPanel({
 
       {/* 2. LAYER: Legend Overlay (Z-10) */}
       {showLegend && !legendCollapsed && (
-        <div className={cn(
+        <div ref={legendOverlayRef} className={cn(
           "absolute top-30 right-4 z-10 pointer-events-none",
           legendDragging && "select-none"
         )}>

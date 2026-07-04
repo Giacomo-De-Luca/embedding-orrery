@@ -1,0 +1,12 @@
+config:
+  batch_size: 64
+  device: null
+  layers: null
+  model_name: google/embeddinggemma-300M
+  name: embeddinggemma_mean
+  pooling: mean
+  type: encoder
+meta:
+  python_version: '3.12'
+  timestamp: '2026-07-03T13:07:08'
+  torch_version: 2.9.0

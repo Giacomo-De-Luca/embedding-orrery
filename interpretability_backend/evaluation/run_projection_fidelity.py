@@ -13,10 +13,7 @@ Run:
 Run this with the backend stopped — DuckDB is single-writer.
 """
 
-import json
 import logging
-import os
-import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -24,17 +21,16 @@ import numpy as np
 from interpretability_backend.backend.utils.duckdb_sync import _get_db as _get_duckdb
 from interpretability_backend.backend.utils.embedding_loader import load_embeddings_for_ids
 from interpretability_backend.evaluation.projection_fidelity import ProjectionFidelityEvaluator
+from interpretability_backend.evaluation.utils import (
+    load_config,
+    resolve_config_path,
+    write_results,
+)
 
 logger = logging.getLogger("orrery." + __name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "projection_fidelity_config.toml"
 DEFAULT_OUTPUT_PATH = Path(__file__).parent / "projection_fidelity_results.json"
-
-
-def load_config(path: Path) -> dict:
-    """Load the TOML config (stdlib tomllib, no new dependency)."""
-    with open(path, "rb") as f:
-        return tomllib.load(f)
 
 
 def _load_projections(duckdb, collection_name: str, projection_types: list[str]):
@@ -163,7 +159,7 @@ def _print_report(result: dict) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s - %(message)s")
 
-    config_path = Path(os.getenv("ORRERY_PROJECTION_FIDELITY_CONFIG", DEFAULT_CONFIG_PATH))
+    config_path = resolve_config_path("ORRERY_PROJECTION_FIDELITY_CONFIG", DEFAULT_CONFIG_PATH)
     config = load_config(config_path)
 
     collections = config.get("collections", [])
@@ -200,8 +196,7 @@ def main() -> None:
             results.append(result)
             _print_report(result)
 
-    output_path.write_text(json.dumps(results, indent=2))
-    print(f"\nWrote {len(results)} result(s) to {output_path}")
+    write_results(output_path, results)
 
 
 if __name__ == "__main__":

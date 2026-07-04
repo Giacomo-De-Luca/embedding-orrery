@@ -116,7 +116,11 @@ Output parquet schema:
 
 ### CLI (standalone, no backend needed)
 
+Run these from `interpretability_backend/` — the `interpret` package is not importable from the repo root:
+
 ```bash
+cd interpretability_backend
+
 # Full pipeline: download + extract for layer 9, 16k width
 uv run python -m interpret.sae.pipeline.prepare_sae_data --layer 9 --width 16k
 
@@ -160,7 +164,9 @@ mutation {
     layer: 9
     width: "16k"
     hookType: "resid_post"
-    storeVectors: true
+    # optional: modelSize, variant, skipDownload, includeActivations,
+    # createCollection, collectionMode, embeddingModel, extractTopics,
+    # topicConfig, deleteSourceFiles
     includeActivations: false
   }) {
     modelId
@@ -168,15 +174,15 @@ mutation {
     featuresInserted
     activationsInserted
     durationSeconds
-    status        # "completed", "already_ingested", or "failed"
+    status        # "completed" or "failed"
     error
   }
 }
 ```
 
-Returns `status: "already_ingested"` if the `(model_id, sae_id)` pair already exists in DuckDB with a matching parquet file on disk.
+There is no early-return for already-ingested data: downloads have resume support and DuckDB inserts use `INSERT OR REPLACE`, so re-runs are safe and always report `"completed"` on success.
 
-Progress is emitted via the existing WebSocket subscription bus with job ID `sae_prepare_{layer}_{hook}_{width}`.
+Progress is emitted via the existing WebSocket subscription bus with job ID `sae_prepare_{model_size}_{variant}_{layer}_{hook_type}_{width}` (e.g. `sae_prepare_4b_it_9_resid_post_16k`).
 
 ## Module Map
 

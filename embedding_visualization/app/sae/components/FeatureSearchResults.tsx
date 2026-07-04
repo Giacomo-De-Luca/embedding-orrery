@@ -22,10 +22,17 @@ interface NormalizedRow {
   saeBadge?: string;
 }
 
+export interface SelectedFeatureRef {
+  modelId: string;
+  saeId: string;
+  featureIndex: number;
+}
+
 interface FeatureSearchResultsProps {
   results: SaeFeatureSearchResult[];
   onSelect: (featureIndex: number, modelId?: string, saeId?: string) => void;
-  selectedIndex: number | null;
+  /** The feature currently open in the detail pane (full identity). */
+  selectedFeature: SelectedFeatureRef | null;
   mode?: 'text' | 'semantic' | 'prompt';
   semanticResults?: SemanticFeatureResult[];
   /** Show an SAE badge per row (for cross-SAE search). */
@@ -46,7 +53,7 @@ function saeLabel(saeId: string): string {
 export function FeatureSearchResults({
   results,
   onSelect,
-  selectedIndex,
+  selectedFeature,
   mode = 'text',
   semanticResults,
   showSaeBadge = false,
@@ -95,7 +102,14 @@ export function FeatureSearchResults({
         </thead>
         <tbody>
           {rows.map((row, idx) => {
-            const isSelected = row.featureIndex === selectedIndex && !showSaeBadge;
+            // A row is selected when its full identity matches the open
+            // feature; rows without identity match on index alone.
+            const isSelected =
+              selectedFeature != null &&
+              row.featureIndex === selectedFeature.featureIndex &&
+              (!row.saeId ||
+                (row.saeId === selectedFeature.saeId &&
+                  row.modelId === selectedFeature.modelId));
             // Use index as part of key since featureIndex may repeat across SAEs
             const rowKey = showSaeBadge
               ? `${row.modelId}::${row.saeId}::${row.featureIndex}`

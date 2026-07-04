@@ -17,33 +17,41 @@ Server runs at: `http://localhost:8000/graphql`
 
 ### 2. Run Tests
 ```bash
-uv run pytest interpretability_backend/test
+uv run pytest interpretability_backend/unit_tests/
 ```
+(`test/` contains notebooks and debug scripts, not pytest tests.)
 
 ## Core Features
 
 - **GraphQL API**: Flexible querying with Strawberry GraphQL.
-- **ChromaDB Integration**: Persistent vector storage in `interpretability_backend/resources/vector_db`.
+- **Dual-database storage**: DuckDB (`resources/main.duckdb`) orchestrates documents, metadata, projections and topics; ChromaDB (`resources/vector_db/`) stores dense vectors only.
 - **Embedding Pipeline**:
     - **HuggingFace Datasets**: Download and embed directly.
     - **Local Files**: Support for `.csv`, `.json`, `.parquet`.
-    - **Methods**: SentenceTransformers (local), OpenAI, Cohere, Ollama.
-- **Dimensionality Reduction**: Pre-compute PCA and UMAP projections for visualization.
+    - **Methods**: SentenceTransformers (local), OpenAI, Cohere, Ollama, HuggingFace API, Gemini, QWEN, BGE.
+- **Dimensionality Reduction**: Pre-compute PCA and UMAP projections (stored in DuckDB).
 - **Topic Extraction**: HDBSCAN clustering with c-TF-IDF keywords and optional LLM labeling.
+- **SAE tooling**: Neuronpedia feature ingestion, live Gemma inference with steering (see `documentation/SAE_ARCHITECTURE.md`, `documentation/INTERPRET_API.md`).
 
 ## Directory Structure
 
 ```
 interpretability_backend/
 ├── backend/
-│   ├── API/            # GraphQL schema, queries, mutations
-│   ├── clients/        # ChromaDB, HuggingFace, Local data clients
-│   ├── embedding_functions/ # Model implementations
+│   ├── API/            # GraphQL schema, queries, mutations, subscriptions
+│   ├── clients/        # DuckDB (orchestrator), ChromaDB, HuggingFace, Local data clients
+│   ├── embedding_functions/ # Multi-provider embedding + SAE ingestion
+│   ├── services/       # Topic extraction, interpret (SAE inference), jobs, progress
+│   ├── topic_extraction/ # HDBSCAN, c-TF-IDF, LLM labeling, reduction
+│   ├── utils/          # Shared utilities (projections, seed bootstrap, ...)
 │   └── main.py         # FastAPI entry point
+├── interpret/          # SAE/steering toolkit (see interpret/README.md)
+├── evaluation/         # Topic-quality + projection-fidelity evaluators
 ├── resources/
-│   └── vector_db/      # ChromaDB storage (Gitignored)
-├── test/               # Unit and integration tests
-└── utils/              # Shared utilities
+│   ├── main.duckdb     # DuckDB store (gitignored; seeded on first start)
+│   └── vector_db/      # ChromaDB storage (gitignored)
+├── unit_tests/         # Pytest tests
+└── test/               # Notebooks + debug scripts
 ```
 
 ## GraphQL API Examples
@@ -82,15 +90,17 @@ query {
 }
 ```
 
-**3. Extract Topics:**
+**3. Extract Topics** (config fields must be nested under `config`):
 ```graphql
 mutation {
   extractTopics(input: {
     collectionName: "emotion_embeddings"
-    minTopicSize: 10
-    nKeywords: 10
-    useLlmLabels: false
-    projectionType: "umap_2d"
+    config: {
+      minTopicSize: 10
+      nKeywords: 10
+      useLlmLabels: false
+      projectionType: "umap_2d"
+    }
   }) {
     numTopics
     numNoisePoints
@@ -122,13 +132,13 @@ Extract semantic topics from your embeddings using HDBSCAN clustering, c-TF-IDF,
 
 ### How It Works
 
-1. **Clustering**: HDBSCAN runs on projection coordinates (UMAP 2D preferred for better cluster separation)
+1. **Clustering**: HDBSCAN runs on the space selected by `cluster_on` — default `"cluster_umap"` (fresh 5-D UMAP on the raw vectors); alternatives: `"projection"` (stored viz coords) or `"embedding"` (L2-normalised raw vectors)
 2. **Keyword Extraction**: c-TF-IDF identifies representative keywords for each cluster
-3. **LLM Labeling** (optional): OpenAI generates human-readable topic names from keywords + sample documents
-4. **Storage**: Each item gets `topic_id` and `topic_label` in metadata
+3. **LLM Labeling** (optional): Gemini (default) or OpenAI generates human-readable topic names from keywords + sample documents
+4. **Storage**: Topic assignments and topic info are written to DuckDB (`topic_extractions`/`topic_info`/`topic_assignments`)
 5. **Noise Handling**: Points that don't fit any cluster get `topic_id: -1` with label "Unclustered"
 
-### Configuration
+### Configuration (key fields)
 
 ```python
 @dataclass
@@ -136,9 +146,13 @@ class TopicExtractionConfig:
     collection_name: str
     min_topic_size: int = 10          # Minimum points per cluster
     n_keywords: int = 10               # Keywords to extract per topic
-    use_llm_labels: bool = False       # Generate LLM labels (requires CHROMA_OPENAI_API_KEY)
-    llm_model: str = "gpt-4o-mini"     # OpenAI model for labeling
-    projection_type: str = "umap_2d"   # Which projection to cluster on
+    use_llm_labels: bool = False       # Generate LLM labels
+    llm_provider: str = "gemini"       # "gemini" (GEMINI_API_KEY) or "openai" (CHROMA_OPENAI_API_KEY)
+    llm_model: str = "gemini-3-flash-preview"
+    projection_type: str = "umap_2d"   # Which stored projection to use
+    cluster_on: str = "cluster_umap"   # Clustering space (see above)
+    # plus: clustering_method, n_clusters, cluster_n_components/min_dist/n_neighbors,
+    # reduction fields — see services/topic_extraction_service.py for the full set
 ```
 
 ### GraphQL Usage
@@ -148,10 +162,12 @@ class TopicExtractionConfig:
 mutation {
   extractTopics(input: {
     collectionName: "my_collection"
-    minTopicSize: 15
-    nKeywords: 10
-    useLlmLabels: true
-    projectionType: "umap_2d"
+    config: {
+      minTopicSize: 15
+      nKeywords: 10
+      useLlmLabels: true
+      projectionType: "umap_2d"
+    }
   }) {
     numTopics
     numNoisePoints
@@ -187,7 +203,8 @@ mutation {
 
 ### Environment Variables
 
-- `CHROMA_OPENAI_API_KEY`: Required for LLM labeling (reuses OpenAI embedding key)
+- `GEMINI_API_KEY`: Required for LLM labeling with the default Gemini provider
+- `CHROMA_OPENAI_API_KEY`: Required when `llm_provider: "openai"` (reuses OpenAI embedding key)
 
 ### Code Architecture
 
@@ -204,30 +221,14 @@ mutation {
   - `GenerateTopics.extract_topics()`: Extract top-N keywords per cluster
 
 **LLM Integration:**
-- `backend/topic_extraction/extractRepresentation.py`: OpenAI labeling
-  - Uses keywords + 4 representative documents as context
+- `backend/topic_extraction/llm_labeling.py`: provider-agnostic labeling (`_GeminiLabeler`/`_OpenAILabeler`)
+  - Uses keywords + representative documents as context
   - Rate limiting with exponential backoff
-  - Generates concise topic names (5 words max)
+  - Generates concise topic names
 
 ### Data Storage
 
-**Item Metadata** (per point):
-```json
-{
-  "topic_id": "3",
-  "topic_label": "Machine Learning | Neural Networks | Deep Learning"
-}
-```
-
-**Collection Metadata**:
-```json
-{
-  "has_topics": true,
-  "topic_count": 12,
-  "topics_extracted_at": "2024-01-15 10:30:00",
-  "topic_summary": "[{\"topic_id\": 0, \"label\": \"...\", \"count\": 150, \"keywords\": [...]}, ...]"
-}
-```
+Topic data lives in DuckDB (not ChromaDB): `topic_extractions` (one row per run, with a JSON config snapshot), `topic_info` (per-topic label/keywords/count), and `topic_assignments` (per-item `topic_id`/`topic_label`, plus `subtopic_id`/`subtopic_label` after reduction). See `documentation/DATABASE_ARCHITECTURE.md`.
 
 ### Frontend Integration
 
@@ -242,14 +243,12 @@ Topics automatically appear in the visualization:
 You can also use the backend components directly in Python scripts:
 
 ```python
-from interpretability_backend.utils.utils import setup_collection
+from interpretability_backend.backend.clients.duckdb_client import DuckDBClient
+from interpretability_backend.backend.clients.chromadb_client import ChromaDBClient
 
-# Connect to the database
-collection = setup_collection()
+db = DuckDBClient()                    # documents, metadata, projections, topics
+items = db.get_items_by_ids("emotion", ["emotion_0", "emotion_1"])
 
-# Query
-results = collection.query(
-    query_texts=["hello world"],
-    n_results=5
-)
+chroma = ChromaDBClient()              # vectors only
+results = chroma.semantic_search("emotion", query_texts=["hello world"], n_results=5)
 ```

@@ -913,12 +913,26 @@ class SteeringInput:
 
 
 @strawberry.input
+class SaeLayerSpecInput:
+    """One SAE to hook during prompt activations: a (layer, width) pair."""
+
+    layer: int
+    width: str = "16k"
+
+
+@strawberry.input
 class RunPromptActivationsInput:
-    """Input for running a prompt through the model with SAE hooks."""
+    """Input for running a prompt through the model with SAE hooks.
+
+    SAEs are given either as ``layers`` (all at the shared ``width``) or as
+    explicit ``saes`` specs, which take precedence and support mixed widths —
+    including two widths at the same layer — in a single forward pass.
+    """
 
     prompt: str
     layers: list[int] | None = None
     width: str = "16k"
+    saes: list[SaeLayerSpecInput] | None = None
     top_k: int = 10
     model_id: str | None = None
     sae_id: str | None = None

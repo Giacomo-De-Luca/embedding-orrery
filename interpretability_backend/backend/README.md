@@ -1,6 +1,6 @@
 # Embedding Visualization Backend
 
-GraphQL API backend for embedding, searching, and visualizing vector embeddings with ChromaDB.
+GraphQL API backend for embedding, searching, and visualizing vector embeddings. Dual-database design: **DuckDB** (`resources/main.duckdb`) orchestrates documents, metadata, projections and topics; **ChromaDB** stores dense vectors only. See `documentation/DATABASE_ARCHITECTURE.md`.
 
 ## Features
 
@@ -10,7 +10,7 @@ GraphQL API backend for embedding, searching, and visualizing vector embeddings 
 - **Semantic search** with multiple similarity measures (cosine, L2, inner product)
 - **Topic extraction** - HDBSCAN clustering + c-TF-IDF keywords + optional LLM labels (Gemini/OpenAI)
 - **Topic reduction** - Merge similar topics via AgglomerativeClustering or auto-HDBSCAN
-- **Projection computation** - PCA and UMAP (2D/3D) stored in ChromaDB metadata
+- **Projection computation** - PCA and UMAP (2D/3D) stored in DuckDB `projections` table (native FLOAT[] arrays)
 - **Real-time progress** via WebSocket subscriptions
 - **Resumable jobs** with persistent JSON state tracking
 - **File upload** endpoint for local file embedding
@@ -43,22 +43,28 @@ interpretability_backend/
 │   │   ├── types.py                     # All GraphQL types, inputs, enums, scalars
 │   │   ├── queries.py                   # Query resolvers (collections, search, datasets, files)
 │   │   ├── mutations.py                 # Mutation resolvers (embed, delete, topics, metadata)
-│   │   ├── subscriptions.py             # WebSocket subscription (embeddingProgress)
+│   │   ├── subscriptions.py             # WebSocket subscriptions (embeddingProgress, generateStream)
+│   │   ├── converters.py                # Service dataclass → GraphQL type converters
 │   │   ├── chromadb_instance.py         # Lazy singleton ChromaDBClient
+│   │   ├── duckdb_instance.py           # Lazy singleton DuckDBClient
+│   │   ├── interpret_instance.py        # Lazy singleton InterpretService
 │   │   └── upload.py                    # REST file upload endpoint (POST /upload)
 │   │
 │   ├── clients/                         # Data source clients
-│   │   ├── chromadb_client.py           # ChromaDB wrapper (search, projections, metadata)
+│   │   ├── duckdb_client.py             # DuckDB orchestrator (items, projections, topics, SAE, chat)
+│   │   ├── chromadb_client.py           # ChromaDB wrapper (vectors + semantic search only)
 │   │   ├── huggingface_client.py        # HF dataset info, preview, portion loading
 │   │   └── local_data_client.py         # Local file info, preview, loading (parquet/JSON/CSV/TSV)
 │   │
 │   ├── embedding_functions/             # Embedding infrastructure
 │   │   ├── config.py                    # Constants, enums (DataType, EmbeddingProvider), dataclasses
 │   │   ├── create_embedding_function.py # Factory: provider → embedding function + dimension
-│   │   ├── embed_huggingface.py         # HuggingFace dataset → ChromaDB (with resume)
-│   │   ├── embed_local_file.py          # Local file → ChromaDB (text/image/vector, with resume)
+│   │   ├── embed_huggingface.py         # HuggingFace dataset → DuckDB+ChromaDB (with resume)
+│   │   ├── embed_local_file.py          # Local file → DuckDB+ChromaDB (text/image/vector, with resume)
+│   │   ├── embed_existing_dataset.py    # Re-embed an existing dataset with a new model
 │   │   ├── embed_images.py              # Image embedding via ViT (google/vit-base-patch16-384)
 │   │   ├── embed_vectors.py             # Pre-computed vector ingestion
+│   │   ├── ingest_sae.py                # Neuronpedia SAE features/activations → DuckDB
 │   │   └── specific_functions/          # Provider-specific embedding implementations
 │   │       ├── embed_sentence_transformer.py  # Fork of ChromaDB's ST EF with prompt support
 │   │       ├── embed_gemini.py                # Google Gemini embedding with task_type
@@ -68,18 +74,25 @@ interpretability_backend/
 │   │
 │   ├── services/                        # Business logic services
 │   │   ├── topic_extraction_service.py  # Topic extraction + reduction orchestration
+│   │   ├── interpret_service.py         # Live SAE inference / steering / streaming chat
+│   │   ├── embedding_pipeline.py        # Shared embed→project→topics pipeline wrapper
+│   │   ├── sae_pipeline_service.py      # prepareSaeData orchestration (download→ingest)
 │   │   ├── progress_emitter.py          # In-memory event bus for WebSocket progress
+│   │   ├── token_emitter.py             # Token event bus for streaming chat
+│   │   ├── cancel_registry.py           # Per-job cancellation events
 │   │   └── job_state.py                 # JSON-based persistent job state (resume capability)
 │   │
 │   ├── topic_extraction/                # Topic extraction algorithms
 │   │   ├── cluster_and_label.py         # GenerateTopics: HDBSCAN + ClassTfidfTransformer
 │   │   ├── topic_reducer.py             # TopicReducer: AgglomerativeClustering / auto-HDBSCAN
-│   │   ├── llm_labeling.py             # LLM label generation (Gemini/OpenAI with tenacity)
-│   │   ├── extract_topics.py            # BERTopic reference code (not used directly)
-│   │   └── _representation_utils.py     # BERTopic reference utilities
+│   │   └── llm_labeling.py              # LLM label generation (Gemini/OpenAI with tenacity)
 │   │
 │   └── utils/                           # Shared utilities
-│       ├── compute_projections.py       # PCA/UMAP computation + ChromaDB metadata storage
+│       ├── compute_projections.py       # PCA/UMAP computation → DuckDB projections table
+│       ├── duckdb_sync.py               # Dataset/collection sync helpers
+│       ├── embedding_loader.py          # Batched embedding reads from ChromaDB
+│       ├── seed_bootstrap.py            # First-start seed dataset copy
+│       ├── color_preprocessing.py       # Hex colour column → mapped_colour float
 │       ├── text_processing.py           # format_text_for_embedding, extract_metadata
 │       ├── batch_utils.py               # sort_items_by_length (efficient batching)
 │       ├── id_utils.py                  # IDDeduplicator (handles duplicate IDs)
@@ -88,7 +101,8 @@ interpretability_backend/
 │       └── known_dimensions.json        # Cached model→dimension mapping
 │
 ├── resources/
-│   ├── vector_db/                       # ChromaDB persistent storage
+│   ├── main.duckdb                      # DuckDB store (documents, metadata, projections, topics)
+│   ├── vector_db/                       # ChromaDB persistent storage (vectors only)
 │   ├── uploads/                         # Uploaded files for embedding
 │   └── job_state.json                   # Persistent job state
 │
@@ -96,17 +110,12 @@ interpretability_backend/
 │   ├── WordNet/                         # WordNet embedding pipeline
 │   └── Lacan/                           # Lacan text analysis experiments
 │
-├── unit_tests/                          # Unit tests
-│   ├── test_similarity_calculations.py
-│   ├── test_local_data_client.py
-│   └── test_topic_extraction.py
-│
-└── tests/                               # Integration tests
-    └── topic_extraction/
-        └── test_topic_reducer.py
+└── unit_tests/                          # All pytest tests (test/ holds notebooks/debug scripts)
 ```
 
 ## GraphQL API
+
+> **Note**: the tables below cover the core embedding/search/topic surface only. The full schema is roughly 25 queries / 30 mutations / 2 subscriptions — including SAE feature queries (`saeModels`, `saeFeature`, `saeFeatureSearch`, ...), interpret mutations (`loadModel`, `runPromptActivations`, `generateSteeredResponse`, `prepareSaeData`, ...), chat-session persistence, `textSearch`, and the `generateStream` subscription. Explore it in the GraphQL Playground or `backend/API/queries.py` / `mutations.py`.
 
 ### Queries
 
@@ -296,11 +305,7 @@ The server runs with `--reload` enabled during development. Changes to Python fi
 ### Running Tests
 
 ```bash
-# Unit tests
 uv run pytest interpretability_backend/unit_tests/
-
-# Integration tests
-uv run pytest interpretability_backend/tests/
 ```
 
 ### Logging

@@ -14,10 +14,7 @@ Note: DBCV requires the live fitted HDBSCAN model, which is not persisted, so it
 extraction flow). All other metrics are computed.
 """
 
-import json
 import logging
-import os
-import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -27,17 +24,16 @@ from interpretability_backend.backend.topic_extraction.cluster_and_label import 
 from interpretability_backend.backend.utils.duckdb_sync import _get_db as _get_duckdb
 from interpretability_backend.backend.utils.embedding_loader import load_embeddings_for_ids
 from interpretability_backend.evaluation.quality_metrics import TopicQualityEvaluator
+from interpretability_backend.evaluation.utils import (
+    load_config,
+    resolve_config_path,
+    write_results,
+)
 
 logger = logging.getLogger("orrery." + __name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "eval_config.toml"
 DEFAULT_OUTPUT_PATH = Path(__file__).parent / "evaluation_results.json"
-
-
-def load_config(path: Path) -> dict:
-    """Load the TOML evaluation config (stdlib tomllib, no new dependency)."""
-    with open(path, "rb") as f:
-        return tomllib.load(f)
 
 
 def _recompute_keywords(documents, labels, n_keywords, language):
@@ -162,7 +158,7 @@ def _print_report(metrics: dict) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s - %(message)s")
 
-    config_path = Path(os.getenv("ORRERY_EVAL_CONFIG", DEFAULT_CONFIG_PATH))
+    config_path = resolve_config_path("ORRERY_EVAL_CONFIG", DEFAULT_CONFIG_PATH)
     config = load_config(config_path)
 
     collections = config.get("collections", [])
@@ -191,8 +187,7 @@ def main() -> None:
             results.append(metrics)
             _print_report(metrics)
 
-    output_path.write_text(json.dumps(results, indent=2))
-    print(f"\nWrote {len(results)} result(s) to {output_path}")
+    write_results(output_path, results)
 
 
 if __name__ == "__main__":
