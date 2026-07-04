@@ -49,6 +49,7 @@ dependencies = [
     "gensim>=4.4",
     "scikit-image>=0.26.0",
     "omegaconf>=2.3.1",
+    "acl-anthology>=1.2.0",
 ]
 
 [project.optional-dependencies]

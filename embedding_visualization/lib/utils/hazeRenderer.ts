@@ -87,6 +87,8 @@ export class HazeRenderer {
   private lastW = 0;
   private lastH = 0;
   private isDark: boolean;
+  /** Reused each frame in render() to avoid per-frame allocation. */
+  private readonly _camPos = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement, isDark = true) {
     this.isDark = isDark;
@@ -279,7 +281,7 @@ export class HazeRenderer {
 
     // Distance-based opacity fade (optional — comment out if not needed)
     // Fades haze when camera is very close, so points stay readable.
-    const camPos = new THREE.Vector3();
+    const camPos = this._camPos;
     camPos.setFromMatrixPosition(this.camera.matrixWorld);
     for (const sprite of this.sprites) {
       const dist = sprite.position.distanceTo(camPos);
@@ -299,6 +301,11 @@ export class HazeRenderer {
 
   dispose(): void {
     this.clearSprites();
+    // Blank the drawing buffer to the neutral blend color (black under screen,
+    // white under multiply) so no stale haze frame lingers on the overlay
+    // canvas after teardown — it stays mounted while nebulaMode is on, e.g.
+    // when filtering leaves no clusters to draw.
+    this.renderer.clear();
     this.renderer.dispose();
   }
 

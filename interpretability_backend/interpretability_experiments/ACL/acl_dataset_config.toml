@@ -1,0 +1,23 @@
+# Configuration for build_acl_dataset.py
+# Paths are relative to the repository root (EmbeddingVisualisation/).
+
+[repo]
+# Git repository holding the ACL Anthology metadata (XML + YAML).
+url = "https://github.com/acl-org/acl-anthology.git"
+# Where the shallow clone is kept (gitignored). Reused on subsequent runs;
+# delete the folder or `git -C <path> pull` to refresh.
+path = "interpretability_backend/resources/acl_anthology"
+
+[output]
+# Parquet output, directly ingestible by the local-file embedding flow.
+path = "interpretability_backend/resources/datasets/acl_abstracts.parquet"
+
+[filters]
+# Keep only papers that have a non-empty abstract.
+require_abstract = true
+# Optional inclusive year range; comment out for no bound.
+# min_year = 2000
+# max_year = 2026
+# Optional venue filter by anthology venue id (e.g. ["acl", "emnlp", "naacl"]).
+# Empty list = all venues.
+venues = []

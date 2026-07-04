@@ -1,0 +1,15 @@
+# EMNLP-only variant of acl_dataset_config.toml.
+# Matches papers whose anthology venue ids include "emnlp": the main conference,
+# including joint EMNLP-IJCNLP years. Does NOT include "Findings of EMNLP" —
+# Findings volumes carry only the "findings" venue id (shared across ACL/NAACL/EMNLP).
+
+[repo]
+url = "https://github.com/acl-org/acl-anthology.git"
+path = "interpretability_backend/resources/acl_anthology"
+
+[output]
+path = "interpretability_backend/resources/datasets/acl_abstracts_emnlp.parquet"
+
+[filters]
+require_abstract = true
+venues = ["emnlp"]

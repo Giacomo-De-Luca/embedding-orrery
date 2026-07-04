@@ -230,9 +230,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       });
     }
 
+    // Exclude points muted by text search / temporal filters, so cluster
+    // labels track the visibly active points (mirrors the 3D clusterDataMap).
+    if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+      displayPoints = displayPoints.filter(p => !combinedMutedIndices.has(p.index));
+    }
+
     // groupPointsByCluster works with Point3D but Point2D is compatible (z defaults via centroid calc)
     return groupPointsByCluster(displayPoints as any, categoryField, colorMap, nestedColorMap);
-  }, [showClusterLabels, points, categoryField, colorMap, nestedColorMap, hideUnclustered, mutedCategories]);
+  }, [showClusterLabels, points, categoryField, colorMap, nestedColorMap, hideUnclustered, mutedCategories, combinedMutedIndices]);
 
   // --- Cluster label font constant ---
   const CLUSTER_FONT = 'bold 13px Geist Mono, monospace';

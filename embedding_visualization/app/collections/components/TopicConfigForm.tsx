@@ -15,14 +15,21 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import type { TopicConfigInput } from '@/lib/graphql/mutations';
 
+/** Stored visualization projections that can double as the clustering space. */
+const PROJECTION_SPACES = ['umap_3d', 'umap_2d', 'pca_3d', 'pca_2d'] as const;
+
+/** Projection loaded for ids/documents (and used as fallback) when clustering on raw vectors. */
+const RAW_MODE_PROJECTION = 'umap_3d';
+
 export interface TopicConfigState {
   clusteringMethod: string;      // "hdbscan" | "kmeans" | "gmm" | "spectral"
   nClusters: number;
   minTopicSize: number;
   nKeywords: number;
-  projectionType: string;
-  // Clustering space
-  clusterOn: string;             // "projection" | "cluster_umap" | "embedding"
+  // Single space selector: a stored projection ("umap_3d" | "umap_2d" | "pca_3d" | "pca_2d")
+  // or a raw-vector mode ("cluster_umap" | "embedding"). Split back into the GraphQL
+  // projectionType + clusterOn pair in toTopicConfigInput.
+  clusteringSpace: string;
   clusterNComponents: number;    // BERTopic UMAP dims (cluster_umap only)
   clusterMinDist: number;        // BERTopic UMAP min_dist (cluster_umap only)
   clusterNNeighbors: number;     // BERTopic UMAP n_neighbors (cluster_umap only)
@@ -41,8 +48,7 @@ export const DEFAULT_TOPIC_CONFIG: TopicConfigState = {
   nClusters: 10,
   minTopicSize: 10,
   nKeywords: 10,
-  projectionType: 'umap_2d',
-  clusterOn: 'cluster_umap',
+  clusteringSpace: 'umap_3d',
   clusterNComponents: 5,
   clusterMinDist: 0.0,
   clusterNNeighbors: 15,
@@ -57,18 +63,19 @@ export const DEFAULT_TOPIC_CONFIG: TopicConfigState = {
 
 /** Convert TopicConfigState to the GraphQL input shape. */
 export function toTopicConfigInput(state: TopicConfigState): TopicConfigInput {
+  const isProjectionSpace = (PROJECTION_SPACES as readonly string[]).includes(state.clusteringSpace);
   const config: TopicConfigInput = {
     minTopicSize: state.minTopicSize,
     nKeywords: state.nKeywords,
-    projectionType: state.projectionType,
+    projectionType: isProjectionSpace ? state.clusteringSpace : RAW_MODE_PROJECTION,
     useLlmLabels: state.useLlmLabels,
     clusteringMethod: state.clusteringMethod,
-    clusterOn: state.clusterOn,
+    clusterOn: isProjectionSpace ? 'projection' : state.clusteringSpace,
   };
   if (state.clusteringMethod !== 'hdbscan') {
     config.nClusters = state.nClusters;
   }
-  if (state.clusterOn === 'cluster_umap') {
+  if (state.clusteringSpace === 'cluster_umap') {
     config.clusterNComponents = state.clusterNComponents;
     config.clusterMinDist = state.clusterMinDist;
     config.clusterNNeighbors = state.clusterNNeighbors;
@@ -172,41 +179,36 @@ export function TopicConfigForm({ value, onChange }: TopicConfigFormProps) {
         />
       </div>
 
-      <div className="space-y-2">
-        <Label>Projection Type</Label>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          value={value.projectionType}
-          onValueChange={(v) => { if (v) update({ projectionType: v }); }}
-        >
-          <ToggleGroupItem value="umap_2d" className="text-xs">UMAP 2D</ToggleGroupItem>
-          <ToggleGroupItem value="umap_3d" className="text-xs">UMAP 3D</ToggleGroupItem>
-          <ToggleGroupItem value="pca_2d" className="text-xs">PCA 2D</ToggleGroupItem>
-          <ToggleGroupItem value="pca_3d" className="text-xs">PCA 3D</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
-
-      {/* Clustering Space */}
+      {/* Clustering Space (merged: which space HDBSCAN & co. run in) */}
       <div className="space-y-2">
         <Label>Clustering Space</Label>
         <ToggleGroup
           type="single"
           variant="outline"
-          value={value.clusterOn}
-          onValueChange={(v) => { if (v) update({ clusterOn: v }); }}
+          className="flex-wrap justify-start"
+          value={value.clusteringSpace}
+          onValueChange={(v) => { if (v) update({ clusteringSpace: v }); }}
         >
-          <ToggleGroupItem value="projection" className="text-xs">Visualization coords</ToggleGroupItem>
+          <ToggleGroupItem value="umap_3d" className="text-xs">UMAP 3D</ToggleGroupItem>
+          <ToggleGroupItem value="umap_2d" className="text-xs">UMAP 2D</ToggleGroupItem>
+          <ToggleGroupItem value="pca_3d" className="text-xs">PCA 3D</ToggleGroupItem>
+          <ToggleGroupItem value="pca_2d" className="text-xs">PCA 2D</ToggleGroupItem>
           <ToggleGroupItem value="cluster_umap" className="text-xs">BERTopic 5D</ToggleGroupItem>
           <ToggleGroupItem value="embedding" className="text-xs">Raw embeddings</ToggleGroupItem>
         </ToggleGroup>
-        {value.clusterOn === 'cluster_umap' && (
+        {(PROJECTION_SPACES as readonly string[]).includes(value.clusteringSpace) && (
+          <p className="text-xs text-muted-foreground">
+            Clusters directly on the stored projection, so topics match the shapes you see in that
+            view. The projection must already be computed for this collection.
+          </p>
+        )}
+        {value.clusteringSpace === 'cluster_umap' && (
           <p className="text-xs text-muted-foreground">
             Runs a fresh UMAP (min_dist 0) on the raw vectors before clustering — slower than
             visualization coords, but usually sharper topics.
           </p>
         )}
-        {value.clusterOn === 'embedding' && (
+        {value.clusteringSpace === 'embedding' && (
           <p className="text-xs text-muted-foreground">
             Clusters on the full-dimensional vectors. Advanced; quality varies with embedding dimension.
           </p>
@@ -214,7 +216,7 @@ export function TopicConfigForm({ value, onChange }: TopicConfigFormProps) {
       </div>
 
       {/* BERTopic UMAP params */}
-      {value.clusterOn === 'cluster_umap' && (
+      {value.clusteringSpace === 'cluster_umap' && (
         <div className="space-y-4 pl-6">
           <div className="space-y-2">
             <div className="flex items-center justify-between">

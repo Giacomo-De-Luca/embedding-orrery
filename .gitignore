@@ -31,6 +31,8 @@ interpretability_backend/resources/sae_labels/*
 interpretability_backend/resources/sae_vectors/*
 interpretability_backend/resources/seed/*
 interpretability_backend/resources/probing_results/*
+interpretability_backend/resources/acl_anthology/
+interpretability_backend/resources/datasets/
 
 ### interrupted progress
 

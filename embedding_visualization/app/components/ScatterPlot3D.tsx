@@ -16,6 +16,7 @@ import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterG
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
 import { computeMVP, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
 import { buildDataToSceneMatrix, getSceneNormalization } from '../utils/rendeding';
+import { computeOverlayLayout, overlayLayoutEqual, type OverlayLayout } from '../../lib/utils/overlayLayout';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
@@ -304,6 +305,24 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   // Ref to track bounds for projection (avoids stale closure)
   const boundsRef = useRef(bounds);
   boundsRef.current = bounds;
+
+  // Lazy cache for the data→scene model matrix. Axis ranges are pinned
+  // (autorange:false), so this matrix is constant during camera interaction and
+  // only changes when `bounds` changes. Recompute only on a bounds-identity miss,
+  // avoiding a Float32Array alloc + layout read + cbrt on every rendered frame.
+  const modelMatrixCacheRef = useRef<{ bounds: DataBounds | null; matrix: Float32Array } | null>(null);
+  const getModelMatrix = useCallback((currentBounds: DataBounds | null): Float32Array => {
+    const cache = modelMatrixCacheRef.current;
+    if (cache && cache.bounds === currentBounds) return cache.matrix;
+    const matrix = buildDataToSceneMatrix(graphDivRef.current, currentBounds ?? undefined);
+    // Only cache once Plotly's scene axis ranges exist: before that,
+    // buildDataToSceneMatrix falls back to unpadded raw bounds, and caching that
+    // would lock in a ~5%-off matrix until `bounds` next changes. Recompute
+    // (cheaply) each frame until the ranges are populated.
+    const rangesReady = !!(graphDivRef.current as any)?._fullLayout?.scene?.xaxis?.range;
+    if (rangesReady) modelMatrixCacheRef.current = { bounds: currentBounds, matrix };
+    return matrix;
+  }, []);
 
 
 
@@ -853,8 +872,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       });
     }
 
+    // Exclude points muted by text search / temporal filters, so haze and
+    // cluster labels track the visibly active points.
+    if (combinedMutedIndices && combinedMutedIndices.size > 0) {
+      clusterPoints = clusterPoints.filter(p => !combinedMutedIndices.has(p.index));
+    }
+
     return groupPointsByCluster(clusterPoints, categoryField, colorMap, nestedColorMap);
-  }, [nebulaMode, showClusterLabels, displayPoints, categoryField, colorMap, nestedColorMap, mutedCategories]);
+  }, [nebulaMode, showClusterLabels, displayPoints, categoryField, colorMap, nestedColorMap, mutedCategories, combinedMutedIndices]);
 
   // --- Cluster label data for canvas overlay ---
   const clusterLabelDataRef = useRef<{
@@ -922,14 +947,13 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const view = cameraParams?.view || cameraParams?._view;
     if (!projection || !view) return;
 
-    const model = buildDataToSceneMatrix(graphDivRef.current, currentBounds);
+    const model = getModelMatrix(currentBounds);
     const mvp = computeMVP(projection, view, model);
 
     // Get the actual GL canvas position relative to our overlay container.
     // Plotly's GL canvas may be offset within the plot div (margins, modebar, etc.)
     const gl = glplot?.gl as WebGLRenderingContext | null;
     const glCanvas = gl?.canvas as HTMLCanvasElement | undefined;
-    const containerRect = container.getBoundingClientRect();
 
     let glOffsetX = 0;
     let glOffsetY = 0;
@@ -937,13 +961,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     let vpH: number;
 
     if (glCanvas && gl) {
-      const glRect = glCanvas.getBoundingClientRect();
-      // Offset of GL canvas within our overlay container (in CSS pixels)
-      glOffsetX = glRect.left - containerRect.left;
-      glOffsetY = glRect.top - containerRect.top;
-      // Viewport size in CSS pixels (what projectToScreen maps into)
-      vpW = glRect.width;
-      vpH = glRect.height;
+      // Offset + viewport size of the GL canvas within our overlay container (CSS px)
+      const layout = computeOverlayLayout(container.getBoundingClientRect(), glCanvas.getBoundingClientRect());
+      glOffsetX = layout.offsetX;
+      glOffsetY = layout.offsetY;
+      vpW = layout.cssW;
+      vpH = layout.cssH;
     } else {
       vpW = cssW;
       vpH = cssH;
@@ -1076,7 +1099,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     }
 
     ctx.globalAlpha = 1.0;
-  }, [width, height, isDark, showClusterLabels, clusterDataMap]);
+  }, [width, height, isDark, showClusterLabels, clusterDataMap, getModelMatrix]);
 
   // Keep ref in sync so the camera animation can call renderLabels on completion
   renderLabelsRef.current = renderLabels;
@@ -1423,13 +1446,32 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   // --- NEBULA: Haze sprites (separate overlay canvas) ---
   const hazeRendererRef = useRef<HazeRenderer | null>(null);
+  // Set by the lifecycle effect; lets the cluster-update effect force a single
+  // repaint after new sprites are built, so muting/filtering updates the haze
+  // immediately without waiting for Plotly's next GL render.
+  const renderHazeOnceRef = useRef<(() => void) | null>(null);
+  // Identity of the clusterDataMap last pushed into the renderer, so the
+  // cluster-update effect can no-op when the lifecycle effect already applied
+  // the current map in the same commit (avoids a double Poisson resample).
+  const appliedClusterMapRef = useRef<Map<string, ClusterData> | null>(null);
 
+  // Whether there is anything to draw — a primitive boolean so the renderer
+  // lifecycle effect only re-runs when crossing the empty/non-empty boundary,
+  // not on every cluster-content change (mute / temporal filter / recolor).
+  const hasNebulaClusters = clusterDataMap.size > 0;
+
+  // 1. Renderer lifecycle: create/dispose the Three.js renderer and hook the GL
+  //    render loop. Deps deliberately EXCLUDE clusterDataMap so cluster-content
+  //    changes never tear down and re-instantiate the WebGL renderer — that
+  //    teardown (plus its Poisson-disk resample) was the interaction hitch.
   useEffect(() => {
-    if (!nebulaMode || !plotReady || !graphDivRef.current || clusterDataMap.size === 0) {
+    if (!nebulaMode || !plotReady || !graphDivRef.current || !hasNebulaClusters) {
       if (hazeRendererRef.current) {
         hazeRendererRef.current.dispose();
         hazeRendererRef.current = null;
       }
+      renderHazeOnceRef.current = null;
+      appliedClusterMapRef.current = null;
       return;
     }
 
@@ -1445,25 +1487,25 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const containerEl = containerRef.current;
     if (!glCanvas || !containerEl) return;
 
+    // Only touch canvas dims/styles when the GL canvas actually moved or resized.
+    // Assigning canvas.width/height resets the WebGL backing store, and style
+    // writes dirty layout (forcing reflow) — doing either every frame is pure
+    // waste during rotation, when position/size are stable.
+    let lastLayout: OverlayLayout | null = null;
     const syncCanvasLayout = () => {
-      const containerRect = containerEl.getBoundingClientRect();
-      const glRect = glCanvas.getBoundingClientRect();
-      const cssW = glRect.width;
-      const cssH = glRect.height;
-      const offsetX = glRect.left - containerRect.left;
-      const offsetY = glRect.top - containerRect.top;
+      const layout = computeOverlayLayout(containerEl.getBoundingClientRect(), glCanvas.getBoundingClientRect());
+      if (overlayLayoutEqual(layout, lastLayout)) return;
+      lastLayout = layout;
 
-      canvas.style.left = `${offsetX}px`;
-      canvas.style.top = `${offsetY}px`;
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${cssH}px`;
+      canvas.style.left = `${layout.offsetX}px`;
+      canvas.style.top = `${layout.offsetY}px`;
+      canvas.style.width = `${layout.cssW}px`;
+      canvas.style.height = `${layout.cssH}px`;
 
-      canvas.width = Math.round(cssW);
-      canvas.height = Math.round(cssH);
+      canvas.width = Math.round(layout.cssW);
+      canvas.height = Math.round(layout.cssH);
 
-      if (hazeRendererRef.current) {
-        hazeRendererRef.current.resize(cssW, cssH);
-      }
+      hazeRendererRef.current?.resize(layout.cssW, layout.cssH);
     };
 
     syncCanvasLayout();
@@ -1471,34 +1513,53 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const haze = new HazeRenderer(canvas, isDark);
     hazeRendererRef.current = haze;
     haze.resize(canvas.clientWidth, canvas.clientHeight);
-    haze.updateClusters(clusterDataMap, points.length);
+    haze.updateClusters(clusterDataMap, pointsRef.current.length);
+    appliedClusterMapRef.current = clusterDataMap;
+
+    // Draw one frame using the live camera — paints current sprites without
+    // waiting for the next Plotly GL render. Reused by the onrender hook and by
+    // the cluster-update effect below.
+    const renderHazeOnce = () => {
+      syncCanvasLayout();
+      const cameraParams = glplot.cameraParams || glplot.camera;
+      if (!cameraParams) return;
+      const projection = cameraParams.projection || cameraParams._projection;
+      const view = cameraParams.view || cameraParams._view;
+      if (!projection || !view) return;
+      hazeRendererRef.current?.render(projection, view, getModelMatrix(boundsRef.current));
+    };
+    renderHazeOnceRef.current = renderHazeOnce;
 
     // Hook into glplot's render loop for camera sync
     const originalOnRender = glplot.onrender;
-
     glplot.onrender = () => {
       if (originalOnRender) originalOnRender();
-
-      syncCanvasLayout();
-
-      const cameraParams = glplot.cameraParams || glplot.camera;
-      if (!cameraParams) return;
-
-      const projection = cameraParams.projection || cameraParams._projection;
-      const view = cameraParams.view || cameraParams._view;
-      const model = buildDataToSceneMatrix(graphDivRef.current, boundsRef.current ?? undefined);
-      if (!projection || !view) return;
-
-      haze.render(projection, view, model);
+      renderHazeOnce();
     };
+
+    renderHazeOnce();
 
     return () => {
       if (glplot) glplot.onrender = originalOnRender || null;
       haze.dispose();
       hazeRendererRef.current = null;
+      renderHazeOnceRef.current = null;
+      appliedClusterMapRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nebulaMode, plotReady, clusterDataMap, isDark]);
+  }, [nebulaMode, plotReady, isDark, hasNebulaClusters]);
+
+  // 2. Cluster-content updates: rebuild only the sprite set on the existing
+  //    renderer (no GL teardown), then force a single repaint so the change is
+  //    visible immediately even if the camera is idle. Skips when the lifecycle
+  //    effect already applied this exact map in the same commit.
+  useEffect(() => {
+    if (!hazeRendererRef.current) return;
+    if (appliedClusterMapRef.current === clusterDataMap) return;
+    hazeRendererRef.current.updateClusters(clusterDataMap, pointsRef.current.length);
+    appliedClusterMapRef.current = clusterDataMap;
+    renderHazeOnceRef.current?.();
+  }, [clusterDataMap]);
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}

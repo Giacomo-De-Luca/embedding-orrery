@@ -1,0 +1,17 @@
+# EMNLP + Findings-of-EMNLP variant of acl_dataset_config.toml.
+# venues and id_patterns are OR'd: main-conference papers match via the "emnlp"
+# venue id (including joint EMNLP-IJCNLP years); Findings-of-EMNLP papers match
+# via the anthology id substring, since Findings volumes only carry the shared
+# "findings" venue id.
+
+[repo]
+url = "https://github.com/acl-org/acl-anthology.git"
+path = "interpretability_backend/resources/acl_anthology"
+
+[output]
+path = "interpretability_backend/resources/datasets/acl_abstracts_emnlp_findings.parquet"
+
+[filters]
+require_abstract = true
+venues = ["emnlp"]
+id_patterns = ["findings-emnlp"]
