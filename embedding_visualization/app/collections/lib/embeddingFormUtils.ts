@@ -105,6 +105,7 @@ export async function resumeLlmLabelingJob(
 export interface ResumeJobDeps {
   embedHFDataset: (input: EmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   embedLocalFile: (input: EmbedLocalFileInput) => Promise<EmbedDatasetResult | null>;
+  reEmbedDataset: (input: ReEmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   generateLlmLabels: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
   refreshCollections: () => Promise<void>;
   setLlmResumeJobId: (id: string | null) => void;
@@ -263,6 +264,25 @@ export async function resumeJob(job: EmbeddingJob, deps: ResumeJobDeps): Promise
   if (handled) return;
 
   const config = job.config as Record<string, unknown>;
+
+  if (job.jobType === 're_embed') {
+    // The backend stores only source/provider/model for re-embed jobs
+    // (no columns/template), so resume always uses the source dataset's
+    // existing document text — matching the omit-columns contract of
+    // ReEmbedDatasetInput.
+    await deps.reEmbedDataset({
+      sourceDatasetName: config.source_dataset_name as string,
+      collectionName: job.collectionName,
+      embeddingModel: transformStoredEmbeddingModel({
+        provider: config.embedding_provider,
+        model_name: config.embedding_model,
+      })!,
+      computeProjections: true,
+      resume: true,
+    });
+    await deps.refreshCollections();
+    return;
+  }
 
   if (job.jobType === 'local_file') {
     const dataTypeValue = config.data_type as string | undefined;

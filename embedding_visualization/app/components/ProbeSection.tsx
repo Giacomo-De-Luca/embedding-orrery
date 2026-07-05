@@ -237,11 +237,15 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
                     <span className="ml-auto text-[10px] text-muted-foreground">
                       n={probe.nTrain + probe.nVal}
                     </span>
+                    {/* Disabled while training: deleting mid-run races the
+                        server-side persist (the finished run would resurrect
+                        the probe or strand score rows). */}
                     <Button
                       size="icon"
                       variant="ghost"
                       className="size-6 text-muted-foreground hover:text-destructive"
                       aria-label={`Delete ${probe.targetField} ${probe.kind} probe`}
+                      disabled={probes.training}
                       onClick={() => void probes.deleteProbe(probe)}
                     >
                       <Trash2 className="size-3" />

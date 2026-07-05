@@ -440,7 +440,7 @@ export function LocalFileTab({
       )}
 
       {/* Sticky CTA with config recap + inline validation */}
-      {isDataLoaded && !embedLoading && (
+      {isDataLoaded && (
         <EmbedFooterBar
           summary={fileEmbedSummary}
           ctaLabel={isVectorMode ? 'Import Vectors' : 'Embed File'}
@@ -501,15 +501,13 @@ export function LocalFileTab({
             </CardContent>
           </Card>
 
-          {!embedLoading && (
-            <EmbedFooterBar
-              summary={reEmbedSummary}
-              ctaLabel="Re-embed Dataset"
-              onSubmit={handleReEmbed}
-              loading={embedLoading}
-              issues={reEmbedValidationIssues}
-            />
-          )}
+          <EmbedFooterBar
+            summary={reEmbedSummary}
+            ctaLabel="Re-embed Dataset"
+            onSubmit={handleReEmbed}
+            loading={embedLoading}
+            issues={reEmbedValidationIssues}
+          />
         </>
       )}
 

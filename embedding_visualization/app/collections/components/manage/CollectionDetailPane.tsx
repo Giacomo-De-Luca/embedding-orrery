@@ -98,11 +98,11 @@ function PreviewCell({ value }: { value: unknown }) {
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[480px] max-w-[90vw]">
-          <ScrollArea className="max-h-72 overflow-auto">
+          <div className="max-h-72 overflow-y-auto">
             <pre className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed">
               {fullText}
             </pre>
-          </ScrollArea>
+          </div>
         </PopoverContent>
       </Popover>
     </td>

@@ -134,7 +134,11 @@ def _parse_metrics(output_dir: Path) -> dict:
 
 
 def _score_linear(X: np.ndarray, npz_path: Path, kind: str) -> tuple[np.ndarray, dict]:
-    """Score all rows with a saved linear direction; return (scores, bundle)."""
+    """Score all rows with a saved linear direction; return (scores, bundle).
+
+    Scoring is chunked (like ``_score_mlp``) so the float64 standardization
+    never materializes a second full-size copy of X.
+    """
     data = np.load(npz_path)
     coef = np.asarray(data["coef"], dtype=np.float64).ravel()
     intercept = float(np.asarray(data["intercept"]).ravel()[0])
@@ -144,10 +148,12 @@ def _score_linear(X: np.ndarray, npz_path: Path, kind: str) -> tuple[np.ndarray,
         if "scaler_scale" in data
         else np.ones_like(scaler_mean)
     )
-    X_std = (X.astype(np.float64) - scaler_mean) / scaler_scale
-    scores = X_std @ coef
+    scores = np.empty(X.shape[0], dtype=np.float64)
+    for start in range(0, X.shape[0], _MLP_SCORING_BATCH):
+        chunk = X[start : start + _MLP_SCORING_BATCH].astype(np.float64)
+        scores[start : start + _MLP_SCORING_BATCH] = ((chunk - scaler_mean) / scaler_scale) @ coef
     if kind in _PREDICTIVE_KINDS:
-        scores = scores + intercept
+        scores += intercept
     bundle = {
         "direction": [float(v) for v in coef],
         "scaler_mean": [float(v) for v in scaler_mean],
@@ -254,6 +260,15 @@ def run_probe_core(
         sample_ids=[ids[i] for i in pool_idx],
     )
 
+    # The toolkit trainers swallow per-fit failures into an error CSV row, so
+    # a failed retrain would otherwise silently reuse the previous run's
+    # artifact. Remove it up front and require the trainer to recreate it.
+    if isinstance(spec, MLPProbeSpec):
+        artifact_path = output_dir / "checkpoints" / "layer_0_embedding.pt"
+    else:
+        artifact_path = output_dir / "directions" / f"L0_embedding_{spec.kind}.npz"
+    artifact_path.unlink(missing_ok=True)
+
     if isinstance(spec, MLPProbeSpec):
         train_mlp_probes(
             dataset,
@@ -264,17 +279,6 @@ def run_probe_core(
             target_columns=[config.target_field],
             indices_override=indices_override,
         )
-        scores = _score_mlp(
-            X.astype(np.float32, copy=False),
-            output_dir / "checkpoints" / "layer_0_embedding.pt",
-            spec,
-        )
-        bundle = {
-            "direction": None,
-            "scaler_mean": None,
-            "scaler_scale": None,
-            "intercept": None,
-        }
     else:
         train_sklearn_probe(
             dataset,
@@ -283,8 +287,22 @@ def run_probe_core(
             output_dir,
             indices_override=indices_override,
         )
-        npz_path = output_dir / "directions" / f"L0_embedding_{spec.kind}.npz"
-        scores, bundle = _score_linear(X, npz_path, config.kind)
+    if not artifact_path.exists():
+        raise ProbeTrainingError(
+            f"The {config.kind} fit failed and produced no probe artifact — "
+            "see the server logs for the underlying error."
+        )
+
+    if isinstance(spec, MLPProbeSpec):
+        scores = _score_mlp(X.astype(np.float32, copy=False), artifact_path, spec)
+        bundle = {
+            "direction": None,
+            "scaler_mean": None,
+            "scaler_scale": None,
+            "intercept": None,
+        }
+    else:
+        scores, bundle = _score_linear(X, artifact_path, config.kind)
 
     if not np.all(np.isfinite(scores)):
         raise ProbeTrainingError(
@@ -292,6 +310,14 @@ def run_probe_core(
         )
 
     metrics = _parse_metrics(output_dir)
+    if not metrics:
+        # Every successful fit emits val_* columns; an empty dict means the
+        # fit errored (error-only CSV row) or was degenerate (all-NaN metrics
+        # dropped by the CSV writer, e.g. a ~zero mass-mean direction).
+        raise ProbeTrainingError(
+            f"The {config.kind} fit produced no usable metrics — the target "
+            "may be degenerate or the fit failed (see server logs)."
+        )
     if config.kind == "massmean":
         # Massmean scores are an uncalibrated projection, so the toolkit only
         # reports correlations. A univariate calibration (slope/intercept fit

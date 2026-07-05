@@ -323,7 +323,7 @@ export function HuggingFaceTab({
       {lastEmbedResult && lastEmbedSource === 'hf' && <EmbedResultCard result={lastEmbedResult} />}
 
       {/* Sticky CTA with config recap + inline validation */}
-      {isDataLoaded && !embedLoading && (
+      {isDataLoaded && (
         <EmbedFooterBar
           summary={embedSummary}
           ctaLabel="Embed Dataset"

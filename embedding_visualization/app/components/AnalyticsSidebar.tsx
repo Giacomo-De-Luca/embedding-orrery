@@ -73,7 +73,7 @@ export function AnalyticsSidebar({
     setAnalysisField(null);
   }, [colorByField]);
 
-  const effectiveAnalysisField = analysisField ?? colorByField;
+  const effectiveAnalysisField = analysisField ?? colorByField ?? null;
 
   // Compute category data for the analysis field (may differ from colorByField)
   const isOverridden = analysisField !== null && analysisField !== colorByField;

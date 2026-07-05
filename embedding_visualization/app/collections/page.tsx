@@ -15,7 +15,7 @@ import { LocalFileTab } from './components/LocalFileTab';
 import { CollectionManagerTab, type CollectionInfo } from './components/CollectionManagerTab';
 import { SaeTab } from './components/SaeTab';
 import { ActiveJobsStrip } from './components/ActiveJobsStrip';
-import { JobProgressDock } from './components/JobProgressDock';
+import { JobProgressDock, JobProgressDockContainer } from './components/JobProgressDock';
 import { useCollectionsUrlState, type DataSourceTab } from './lib/urlState';
 import { resumeJob } from './lib/embeddingFormUtils';
 
@@ -138,6 +138,7 @@ function CollectionsPageContent() {
     resumeJob(job, {
       embedHFDataset,
       embedLocalFile,
+      reEmbedDataset,
       generateLlmLabels,
       refreshCollections: handleRefreshCollections,
       setLlmResumeJobId,
@@ -154,7 +155,11 @@ function CollectionsPageContent() {
     ) : null;
 
   return (
-    <div className="container mx-auto p-6 max-w-6xl">
+    // The Card primitive is intentionally surface-less app-wide (glassy
+    // overlays on the Explore page); on this form-heavy page give every card
+    // the --card token + a soft border so hierarchy survives dark mode,
+    // where shadows alone are invisible.
+    <div className="container mx-auto p-6 max-w-6xl **:data-[slot=card]:bg-card/60 **:data-[slot=card]:border **:data-[slot=card]:border-border/60">
       {/* Page navigation */}
       <div className="mb-4 flex">
         <PageNav variant="solid" />
@@ -165,18 +170,6 @@ function CollectionsPageContent() {
       </p>
 
       <DataSourceTabs activeTab={activeTab} onTabChange={setActiveTab}>
-        {/* Page-global jobs strip: visible on every tab, driven by polled
-            server state so jobs survive page reloads. Jobs currently shown in
-            the progress dock are hidden here to avoid duplication. */}
-        <div className="mt-4 empty:hidden">
-          <ActiveJobsStrip
-            onResumeJob={handleResumeJob}
-            onCancelJob={(job) => cancelEmbeddingJob(job.collectionName)}
-            onRemoveJob={(job) => removeEmbeddingJob(job.collectionName)}
-            hideJobIds={[activeJobCollectionName, llmResumeJobId]}
-          />
-        </div>
-
         {renderTab('huggingface',
           <HuggingFaceTab
             fetchHFDatasetInfo={fetchHFDatasetInfo}
@@ -247,23 +240,42 @@ function CollectionsPageContent() {
         {renderTab('sae', <SaeTab />)}
       </DataSourceTabs>
 
-      {/* Non-blocking progress dock for client-initiated jobs: the page stays
-          usable while an embed or LLM-labeling run is in flight. */}
-      {embedLoading && activeJobCollectionName && (
-        <JobProgressDock
-          jobId={activeJobCollectionName}
-          onCancel={() => cancelEmbeddingJob(activeJobCollectionName)}
-          cancelLoading={cancelJobLoading}
+      {/* Page-global jobs strip below the tab content: driven by polled
+          server state so jobs survive page reloads. Jobs whose progress is
+          already on screen (dock or Manage-tab modal) are hidden to avoid
+          showing the same operation twice. */}
+      <div className="mt-6 empty:hidden">
+        <ActiveJobsStrip
+          onResumeJob={handleResumeJob}
+          onCancelJob={(job) => cancelEmbeddingJob(job.collectionName)}
+          onRemoveJob={(job) => removeEmbeddingJob(job.collectionName)}
+          hideJobIds={[
+            activeJobCollectionName,
+            llmResumeJobId,
+            llmLabelsLoading && managedCollection ? `${managedCollection}_llm_labeling` : null,
+          ]}
         />
-      )}
-      {llmResumeJobId && (
-        <JobProgressDock
-          jobId={llmResumeJobId}
-          title="Generating LLM Labels"
-          subtitle="Each topic is labeled individually via LLM API calls."
-          itemsLabel="topics"
-        />
-      )}
+      </div>
+
+      {/* Non-blocking progress docks for client-initiated jobs: the page
+          stays usable while an embed or LLM-labeling run is in flight. */}
+      <JobProgressDockContainer>
+        {embedLoading && activeJobCollectionName && (
+          <JobProgressDock
+            jobId={activeJobCollectionName}
+            onCancel={() => cancelEmbeddingJob(activeJobCollectionName)}
+            cancelLoading={cancelJobLoading}
+          />
+        )}
+        {llmResumeJobId && (
+          <JobProgressDock
+            jobId={llmResumeJobId}
+            title="Generating LLM Labels"
+            subtitle="Each topic is labeled individually via LLM API calls."
+            itemsLabel="topics"
+          />
+        )}
+      </JobProgressDockContainer>
     </div>
   );
 }

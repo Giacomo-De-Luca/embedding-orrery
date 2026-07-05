@@ -23,6 +23,3 @@ export function ProgressModal({
     </div>
   );
 }
-
-/** @deprecated Use ProgressModal instead */
-export const EmbeddingProgressModal = ProgressModal;

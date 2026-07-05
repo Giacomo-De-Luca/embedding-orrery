@@ -62,8 +62,17 @@ export function useProbes(
   const [scoresByKey, setScoresByKey] = useState<Record<string, ProbeScoresData>>({});
   const [training, setTraining] = useState(false);
   const [trainingError, setTrainingError] = useState<string | null>(null);
+  // Progress-subscription job id for the in-flight run, pinned to the
+  // collection the run started for (not the live one).
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   // Score field to auto-recolor to once its scores have landed.
   const pendingRecolorRef = useRef<string | null>(null);
+  // Live collection, so a train that settles after a collection switch can
+  // tell it no longer owns the hook state (field names are collection-
+  // agnostic, so acting on a stale result would recolor/clobber the new
+  // collection's probes).
+  const collectionRef = useRef(collectionName);
+  collectionRef.current = collectionName;
 
   const { data: probesData, refetch: refetchProbes } = useQuery<CollectionProbesData>(
     GET_COLLECTION_PROBES,
@@ -167,14 +176,18 @@ export function useProbes(
   const train = useCallback(
     async (targetField: string, kind: string) => {
       if (!collectionName) return;
+      const startedFor = collectionName;
+      const stillCurrent = () => collectionRef.current === startedFor;
       setTraining(true);
       setTrainingError(null);
+      setActiveJobId(`${startedFor}_probe`);
       try {
         const { data: res, error: mutationError } = await trainProbeMutation({
           variables: { input: { collectionName, targetField, kind } },
           // Mirrors the long-running-mutation convention (extractTopics).
           context: { fetchOptions: { timeout: 600000 } },
         });
+        if (!stillCurrent()) return;
         const result = res?.trainProbe;
         if (mutationError) {
           setTrainingError(mutationError.message);
@@ -190,12 +203,18 @@ export function useProbes(
           });
         }
       } catch (err) {
-        setTrainingError(err instanceof Error ? err.message : 'Probe training failed');
+        if (stillCurrent()) {
+          setTrainingError(err instanceof Error ? err.message : 'Probe training failed');
+        }
       } finally {
         // The run persists server-side even if the connection dropped, so
-        // always resync the probe list on settle.
-        await refetchProbes().catch(() => {});
+        // resync the probe list on settle (skipped after a collection switch —
+        // the query already refetched for the new collection).
+        if (stillCurrent()) {
+          await refetchProbes().catch(() => {});
+        }
         setTraining(false);
+        setActiveJobId(null);
       }
     },
     [collectionName, trainProbeMutation, refetchProbes],
@@ -240,6 +259,6 @@ export function useProbes(
     deleteProbe,
     training,
     trainingError,
-    jobId: training && collectionName ? `${collectionName}_probe` : null,
+    jobId: activeJobId,
   };
 }

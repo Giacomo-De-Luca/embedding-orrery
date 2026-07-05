@@ -1,5 +1,6 @@
 """GraphQL query resolvers for embedding visualization backend."""
 
+import asyncio
 import json
 
 import strawberry
@@ -446,12 +447,16 @@ class Query:
         return CollectionProbesResult(collection_name=collection_name, probes=probes)
 
     @strawberry.field
-    def probe_scores(
+    async def probe_scores(
         self, collection_name: str, target_field: str, kind: str, info=None
     ) -> ProbeScores | None:
-        """Per-item scores for one trained probe (parallel arrays), or None."""
+        """Per-item scores for one trained probe (parallel arrays), or None.
+
+        Async: this can read ~100k+ rows into Python lists, which would
+        otherwise block the event loop (and stall WebSocket streams).
+        """
         db = get_duckdb_client()
-        data = db.get_probe_scores(collection_name, target_field, kind)
+        data = await asyncio.to_thread(db.get_probe_scores, collection_name, target_field, kind)
         if data is None:
             return None
         residuals = data["residuals"]

@@ -61,9 +61,13 @@ export function buildCollectionsSearch(
 
 /**
  * Page-local URL state for /collections: active tab + manage-tab selection.
- * Reads once on mount, then mirrors state changes into the URL via
- * router.replace (no history entries). Must be used under a <Suspense>
- * boundary (useSearchParams requirement).
+ *
+ * READ-ONCE CONTRACT: params are parsed on first render only, then state is
+ * the source of truth and is mirrored into the URL via router.replace (no
+ * history entries). An in-app navigation to /collections?... while already
+ * mounted will NOT update the state — if such a link is ever added, this
+ * hook must additionally sync from useSearchParams. Must be used under a
+ * <Suspense> boundary (useSearchParams requirement).
  */
 export function useCollectionsUrlState() {
   const searchParams = useSearchParams();

@@ -1,9 +1,8 @@
 'use client';
 
-import { Button } from '@/lib/ui-primitives/button';
+import { useState } from 'react';
 import { Input } from '@/lib/ui-primitives/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
-import { Spinner } from '@/lib/ui-primitives/spinner';
 import {
   Select,
   SelectContent,
@@ -22,11 +21,6 @@ import type { EmbeddingModelState } from '../lib/useEmbeddingModelState';
 interface EmbeddingModelFormProps {
   model: EmbeddingModelState;
   showTopics?: boolean;
-  showEmbedButton?: boolean;
-  onEmbed?: () => void;
-  embedLoading?: boolean;
-  embedDisabled?: boolean;
-  embedButtonText?: string;
   idPrefix?: string;
   title?: string;
 }
@@ -34,14 +28,14 @@ interface EmbeddingModelFormProps {
 export function EmbeddingModelForm({
   model,
   showTopics = true,
-  showEmbedButton = false,
-  onEmbed,
-  embedLoading = false,
-  embedDisabled = false,
-  embedButtonText = 'Embed Dataset',
   idPrefix = '',
   title = 'Embedding Model',
 }: EmbeddingModelFormProps) {
+  // Draft so the field can be temporarily empty/invalid while typing; the
+  // committed batchSize only updates on valid positive integers and the
+  // field snaps back to the committed value on blur.
+  const [batchSizeDraft, setBatchSizeDraft] = useState<string | null>(null);
+
   return (
     <Card>
       <CardHeader>
@@ -86,11 +80,13 @@ export function EmbeddingModelForm({
               id={`${idPrefix}batch-size`}
               type="number"
               min={1}
-              value={model.batchSize}
+              value={batchSizeDraft ?? model.batchSize}
               onChange={(e) => {
+                setBatchSizeDraft(e.target.value);
                 const parsed = parseInt(e.target.value, 10);
                 if (!Number.isNaN(parsed) && parsed > 0) model.setBatchSize(parsed);
               }}
+              onBlur={() => setBatchSizeDraft(null)}
               placeholder={model.batchSize.toString()}
             />
           </div>
@@ -202,20 +198,6 @@ export function EmbeddingModelForm({
           </>
         )}
 
-        {showEmbedButton && (
-          <>
-            <Separator />
-            <Button
-              onClick={onEmbed}
-              disabled={embedLoading || embedDisabled}
-              size="lg"
-              className="w-full md:w-auto"
-            >
-              {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
-              {embedButtonText}
-            </Button>
-          </>
-        )}
       </CardContent>
     </Card>
   );
