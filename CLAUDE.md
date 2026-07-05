@@ -39,7 +39,7 @@ Embedding analysis platform: embed data from any source (HuggingFace datasets, l
   - `backend/topic_extraction/` — HDBSCAN clustering, c-TF-IDF, LLM labeling, reduction
   - `interpretability_experiments/WordNet/` — WordNet embedding pipeline (153k words)
   - `interpretability_experiments/ACL/` — ACL Anthology abstracts dataset builder (80k papers → parquet)
-- **`embedding_visualization/`** — Next.js 15 frontend. Has its own `CLAUDE.md`.
+- **`embedding_visualization/`** — Next.js 16 frontend. Has its own `CLAUDE.md`.
 - **`docs/`** — Nextra 4 documentation website (own `package.json`, excluded from Docker via `.dockerignore`). Canonical markdown stays in `documentation/`; `docs/scripts/sync-content.mjs` (npm `predev`/`prebuild` hook) copies the curated public pages + `gallery/` in at build time — all synced output is gitignored (`docs/.gitignore` lists each file; keep in sync with the script's `PAGES` map). Committed content: `content/index.mdx`, `content/getting-started.md`, per-folder `_meta.js`. Gotcha: `zod` is pinned to 4.1.12 via npm `overrides` — zod ≥4.2 breaks nextra-theme-docs 4.6 Layout prop validation ("expected nonoptional, received undefined at children"). Run: `cd docs && npm install && npm run dev`.
 - **`references/`** — Vendored reference code (SAEDashboard, automated-interpretability, chatbot, neuronpedia) — not part of the app, exclude from reviews/refactors
 
