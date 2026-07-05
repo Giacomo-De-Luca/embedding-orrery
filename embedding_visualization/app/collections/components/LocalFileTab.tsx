@@ -63,8 +63,6 @@ export function LocalFileTab({
   lastEmbedResult,
   lastEmbedSource,
 }: LocalFileTabProps) {
-  const model = useEmbeddingModelState();
-
   // Source selection: file path OR existing dataset
   const [sourceDataset, setSourceDataset] = useState<string | null>(null);
   const [datasetColumns, setDatasetColumns] = useState<string[]>([]);

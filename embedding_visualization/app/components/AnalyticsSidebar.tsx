@@ -18,6 +18,12 @@ import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
 import type { Point2D, Point3D, TemporalRange } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+
+/** Cardinality cap for fields missing from colorFieldOptions — beyond this the
+ * distribution list is hidden (continuous fields would render one row per value). */
+const MAX_ANALYTICS_CATEGORIES = 300;
+/** Stable empty array so useTemporalData memo deps don't churn. */
+const NO_CATEGORIES: string[] = [];
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 
 interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
@@ -112,15 +118,28 @@ export function AnalyticsSidebar({
     return counts;
   }, [isOverridden, sharedFilteredCounts, combinedMutedIndices, effectiveAnalysisField, points]);
 
+  // Guard against continuous color fields (sequential/diverging scales) exploding
+  // into one "category" per distinct float value: trust the field's recommended
+  // scale when it's listed, and fall back to a cardinality cap for unlisted fields.
+  const isCategoricalField = useMemo(() => {
+    if (!effectiveAnalysisField) return false;
+    const fieldOption = colorFieldOptions?.find(o => o.field === effectiveAnalysisField);
+    if (fieldOption) return fieldOption.recommendedScale === 'categorical';
+    return filteredCategoryValues.length <= MAX_ANALYTICS_CATEGORIES;
+  }, [effectiveAnalysisField, colorFieldOptions, filteredCategoryValues.length]);
+
+  const hasCategoricalData = Boolean(
+    isCategoricalField && filteredCategoryValues.length > 0
+  );
+
   const { temporalField, temporalFieldCandidates, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,
     colorByField,
-    filteredCategoryValues,
+    hasCategoricalData ? filteredCategoryValues : NO_CATEGORIES,
     availableFields,
     temporalFieldOverride
   );
 
-  const hasCategoricalData = effectiveAnalysisField && filteredCategoryValues.length > 0;
   const hasTemporalData = temporalField && allPeriods.length >= 2;
   const showTemporalSection = hasTemporalData || availableFields.length > 0;
   const hasStackedTemporalData = hasTemporalData && crossTabData.length >= 2 && hasCategoricalData;

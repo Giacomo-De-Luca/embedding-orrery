@@ -173,12 +173,16 @@ export function CategoryBarList({
             </SelectContent>
           </Select>
         )}
-        {hasData && (
+        {hasData ? (
           <CardDescription className="text-xs">
             {filterActive
               ? `${(summary.totalFiltered ?? 0).toLocaleString()} visible across ${summary.matchedCategoryCount ?? 0} categories`
               : `${summary.totalCount.toLocaleString()} points across ${summary.visibleCategoryCount} categories`
             }
+          </CardDescription>
+        ) : (
+          <CardDescription className="text-xs">
+            Select a categorical field to view its distribution.
           </CardDescription>
         )}
         {categoryValues.length > NAME_FILTER_THRESHOLD && (
