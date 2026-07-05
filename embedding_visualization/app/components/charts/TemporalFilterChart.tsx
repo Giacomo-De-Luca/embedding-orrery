@@ -143,7 +143,7 @@ export function TemporalFilterChart({
       for (const cat of topCategories) {
         const safeKey = sanitizeKey(cat);
         config[safeKey] = {
-          label: getCategoryLabel(categoryField, cat),
+          label: getCategoryLabel(categoryField!, cat),
           color: colorMap[cat] ?? '#7f7f7f',
         };
       }

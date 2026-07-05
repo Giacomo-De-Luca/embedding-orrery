@@ -325,7 +325,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setActiveJobCollectionName(input.collectionName);
 
     try {
-      const { data, errors } = await embedHFMutation({
+      const { data, error } = await embedHFMutation({
         variables: { input },
         // Longer timeout for embedding operations
         context: {
@@ -335,8 +335,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         setActiveJobCollectionName(null);
         return null;
       }
@@ -436,7 +436,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setActiveJobCollectionName(input.collectionName);
 
     try {
-      const { data, errors } = await embedLocalMutation({
+      const { data, error } = await embedLocalMutation({
         variables: { input },
         context: {
           fetchOptions: {
@@ -445,8 +445,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         setActiveJobCollectionName(null);
         return null;
       }
@@ -479,7 +479,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setActiveJobCollectionName(input.collectionName);
 
     try {
-      const { data, errors } = await reEmbedMutation({
+      const { data, error } = await reEmbedMutation({
         variables: { input },
         context: {
           fetchOptions: {
@@ -488,8 +488,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         setActiveJobCollectionName(null);
         return null;
       }
@@ -523,7 +523,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastTopicsResult(null);
 
     try {
-      const { data, errors } = await extractTopicsMutation({
+      const { data, error } = await extractTopicsMutation({
         variables: { collectionName, config: config || null },
         context: {
           fetchOptions: {
@@ -532,8 +532,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -567,7 +567,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastReduceResult(null);
 
     try {
-      const { data, errors } = await reduceTopicsMutation({
+      const { data, error } = await reduceTopicsMutation({
         variables: { input },
         context: {
           fetchOptions: {
@@ -576,8 +576,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -611,7 +611,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastLlmLabelsResult(null);
 
     try {
-      const { data, errors } = await generateLlmLabelsMutation({
+      const { data, error } = await generateLlmLabelsMutation({
         variables: { input },
         context: {
           fetchOptions: {
@@ -620,8 +620,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
         }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -662,12 +662,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setError(null);
 
     try {
-      const { data, errors } = await renameTopicLabelMutation({
+      const { data, error } = await renameTopicLabelMutation({
         variables: { input: { collectionName, topicId, newLabel, isSubtopic } }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -702,12 +702,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setError(null);
 
     try {
-      const { data, errors } = await regenerateTopicLabelMutation({
+      const { data, error } = await regenerateTopicLabelMutation({
         variables: { input: { collectionName, topicId, newLabel: llmConfig || "" } }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -784,12 +784,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setError(null);
 
     try {
-      const { data, errors } = await deleteMutation({
+      const { data, error } = await deleteMutation({
         variables: { collectionName }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return false;
       }
 
@@ -808,12 +808,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setError(null);
 
     try {
-      const { data, errors } = await updateMetadataMutation({
+      const { data, error } = await updateMetadataMutation({
         variables: { collectionName, metadata }
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 
@@ -855,12 +855,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastDocActivationsResult(null);
 
     try {
-      const { data, errors } = await computeDocActMutation({
+      const { data, error } = await computeDocActMutation({
         variables: { input: { collectionName } },
       });
 
-      if (errors && errors.length > 0) {
-        setError(errors.map(e => e.message).join(', '));
+      if (error) {
+        setError(error.message);
         return null;
       }
 

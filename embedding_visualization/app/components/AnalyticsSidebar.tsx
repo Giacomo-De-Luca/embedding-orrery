@@ -196,7 +196,7 @@ export function AnalyticsSidebar({
         <div className="p-4 space-y-6">
           {hasCategoricalData && (
             <CategoryBarList
-              categoryField={effectiveAnalysisField}
+              categoryField={effectiveAnalysisField ?? null}
               categoryValues={filteredCategoryValues}
               categoryCounts={denoisedCategoryCounts}
               categoricalPalette={categoricalPalette}

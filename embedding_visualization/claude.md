@@ -1,6 +1,6 @@
 # CLAUDE.md - Embedding Visualization Frontend
 
-Next.js 15 web app for visualizing embedding collections with interactive 2D/3D scatter plots and semantic search. Supports flexible metadata with automatic field detection.
+Next.js 16 web app for visualizing embedding collections with interactive 2D/3D scatter plots and semantic search. Supports flexible metadata with automatic field detection.
 
 ## Development
 
@@ -8,6 +8,19 @@ Next.js 15 web app for visualizing embedding collections with interactive 2D/3D 
 npm run dev                    # Frontend only (http://localhost:3000)
 npx shadcn@latest add [name]  # Add UI components
 ```
+
+## Build & bundler (Next.js 16)
+
+Next.js 16 makes **Turbopack the default** for `next dev` and `next build`. Two build scripts use **different bundlers on purpose**:
+
+- `npm run build` → `next build --turbopack` — local/default build.
+- `npm run build:docker` → `next build --webpack` — Docker/production image. Opts back into **Webpack** because the `webpack()` function in `next.config.ts` is still needed there, and Next 16 **fails** a Turbopack build when a `webpack` config is present unless a bundler flag is passed. Also sets `ORRERY_DOCKER_BUILD=1` (flips `typescript.ignoreBuildErrors`).
+
+**Forked-Plotly aliases — Turbopack ignores the `webpack()` function, so both must be declared in `turbopack.resolveAlias` too:**
+- **glslify** → `./glslify-runtime-stub.js` (the SAME runtime stub webpack uses). Must be the runtime stub, **not** an empty module / `false` — the regl-* packages call `glslify()` at runtime around their pre-compiled shaders, so an empty module makes `createScatter()` throw (react-plotly swallows it) and **2D scattergl renders blank**. See the troubleshooting note below.
+- **maplibre-gl.css** → `./maplibre-css-stub.js` (empty JS module). `forked/plotly.js/src/registry.js` `require()`s this CSS for unused map traces; Turbopack **cannot instantiate a CSS module required from JS** ("module factory is not available"), which aborts the entire Plotly load. Aliasing CSS→CSS does not work — the target must be a JS module. Webpack imports the real CSS fine, so it's Turbopack-only.
+
+`reactCompiler: true` is a top-level option (promoted out of `experimental` in Next 16); it relies on Babel, which makes the Webpack `build:docker` much slower than the Turbopack build. Six pre-existing broken/abandoned files (unimported, importing uninstalled `@uwdata/mosaic-*` etc.) are in `tsconfig.json` `exclude` so `next build`'s whole-program type-check passes — delete them as follow-up.
 
 ## Component Architecture
 
@@ -91,8 +104,8 @@ Visualization state is managed by a **Zustand store** (`lib/stores/useVisualizat
 - **Plotly types**: Use type assertions (`as Partial<Config>`)
 - **Color scale not loading / custom strip shows as viridis**: Crameri/strip colormaps (e.g. `hilbertColor`) are lazy-loaded JSON chunks read synchronously from cache via `getCrameriPlotlyScale()`; an unloaded strip falls back to viridis. The scatter plots call `useColorScaleReady(colorScale)` (`lib/hooks/useColorScaleReady.ts`) to lazy-load **the active** strip and bump a tick that forces the colorscale `useMemo` to recompute when it lands — needed because a scale set programmatically (URL param / collection default) never opens `ColorScaleSelector` (which is the only other thing that triggers the load). Include that tick in any new colorscale memo deps.
 - **Categories all gray**: Check `buildCategoryColorMap()` — presets only override specific values
-- **`scene.scatter2d.update is not a function` / 2D scattergl renders nothing (3D fine)**: two related causes. (1) plotly marks regl components with the placeholder `true` during the calc pass (`calc.js`) and only creates the real objects in the dirty plot call (`plot.js`); a pan/zoom drag or box-select landing in that window called `.update()` on the boolean. Patched in the fork (`forked/plotly.js/src/traces/scattergl/scene_update.js`, `select.js`, `edit_style.js`) with `isReady()` guards. (2) The regl-* packages call `glslify()` **at runtime** around their pre-compiled shader strings, so `next.config.ts` must NOT alias glslify to `false` — that makes `createScatter()` throw (silently swallowed by react-plotly, which has no `onError`), leaving `scene.scatter2d` stuck on the placeholder → blank plot. The alias points to `glslify-runtime-stub.js` (tagged-template join) instead. Note the breakage only surfaces after a clean `.next` rebuild — stale webpack-cached chunks can mask config-level regressions for a long time. Also: never run two `next dev` instances against the same `.next` (corrupts chunks → ENOENT / 404s / silent server death).
+- **`scene.scatter2d.update is not a function` / 2D scattergl renders nothing (3D fine)**: two related causes. (1) plotly marks regl components with the placeholder `true` during the calc pass (`calc.js`) and only creates the real objects in the dirty plot call (`plot.js`); a pan/zoom drag or box-select landing in that window called `.update()` on the boolean. Patched in the fork (`forked/plotly.js/src/traces/scattergl/scene_update.js`, `select.js`, `edit_style.js`) with `isReady()` guards. (2) The regl-* packages call `glslify()` **at runtime** around their pre-compiled shader strings, so `next.config.ts` must NOT alias glslify to `false` — that makes `createScatter()` throw (silently swallowed by react-plotly, which has no `onError`), leaving `scene.scatter2d` stuck on the placeholder → blank plot. The alias points to `glslify-runtime-stub.js` (tagged-template join) instead. **Under Next 16 this alias must ALSO be declared in `turbopack.resolveAlias` (Turbopack ignores the `webpack()` function) — see "Build & bundler".** Note the breakage only surfaces after a clean `.next` rebuild — stale webpack-cached chunks can mask config-level regressions for a long time. Also: never run two `next dev` instances against the same `.next` (corrupts chunks → ENOENT / 404s / silent server death).
 
 ## Tech Stack
 
-Next.js 15, React 19, TypeScript 5, Zustand (state management), Plotly.js (WebGL), Apollo Client 4, Tailwind CSS 4, Shadcn UI, react-resizable-panels, d3-scale + d3-scale-chromatic, Crameri colormaps, @tanstack/react-table, next-themes, sonner
+Next.js 16 (Turbopack default), React 19, TypeScript 5, Zustand (state management), Plotly.js (WebGL, forked), Apollo Client 4, Tailwind CSS 4, Shadcn UI, react-resizable-panels, d3-scale + d3-scale-chromatic, Crameri colormaps, @tanstack/react-table, next-themes, sonner
