@@ -37,6 +37,7 @@
   ],
   "exclude": [
     "node_modules",
+    "lib/references",
     "app/utils/category_column.ts",
     "app/utils/plotLabels.tsx",
     "app/utils/text_summarizer.ts",
