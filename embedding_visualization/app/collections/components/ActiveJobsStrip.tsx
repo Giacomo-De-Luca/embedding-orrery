@@ -5,79 +5,65 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/lib
 import { Button } from '@/lib/ui-primitives/button';
 import { Progress } from '@/lib/ui-primitives/progress';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { Spinner } from '@/lib/ui-primitives/spinner';
 import { GET_EMBEDDING_JOBS } from '@/lib/graphql/queries';
-import type { EmbeddingJob } from '@/lib/graphql/mutations';
-import { RefreshCw, Play, Square, X, AlertCircle } from 'lucide-react';
+import type { EmbeddingJob, JobStatus } from '@/lib/graphql/mutations';
+import { RefreshCw, Play, Square, X } from 'lucide-react';
 
 interface JobsQueryData {
   embeddingJobs: EmbeddingJob[];
 }
 
-interface JobsPanelProps {
-  /** Called when user clicks resume on an interrupted job */
-  onResumeJob?: (job: EmbeddingJob) => void;
-  /** Called when user clicks cancel on a running job */
-  onCancelJob?: (job: EmbeddingJob) => void;
-  /** Called when user clicks remove on an interrupted job */
-  onRemoveJob?: (job: EmbeddingJob) => void;
-  /** Filter jobs by status */
-  statusFilter?: 'running' | 'interrupted' | 'completed' | null;
-}
-
-/**
- * Displays a list of embedding jobs with their progress.
- * Shows interrupted jobs with resume/remove buttons and running jobs with cancel button.
- */
-export function JobsPanel({ onResumeJob, onCancelJob, onRemoveJob, statusFilter = 'interrupted' }: JobsPanelProps) {
+/** Poll the backend job registry. Pass null to fetch jobs of every status. */
+export function useEmbeddingJobs(statusFilter: JobStatus | null) {
   const { data, loading, error, refetch } = useQuery<JobsQueryData>(GET_EMBEDDING_JOBS, {
     variables: statusFilter ? { status: statusFilter } : {},
     fetchPolicy: 'network-only',
-    pollInterval: 5000, // Poll every 5 seconds for updates
+    pollInterval: 5000,
   });
+  return { jobs: data?.embeddingJobs ?? [], loading, error, refetch };
+}
 
-  const jobs = data?.embeddingJobs ?? [];
+interface ActiveJobsStripProps {
+  onResumeJob: (job: EmbeddingJob) => void | Promise<void>;
+  onCancelJob: (job: EmbeddingJob) => void;
+  onRemoveJob: (job: EmbeddingJob) => void;
+  /**
+   * Job ids (registry keys / collection names) already surfaced elsewhere
+   * (e.g. by the progress dock for a client-initiated embed) — hidden here
+   * to avoid showing the same job twice.
+   */
+  hideJobIds?: (string | null | undefined)[];
+}
 
-  if (loading && jobs.length === 0) {
-    return (
-      <Card>
-        <CardContent className="pt-6 flex items-center justify-center">
-          <Spinner className="h-6 w-6" />
-          <span className="ml-2 text-muted-foreground">Loading jobs...</span>
-        </CardContent>
-      </Card>
-    );
-  }
+/**
+ * Page-global slim panel listing running + interrupted jobs, driven purely by
+ * polled server state — so jobs stay visible after a page reload, regardless
+ * of which tab started them. Renders nothing when there are no jobs.
+ */
+export function ActiveJobsStrip({
+  onResumeJob,
+  onCancelJob,
+  onRemoveJob,
+  hideJobIds,
+}: ActiveJobsStripProps) {
+  const { jobs, refetch } = useEmbeddingJobs(null);
 
-  if (error) {
-    return (
-      <Card className="border-destructive">
-        <CardContent className="pt-6">
-          <div className="text-destructive flex items-center gap-2">
-            <AlertCircle className="h-4 w-4" />
-            Failed to load jobs: {error.message}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const visibleJobs = jobs.filter(
+    (job) =>
+      job.status !== 'completed' &&
+      !(hideJobIds ?? []).includes(job.collectionName)
+  );
 
-  if (jobs.length === 0) {
-    return null; // Don't show panel if no jobs
-  }
+  if (visibleJobs.length === 0) return null;
 
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>
-              {statusFilter === 'interrupted' ? 'Interrupted Jobs' : 'Jobs'}
-            </CardTitle>
+            <CardTitle>Jobs</CardTitle>
             <CardDescription>
-              {statusFilter === 'interrupted'
-                ? 'These jobs were interrupted and can be resumed'
-                : 'Current and recent embedding operations'}
+              Running and interrupted embedding operations
             </CardDescription>
           </div>
           <Button variant="ghost" size="sm" onClick={() => refetch()}>
@@ -86,7 +72,7 @@ export function JobsPanel({ onResumeJob, onCancelJob, onRemoveJob, statusFilter 
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {jobs.map((job) => (
+        {visibleJobs.map((job) => (
           <JobCard
             key={job.collectionName}
             job={job}
@@ -102,12 +88,12 @@ export function JobsPanel({ onResumeJob, onCancelJob, onRemoveJob, statusFilter 
 
 interface JobCardProps {
   job: EmbeddingJob;
-  onResume?: (job: EmbeddingJob) => void;
+  onResume?: (job: EmbeddingJob) => void | Promise<void>;
   onCancel?: (job: EmbeddingJob) => void;
   onRemove?: (job: EmbeddingJob) => void;
 }
 
-function JobCard({ job, onResume, onCancel, onRemove }: JobCardProps) {
+export function JobCard({ job, onResume, onCancel, onRemove }: JobCardProps) {
   const statusColor = {
     running: 'bg-blue-500',
     interrupted: 'bg-yellow-500',
@@ -138,7 +124,9 @@ function JobCard({ job, onResume, onCancel, onRemove }: JobCardProps) {
             )}
           </p>
         </div>
-        {job.status === 'running' && onCancel && (
+        {/* Cancel only for non-LLM jobs: backend cancel registration for
+            llm_labeling is unverified */}
+        {job.status === 'running' && onCancel && !isLlmLabeling && (
           <Button
             size="sm"
             variant="destructive"

@@ -297,6 +297,40 @@ class DuckDBClient:
             ON sae_document_activations (collection_name, feature_index)
         """)
 
+        # -- Probe tables (embedding-space probes on numeric metadata fields) --
+        # No FK to vector_collections: delete_dataset cleans up manually in
+        # dependency order (mirrors sae_document_activations).
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS probes (
+                collection_name VARCHAR NOT NULL,
+                target_field    VARCHAR NOT NULL,
+                kind            VARCHAR NOT NULL,
+                config          JSON,
+                metrics         JSON,
+                direction       FLOAT[],
+                scaler_mean     FLOAT[],
+                scaler_scale    FLOAT[],
+                intercept       FLOAT,
+                artifact_path   VARCHAR,
+                n_train         INTEGER,
+                n_val           INTEGER,
+                created_at      TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (collection_name, target_field, kind)
+            )
+        """)
+
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS probe_scores (
+                collection_name VARCHAR NOT NULL,
+                target_field    VARCHAR NOT NULL,
+                kind            VARCHAR NOT NULL,
+                item_id         VARCHAR NOT NULL,
+                score           FLOAT NOT NULL,
+                residual        FLOAT,
+                PRIMARY KEY (collection_name, target_field, kind, item_id)
+            )
+        """)
+
         # -- Chat history tables --
 
         self._exec("""
@@ -578,6 +612,23 @@ class DuckDBClient:
         self._exec(
             """
             DELETE FROM sae_document_activations WHERE collection_name IN (
+                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
+            )
+        """,
+            [name],
+        )
+
+        self._exec(
+            """
+            DELETE FROM probe_scores WHERE collection_name IN (
+                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
+            )
+        """,
+            [name],
+        )
+        self._exec(
+            """
+            DELETE FROM probes WHERE collection_name IN (
                 SELECT collection_name FROM vector_collections WHERE dataset_name = ?
             )
         """,
@@ -1813,6 +1864,210 @@ class DuckDBClient:
         )
         logger.info("Deleted %d document activation rows for %s", count, collection_name)
         return int(count)
+
+    # ------------------------------------------------------------------
+    # Probes (embedding-space probes on numeric metadata fields)
+    # ------------------------------------------------------------------
+
+    def upsert_probe(
+        self,
+        collection_name: str,
+        target_field: str,
+        kind: str,
+        *,
+        config: dict | None = None,
+        metrics: dict | None = None,
+        direction: list[float] | None = None,
+        scaler_mean: list[float] | None = None,
+        scaler_scale: list[float] | None = None,
+        intercept: float | None = None,
+        artifact_path: str | None = None,
+        n_train: int = 0,
+        n_val: int = 0,
+    ) -> None:
+        """Insert or replace a probe row (one probe per collection+field+kind)."""
+        self._exec(
+            """
+            INSERT OR REPLACE INTO probes (
+                collection_name, target_field, kind, config, metrics,
+                direction, scaler_mean, scaler_scale, intercept,
+                artifact_path, n_train, n_val
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                collection_name,
+                target_field,
+                kind,
+                json.dumps(config) if config is not None else None,
+                json.dumps(metrics) if metrics is not None else None,
+                direction,
+                scaler_mean,
+                scaler_scale,
+                intercept,
+                artifact_path,
+                n_train,
+                n_val,
+            ],
+        )
+
+    def list_probes(self, collection_name: str) -> list[dict]:
+        """Return all probes for a collection, JSON fields parsed, oldest first."""
+        rows = self._exec(
+            """
+            SELECT collection_name, target_field, kind, config, metrics,
+                   direction, scaler_mean, scaler_scale, intercept,
+                   artifact_path, n_train, n_val, created_at
+            FROM probes WHERE collection_name = ?
+            ORDER BY created_at, target_field, kind
+            """,
+            [collection_name],
+        ).fetchall()
+
+        def _parse_json(value):
+            return json.loads(value) if isinstance(value, str) else value
+
+        return [
+            {
+                "collection_name": r[0],
+                "target_field": r[1],
+                "kind": r[2],
+                "config": _parse_json(r[3]),
+                "metrics": _parse_json(r[4]),
+                "direction": list(r[5]) if r[5] is not None else None,
+                "scaler_mean": list(r[6]) if r[6] is not None else None,
+                "scaler_scale": list(r[7]) if r[7] is not None else None,
+                "intercept": r[8],
+                "artifact_path": r[9],
+                "n_train": r[10],
+                "n_val": r[11],
+                "created_at": str(r[12]) if r[12] is not None else "",
+            }
+            for r in rows
+        ]
+
+    def insert_probe_scores_bulk(
+        self,
+        collection_name: str,
+        target_field: str,
+        kind: str,
+        scores_df: pd.DataFrame,
+    ) -> int:
+        """Replace all scores for a probe key with the given rows.
+
+        Expected columns: item_id, score, residual (residual may hold None).
+        Existing rows for the key are deleted first so a retrain with fewer
+        valid items never leaves strays.
+        """
+        self._exec(
+            "DELETE FROM probe_scores WHERE collection_name = ? AND target_field = ? AND kind = ?",
+            [collection_name, target_field, kind],
+        )
+        if scores_df.empty:
+            return 0
+        n = len(scores_df)
+        residual = (
+            scores_df["residual"]
+            if "residual" in scores_df.columns
+            else pd.Series([None] * n)
+        )
+        # Nullable Float64 keeps None as SQL NULL (plain float64 would coerce
+        # None to NaN, which DuckDB stores as NaN, not NULL).
+        insert_df = pd.DataFrame(
+            {
+                "collection_name": [collection_name] * n,
+                "target_field": [target_field] * n,
+                "kind": [kind] * n,
+                "item_id": scores_df["item_id"].astype(str),
+                "score": scores_df["score"].astype("float64"),
+                "residual": pd.array(
+                    [None if pd.isna(v) else float(v) for v in residual],
+                    dtype="Float64",
+                ),
+            }
+        )
+        with self._write_lock:
+            self._conn.execute("INSERT INTO probe_scores SELECT * FROM insert_df")
+        return n
+
+    def get_probe_scores(
+        self, collection_name: str, target_field: str, kind: str
+    ) -> dict | None:
+        """Return {"item_ids", "scores", "residuals"} for a probe, or None if absent."""
+        probe = self._exec(
+            "SELECT 1 FROM probes WHERE collection_name = ? AND target_field = ? AND kind = ?",
+            [collection_name, target_field, kind],
+        ).fetchone()
+        if probe is None:
+            return None
+        rows = self._exec(
+            """
+            SELECT item_id, score, residual FROM probe_scores
+            WHERE collection_name = ? AND target_field = ? AND kind = ?
+            ORDER BY item_id
+            """,
+            [collection_name, target_field, kind],
+        ).fetchall()
+
+        def _clean(value):
+            if value is None or value != value:  # NULL or NaN
+                return None
+            return float(value)
+
+        return {
+            "item_ids": [r[0] for r in rows],
+            "scores": [float(r[1]) for r in rows],
+            "residuals": [_clean(r[2]) for r in rows],
+        }
+
+    def delete_probe(self, collection_name: str, target_field: str, kind: str) -> bool:
+        """Delete a probe and its scores. Returns True if a probe row existed."""
+        existed = self._exec(
+            "SELECT 1 FROM probes WHERE collection_name = ? AND target_field = ? AND kind = ?",
+            [collection_name, target_field, kind],
+        ).fetchone()
+        self._exec(
+            "DELETE FROM probe_scores WHERE collection_name = ? AND target_field = ? AND kind = ?",
+            [collection_name, target_field, kind],
+        )
+        self._exec(
+            "DELETE FROM probes WHERE collection_name = ? AND target_field = ? AND kind = ?",
+            [collection_name, target_field, kind],
+        )
+        if existed:
+            logger.info(
+                "Deleted probe %s/%s/%s", collection_name, target_field, kind
+            )
+        return existed is not None
+
+    def get_numeric_metadata_field(
+        self, dataset_name: str, field: str
+    ) -> list[tuple[str, float | None]]:
+        """Read one metadata field as numbers for all items, ordered by row_index.
+
+        Uses a quoted JSONPath so dotted field names (e.g. "Conc.M") are treated
+        as literal keys, not nested paths. Values that are missing or fail
+        TRY_CAST come back as None.
+        """
+        if not self.get_dataset(dataset_name):
+            return []
+        escaped = field.replace("\\", "\\\\").replace('"', '\\"')
+        json_path = f'$."{escaped}"'
+        table = self._items_table(dataset_name)
+        rows = self._exec(
+            f"""
+            SELECT id, TRY_CAST(json_extract_string(metadata, ?) AS DOUBLE)
+            FROM {table}
+            ORDER BY row_index
+            """,
+            [json_path],
+        ).fetchall()
+
+        def _clean(value):
+            if value is None or value != value:  # NULL or NaN
+                return None
+            return float(value)
+
+        return [(r[0], _clean(r[1])) for r in rows]
 
     def search_documents_by_feature_labels(
         self,

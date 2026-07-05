@@ -1,0 +1,12 @@
+# Dependencies / build output
+node_modules/
+.next/
+out/
+.vercel/
+*.log
+
+# Generated at build time by scripts/sync-content.mjs.
+# Convention: committed pages are .mdx; every .md under content/ is generated.
+public/gallery/
+public/_pagefind/
+content/**/*.md

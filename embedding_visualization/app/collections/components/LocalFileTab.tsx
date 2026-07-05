@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLazyQuery } from '@apollo/client/react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
@@ -9,7 +9,8 @@ import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { TopicConfigForm } from './TopicConfigForm';
-import type { DataType, PortionStrategy, EmbedLocalFileInput, ReEmbedDatasetInput, LocalFileInfo, LocalFilePreview, EmbedDatasetResult, EmbeddingJob, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
+import type { DataType, EmbedLocalFileInput, ReEmbedDatasetInput, LocalFileInfo, LocalFilePreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
+import type { EmbedSource } from '@/lib/hooks/useEmbedDataset';
 import type { CollectionInfo } from './CollectionManagerTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
@@ -22,9 +23,10 @@ import { ColumnSelector } from './ColumnSelector';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
-import { EmbedProgressSection } from './EmbedProgressSection';
-import { useEmbeddingModelState } from '../lib/useEmbeddingModelState';
-import { updateTextTemplate, transformStoredEmbeddingModel, resumeLlmLabelingJob } from '../lib/embeddingFormUtils';
+import { EmbedFooterBar } from './EmbedFooterBar';
+import { useEmbedFormState } from '../lib/useEmbedFormState';
+import { buildLocalEmbedInput, buildReEmbedInput } from '../lib/embeddingFormUtils';
+import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
 
 interface LocalFileTabProps {
   fetchLocalFileInfo: (filePath: string) => Promise<LocalFileInfo | null>;
@@ -41,11 +43,7 @@ interface LocalFileTabProps {
   error: string | null;
   clearError: () => void;
   lastEmbedResult: EmbedDatasetResult | null;
-  activeJobCollectionName?: string | null;
-  generateLlmLabels?: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
-  cancelEmbeddingJob?: (collectionName: string) => Promise<boolean>;
-  cancelJobLoading?: boolean;
-  removeEmbeddingJob?: (collectionName: string) => Promise<boolean>;
+  lastEmbedSource?: EmbedSource | null;
 }
 
 export function LocalFileTab({
@@ -63,18 +61,33 @@ export function LocalFileTab({
   error,
   clearError,
   lastEmbedResult,
-  activeJobCollectionName,
-  generateLlmLabels,
-  cancelEmbeddingJob,
-  cancelJobLoading,
-  removeEmbeddingJob,
+  lastEmbedSource,
 }: LocalFileTabProps) {
   const model = useEmbeddingModelState();
-  const [llmResumeJobId, setLlmResumeJobId] = useState<string | null>(null);
 
   // Source selection: file path OR existing dataset
   const [sourceDataset, setSourceDataset] = useState<string | null>(null);
   const [datasetColumns, setDatasetColumns] = useState<string[]>([]);
+
+  // Local file specific state
+  const [filePath, setFilePath] = useState('');
+  const [dataType, setDataType] = useState<DataType>('TEXT');
+
+  // Shared embed-form state (columns, template, portion, model config);
+  // column config resets when the file path changes
+  const form = useEmbedFormState(filePath);
+  const {
+    model,
+    collectionName, setCollectionName,
+    selectedEmbeddingColumns, setSelectedEmbeddingColumns,
+    selectedMetadataColumns, setSelectedMetadataColumns,
+    textTemplate, setTextTemplate,
+    idColumn, setIdColumn,
+    handleEmbeddingColumnsChange,
+    portionStrategy, setPortionStrategy,
+    numRows, setNumRows,
+    randomSeed, setRandomSeed,
+  } = form;
 
   // Lazy query to fetch dataset preview for column detection
   const [fetchPreview] = useLazyQuery<{ embeddings: Array<{ id: string; document: string | null; metadata: Record<string, unknown> | null }> }>(GET_COLLECTION_PREVIEW);
@@ -98,36 +111,7 @@ export function LocalFileTab({
       setSelectedEmbeddingColumns(['__document__']);
       setSelectedMetadataColumns([]);
     }
-  }, [fetchPreview]);
-
-  // Local file specific state
-  const [filePath, setFilePath] = useState('');
-  const [dataType, setDataType] = useState<DataType>('TEXT');
-  const [collectionName, setCollectionName] = useState('');
-
-  // Column configuration
-  const [selectedEmbeddingColumns, setSelectedEmbeddingColumns] = useState<string[]>([]);
-  const [selectedMetadataColumns, setSelectedMetadataColumns] = useState<string[]>([]);
-  const [textTemplate, setTextTemplate] = useState('');
-  const [idColumn, setIdColumn] = useState('auto');
-
-  // Portion configuration
-  const [portionStrategy, setPortionStrategy] = useState<PortionStrategy>('FIRST_N');
-  const [numRows, setNumRows] = useState(1000);
-  const [randomSeed, setRandomSeed] = useState(42);
-
-  const handleEmbeddingColumnsChange = (cols: string[]) => {
-    setSelectedEmbeddingColumns(cols);
-    setTextTemplate(updateTextTemplate(textTemplate, selectedEmbeddingColumns, cols));
-  };
-
-  // Reset columns when file changes
-  useEffect(() => {
-    setSelectedEmbeddingColumns([]);
-    setSelectedMetadataColumns([]);
-    setTextTemplate('');
-    setIdColumn('auto');
-  }, [filePath]);
+  }, [fetchPreview, setSelectedEmbeddingColumns, setSelectedMetadataColumns]);
 
   const autoConfigureColumns = (columns: string[]) => {
     if (columns.length === 0) return;
@@ -167,14 +151,8 @@ export function LocalFileTab({
   const handleFetchInfoAndPreview = async () => {
     clearError();
 
-    if (!filePath) {
-      alert('Please provide a file path');
-      return;
-    }
-    if (!filePath.startsWith('/')) {
-      alert('File path must be absolute (starting with /)');
-      return;
-    }
+    // Button is disabled for invalid paths (FileUploadZone shows the reason)
+    if (!filePath.startsWith('/')) return;
 
     const info = await fetchLocalFileInfo(filePath);
     if (!info || info.error) return;
@@ -186,75 +164,15 @@ export function LocalFileTab({
   const handleEmbed = async () => {
     clearError();
 
-    if (selectedEmbeddingColumns.length === 0) {
-      alert(dataType === 'VECTOR' ? 'Please select a vector column' : 'Please select at least one embedding column');
-      return;
-    }
-    if (!collectionName) {
-      alert('Please provide a collection name');
-      return;
-    }
+    // CTA is disabled while issues exist; guard anyway
+    if (fileValidationIssues.length > 0) return;
 
-    const metadataColumns = selectedEmbeddingColumns.length === 1
-      ? selectedMetadataColumns
-      : [...selectedMetadataColumns, ...selectedEmbeddingColumns];
-
-    await embedLocalFile({
+    await embedLocalFile(buildLocalEmbedInput(form.commonValues(), {
       filePath,
-      collectionName,
       dataType,
-      columns: dataType === 'TEXT' ? selectedEmbeddingColumns : undefined,
-      textTemplate: dataType === 'TEXT' ? (textTemplate || undefined) : undefined,
-      imageColumn: dataType === 'IMAGE' ? selectedEmbeddingColumns[0] : undefined,
-      vectorColumn: dataType === 'VECTOR' ? selectedEmbeddingColumns[0] : undefined,
-      idColumn: idColumn !== 'auto' ? idColumn : undefined,
-      metadataColumns,
-      nRows: portionStrategy === 'FIRST_N' ? numRows : undefined,
-      sampleN: portionStrategy === 'RANDOM_SAMPLE' ? numRows : undefined,
-      sampleSeed: portionStrategy === 'RANDOM_SAMPLE' ? randomSeed : undefined,
-      computeProjections: true,
-      batchSize: model.batchSize,
-      embeddingModel: dataType === 'TEXT' ? model.buildEmbeddingModelInput() : undefined,
-      ...model.getTopicParams(),
-    });
+      portion: { strategy: portionStrategy, numRows, seed: randomSeed },
+    }));
 
-    await refreshCollections();
-  };
-
-  const handleResumeJob = async (job: EmbeddingJob) => {
-    if (generateLlmLabels) {
-      const handled = await resumeLlmLabelingJob(job, generateLlmLabels, {
-        setLlmResumeJobId,
-        refreshCollections,
-      });
-      if (handled) return;
-    }
-
-    const config = job.config as Record<string, unknown>;
-
-    const dataTypeValue = config.data_type as string | undefined;
-    const resumeDataType = dataTypeValue?.toUpperCase() as DataType | undefined;
-
-    await embedLocalFile({
-      filePath: config.file_path as string,
-      collectionName: job.collectionName,
-      dataType: resumeDataType,
-      columns: config.columns as string[] | undefined,
-      textTemplate: config.text_template as string | undefined,
-      imageColumn: config.image_column as string | undefined,
-      vectorColumn: config.vector_column as string | undefined,
-      idColumn: config.id_column as string | undefined,
-      metadataColumns: config.metadata_columns as string[] | undefined,
-      nRows: config.n_rows as number | undefined,
-      sampleN: config.sample_n as number | undefined,
-      sampleSeed: config.sample_seed as number | undefined,
-      computeProjections: true,
-      batchSize: config.batch_size as number | undefined,
-      embeddingModel: transformStoredEmbeddingModel(
-        config.embedding_model as Record<string, unknown> | undefined
-      ),
-      resume: true,
-    });
     await refreshCollections();
   };
 
@@ -276,28 +194,13 @@ export function LocalFileTab({
   const handleReEmbed = async () => {
     clearError();
     if (!sourceDataset) return;
-    if (!collectionName) {
-      alert('Please provide a collection name');
-      return;
-    }
-    if (selectedEmbeddingColumns.length === 0) {
-      alert('Please select at least one column to embed');
-      return;
-    }
+    // CTA is disabled while issues exist; guard anyway
+    if (reEmbedValidationIssues.length > 0) return;
 
-    // If only __document__ is selected, don't pass columns (use existing document text)
-    const useExistingDoc = selectedEmbeddingColumns.length === 1 && selectedEmbeddingColumns[0] === '__document__';
-
-    await reEmbedDataset({
-      sourceDatasetName: sourceDataset,
-      collectionName,
-      embeddingModel: model.buildEmbeddingModelInput(),
-      columns: useExistingDoc ? undefined : selectedEmbeddingColumns,
-      textTemplate: useExistingDoc ? undefined : (textTemplate || undefined),
-      batchSize: model.batchSize,
-      computeProjections: true,
-      ...model.getTopicParams(),
-    });
+    await reEmbedDataset(buildReEmbedInput(
+      { ...form.commonValues(), embeddingModel: model.buildEmbeddingModelInput() },
+      sourceDataset
+    ));
 
     await refreshCollections();
   };
@@ -309,14 +212,57 @@ export function LocalFileTab({
   const isVectorMode = dataType === 'VECTOR';
   const sourceDatasetInfo = sourceDataset ? collections.find(c => c.name === sourceDataset) : null;
 
+  const fileValidationIssues = useMemo(() => getEmbedValidationIssues({
+    source: 'local-file',
+    filePath,
+    collectionName,
+    embeddingColumns: selectedEmbeddingColumns,
+    dataType,
+    portionStrategy,
+  }), [filePath, collectionName, selectedEmbeddingColumns, dataType, portionStrategy]);
+
+  const reEmbedValidationIssues = useMemo(() => getEmbedValidationIssues({
+    source: 'reembed',
+    collectionName,
+    embeddingColumns: selectedEmbeddingColumns,
+  }), [collectionName, selectedEmbeddingColumns]);
+
+  const fileEmbedSummary = buildEmbedSummary({
+    collectionName,
+    portionStrategy,
+    numRows,
+    totalRows: totalRows ?? null,
+    modelName: model.modelName,
+    enableTopics: model.enableTopics,
+    dataType,
+  });
+
+  const reEmbedSummary = buildEmbedSummary({
+    collectionName,
+    portionStrategy: 'ALL',
+    totalRows: sourceDatasetInfo?.numItems ?? null,
+    modelName: model.modelName,
+    enableTopics: model.enableTopics,
+  });
+
+  // Scroll the newly revealed configuration into view after fetching info
+  const infoCardRef = useRef<HTMLDivElement>(null);
+  const wasLoadedRef = useRef(false);
+  useEffect(() => {
+    if (isDataLoaded && !wasLoadedRef.current) {
+      infoCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    wasLoadedRef.current = isDataLoaded;
+  }, [isDataLoaded]);
+
   return (
     <div className="space-y-6">
       {/* Data Source Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Local File</CardTitle>
+          <CardTitle>1 · Data Source</CardTitle>
           <CardDescription>
-            Upload or provide the path to a local data file
+            Upload or provide the path to a local data file — or re-embed an existing dataset
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -394,9 +340,9 @@ export function LocalFileTab({
 
       {/* File Info & Preview */}
       {isDataLoaded && (
-        <Card>
+        <Card ref={infoCardRef}>
           <CardHeader>
-            <CardTitle>File Information</CardTitle>
+            <CardTitle>2 · File Information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <DatasetInfoDisplay
@@ -412,7 +358,7 @@ export function LocalFileTab({
       {isDataLoaded && columns.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Column Configuration</CardTitle>
+            <CardTitle>3 · Column Configuration</CardTitle>
             <CardDescription>
               {isVectorMode
                 ? 'Select the vector column and metadata fields'
@@ -440,7 +386,7 @@ export function LocalFileTab({
       {isDataLoaded && (
         <Card>
           <CardHeader>
-            <CardTitle>Dataset Portion</CardTitle>
+            <CardTitle>4 · Dataset Portion</CardTitle>
             <CardDescription>
               {isVectorMode
                 ? 'Choose which portion of the file to import'
@@ -448,19 +394,17 @@ export function LocalFileTab({
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {/* embedLocalFile has no row-range input, so ROW_RANGE is not offered */}
             <PortionSelector
               strategy={portionStrategy}
               onStrategyChange={setPortionStrategy}
               n={numRows}
               onNChange={setNumRows}
-              start={0}
-              onStartChange={() => { }}
-              end={1000}
-              onEndChange={() => { }}
               seed={randomSeed}
               onSeedChange={setRandomSeed}
               totalRows={totalRows || null}
               availableSplits={[]}
+              allowedStrategies={['ALL', 'FIRST_N', 'RANDOM_SAMPLE']}
             />
           </CardContent>
         </Card>
@@ -470,6 +414,7 @@ export function LocalFileTab({
       {isDataLoaded && dataType === 'TEXT' && (
         <EmbeddingModelForm
           model={model}
+          title="5 · Embedding Model"
           showTopics={false}
           idPrefix="local-"
         />
@@ -496,17 +441,15 @@ export function LocalFileTab({
         </Card>
       )}
 
-      {/* Embed Button */}
-      {isDataLoaded && (
-        <Button
-          onClick={handleEmbed}
-          disabled={embedLoading || selectedEmbeddingColumns.length === 0}
-          size="lg"
-          className="w-full md:w-auto"
-        >
-          {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
-          {isVectorMode ? 'Import Vectors' : 'Embed File'}
-        </Button>
+      {/* Sticky CTA with config recap + inline validation */}
+      {isDataLoaded && !embedLoading && (
+        <EmbedFooterBar
+          summary={fileEmbedSummary}
+          ctaLabel={isVectorMode ? 'Import Vectors' : 'Embed File'}
+          onSubmit={handleEmbed}
+          loading={embedLoading}
+          issues={fileValidationIssues}
+        />
       )}
 
       {/* Re-embed from existing dataset: column selection + model + button */}
@@ -560,33 +503,21 @@ export function LocalFileTab({
             </CardContent>
           </Card>
 
-          <Button
-            onClick={handleReEmbed}
-            disabled={embedLoading || !collectionName}
-            size="lg"
-            className="w-full md:w-auto"
-          >
-            {embedLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
-            Re-embed Dataset
-          </Button>
+          {!embedLoading && (
+            <EmbedFooterBar
+              summary={reEmbedSummary}
+              ctaLabel="Re-embed Dataset"
+              onSubmit={handleReEmbed}
+              loading={embedLoading}
+              issues={reEmbedValidationIssues}
+            />
+          )}
         </>
       )}
 
-      {lastEmbedResult && <EmbedResultCard result={lastEmbedResult} isImportMode={isVectorMode} />}
-
-      <EmbedProgressSection
-        embedLoading={embedLoading}
-        activeJobCollectionName={activeJobCollectionName}
-        llmResumeJobId={llmResumeJobId}
-        onResumeJob={handleResumeJob}
-        onCancelActiveJob={activeJobCollectionName && cancelEmbeddingJob
-          ? () => cancelEmbeddingJob(activeJobCollectionName)
-          : undefined}
-        cancelLoading={cancelJobLoading}
-        onRemoveJob={removeEmbeddingJob
-          ? (job) => removeEmbeddingJob(job.collectionName)
-          : undefined}
-      />
+      {lastEmbedResult && (lastEmbedSource === 'local' || lastEmbedSource === 'reembed') && (
+        <EmbedResultCard result={lastEmbedResult} isImportMode={isVectorMode} />
+      )}
     </div>
   );
 }

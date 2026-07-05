@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Input } from '@/lib/ui-primitives/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { PortionStrategy, EmbedDatasetInput, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult, EmbeddingJob, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
+import type { EmbedDatasetInput, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
+import type { EmbedSource } from '@/lib/hooks/useEmbedDataset';
 
 import { SplitSelector } from './SplitSelector';
 import { PortionSelector } from './PortionSelector';
@@ -16,9 +17,10 @@ import { ColumnSelector } from './ColumnSelector';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
-import { EmbedProgressSection } from './EmbedProgressSection';
-import { useEmbeddingModelState } from '../lib/useEmbeddingModelState';
-import { updateTextTemplate, transformStoredEmbeddingModel, resumeLlmLabelingJob } from '../lib/embeddingFormUtils';
+import { EmbedFooterBar } from './EmbedFooterBar';
+import { useEmbedFormState } from '../lib/useEmbedFormState';
+import { buildHFEmbedInput } from '../lib/embeddingFormUtils';
+import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
 
 interface HuggingFaceTabProps {
   fetchHFDatasetInfo: (datasetId: string) => Promise<HFDatasetInfo | null>;
@@ -38,11 +40,7 @@ interface HuggingFaceTabProps {
   error: string | null;
   clearError: () => void;
   lastEmbedResult: EmbedDatasetResult | null;
-  activeJobCollectionName?: string | null;
-  generateLlmLabels?: (input: GenerateLlmLabelsInput) => Promise<GenerateLlmLabelsResult | null>;
-  cancelEmbeddingJob?: (collectionName: string) => Promise<boolean>;
-  cancelJobLoading?: boolean;
-  removeEmbeddingJob?: (collectionName: string) => Promise<boolean>;
+  lastEmbedSource?: EmbedSource | null;
 }
 
 export function HuggingFaceTab({
@@ -58,45 +56,29 @@ export function HuggingFaceTab({
   error,
   clearError,
   lastEmbedResult,
-  activeJobCollectionName,
-  generateLlmLabels,
-  cancelEmbeddingJob,
-  cancelJobLoading,
-  removeEmbeddingJob,
+  lastEmbedSource,
 }: HuggingFaceTabProps) {
-  const model = useEmbeddingModelState();
-  const [llmResumeJobId, setLlmResumeJobId] = useState<string | null>(null);
-
   // HuggingFace specific state
   const [datasetId, setDatasetId] = useState('dair-ai/emotion');
   const [selectedSplit, setSelectedSplit] = useState('train');
-  const [collectionName, setCollectionName] = useState('');
 
-  // Column configuration
-  const [selectedEmbeddingColumns, setSelectedEmbeddingColumns] = useState<string[]>([]);
-  const [selectedMetadataColumns, setSelectedMetadataColumns] = useState<string[]>([]);
-  const [textTemplate, setTextTemplate] = useState('');
-  const [idColumn, setIdColumn] = useState('auto');
-
-  // Portion configuration
-  const [portionStrategy, setPortionStrategy] = useState<PortionStrategy>('FIRST_N');
-  const [numRows, setNumRows] = useState(1000);
-  const [rangeStart, setRangeStart] = useState(0);
-  const [rangeEnd, setRangeEnd] = useState(1000);
-  const [randomSeed, setRandomSeed] = useState(42);
-
-  const handleEmbeddingColumnsChange = (cols: string[]) => {
-    setSelectedEmbeddingColumns(cols);
-    setTextTemplate(updateTextTemplate(textTemplate, selectedEmbeddingColumns, cols));
-  };
-
-  // Reset columns when dataset changes
-  useEffect(() => {
-    setSelectedEmbeddingColumns([]);
-    setSelectedMetadataColumns([]);
-    setTextTemplate('');
-    setIdColumn('auto');
-  }, [datasetId]);
+  // Shared embed-form state (columns, template, portion, model config);
+  // column config resets when the dataset id changes
+  const form = useEmbedFormState(datasetId);
+  const {
+    model,
+    collectionName, setCollectionName,
+    selectedEmbeddingColumns, setSelectedEmbeddingColumns,
+    selectedMetadataColumns, setSelectedMetadataColumns,
+    textTemplate, setTextTemplate,
+    idColumn, setIdColumn,
+    handleEmbeddingColumnsChange,
+    portionStrategy, setPortionStrategy,
+    numRows, setNumRows,
+    rangeStart, setRangeStart,
+    rangeEnd, setRangeEnd,
+    randomSeed, setRandomSeed,
+  } = form;
 
   const autoConfigureColumns = (features: Array<{ name: string; dtype: string }>) => {
     const textCols = features
@@ -131,10 +113,8 @@ export function HuggingFaceTab({
   const handleFetchInfoAndPreview = async () => {
     clearError();
 
-    if (!datasetId.includes('/')) {
-      alert('Dataset ID format should be: org/dataset');
-      return;
-    }
+    // Button is disabled for malformed ids; guard anyway
+    if (!datasetId.includes('/')) return;
 
     const info = await fetchHFDatasetInfo(datasetId);
     if (!info || info.error) return;
@@ -150,101 +130,17 @@ export function HuggingFaceTab({
   const handleEmbed = async () => {
     clearError();
 
-    if (selectedEmbeddingColumns.length === 0) {
-      alert('Please select at least one embedding column');
-      return;
-    }
-    if (!collectionName) {
-      alert('Please provide a collection name');
-      return;
-    }
+    // CTA is disabled while issues exist; guard anyway
+    if (validationIssues.length > 0) return;
 
-    const metadataColumns = selectedEmbeddingColumns.length === 1
-      ? selectedMetadataColumns
-      : [...selectedMetadataColumns, ...selectedEmbeddingColumns];
-
-    const embeddingModel = model.buildEmbeddingModelInput();
-    const topicParams = model.getTopicParams();
-
-    const commonInput = {
+    await embedHFDataset(buildHFEmbedInput(form.commonValues(), {
       datasetId,
-      collectionName,
-      config: datasetInfo?.defaultConfig || undefined,
-      columns: selectedEmbeddingColumns,
-      textTemplate: textTemplate || undefined,
-      idColumn: idColumn !== 'auto' ? idColumn : undefined,
-      metadataColumns,
-      computeProjections: true,
-      batchSize: model.batchSize,
-      embeddingModel,
-      ...topicParams,
-    };
+      defaultConfig: datasetInfo?.defaultConfig,
+      selectedSplit,
+      allSplits: datasetInfo?.configs[0]?.splits.map(s => s.name) || [],
+      portion: { strategy: portionStrategy, numRows, rangeStart, rangeEnd, seed: randomSeed },
+    }));
 
-    if (portionStrategy === 'ALL') {
-      // Embed every split into one collection in a single backend pass. The
-      // backend tags each row with `source_split` and shares one ID
-      // deduplicator across splits, so nothing gets overwritten.
-      const allSplits = datasetInfo?.configs[0]?.splits.map(s => s.name) || ['train'];
-      await embedHFDataset({
-        ...commonInput,
-        splits: allSplits,
-        portion: { strategy: 'ALL' },
-      });
-    } else {
-      await embedHFDataset({
-        ...commonInput,
-        split: selectedSplit,
-        portion: {
-          strategy: portionStrategy,
-          n: portionStrategy === 'FIRST_N' || portionStrategy === 'RANDOM_SAMPLE' ? numRows : undefined,
-          start: portionStrategy === 'ROW_RANGE' ? rangeStart : undefined,
-          end: portionStrategy === 'ROW_RANGE' ? rangeEnd : undefined,
-          seed: portionStrategy === 'RANDOM_SAMPLE' ? randomSeed : undefined,
-        },
-      });
-    }
-
-    await refreshCollections();
-  };
-
-  const handleResumeJob = async (job: EmbeddingJob) => {
-    if (generateLlmLabels) {
-      const handled = await resumeLlmLabelingJob(job, generateLlmLabels, {
-        setLlmResumeJobId,
-        refreshCollections,
-      });
-      if (handled) return;
-    }
-
-    const config = job.config as Record<string, unknown>;
-
-    const storedPortion = config.portion as Record<string, unknown> | undefined;
-    const portion = storedPortion ? {
-      strategy: (storedPortion.strategy as string)?.toUpperCase() as PortionStrategy,
-      n: storedPortion.n as number | undefined,
-      start: storedPortion.start as number | undefined,
-      end: storedPortion.end as number | undefined,
-      seed: storedPortion.seed as number | undefined,
-    } : undefined;
-
-    await embedHFDataset({
-      datasetId: config.dataset_id as string,
-      collectionName: job.collectionName,
-      config: config.config as string | undefined,
-      split: config.split as string | undefined,
-      splits: config.splits as string[] | undefined,
-      columns: config.columns as string[] | undefined,
-      textTemplate: config.text_template as string | undefined,
-      idColumn: config.id_column as string | undefined,
-      metadataColumns: config.metadata_columns as string[] | undefined,
-      portion,
-      computeProjections: true,
-      batchSize: config.batch_size as number | undefined,
-      embeddingModel: transformStoredEmbeddingModel(
-        config.embedding_model as Record<string, unknown> | undefined
-      ),
-      resume: true,
-    });
     await refreshCollections();
   };
 
@@ -255,12 +151,45 @@ export function HuggingFaceTab({
   const availableSplits = datasetInfo?.configs[0]?.splits.map(s => s.name) || [];
   const totalRows = datasetInfo?.configs[0]?.splits.find(s => s.name === selectedSplit)?.numRows;
 
+  const datasetIdInvalid = datasetId.length > 0 && !datasetId.includes('/');
+
+  const validationIssues = useMemo(() => getEmbedValidationIssues({
+    source: 'hf',
+    datasetId,
+    collectionName,
+    embeddingColumns: selectedEmbeddingColumns,
+    portionStrategy,
+    rangeStart,
+    rangeEnd,
+  }), [datasetId, collectionName, selectedEmbeddingColumns, portionStrategy, rangeStart, rangeEnd]);
+
+  const embedSummary = buildEmbedSummary({
+    collectionName,
+    portionStrategy,
+    numRows,
+    rangeStart,
+    rangeEnd,
+    totalRows: totalRows ?? null,
+    modelName: model.modelName,
+    enableTopics: model.enableTopics,
+  });
+
+  // Scroll the newly revealed configuration into view after fetching info
+  const infoCardRef = useRef<HTMLDivElement>(null);
+  const wasLoadedRef = useRef(false);
+  useEffect(() => {
+    if (isDataLoaded && !wasLoadedRef.current) {
+      infoCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    wasLoadedRef.current = isDataLoaded;
+  }, [isDataLoaded]);
+
   return (
     <div className="space-y-6">
       {/* Data Source Card */}
       <Card>
         <CardHeader>
-          <CardTitle>HuggingFace Dataset</CardTitle>
+          <CardTitle>1 · Data Source</CardTitle>
           <CardDescription>
             Enter a HuggingFace dataset ID (e.g., dair-ai/emotion, ag_news, imdb)
           </CardDescription>
@@ -275,6 +204,11 @@ export function HuggingFaceTab({
                 onChange={(e) => setDatasetId(e.target.value)}
                 placeholder="e.g., dair-ai/emotion"
               />
+              {datasetIdInvalid && (
+                <p className="text-xs text-destructive">
+                  Dataset ID must be in the form org/dataset
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="collection-name">Collection Name</Label>
@@ -289,7 +223,7 @@ export function HuggingFaceTab({
 
           <Button
             onClick={handleFetchInfoAndPreview}
-            disabled={isLoading || !datasetId}
+            disabled={isLoading || !datasetId.includes('/')}
             className="w-full md:w-auto"
           >
             {isLoading ? <Spinner className="mr-2 h-4 w-4" /> : null}
@@ -302,9 +236,9 @@ export function HuggingFaceTab({
 
       {/* Dataset Info & Preview */}
       {isDataLoaded && (
-        <Card>
+        <Card ref={infoCardRef}>
           <CardHeader>
-            <CardTitle>Dataset Information</CardTitle>
+            <CardTitle>2 · Dataset Information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {splits.length > 0 && (
@@ -328,7 +262,7 @@ export function HuggingFaceTab({
       {isDataLoaded && columns.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Column Configuration</CardTitle>
+            <CardTitle>3 · Column Configuration</CardTitle>
             <CardDescription>
               Select columns for embedding and configure the text template
             </CardDescription>
@@ -353,7 +287,7 @@ export function HuggingFaceTab({
       {isDataLoaded && (
         <Card>
           <CardHeader>
-            <CardTitle>Dataset Portion</CardTitle>
+            <CardTitle>4 · Dataset Portion</CardTitle>
             <CardDescription>
               Choose which portion of the dataset to embed
             </CardDescription>
@@ -381,30 +315,23 @@ export function HuggingFaceTab({
       {isDataLoaded && (
         <EmbeddingModelForm
           model={model}
-          showEmbedButton
-          onEmbed={handleEmbed}
-          embedLoading={embedLoading}
-          embedDisabled={selectedEmbeddingColumns.length === 0}
-          embedButtonText="Embed Dataset"
+          title="5 · Embedding Model"
           idPrefix="hf-"
         />
       )}
 
-      {lastEmbedResult && <EmbedResultCard result={lastEmbedResult} />}
+      {lastEmbedResult && lastEmbedSource === 'hf' && <EmbedResultCard result={lastEmbedResult} />}
 
-      <EmbedProgressSection
-        embedLoading={embedLoading}
-        activeJobCollectionName={activeJobCollectionName}
-        llmResumeJobId={llmResumeJobId}
-        onResumeJob={handleResumeJob}
-        onCancelActiveJob={activeJobCollectionName && cancelEmbeddingJob
-          ? () => cancelEmbeddingJob(activeJobCollectionName)
-          : undefined}
-        cancelLoading={cancelJobLoading}
-        onRemoveJob={removeEmbeddingJob
-          ? (job) => removeEmbeddingJob(job.collectionName)
-          : undefined}
-      />
+      {/* Sticky CTA with config recap + inline validation */}
+      {isDataLoaded && !embedLoading && (
+        <EmbedFooterBar
+          summary={embedSummary}
+          ctaLabel="Embed Dataset"
+          onSubmit={handleEmbed}
+          loading={embedLoading}
+          issues={validationIssues}
+        />
+      )}
     </div>
   );
 }

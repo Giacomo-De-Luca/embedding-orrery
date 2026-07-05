@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import {
@@ -11,19 +12,27 @@ import {
 } from '@/lib/ui-primitives/select';
 import type { PortionStrategy } from '@/lib/graphql/mutations';
 
+const ALL_STRATEGIES: PortionStrategy[] = ['ALL', 'FIRST_N', 'RANDOM_SAMPLE', 'ROW_RANGE'];
+
 interface PortionSelectorProps {
   strategy: PortionStrategy;
   onStrategyChange: (strategy: PortionStrategy) => void;
   n: number;
   onNChange: (n: number) => void;
-  start: number;
-  onStartChange: (start: number) => void;
-  end: number;
-  onEndChange: (end: number) => void;
+  start?: number;
+  onStartChange?: (start: number) => void;
+  end?: number;
+  onEndChange?: (end: number) => void;
   seed: number;
   onSeedChange: (seed: number) => void;
   totalRows: number | null;
   availableSplits?: string[];
+  /**
+   * Which strategies to offer (default: all). Backends without row-range
+   * support (embedLocalFile) pass a subset instead of rendering an inert
+   * option.
+   */
+  allowedStrategies?: PortionStrategy[];
 }
 
 export function PortionSelector({
@@ -31,16 +40,25 @@ export function PortionSelector({
   onStrategyChange,
   n,
   onNChange,
-  start,
+  start = 0,
   onStartChange,
-  end,
+  end = 1000,
   onEndChange,
   seed,
   onSeedChange,
   totalRows,
   availableSplits,
+  allowedStrategies = ALL_STRATEGIES,
 }: PortionSelectorProps) {
   const showWarning = strategy === 'ALL' && totalRows && totalRows > 10000;
+
+  // If the current strategy is not offered (e.g. after a prop change), fall
+  // back to FIRST_N so the form never holds an unsubmittable value.
+  useEffect(() => {
+    if (!allowedStrategies.includes(strategy)) {
+      onStrategyChange('FIRST_N');
+    }
+  }, [allowedStrategies, strategy, onStrategyChange]);
 
   return (
     <div className="space-y-4">
@@ -51,13 +69,21 @@ export function PortionSelector({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">
-              All Rows
-              {availableSplits && availableSplits.length > 1 && ' (All Splits)'}
-            </SelectItem>
-            <SelectItem value="FIRST_N">First N Rows</SelectItem>
-            <SelectItem value="RANDOM_SAMPLE">Random Sample</SelectItem>
-            <SelectItem value="ROW_RANGE">Row Range</SelectItem>
+            {allowedStrategies.includes('ALL') && (
+              <SelectItem value="ALL">
+                All Rows
+                {availableSplits && availableSplits.length > 1 && ' (All Splits)'}
+              </SelectItem>
+            )}
+            {allowedStrategies.includes('FIRST_N') && (
+              <SelectItem value="FIRST_N">First N Rows</SelectItem>
+            )}
+            {allowedStrategies.includes('RANDOM_SAMPLE') && (
+              <SelectItem value="RANDOM_SAMPLE">Random Sample</SelectItem>
+            )}
+            {allowedStrategies.includes('ROW_RANGE') && (
+              <SelectItem value="ROW_RANGE">Row Range</SelectItem>
+            )}
           </SelectContent>
         </Select>
         {strategy === 'ALL' && availableSplits && availableSplits.length > 1 && (
@@ -122,7 +148,7 @@ export function PortionSelector({
               id="range-start"
               type="number"
               value={start}
-              onChange={(e) => onStartChange(parseInt(e.target.value) || 0)}
+              onChange={(e) => onStartChange?.(parseInt(e.target.value) || 0)}
               min={0}
               max={end - 1}
             />
@@ -133,7 +159,7 @@ export function PortionSelector({
               id="range-end"
               type="number"
               value={end}
-              onChange={(e) => onEndChange(parseInt(e.target.value) || 0)}
+              onChange={(e) => onEndChange?.(parseInt(e.target.value) || 0)}
               min={start + 1}
               max={totalRows || undefined}
             />

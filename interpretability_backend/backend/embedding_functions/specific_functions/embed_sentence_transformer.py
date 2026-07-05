@@ -12,6 +12,8 @@ For EmbeddingGemma and similar models, pass a prompt that can be either:
 See: https://huggingface.co/google/gemma-embedding-001
 """
 
+import gc
+import logging
 from typing import Any
 
 import numpy as np
@@ -29,11 +31,15 @@ KNOWN_PROMPT_NAMES = {
     "s2s",  # Sentence to sentence
 }
 
+logger = logging.getLogger("orrery." + __name__)
+
 
 class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
     """Fork of ChromaDB's SentenceTransformerEmbeddingFunction with prompt support."""
 
-    # Class-level model cache (shared across all instances, matches ChromaDB)
+    # Class-level single-slot model cache (shared across all instances). Unlike
+    # ChromaDB's unbounded dict, loading a different model evicts the previous one
+    # so only one SentenceTransformer stays resident (each is 100 MB-1 GB+).
     models: dict[str, Any] = {}
 
     def __init__(
@@ -74,11 +80,41 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
                 raise ValueError(f"Keyword argument {key} is not a primitive type")
         self.kwargs = kwargs
 
-        if model_name not in self.models:
-            self.models[model_name] = SentenceTransformer(
-                model_name_or_path=model_name, device=device, **kwargs
-            )
-        self._model = self.models[model_name]
+        # Bind through a local: a concurrent constructor may evict between the
+        # membership check and a dict re-read (embed jobs run in worker threads
+        # while sync semantic-search resolvers construct EFs on the event loop).
+        model = self.models.get(model_name)
+        if model is None:
+            self._evict_cached_models()
+            model = SentenceTransformer(model_name_or_path=model_name, device=device, **kwargs)
+            self.models[model_name] = model
+        self._model = model
+
+    @classmethod
+    def _evict_cached_models(cls) -> None:
+        """Drop all cached models before loading a different one.
+
+        Evicting first (rather than after the new load) keeps peak RAM to one
+        *cached* model. Instances created earlier keep working: they hold their
+        own ``self._model`` reference, so an evicted model is only freed once
+        those instances are garbage-collected too (until then it stays resident
+        alongside the new one).
+        """
+        if not cls.models:
+            return
+        evicted = list(cls.models)
+        cls.models.clear()
+        gc.collect()
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # best-effort cleanup: never fail the new model's load
+            logger.debug("torch cache cleanup after eviction failed", exc_info=True)
+        logger.info("Evicted cached SentenceTransformer model(s): %s", ", ".join(evicted))
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate embeddings for the given documents.

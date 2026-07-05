@@ -1,0 +1,519 @@
+% Orrery: EMNLP System Demonstration paper draft
+% Target: ACL/EMNLP demo track (6 pages + references, ACL rolling style)
+% Compile with the acl.sty / ACL LaTeX template (https://github.com/acl-org/acl-style-files)
+%
+% CONVENTIONS FOR CO-AUTHORS
+%   % TODO markers flag numbers/claims that are NOT yet backed by committed
+%   code or saved results. Do not leave any % TODO in the submitted PDF.
+%   Verified figures (from documentation/PROJECTION_FIDELITY.md and the code)
+%   are used as-is. See memory: project_orrery_paper_claims for the audit.
+
+\documentclass[11pt]{article}
+\usepackage[]{ACL2023}   % <-- replace with the current cycle's style file
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{url}
+
+\title{Orrery: An Interactive Platform Unifying Embedding Visualisation,
+Topic Extraction, and Sparse-Autoencoder Interpretability}
+
+\author{
+  Anonymous \\
+  Affiliation \\
+  \texttt{email@domain} \\
+}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\begin{abstract}
+Orrery is an open-source platform for interactive visualisation of
+embedding spaces with native support for Sparse Autoencoder (SAE)
+interpretability. Given any local or HuggingFace dataset, it produces an
+explorable 3D constellation through a single pipeline of embedding,
+projection, clustering, automatic topic labelling, and---optionally---the
+collection of per-document SAE feature activations. The resulting map can
+be searched visually, semantically, lexically (BM25), or by SAE feature
+name. SAE decoder vectors are visualised as a navigable constellation of
+their own, where entering a document highlights the features it activates.
+Individual features can be inspected in a Neuronpedia-style dashboard and
+applied directly to steer the model. The interface sustains 60\,fps on
+250k points---including animations and nebula shaders---on 8\,GB of RAM.
+Orrery unifies corpus-scale semantic exploration with internal feature
+interpretation and causal model intervention, and is released under the
+Apache~2.0 license at \url{[URL]}.
+\end{abstract}
+
+%======================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Researchers working with text embeddings face fragmented tooling.
+Interactive visualisation (TensorBoard Embedding Projector
+\citep{smilkov2016projector}), topic analysis (BERTopic
+\citep{grootendorst2022bertopic}), and mechanistic interpretability
+(Neuronpedia \citep{neuronpedia}) exist as separate systems. Moving
+between them requires data export, format conversion, and constant context
+switching. No existing tool lets a researcher go from ``\emph{what does my
+embedding space look like?}'' to ``\emph{which model features drive this
+structure?}'' within a single workflow.
+
+\paragraph{Contribution.} We present \textbf{Orrery}, an open-source
+platform that integrates three capabilities that are usually siloed:
+(i)~interactive 2D/3D embedding visualisation that sustains 250k+ points at
+interactive frame-rates on commodity hardware; (ii)~an automatic topic
+extraction pipeline with hierarchical reduction and LLM labelling; and
+(iii)~Sparse-Autoencoder analysis with live model inference, per-document
+feature activation, and interactive steering. To our knowledge Orrery is
+the first system to connect general-purpose embedding visualisation to
+mechanistic-interpretability SAE analysis, closing the loop:
+\emph{find a semantic pattern in the map $\rightarrow$ identify candidate
+features or directions $\rightarrow$ inspect the evidence $\rightarrow$
+intervene in the model $\rightarrow$ observe the behavioural effect.}
+
+\paragraph{Emergent structure as validation.} To demonstrate that the
+platform surfaces genuine scientific insight, we report two findings that
+its analytical-colouring workflow makes directly visible. First, the
+embedding of colour \emph{names} self-organises around perceptual colour
+space: a UMAP-3D layout of the XKCD colour survey is \emph{more}
+colour-coherent (Mantel $\rho = 0.60$) than the 3072-d embedding it was
+projected from ($\rho = 0.29$; \S\ref{sec:xkcd}). Second, psycholinguistic
+dimensions such as concreteness and imageability are linearly decodable
+from the embedding geometry, appearing as visible spatial gradients
+(\S\ref{sec:concreteness}). Finally, we validate the SAE machinery by
+recovering an ActAdd-style refusal direction on Gemma-3-4b-it
+(\S\ref{sec:refusal}).
+
+%======================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Embedding visualisers.} The TensorBoard Embedding Projector
+\citep{smilkov2016projector} pioneered interactive PCA/t-SNE/UMAP browsing
+but consumes only precomputed vectors and caps at tens of thousands of
+points. Embedding Atlas \citep{embeddingatlas}, Nomic Atlas
+\citep{nomicatlas}, and Latent Scope \citep{latentscope} scale further and
+add clustering, but Atlas and Nomic are closed or cloud-hosted and none
+connect the map to a model's internal features. Artistic work such as
+Google's \emph{Embedding Galaxy}\footnote{\url{https://artsexperiments.withgoogle.com/tsnemap/}}
+inspires our ``star cartography'' rendering but is not a research tool.
+
+\paragraph{Topic modelling.} Orrery's topic pipeline follows BERTopic
+\citep{grootendorst2022bertopic}: HDBSCAN over a UMAP reduction, followed
+by class-based TF--IDF (c-TF--IDF). We reuse BERTopic's LLM labelling
+prompt directly. Our contribution here is integration, not algorithm.
+
+\paragraph{SAE interpretability.} Sparse Autoencoders decompose model
+activations into interpretable features \citep{bricken2023monosemanticity,
+templeton2024scaling}. Neuronpedia \citep{neuronpedia} hosts feature
+dashboards, and SAEDashboard/SAE-vis provide static visualisations. We use
+the Gemma Scope SAEs \citep{lieberum2024gemmascope} and the Neuronpedia
+label/activation data, but---unlike prior tools---place features in the
+same interactive space as documents and expose live steering. Our steering
+follows ActAdd \citep{turner2023actadd}; the refusal experiment adapts
+\citet{arditi2024refusal}.
+
+%======================================================================
+\section{System Design}
+\label{sec:design}
+
+\paragraph{Datasets vs.\ collections.} Orrery separates two concepts. A
+\emph{dataset} is a set of documents (text, image, audio) stored and
+indexed in DuckDB. Each dataset can have one or more \emph{collections}: a
+collection is a set of vectors (in ChromaDB), a set of projections (in
+DuckDB), and optionally a set of topics and a set of per-document SAE
+activations (both in DuckDB). Decoupling the two lets a user embed the same
+dataset many times---different prompts, column combinations, or
+models---without duplicating the documents, which was the main limitation
+of a vector-store-only design.
+
+\paragraph{Dual-database architecture.} DuckDB
+(\texttt{main.duckdb}) is the central orchestrator: documents, JSON
+metadata, native \texttt{FLOAT[]} projection arrays, normalised topic
+tables, and sparse SAE activation rows. ChromaDB stores only IDs plus dense
+vectors, serving approximate-nearest-neighbour similarity search (cosine).
+DuckDB handles the relational and columnar-scan workloads (metadata
+filters, \texttt{ILIKE} text search, FTS/BM25); ChromaDB handles ANN. A
+\texttt{vector\_collections} table links one dataset to its many
+embeddings. Figure~\ref{fig:arch} shows the data flow.
+
+\begin{figure}[t]
+  \centering
+  % TODO Fig 2: architecture diagram
+  % Data Sources -> Embedding Providers -> DuckDB + ChromaDB
+  %              -> Topic Extraction -> GraphQL API -> Frontend
+  \fbox{\parbox{0.9\columnwidth}{\centering\vspace{2em}
+  \textit{[architecture diagram placeholder]}\vspace{2em}}}
+  \caption{Data flow: sources $\rightarrow$ embedding providers
+  $\rightarrow$ dual storage (DuckDB + ChromaDB) $\rightarrow$ topic
+  extraction $\rightarrow$ GraphQL API $\rightarrow$ WebGL frontend.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{The embedding pipeline}
+\label{sec:pipeline}
+Starting from a dataset loaded from HuggingFace or a local file (JSON,
+Parquet, CSV) and shown as a preview, the workflow has one required step
+(projections) and three optional ones.
+
+\begin{enumerate}[nosep]
+  \item \textbf{Embed.} The user chooses a column combination and a
+  template, referencing columns by name in braces and keeping the prompt
+  outside them, e.g.\ \texttt{\{word\}: \{definition\}}. Embedding is
+  computed by one of seven providers---SentenceTransformers (local
+  default), Ollama, BGE/FlagEmbedding, Qwen (all local), or the OpenAI,
+  Cohere, HuggingFace, and Gemini APIs---with task-type support for Gemma
+  and Gemini and hardware auto-detection (MPS/CUDA/CPU). Vectors go to
+  ChromaDB; selected metadata columns go to DuckDB. This step can be
+  \emph{skipped} for datasets that already carry a vector column.
+  \item \textbf{Project (required).} We automatically compute and store 2D
+  and 3D projections for both PCA and UMAP.
+  \item \textbf{Topic model (optional).} \S\ref{sec:topics}.
+  \item \textbf{SAE activations (optional).} \S\ref{sec:sae}.
+\end{enumerate}
+
+\subsection{Topic extraction}
+\label{sec:topics}
+When enabled, a BERTopic-style pipeline runs. Because BERTopic is modular
+we expose several clustering algorithms---HDBSCAN (default), K-means, GMM,
+and Spectral clustering (suited to small datasets, $O(n^2)$
+memory)---applied by default to a fresh 5-component UMAP of the raw
+vectors. Labels come from c-TF--IDF keywords, optionally upgraded with LLM
+labels (Gemini/OpenAI) using BERTopic's prompt, with incremental saves and
+resume. An optional second reduction step merges topics to a target count
+while preserving the originals as subtopics, enabling hierarchical
+Tableau-style colouring.
+% TODO: cluster-quality metrics (silhouette / Davies-Bouldin) are described
+% in the outline but a standalone evaluator (DBCV, silhouette, C_v/U_Mass)
+% lives in interpretability_backend/evaluation and is NOT yet persisted /
+% exposed. Either wire it in and report numbers, or omit the claim.
+
+\subsection{Colour support}
+\label{sec:colour}
+Any metadata column can drive colouring. Orrery supports categorical,
+sequential, diverging, and monochrome scales, including Crameri's
+scientific colour maps \citep{crameri2020colourmaps} for perceptually
+uniform, colour-vision-deficiency-safe rendering---important both for
+interpretability research and for displaying historical corpora. When a
+dataset carries a hex colour column, embedding auto-detects it and derives
+a numeric \texttt{mapped\_colour} field via a Hilbert-curve strip that
+reduces a 3D colour space to a single perceptually-ordered dimension
+(\S\ref{sec:xkcd}, Appendix). Colour schemes round-trip through the URL and
+can be saved per collection as a default.
+
+%======================================================================
+\section{Visualisation and Interaction}
+\label{sec:viz}
+
+\paragraph{Rendering.} The scatter plots are WebGL-accelerated Plotly.js
+(2D and 3D). We fork Plotly.js to fix an $O(n\cdot m)$ trace-update cost
+that made real-time overlays unusable on large collections; with the fix,
+250k+ points render at 60\,fps on 8\,GB of RAM, with marker size and
+opacity scaled logarithmically to point count.
+
+\paragraph{Search as filter.} A collection can be searched four ways, with
+results highlighted as a constellation whose stars grow \emph{warmer} with
+similarity: (i)~\textbf{semantic} search (also triggered by clicking any
+point, which flies the camera in and retrieves top-$k$ neighbours in the
+original space); (ii)~\textbf{text} search (server-side DuckDB
+\texttt{ILIKE}/BM25 with per-column, exact/partial, and case controls);
+(iii)~\textbf{SAE feature-name} search (\S\ref{sec:sae}); and
+(iv)~\textbf{prompt} search on SAE collections.
+
+\paragraph{Filtering.} The legend panel doubles as a filter: a categorical
+colour field renders as a searchable, scrollable, counted list whose
+entries toggle points on and off; a numerical field renders as a
+colour-scaled histogram with draggable handles that set the scale, and the
+analytics panel offers a second histogram whose handles graphically filter
+a range. An advanced panel composes explicit predicates (equals, not-equals,
+in, not-in, range). Temporal fields are auto-detected and filtered through a
+draggable range picker.
+
+\paragraph{Rendering features for cluster identification.} In 3D, an
+optional \emph{nebula} mode draws translucent halos around topic clusters
+via camera-synced sprite shaders on a blended overlay canvas, and a
+collision-avoidance system projects 3D label anchors to screen space (using
+MVP matrices read from Plotly's WebGL internals) and greedily packs
+non-overlapping labels by a similarity-weighted priority. A deferred
+selected-point pattern keeps camera fly-to animations off the $O(n)$ Plotly
+diff path. A one-click screenshot exports the composited scene (plot, haze,
+labels, legend) at device resolution.
+
+%======================================================================
+\section{Sparse-Autoencoder Support}
+\label{sec:sae}
+
+SAE support is the platform's primary novel contribution, and it comprises
+two workflows: visualising a \emph{space of features}, and collecting
+features \emph{per document}.
+
+\paragraph{From-scratch SAE core.} Rather than wrapping SAELens or
+TransformerLens, Orrery implements JumpReLU and TopK SAEs directly
+(\raise.17ex\hbox{$\scriptstyle\sim$}135 lines). A hook manager attaches
+SAEs to specific sites (\texttt{resid\_post}, \texttt{attn\_out},
+\texttt{mlp\_out}) and can co-attach multiple SAEs---including two widths at
+one layer---in a single forward pass, with prefill-only semantics and
+steering composition. Mid-layer activation capture uses a forked
+\texttt{gemma\_pytorch} internal cache rather than standard forward hooks.
+An in-memory SAE weight cache avoids re-reading the
+\raise.17ex\hbox{$\scriptstyle\sim$}320\,MB \texttt{params.safetensors} on
+repeated loads, improving chat time-to-first-token.
+% Honest scope: the from-scratch SAE machinery is model-agnostic, but the
+% live InterpretService inference wrapper is currently Gemma-only.
+
+\subsection{Visualising SAE collections}
+The feature space of an SAE can be laid out two ways. First, each feature's
+decoder row (dimension $R$, the residual-stream width) is treated as a
+vector and projected. Second, each feature is labelled by an
+autointerpreter and the label is embedded with a conventional encoder.
+Either route yields a \{\texttt{feature\_index, label, vector, top\_logit,
+documents}\} record that projects into 3D like any collection. For any
+Gemma Scope SAE, Orrery can download decoder vectors and metadata from the
+Neuronpedia S3 bucket and ingest them into DuckDB/ChromaDB in one click.
+
+A projected SAE collection gains two abilities over an ordinary one.
+(i)~\textbf{Prompt highlighting:} entering a prompt runs it through the
+model, max-pools each feature's activation across tokens, and highlights
+and ranks the most-activated features directly on the scatter plot.
+(ii)~\textbf{Cross-linking:} right-clicking a feature (found by vector or
+label search) opens it in the Feature Explorer for inspection and steering.
+
+\subsection{Per-document SAE activations}
+For an ordinary collection, the user can additionally collect SAE
+activations: every document is run through Gemma with SAE hooks, and for
+each feature we keep the max activation across tokens, stored as sparse
+\((\texttt{item\_id, feature\_index, activation})\) rows
+(\raise.17ex\hbox{$\scriptstyle\sim$}100--150 nonzero per document). This
+backs a two-hop \emph{feature-label} search: a query such as
+``poetry'' \texttt{ILIKE}-matches SAE features, and documents are ranked by
+their max activation over the matching features---searching a corpus by the
+model's internal concepts rather than its surface words.
+
+\subsection{Feature Explorer and steering}
+A Neuronpedia-style page (token-strip activation heatmaps, top/bottom logit
+bar charts) supports three query modes: text search and semantic search
+over labels, and prompt search that shows, per token, which feature fires
+(or the max/mean activation list over the prompt). Unlike Neuronpedia, we
+keep inspection and \emph{steering} on the same page: an interesting
+feature can be injected additively onto its decoder direction at a chosen
+strength and the steered generation streamed token-by-token over a
+WebSocket, side-by-side with a seeded baseline for comparison.
+% Honest scope: steering.py implements additive/orthogonal/ablation/
+% projection-cap modes, but only ADDITIVE is reachable from the demo UI.
+
+%======================================================================
+\section{Case Studies}
+\label{sec:cases}
+
+\subsection{Colour words mirror perceptual colour space}
+\label{sec:xkcd}
+Nonlinear structure in the embedding space can still be read off visually.
+We embed the XKCD colour survey (\raise.17ex\hbox{$\scriptstyle\sim$}950
+English colour terms, each with a hex code aggregated from 200k
+respondents \citep{xkcd}) with Gemini and colour each point by its true
+hex value. The layout intuitively recovers the colour wheel: greens,
+blues, and warm tones each pool together (Fig.~\ref{fig:xkcd}).
+
+We quantify this with a Mantel test (rank correlation between two pairwise
+distance structures) comparing the projection to a \emph{perceptual}
+reference---CIEDE2000 $\Delta E$ over CIELAB---and to the original
+embedding geometry (cosine). The UMAP-3D layout attains global Mantel
+$\rho = 0.60$ against perceptual colour, \emph{higher} than the raw
+3072-d Gemini embedding it was built from ($\rho = 0.29$), and higher than
+PCA-3D ($\rho = 0.47$); all correlations are strongly significant
+(permutation $z = 29$--$121$, $p_{\text{emp}} < 0.001$). Strikingly, UMAP
+\emph{concentrates} a colour signal that is diffuse in the full embedding:
+the projection makes visible a relationship that is hidden in the original
+space. (PCA-3D, by contrast, more faithfully preserves the embedding's
+\emph{global} geometry, $\rho = 0.49$ vs.\ $0.29$---the honest picture of
+the vectors; UMAP wins on local neighbourhood structure.)
+
+\begin{figure}[t]
+  \centering
+  % TODO Fig 3: gallery/XKCD_embedded_colourspace.png (Gemini, 3D, hex-coloured)
+  \fbox{\parbox{0.9\columnwidth}{\centering\vspace{3em}
+  \textit{[XKCD colour-word constellation]}\vspace{3em}}}
+  \caption{XKCD colour survey embedded with Gemini, projected to UMAP-3D,
+  each point coloured by its true hex value. The semantic embedding of
+  colour \emph{names} self-organises around perceptual colour space.}
+  \label{fig:xkcd}
+\end{figure}
+
+\subsection{Psycholinguistic dimensions as spatial gradients}
+\label{sec:concreteness}
+A central use of an interpretability visualiser is spotting linear
+directions in the embedding space---the setting of ``mass-mean'' probing in
+Geometry of Truth \citep{marks2023geometry}. We embed English words from
+the Brysbaert concreteness ratings \citep{brysbaert2014concreteness} and
+colour each point by its concreteness score; the abstract--concrete axis is
+visibly linearly separable. We replicate this on the Glasgow Norms
+\citep{scott2019glasgow}, which supply seven psycholinguistic dimensions
+(arousal, valence, dominance, concreteness, imageability, familiarity,
+gender association), training linear and non-linear probes on each and
+testing on MiniLM and Gemma-embedding-300m.
+% TODO: report actual probe R^2 per dimension/model (Glasgow CSV in
+% resources/uploads is 4,682 rows, NOT 19,537; runnable). Prior draft's
+% "R^2 up to 0.9" and Brysbaert "93%" are NOT yet backed by saved results.
+% Fill Table~\ref{tab:probes} and the numbers below before submission.
+Of these, concreteness, imageability, and valence are the most cleanly
+decodable [TODO $R^2$], suggesting the embedding space self-organises along
+psycholinguistic axes without supervision. The number of such linear
+directions is unknown; we hope the visualiser accelerates their discovery.
+
+\begin{table}[t]
+  \centering
+  \small
+  % TODO Table 1: fill with real linear-probe R^2 values
+  \begin{tabular}{lcc}
+    \toprule
+    Dimension & MiniLM & Gemma-300m \\
+    \midrule
+    Concreteness  & [TODO] & [TODO] \\
+    Imageability  & [TODO] & [TODO] \\
+    Valence       & [TODO] & [TODO] \\
+    Arousal       & [TODO] & [TODO] \\
+    Dominance     & [TODO] & [TODO] \\
+    Familiarity   & [TODO] & [TODO] \\
+    Gender assoc. & [TODO] & [TODO] \\
+    \bottomrule
+  \end{tabular}
+  \caption{Linear-probe $R^2$ recovering Glasgow Norms dimensions from
+  embedding vectors. \emph{(placeholder---fill from runs)}}
+  \label{tab:probes}
+\end{table}
+
+\subsection{Digital-humanities corpora at scale}
+\label{sec:dh}
+To show scale and humanities use, we embed two corpora at the sentence
+level: the full Lacan corpus (\raise.17ex\hbox{$\scriptstyle\sim$}150k
+sentences) and a section of a Sanskrit travelogue corpus. The layout
+separates texts by time period, and even at 150k+ documents with nebula
+mode active the scatter plot stays fully interactive, letting scholars
+search and browse the corpus visually.
+% Corpus sizes standardised per memory: Lacan = 150k (committed subset is
+% 41k); WordNet = 212k senses if used as an additional scale demo.
+
+\subsection{SAE validation: refusal direction}
+\label{sec:refusal}
+To validate steering, we adapt \citet{arditi2024refusal} to Gemma-3-4b-it
+via our \texttt{gemma\_pytorch} fork. Unlike the original---which ablates
+the refusal direction geometrically at every layer---we use ActAdd
+\citep{turner2023actadd}, matching how we steer SAE features. We grid-search
+the layer and activation range that flips the most safety-benchmark prompts
+from refused to accepted while preserving coherence.
+% TODO: report the real layer and bypass rate. Draft said "layer 11 / 100%
+% on HarmBench"; collection metadata says layer 14 and the default eval set
+% is JailbreakBench, and the eval directory was not saved. Re-run, save the
+% eval, and report the true numbers + benchmark name before asserting.
+We release the experiment code and the extracted refusal vector in the
+repository to support LLM-safety research.
+
+%======================================================================
+\section{Comparison with Existing Systems}
+\label{sec:comparison}
+
+\begin{table*}[t]
+  \centering
+  \small
+  \begin{tabular}{lccccc}
+    \toprule
+    Feature & Orrery & TB Projector & BERTopic & Neuronpedia & Nomic Atlas \\
+    \midrule
+    Interactive 2D/3D viz            & \checkmark & \checkmark & --- & --- & \checkmark \\
+    Custom multi-provider embedding  & \checkmark & --- (precomputed) & --- & --- & partial \\
+    Topic extraction + LLM labels    & \checkmark & --- & \checkmark & --- & --- \\
+    Hierarchical topic reduction     & \checkmark & --- & \checkmark & --- & --- \\
+    SAE feature analysis             & \checkmark & --- & --- & \checkmark & --- \\
+    SAE steering + chat              & \checkmark & --- & --- & --- & --- \\
+    Scatter $\leftrightarrow$ SAE linking & \checkmark & --- & --- & --- & --- \\
+    Metadata analytical colouring    & \checkmark & limited & --- & --- & limited \\
+    Temporal filtering               & \checkmark & --- & --- & --- & --- \\
+    Open source                      & \checkmark & \checkmark & \checkmark & partial & --- \\
+    Local / offline                  & \checkmark & \checkmark & \checkmark & --- & --- \\
+    Scale (points)                   & 250k+ & \raise.17ex\hbox{$\scriptstyle\sim$}50k & N/A & N/A & 1M+ (cloud) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Orrery occupies a unique intersection: the only system pairing
+  general-purpose embedding visualisation with SAE mechanistic
+  interpretability.}
+  \label{tab:comparison}
+\end{table*}
+
+Table~\ref{tab:comparison} positions Orrery. TensorBoard Projector
+visualises but cannot analyse model internals; BERTopic extracts topics but
+has no interactive layer; Neuronpedia explores SAE features but cannot tie
+them to embedding-level structure; Nomic Atlas scales further but is
+closed-source and lacks SAE integration. Orrery is the only system that
+combines all three.
+
+%======================================================================
+\section{Demonstration}
+\label{sec:demo}
+
+A 3--5 minute live walkthrough: (1)~open a pre-loaded dataset and show topic
+clusters with LLM labels; (2)~recolour by different metadata fields;
+(3)~run semantic search with glow-highlighted, topic-scoped results;
+(4)~switch to XKCD colours and show colour self-organisation; (5)~open the
+Feature Explorer and browse SAE activation heatmaps; (6)~enter a prompt and
+watch per-token features light up on the scatter plot; (7)~activate a
+steering preset and show the behavioural change in chat against a seeded
+baseline; (8)~switch to the refusal vector to demonstrate safety-relevant
+steering. A hosted instance with pre-loaded datasets (XKCD Colours, Glasgow
+Norms, a WordNet subset, and a safety benchmark), a \texttt{docker compose
+up} path for local reproduction, and a recorded video are available at
+\url{[URL]}.
+
+%======================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+Orrery's SAE inference wrapper is currently Gemma-specific, though the SAE
+core is model-agnostic; extending live inference to other model families
+(e.g.\ Qwen) is future work. Topic extraction follows BERTopic's approach,
+so the contribution there is integration rather than a new algorithm. As
+reported in the SAE literature, most individual features do not yield
+cleanly interpretable steering effects. Rendering scales to
+\raise.17ex\hbox{$\scriptstyle\sim$}250--500k points, below cloud systems
+that reach 1M+. Only additive steering is exposed in the demo UI, and
+cluster-quality metrics are computed offline rather than surfaced in the
+interface.
+
+%======================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+Orrery unifies embedding visualisation, topic extraction, and SAE
+interpretability in a single open-source platform. Its analytical-colouring
+workflow makes emergent structure directly visible---colour-word embeddings
+align with perceptual colour space (UMAP Mantel $\rho = 0.60$, above the
+raw embedding's $0.29$) and psycholinguistic dimensions surface as linear
+gradients---while the SAE integration lets researchers trace that structure
+back to individual model features and interactively steer behaviour, a
+loop not available in any existing tool.
+
+%======================================================================
+% \section*{Ethics Statement}
+% TODO: note the refusal / jailbreak steering is released for defensive
+% safety research; discuss dual-use and responsible-release stance.
+
+% \section*{Acknowledgements}
+
+\bibliographystyle{acl_natbib}
+\bibliography{orrery}   % see orrery.bib (create alongside)
+
+\appendix
+\section{Hilbert-curve colour strips}
+% TODO: describe generate_color_strips.py — mapping a 3D colour space to a
+% single perceptually-ordered dimension via a space-filling Hilbert curve.
+
+\section{Additional probe results}
+% TODO: full Glasgow Norms / Brysbaert probe tables, per model.
+
+\end{document}

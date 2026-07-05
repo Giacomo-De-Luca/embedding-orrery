@@ -1,5 +1,11 @@
 ### Sections
 
+
+**Abstract**
+
+is an open-source platform for interactive visualisation of embedding spaces with native support for Sparse Autoencoder (SAE) interpretability. Given any local or HuggingFace dataset, it produces an explorable 3D constellation through a single pipeline of embedding, projection, clustering, automatic topic labelling, and, optionally, collection of per-document SAE feature activations. The resulting map can be searched visually, semantically, lexically (BM25), or by SAE feature names. SAE decoder vectors are visualised as a navigable constellation of their own, where inputting a document highlights the features it activates. Individual features can be inspected in a Neuronpedia-style dashboard and applied directly to steer the model. The interface sustains 60 fps on 250k points, including animations and nebula shaders, on 8 GB of RAM. Orrery is released under the Apache 2.0 license at [URL].
+
+
 Introduction
 
 related works: 

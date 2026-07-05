@@ -1,0 +1,54 @@
+{/* Keep the feature blurbs and captions in sync with the root README.md */}
+
+# Orrery
+
+**Interactive embedding visualisation with SAE interpretability.**
+
+Orrery is an open-source vector visualisation platform with native Sparse
+Autoencoder (SAE) support, built for data exploration and interpretability
+research. It turns any dataset into an explorable 3D constellation — embed,
+project, cluster, auto-label — and lets you inspect and steer a live language
+model through the same interface.
+
+![WordNet, 212k senses](/gallery/geometry.png)
+
+## What it does
+
+**Embedding visualisation** — Embed from the HuggingFace Hub, local files
+(CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL
+2D/3D scatter plots. Eight embedding providers; one dataset can carry multiple
+embeddings without duplication. 60 FPS with 250k points on 8 GB of VRAM.
+
+**Topic extraction** — A BERTopic-style pipeline: HDBSCAN clustering with
+c-TF-IDF keywords and optional LLM labels, plus hierarchical reduction with
+nested colouring.
+
+**SAE feature analysis** — Live inference on Gemma 3 with from-scratch
+JumpReLU/TopK SAE implementations. Capture per-token activations, highlight
+activated features on the scatter plot, apply additive steering, and chat with
+the steered model.
+
+**Feature-grounded search** — Link a dataset to an SAE and search documents by
+feature label: type "poetry" and Orrery ranks documents by how strongly the
+matching SAE features fire on them.
+
+| | |
+|---|---|
+| ![WordNet semantic search for "meditation"](/gallery/meditation.png) | ![HarmBench dataset](/gallery/harmbench.png) |
+| WordNet (212k senses) with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
+
+![SAE Feature Explorer with steered chat](/gallery/poetry.jpg)
+
+*Find a feature in the scatter plot, inspect it, steer the model: with the
+"poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite
+job?" in verse.*
+
+## Where to start
+
+- [Getting Started](/getting-started) — clone-to-running in a few minutes
+- [Docker](/docker) — containerised setup
+- [Database Architecture](/architecture/database) — the DuckDB + ChromaDB design
+- [SAE & Interpretability](/sae/architecture) — feature storage, pipelines, live inference
+
+Source code on [GitHub](https://github.com/Giacomo-De-Luca/orrery), licensed
+Apache 2.0.

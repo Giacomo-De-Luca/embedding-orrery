@@ -15,7 +15,6 @@ import chromadb
 import numpy as np
 from chromadb.config import Settings
 
-from ..topic_extraction.cluster_and_label import GenerateTopics
 from ..topic_extraction.llm_labeling import (
     _create_labeler,
     generate_llm_label_for_topic,
@@ -365,6 +364,10 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 cluster_input = raw / np.where(norms == 0, 1.0, norms)
         else:  # "projection"
             cluster_input = reduced_embeddings
+
+        # Local import: cluster_and_label pulls in hdbscan/sklearn/scipy (~94 MB RSS),
+        # keep it out of module scope so server startup stays light (mirrors umap guard).
+        from ..topic_extraction.cluster_and_label import GenerateTopics
 
         generator = GenerateTopics(
             documents=documents,

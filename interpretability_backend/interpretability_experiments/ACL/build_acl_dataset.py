@@ -53,16 +53,54 @@ def resolve_venues(venue_ids: Any, venue_index: Mapping[str, Any]) -> str:
     return ", ".join(names)
 
 
+# Ordered (keyword, track) rules for classifying a volume title; first hit wins.
+# "student research" and "shared task" must precede "workshop"/the workshop flag,
+# since their titles usually contain the word "workshop" too.
+_TRACK_TITLE_RULES = (
+    ("findings", "findings"),
+    ("demonstration", "demo"),
+    ("demo", "demo"),
+    ("tutorial", "tutorial"),
+    ("industry", "industry"),
+    ("industrial", "industry"),
+    ("student research", "srw"),
+    ("shared task", "shared_task"),
+    ("workshop", "workshop"),
+)
+
+
+def derive_track(volume_title: str, is_journal: bool, is_workshop: bool) -> str:
+    """Classify a paper's volume into a track (main/findings/demo/industry/...).
+
+    Title keywords work for both old-style (D19-3xxx) and new-style
+    (2023.emnlp-demo.5) anthology ids, unlike parsing the id itself.
+    """
+    if is_journal:
+        return "journal"
+    lowered = volume_title.lower()
+    for keyword, track in _TRACK_TITLE_RULES:
+        if keyword in lowered:
+            return track
+    return "workshop" if is_workshop else "main"
+
+
 def paper_to_record(paper: Any, venue_index: Mapping[str, Any]) -> dict[str, Any]:
     """Extract one flat dataset row from an anthology Paper."""
     year_str = paper.year
     year = int(year_str) if year_str and year_str.isdigit() else None
+    volume = paper.parent
+    track = derive_track(
+        markup_to_text(volume.title),
+        is_journal=volume.type.value == "journal",
+        is_workshop=volume.is_workshop,
+    )
     return {
         "acl_id": paper.full_id,
         "title": markup_to_text(paper.title),
         "year": year,
         "authors": format_authors(paper.namespecs),
         "venue": resolve_venues(paper.venue_ids, venue_index),
+        "track": track,
         "abstract": markup_to_text(paper.abstract),
         "url": paper.web_url,
     }

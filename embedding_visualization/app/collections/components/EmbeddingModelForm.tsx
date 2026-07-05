@@ -28,6 +28,7 @@ interface EmbeddingModelFormProps {
   embedDisabled?: boolean;
   embedButtonText?: string;
   idPrefix?: string;
+  title?: string;
 }
 
 export function EmbeddingModelForm({
@@ -39,11 +40,12 @@ export function EmbeddingModelForm({
   embedDisabled = false,
   embedButtonText = 'Embed Dataset',
   idPrefix = '',
+  title = 'Embedding Model',
 }: EmbeddingModelFormProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Embedding Model</CardTitle>
+        <CardTitle>{title}</CardTitle>
         <CardDescription>
           Choose the embedding model to use
         </CardDescription>
@@ -82,8 +84,13 @@ export function EmbeddingModelForm({
             <Label htmlFor={`${idPrefix}batch-size`}>Batch Size</Label>
             <Input
               id={`${idPrefix}batch-size`}
+              type="number"
+              min={1}
               value={model.batchSize}
-              onChange={(e) => model.setBatchSize(Number(e.target.value))}
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                if (!Number.isNaN(parsed) && parsed > 0) model.setBatchSize(parsed);
+              }}
               placeholder={model.batchSize.toString()}
             />
           </div>

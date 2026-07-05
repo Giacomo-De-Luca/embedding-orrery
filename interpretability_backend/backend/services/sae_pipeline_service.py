@@ -16,9 +16,9 @@ from interpret.sae.pipeline.prepare_sae_data import (
 )
 from interpret.sae.sae_config import (
     HOOK_TYPE_FROM_STR,
-    GemmaScopeSAEConfig,
     MODEL_SIZE_TO_D_IN,
     MODEL_SIZE_TO_LAYERS,
+    GemmaScopeSAEConfig,
 )
 from interpret.sae.source_ids import neuronpedia_source_id
 

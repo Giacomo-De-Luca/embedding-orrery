@@ -2,15 +2,18 @@
 
 import { Tabs, TabsList, TabsTrigger } from '@/lib/ui-primitives/tabs';
 import { Database, Upload, Settings, Microscope } from 'lucide-react';
+import type { DataSourceTab } from '../lib/urlState';
 
-export type DataSourceTab = 'huggingface' | 'local' | 'manage' | 'sae';
+export type { DataSourceTab };
 
 interface DataSourceTabsProps {
   activeTab: DataSourceTab;
   onTabChange: (tab: DataSourceTab) => void;
+  /** Tab bodies (TabsContent elements) rendered inside the Radix root. */
+  children?: React.ReactNode;
 }
 
-export function DataSourceTabs({ activeTab, onTabChange }: DataSourceTabsProps) {
+export function DataSourceTabs({ activeTab, onTabChange, children }: DataSourceTabsProps) {
   return (
     <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as DataSourceTab)}>
       <TabsList className="grid w-full grid-cols-4">
@@ -31,6 +34,7 @@ export function DataSourceTabs({ activeTab, onTabChange }: DataSourceTabsProps) 
           <span className="hidden sm:inline">SAE</span>
         </TabsTrigger>
       </TabsList>
+      {children}
     </Tabs>
   );
 }

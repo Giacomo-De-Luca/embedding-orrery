@@ -15,6 +15,8 @@ from .types import (
     Collection,
     # Collection types
     CollectionMetadata,
+    # Probe types
+    CollectionProbesResult,
     DataTypeEnum,
     EmbedDatasetInput,
     EmbedDatasetResult,
@@ -49,6 +51,8 @@ from .types import (
     ModelStatus,
     PortionInput,
     PortionStrategyEnum,
+    ProbeInfo,
+    ProbeScores,
     ProjectionData,
     PromptActivationsResponse,
     PromptHighlightFeature,
@@ -73,6 +77,8 @@ from .types import (
     TextSearchMode,
     TextSearchResponse,
     TokenChunk,
+    TrainProbeInput,
+    TrainProbeResult,
     # Note: JobProgress is imported from subscriptions (not types) to avoid circular imports
     # Helper functions
     build_where_clause,
@@ -149,4 +155,10 @@ __all__ = [
     "SteeringInput",
     "GenerateStreamInput",
     "TokenChunk",
+    # Probe types
+    "TrainProbeInput",
+    "TrainProbeResult",
+    "ProbeInfo",
+    "ProbeScores",
+    "CollectionProbesResult",
 ]

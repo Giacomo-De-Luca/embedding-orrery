@@ -185,7 +185,7 @@ export function InlineEditableField({
             <Button
               size="sm"
               variant="ghost"
-              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive opacity-40 group-hover:opacity-100 transition-opacity"
               onClick={handleDelete}
               disabled={isDeleting || isSaving}
             >
@@ -216,7 +216,7 @@ export function InlineEditableField({
                 {displayValue || 'Not set'}
               </span>
               {!readOnly && (
-                <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                <Pencil className="h-3 w-3 text-muted-foreground opacity-40 group-hover:opacity-100 transition-opacity flex-shrink-0" />
               )}
               {readOnly && (
                 <Lock className="h-3 w-3 text-muted-foreground opacity-50 flex-shrink-0" />

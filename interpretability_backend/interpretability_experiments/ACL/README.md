@@ -25,6 +25,7 @@ One parquet row per paper (`interpretability_backend/resources/datasets/acl_abst
 | `year` | Int64 (nullable) | Null if non-numeric in source |
 | `authors` | str | `First Last; First Last` |
 | `venue` | str | Comma-joined venue acronyms (e.g. `ACL`, `EMNLP, WMT`) |
+| `track` | str | Volume type, derived from the parent volume title + flags: `main`, `findings`, `demo`, `industry`, `tutorial`, `srw`, `shared_task`, `workshop`, `journal` |
 | `abstract` | str | Plain text; rows without abstracts dropped by default |
 | `url` | str | aclanthology.org landing page |
 

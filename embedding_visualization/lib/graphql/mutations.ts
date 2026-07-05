@@ -4,6 +4,8 @@
 
 import { gql } from '@apollo/client';
 
+import type { ProbeInfo } from '../utils/probeFields';
+
 // ========== HuggingFace Dataset Queries ==========
 
 /**
@@ -682,6 +684,41 @@ export interface ComputeDocumentActivationsResult {
   collectionName: string;
   itemsProcessed: number;
   totalItems: number;
+  durationSeconds: number;
+  error: string | null;
+}
+
+// ========== Embedding-space probes ==========
+
+export const TRAIN_PROBE = gql`
+  mutation TrainProbe($input: TrainProbeInput!) {
+    trainProbe(input: $input) {
+      collectionName
+      probe {
+        targetField
+        kind
+        scoreField
+        residualField
+        metrics
+        nTrain
+        nVal
+        createdAt
+      }
+      durationSeconds
+      error
+    }
+  }
+`;
+
+export const DELETE_PROBE = gql`
+  mutation DeleteProbe($collectionName: String!, $targetField: String!, $kind: String!) {
+    deleteProbe(collectionName: $collectionName, targetField: $targetField, kind: $kind)
+  }
+`;
+
+export interface TrainProbeResult {
+  collectionName: string;
+  probe: ProbeInfo | null;
   durationSeconds: number;
   error: string | null;
 }

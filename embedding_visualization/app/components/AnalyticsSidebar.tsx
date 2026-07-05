@@ -12,11 +12,13 @@ import { Separator } from '@/lib/ui-primitives/separator';
 import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { CategoryBarList } from './charts/CategoryBarList';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
+import { ProbeSection } from './ProbeSection';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
 import type { Point2D, Point3D, TemporalRange } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 
 interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   points: (Point2D | Point3D)[];
@@ -33,6 +35,7 @@ interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   /** Combined muted indices (text search + temporal) for local fallback computation. */
   combinedMutedIndices?: Set<number> | null;
   colorFieldOptions?: ColorFieldOption[];
+  probes?: UseProbesReturn | null;
   onCategoryToggle?: (category: string, shiftKey: boolean) => void;
 }
 
@@ -49,6 +52,7 @@ export function AnalyticsSidebar({
   sharedFilteredCounts,
   combinedMutedIndices,
   colorFieldOptions,
+  probes,
   onCategoryToggle,
   className,
   ...props
@@ -225,6 +229,13 @@ export function AnalyticsSidebar({
             <p className="text-sm text-muted-foreground">
               Select a categorical color field to view distribution charts.
             </p>
+          )}
+
+          {probes && (
+            <>
+              {(hasCategoricalData || showTemporalSection) && <Separator />}
+              <ProbeSection probes={probes} colorFieldOptions={colorFieldOptions} />
+            </>
           )}
         </div>
         <ScrollBar orientation="vertical" />

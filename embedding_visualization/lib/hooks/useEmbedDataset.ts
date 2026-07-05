@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { useMutation, useLazyQuery, useApolloClient } from '@apollo/client/react';
+import { toast } from 'sonner';
 import {
   GET_HF_DATASET_INFO,
   GET_HF_DATASET_PREVIEW,
@@ -38,6 +39,23 @@ import {
 import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS, GENERATE_LLM_LABELS, GET_COLLECTION_TOPICS } from '../graphql/queries';
 
 // ========== Hook Return Types ==========
+
+/** Which embed flow produced the current lastEmbedResult. */
+export type EmbedSource = 'hf' | 'local' | 'reembed';
+
+/** Toast the outcome of a (potentially long) embed run — the user may be on
+ * another tab when it finishes. Inline result/error cards stay as the
+ * inspectable record. */
+function notifyEmbedOutcome(result: EmbedDatasetResult | null) {
+  if (!result) return;
+  if (result.error) {
+    toast.error(`Embedding failed: ${result.error}`);
+  } else {
+    toast.success(
+      `Embedded ${result.totalEmbedded.toLocaleString()} items into "${result.collectionName}" in ${result.durationSeconds.toFixed(1)}s`
+    );
+  }
+}
 
 export interface UseEmbedDatasetReturn {
   // HuggingFace dataset operations
@@ -81,8 +99,10 @@ export interface UseEmbedDatasetReturn {
   error: string | null;
   clearError: () => void;
 
-  // Last embed result
+  // Last embed result + which flow produced it (tabs stay mounted, so each
+  // tab only renders the result belonging to its own flow)
   lastEmbedResult: EmbedDatasetResult | null;
+  lastEmbedSource: EmbedSource | null;
 
   // Topic extraction
   extractTopics: (collectionName: string, config?: TopicConfigInput) => Promise<ExtractTopicsResult | null>;
@@ -133,6 +153,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const [localFilePreview, setLocalFilePreview] = useState<LocalFilePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastEmbedResult, setLastEmbedResult] = useState<EmbedDatasetResult | null>(null);
+  const [lastEmbedSource, setLastEmbedSource] = useState<EmbedSource | null>(null);
 
   // Active job tracking for progress display
   const [activeJobCollectionName, setActiveJobCollectionName] = useState<string | null>(null);
@@ -300,6 +321,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const embedHFDataset = useCallback(async (input: EmbedDatasetInput): Promise<EmbedDatasetResult | null> => {
     setError(null);
     setLastEmbedResult(null);
+    setLastEmbedSource('hf');
     setActiveJobCollectionName(input.collectionName);
 
     try {
@@ -327,11 +349,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       setLastEmbedResult(result);
       setActiveJobCollectionName(null);
+      notifyEmbedOutcome(result);
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to embed dataset';
       setError(message);
       setActiveJobCollectionName(null);
+      toast.error(message);
       return null;
     }
   }, [embedHFMutation]);
@@ -408,6 +432,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const embedLocalFile = useCallback(async (input: EmbedLocalFileInput): Promise<EmbedDatasetResult | null> => {
     setError(null);
     setLastEmbedResult(null);
+    setLastEmbedSource('local');
     setActiveJobCollectionName(input.collectionName);
 
     try {
@@ -434,11 +459,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       setLastEmbedResult(result);
       setActiveJobCollectionName(null);
+      notifyEmbedOutcome(result);
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to embed file';
       setError(message);
       setActiveJobCollectionName(null);
+      toast.error(message);
       return null;
     }
   }, [embedLocalMutation]);
@@ -448,6 +475,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const reEmbedDataset = useCallback(async (input: ReEmbedDatasetInput): Promise<EmbedDatasetResult | null> => {
     setError(null);
     setLastEmbedResult(null);
+    setLastEmbedSource('reembed');
     setActiveJobCollectionName(input.collectionName);
 
     try {
@@ -474,11 +502,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       setLastEmbedResult(result);
       setActiveJobCollectionName(null);
+      notifyEmbedOutcome(result);
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to re-embed dataset';
       setError(message);
       setActiveJobCollectionName(null);
+      toast.error(message);
       return null;
     }
   }, [reEmbedMutation]);
@@ -511,6 +541,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       if (result?.error) {
         setError(result.error);
+        toast.error(`Topic extraction failed: ${result.error}`);
+      } else if (result) {
+        toast.success(
+          `Extracted ${result.numTopics} topics for "${result.collectionName}" in ${result.durationSeconds.toFixed(1)}s`
+        );
       }
 
       setLastTopicsResult(result);
@@ -518,6 +553,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to extract topics';
       setError(message);
+      toast.error(message);
       return null;
     }
   }, [extractTopicsMutation]);
@@ -549,6 +585,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       if (result?.error) {
         setError(result.error);
+        toast.error(`Topic reduction failed: ${result.error}`);
+      } else if (result) {
+        toast.success(
+          `Reduced ${result.numTopicsBefore} → ${result.numTopicsAfter} topics for "${result.collectionName}"`
+        );
       }
 
       setLastReduceResult(result);
@@ -556,6 +597,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to reduce topics';
       setError(message);
+      toast.error(message);
       return null;
     }
   }, [reduceTopicsMutation]);
@@ -587,6 +629,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       if (result?.error) {
         setError(result.error);
+        toast.error(`LLM labeling failed: ${result.error}`);
+      } else if (result) {
+        const parts = [`${result.topicsLabeled}/${result.totalTopics} topics`];
+        if (result.totalSubtopics > 0) {
+          parts.push(`${result.subtopicsLabeled}/${result.totalSubtopics} subtopics`);
+        }
+        toast.success(`Labeled ${parts.join(' and ')} for "${result.collectionName}"`);
       }
 
       setLastLlmLabelsResult(result);
@@ -594,6 +643,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate LLM labels';
       setError(message);
+      toast.error(message);
       return null;
     }
   }, [generateLlmLabelsMutation]);
@@ -886,6 +936,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
     // Last result
     lastEmbedResult,
+    lastEmbedSource,
 
     // Document activations
     computeDocumentActivations,

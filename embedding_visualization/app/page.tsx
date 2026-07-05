@@ -12,6 +12,7 @@ import { useVisualizationPoints } from '../lib/hooks/useVisualizationPoints';
 import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
+import { useProbes } from '../lib/hooks/useProbes';
 import { useTextSearch } from '../lib/hooks/useTextSearch';
 import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/usePromptHighlight';
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
@@ -84,6 +85,14 @@ function HomeContent() {
     selectedCollection,
     method,
     mode,
+  );
+
+  // Embedding-space probes: score/residual fields are merged client-side
+  // (never into the persisted field_analysis cache).
+  const probes = useProbes(selectedCollection, data);
+  const mergedColorFieldOptions = useMemo(
+    () => [...colorFieldOptions, ...probes.fieldOptions],
+    [colorFieldOptions, probes.fieldOptions],
   );
 
   // Sync URL when collection or colorBy changes
@@ -169,7 +178,10 @@ function HomeContent() {
     data?.metadata?.embedding_prompt,
   );
 
-  const { points2d, points3d } = useVisualizationPoints(data, { method, searchQuery });
+  const { points2d, points3d } = useVisualizationPoints(
+    probes.augmentedData ?? data,
+    { method, searchQuery },
+  );
 
   // Resolve a search result ID to its visualization point (used by useAppSearch
   // to auto-select the first result in the same React batch as setSemanticSearchResults).
@@ -418,8 +430,9 @@ function HomeContent() {
                   }}
                   searchQuery={searchQuery}
                   highlightedCount={combinedHighlightedIndices?.size}
-                  colorFieldOptions={colorFieldOptions}
+                  colorFieldOptions={mergedColorFieldOptions}
                   collectionName={selectedCollection}
+                  probes={probes}
                   textSearchResults={textSearchResults}
                   onTextResultClick={wrappedHandlePointClick}
                   activePanel={activePanel}

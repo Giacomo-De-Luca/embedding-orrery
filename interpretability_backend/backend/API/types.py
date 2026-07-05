@@ -773,6 +773,59 @@ class ComputeDocumentActivationsResult:
 
 
 @strawberry.input
+class TrainProbeInput:
+    """Input for training an embedding-space probe on a metadata field."""
+
+    collection_name: str
+    target_field: str
+    kind: str = "ridge"  # ridge | massmean | mlp
+    alpha: float | None = None
+    epochs: int | None = None
+    hidden_dims: list[int] | None = None
+
+
+@strawberry.type
+class ProbeInfo:
+    """A trained probe: target field, kind, metrics, derived field names."""
+
+    target_field: str
+    kind: str
+    score_field: str
+    residual_field: str | None
+    metrics: JSON | None
+    n_train: int
+    n_val: int
+    created_at: str
+
+
+@strawberry.type
+class TrainProbeResult:
+    """Result of a probe training run."""
+
+    collection_name: str
+    probe: ProbeInfo | None
+    duration_seconds: float
+    error: str | None = None
+
+
+@strawberry.type
+class CollectionProbesResult:
+    """All trained probes for a collection."""
+
+    collection_name: str
+    probes: list[ProbeInfo]
+
+
+@strawberry.type
+class ProbeScores:
+    """Per-item probe scores, parallel arrays aligned by index."""
+
+    item_ids: list[str]
+    scores: list[float]
+    residuals: list[float | None] | None
+
+
+@strawberry.input
 class IngestSaeFeaturesInput:
     """Input for ingesting SAE feature parquet."""
 

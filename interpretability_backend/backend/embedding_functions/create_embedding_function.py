@@ -51,7 +51,7 @@ def _ensure_hf_login():
 # Login eagerly so the .env token replaces any stale cached token before
 # any model download is attempted.
 
-try: 
+try:
     _ensure_hf_login()
 except:
     print("Internet not accessible or HF token not in env.")

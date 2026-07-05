@@ -2,6 +2,8 @@
 .claude
 .codex
 .venv
+node_modules
+docs
 __pycache__
 *.py[cod]
 .pytest_cache

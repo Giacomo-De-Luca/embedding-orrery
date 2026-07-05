@@ -96,6 +96,7 @@ embedding_visualization/public/data/*.json
 !embedding_visualization/public/data/collections.json
 
 # General patterns (apply everywhere)
+node_modules/
 .DS_Store
 *.pem
 npm-debug.log*

@@ -101,6 +101,8 @@ Optional — only needed for the corresponding provider or LLM labelling.
 
 ## Documentation
 
+The pages below are also published as a documentation website built from [`docs/`](docs/) (Nextra) — see [`docs/README.md`](docs/README.md) to run or deploy it.
+
 - [`documentation/DATABASE_ARCHITECTURE.md`](documentation/DATABASE_ARCHITECTURE.md) — DuckDB/ChromaDB schema and data flow
 - [`documentation/DOCKER.md`](documentation/DOCKER.md) — Docker setup and SAE cache profile
 - [`documentation/SAE_ARCHITECTURE.md`](documentation/SAE_ARCHITECTURE.md) — SAE storage, ingestion, GraphQL API

@@ -15,12 +15,12 @@ from collections.abc import AsyncGenerator
 
 import strawberry
 
-from ..services.interpret_service import SteeringSpec
 from ..services.progress_emitter import (
     ProgressEvent,
     register_subscriber,
     unregister_subscriber,
 )
+from ..services.steering_types import SteeringSpec
 from ..services.token_emitter import (
     TokenEvent,
     register_token_subscriber,

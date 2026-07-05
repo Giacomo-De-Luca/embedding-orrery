@@ -1,0 +1,66 @@
+{/* Keep the quick-start, seed-collection, pages, and env-var sections in sync with the root README.md */}
+
+# Getting Started
+
+## Requirements
+
+- Python managed by [uv](https://docs.astral.sh/uv/)
+- Node.js 20+
+- No API keys needed for core features — local SentenceTransformers embedding,
+  visualisation, topic extraction, and SAE analysis all run offline.
+
+## Install and run
+
+```bash
+git clone https://github.com/Giacomo-De-Luca/orrery.git
+cd orrery
+
+# Backend
+uv sync
+./start_backend.sh          # GraphQL at http://localhost:8000/graphql
+
+# Frontend (second terminal)
+cd embedding_visualization && npm install && npm run dev   # http://localhost:3000
+```
+
+The app ships with two small demo collections — an `emotion` sample (1000 rows,
+MiniLM, with topic labels) and Gemini-embedded XKCD colours — so it works on a
+fresh clone with no data setup. On first startup the backend copies this seed
+snapshot into the live data stores.
+
+Prefer containers? See [Docker](/docker).
+
+## Pages
+
+- **`/`** — Visualisation dashboard: 2D/3D scatter, semantic and text search,
+  topics, temporal filtering, analytical colouring
+- **`/sae`** — SAE Feature Explorer: activation heatmaps, logit charts, prompt
+  explorer, steering chat
+- **`/collections`** — Dataset management: embed, manage collections, extract
+  topics, configure SAE links
+
+## Environment variables
+
+Optional — only needed for the corresponding provider or LLM labelling.
+
+| Variable | Used for |
+|----------|----------|
+| `GEMINI_API_KEY` | Gemini embedding + LLM topic labelling |
+| `CHROMA_OPENAI_API_KEY` | OpenAI embedding + LLM topic labelling |
+| `CHROMA_COHERE_API_KEY` | Cohere embedding |
+| `CHROMA_HUGGINGFACE_API_KEY` | HuggingFace API embedding provider |
+| `HUGGINGFACE_API_KEY` | HuggingFace gated model access |
+
+Note: live semantic search on the XKCD demo collection needs `GEMINI_API_KEY`
+(its vectors are Gemini-embedded); viewing, colouring, and topics work with no
+key since projections are precomputed.
+
+## Embedding your first dataset
+
+1. Open `http://localhost:3000/collections`
+2. Pick a source: a HuggingFace dataset id, a local CSV/JSON/Parquet file, or
+   pre-computed vectors
+3. Choose an embedding provider (SentenceTransformers runs locally with no key)
+   and start the job — progress streams in real time
+4. When it finishes, open the collection on the dashboard, then extract topics
+   from the collection page to get labelled clusters

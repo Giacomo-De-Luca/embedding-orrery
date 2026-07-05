@@ -19,40 +19,34 @@ to serialise GPU access.
 import asyncio
 import gc
 import logging
-import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import torch
 
-from ..utils.resource_paths import DIRECTIONS_DIR
-from .token_emitter import emit_token
-
-# The interpret/ toolkit uses `interpret.*` absolute imports internally.
-# Ensure its parent directory is on sys.path so those imports resolve
-# when the backend is started from the project root.
-_INTERPRET_PARENT = str(Path(__file__).resolve().parents[2])
-if _INTERPRET_PARENT not in sys.path:
-    sys.path.insert(0, _INTERPRET_PARENT)
-
-from interpret.inference.gemma_pytorch import GemmaPytorchInference  # noqa: E402, I001
-from interpret.sae.exploration.prompt_explorer import (  # noqa: E402
+# The sys.path bootstrap for `interpret.*` absolute imports lives in
+# services/__init__.py, which always runs before this module.
+from interpret.inference.gemma_pytorch import GemmaPytorchInference
+from interpret.sae import paths as sae_paths
+from interpret.sae.exploration.prompt_explorer import (
     PromptExplorer,
     PromptExplorerConfig,
 )
-from interpret.sae.hook_manager import HookManager  # noqa: E402
-from interpret.sae.loading import clear_sae_cache  # noqa: E402
-from interpret.sae.sae_config import (  # noqa: E402
+from interpret.sae.hook_manager import HookManager
+from interpret.sae.loading import clear_sae_cache
+from interpret.sae.sae_config import (
     HOOK_TYPE_FROM_STR,
+    WIDTH_TO_D_SAE,
     GemmaScopeSAEConfig,
     HookType,
-    WIDTH_TO_D_SAE,
 )
-from interpret.sae.source_ids import neuronpedia_source_id  # noqa: E402
-from interpret.sae.steering import SteeringMode, SteeringOp  # noqa: E402
-from interpret.sae import paths as sae_paths  # noqa: E402
+from interpret.sae.source_ids import neuronpedia_source_id
+from interpret.sae.steering import SteeringMode, SteeringOp
+
+from ..utils.resource_paths import DIRECTIONS_DIR
+from .steering_types import SteeringSpec
+from .token_emitter import emit_token
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -146,25 +140,6 @@ class PromptActivationsResult:
     prompt: str
     token_strings: list[str] = field(default_factory=list)
     layers: list[LayerActivationsResult] = field(default_factory=list)
-
-
-@dataclass
-class SteeringSpec:
-    """A single steering specification (service-internal).
-
-    Two mutually exclusive flavours:
-      - SAE feature: ``feature_index`` + ``layer`` + ``hook_type`` + ``width``
-        resolve a direction from ``sae.w_dec``.
-      - Pre-extracted direction: ``direction_name`` resolves a 1-D vector
-        from ``DIRECTION_REGISTRY``. The other fields are ignored.
-    """
-
-    feature_index: int
-    layer: int
-    hook_type: str
-    width: str
-    strength: float
-    direction_name: str | None = None
 
 
 @dataclass

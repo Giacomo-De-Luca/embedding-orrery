@@ -236,11 +236,11 @@
 
   /* Frosted glass tooltip - warm gold tint */
   .frosted-tooltip {
-    background: rgba(255, 245, 230, 0.2);
+    background: rgba(255, 245, 230, 0.28);
     border: 1px solid rgba(255, 215, 140, 0.4);
     border-radius: 12px;
-    padding: 8px 12px;
-    max-width: 280px;
+    padding: 10px 12px;
+    max-width: 320px;
     box-shadow:
       0 4px 16px rgba(200, 160, 80, 0.15),
       0 1px 3px rgba(0, 0, 0, 0.08),

@@ -21,9 +21,9 @@ from ..services.embedding_pipeline import (
     LocalFileEmbeddingPipeline,
     ReEmbeddingPipeline,
 )
-from ..services.interpret_service import SteeringSpec
 from ..services.job_state import JobStatus, get_job_state_service
 from ..services.progress_emitter import emit_progress_sync
+from ..services.steering_types import SteeringSpec
 from ..services.topic_extraction_service import (
     extract_topics as do_extract_topics,
 )
@@ -32,6 +32,7 @@ from .converters import (
     build_embedding_model_config,
     build_hf_embedding_config,
     build_local_file_embedding_config,
+    build_probe_config,
     build_topic_extraction_config,
     convert_topic_infos,
 )
@@ -62,6 +63,7 @@ from .types import (
     ModelStatus,
     PrepareSaeInput,
     PrepareSaeResult,
+    ProbeInfo,
     PromptActivationsResponse,
     PromptDocumentSearchResponse,
     PromptDocumentSearchResult,
@@ -78,6 +80,8 @@ from .types import (
     SaveChatMessageInput,
     SearchDocumentsByPromptInput,
     SteeredGenerationResponse,
+    TrainProbeInput,
+    TrainProbeResult,
     UpdateCollectionMetadataResult,
 )
 
@@ -286,6 +290,56 @@ class Mutation:
             num_topics_before_reduction=result.num_topics_before_reduction,
             reduction_applied=result.reduction_applied,
         )
+
+    @strawberry.mutation
+    async def train_probe(self, input: TrainProbeInput, info=None) -> TrainProbeResult:
+        """Train an embedding-space probe on a numeric metadata field.
+
+        Progress is emitted under job id "{collection_name}_probe"; the
+        mutation resolves when the run finishes (service never raises).
+        """
+        try:
+            config = build_probe_config(input)
+        except ValueError as e:
+            return TrainProbeResult(
+                collection_name=input.collection_name,
+                probe=None,
+                duration_seconds=0.0,
+                error=str(e),
+            )
+
+        # Deferred: probing_service pulls in torch + the interpret/ toolkit,
+        # which must stay out of schema-build time (torch-free demo image).
+        from ..services.probing_service import train_probe_for_collection
+
+        result = await asyncio.to_thread(train_probe_for_collection, config)
+
+        probe = None
+        if result.error is None:
+            probe = ProbeInfo(
+                target_field=result.target_field,
+                kind=result.kind,
+                score_field=result.score_field,
+                residual_field=result.residual_field,
+                metrics=result.metrics,
+                n_train=result.n_train,
+                n_val=result.n_val,
+                created_at="",
+            )
+        return TrainProbeResult(
+            collection_name=result.collection_name,
+            probe=probe,
+            duration_seconds=result.duration_seconds,
+            error=result.error,
+        )
+
+    @strawberry.mutation
+    def delete_probe(
+        self, collection_name: str, target_field: str, kind: str, info=None
+    ) -> bool:
+        """Delete a trained probe and its per-item scores."""
+        db = get_duckdb_client()
+        return db.delete_probe(collection_name, target_field, kind)
 
     @strawberry.mutation
     async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:

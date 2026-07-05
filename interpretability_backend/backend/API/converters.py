@@ -9,6 +9,7 @@ from ..embed_dataset import (
     PortionConfig,
     PortionStrategy,
 )
+from ..services.probing_types import PROBE_KINDS, ProbeConfig
 from ..services.topic_extraction_service import TopicExtractionConfig
 from .types import (
     DataTypeEnum,
@@ -147,6 +148,27 @@ def build_topic_extraction_config(
         reduction_method=reduction_method,
         nr_topics=nr_topics,
         use_ctfidf_for_reduction=use_ctfidf_for_reduction,
+    )
+
+
+def build_probe_config(input) -> ProbeConfig:
+    """Convert GraphQL TrainProbeInput to internal ProbeConfig.
+
+    Optional hyperparams fall back to ProbeConfig defaults; the kind is
+    validated here so bad input fails before any data is loaded.
+    """
+    if input.kind not in PROBE_KINDS:
+        raise ValueError(
+            f"Unknown probe kind {input.kind!r}. Expected one of {PROBE_KINDS}."
+        )
+    defaults = ProbeConfig(collection_name="", target_field="")
+    return ProbeConfig(
+        collection_name=input.collection_name,
+        target_field=input.target_field,
+        kind=input.kind,
+        alpha=input.alpha if input.alpha is not None else defaults.alpha,
+        epochs=input.epochs if input.epochs is not None else defaults.epochs,
+        hidden_dims=list(input.hidden_dims) if input.hidden_dims else None,
     )
 
 

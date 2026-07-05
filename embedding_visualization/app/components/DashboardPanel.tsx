@@ -20,6 +20,7 @@ import type { Point2D, Point3D, SemanticSearchResult, HighlightMap, TopicInfo, T
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
+import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 import { cn } from '@/lib/utils/utils';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
@@ -80,6 +81,8 @@ interface DashboardPanelProps {
   // Feature search (document activations) — combobox multi-select
   featureSearch?: UseDocumentFeatureSearchReturn | null;
   onFeatureSearchResultClick?: (rowIndex: number) => void;
+  // Embedding-space probes (threaded to AnalyticsSidebar)
+  probes?: UseProbesReturn | null;
   // Topic search props (threaded to SearchSidebar)
   topics?: TopicInfo[];
   topicSearchMode?: TopicSearchMode;
@@ -135,6 +138,8 @@ export function DashboardPanel({
   // Feature search (document activations)
   featureSearch,
   onFeatureSearchResultClick,
+  // Embedding-space probes
+  probes,
   // Topic search props
   topics,
   topicSearchMode,
@@ -839,6 +844,7 @@ export function DashboardPanel({
           sharedFilteredCounts={filteredCategoryCounts}
           combinedMutedIndices={combinedMutedIndices}
           colorFieldOptions={colorFieldOptions}
+          probes={probes}
           onCategoryToggle={handleCategoryToggle}
           variant="floating"
           className={cn(

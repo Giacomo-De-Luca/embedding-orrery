@@ -1,5 +1,8 @@
 'use client';
 
+import type { ReactNode } from 'react';
+import { isHexColor, normalizeHex, formatMetadataValue } from '@/lib/utils/tooltipFormat';
+
 interface TooltipData {
   x: number;
   y: number;
@@ -24,21 +27,37 @@ function formatFieldName(field: string): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function truncateValue(value: unknown, maxLen = 200): string {
-  const str = String(value ?? '');
-  return str.length > maxLen ? str.substring(0, maxLen) + '...' : str;
+/** Render a metadata value: color swatch for hex fields, formatted text otherwise. */
+function renderFieldValue(value: unknown): ReactNode {
+  if (isHexColor(value)) {
+    const hex = normalizeHex(value);
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className="inline-block h-3 w-3 shrink-0 rounded-sm ring-1 ring-black/20 dark:ring-white/20"
+          style={{ backgroundColor: hex }}
+        />
+        <span className="font-mono tabular-nums">{hex}</span>
+      </span>
+    );
+  }
+  const isNumber = typeof value === 'number' && Number.isFinite(value);
+  return (
+    <span className={isNumber ? 'tabular-nums' : 'break-words'}>
+      {formatMetadataValue(value)}
+    </span>
+  );
 }
 
 export function FrostedTooltip({ data }: FrostedTooltipProps) {
   if (!data?.visible) return null;
 
-  const truncatedDoc = data.document && data.document.length > 200
-    ? data.document.substring(0, 200) + '...'
-    : data.document;
-
   const extraFields = data.tooltipFields && data.metadata
     ? data.tooltipFields.filter(f => data.metadata![f] !== undefined && data.metadata![f] !== null && data.metadata![f] !== '')
     : [];
+
+  const hasFields = extraFields.length > 0;
+  const hasDocument = Boolean(data.document);
 
   return (
     <div
@@ -50,22 +69,36 @@ export function FrostedTooltip({ data }: FrostedTooltipProps) {
         pointerEvents: 'none',
         zIndex: 1000,
         // Inline backdrop-filter to ensure it works over WebGL canvas
-        backdropFilter: 'blur(8px) saturate(150%)',
+        backdropFilter: 'blur(12px) saturate(150%)',
         WebkitBackdropFilter: 'blur(12px) saturate(150%)',
       }}
     >
-      <div className="font-medium">{data.label}</div>
-      {extraFields.length > 0 && (
-        <div className="text-xs mt-1.5 space-y-0.5 opacity-80">
+      <div className="text-sm font-semibold break-words">{data.label}</div>
+
+      {hasFields && (
+        <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
           {extraFields.map(field => (
-            <div key={field}>
-              <span className="font-medium">{formatFieldName(field)}:</span>{' '}
-              {truncateValue(data.metadata![field])}
+            <div key={field} className="contents">
+              <span className="opacity-60">{formatFieldName(field)}</span>
+              <span className="min-w-0">{renderFieldValue(data.metadata![field])}</span>
             </div>
           ))}
         </div>
       )}
-      {truncatedDoc && <div className="text-sm mt-1 opacity-70">{truncatedDoc}</div>}
+
+      {hasDocument && (
+        <div
+          className={`text-xs break-words opacity-70 ${hasFields ? 'mt-2 border-t border-foreground/15 pt-2' : 'mt-2'}`}
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: 4,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+        >
+          {data.document}
+        </div>
+      )}
     </div>
   );
 }

@@ -14,6 +14,7 @@ from ..clients.local_data_client import (
     get_local_file_preview as get_local_preview,
 )
 from ..services.job_state import JobStatus, get_job_state_service
+from ..services.probing_types import score_field_names as probe_score_field_names
 from .chromadb_instance import get_chromadb_client
 from .duckdb_instance import get_duckdb_client
 from .interpret_instance import get_interpret_service
@@ -24,6 +25,8 @@ from .types import (
     ChatSessionMessage,
     Collection,
     CollectionMetadata,
+    # Probe types
+    CollectionProbesResult,
     DocumentActivationResult,
     DocumentActivationSearchResponse,
     EmbeddingItem,
@@ -39,6 +42,8 @@ from .types import (
     LocalFilePreview,
     # Interpret types
     ModelStatus,
+    ProbeInfo,
+    ProbeScores,
     ProjectionData,
     SaeActivation,
     SaeActivationQuantileGroup,
@@ -413,6 +418,49 @@ class Query:
             duration_seconds=0.0,
             num_topics_before_reduction=topic_data.get("num_topics_before_reduction"),
             reduction_applied=topic_data.get("reduction_applied", False),
+        )
+
+    @strawberry.field
+    def collection_probes(
+        self, collection_name: str, info=None
+    ) -> CollectionProbesResult:
+        """List trained embedding-space probes for a collection."""
+        db = get_duckdb_client()
+        probes = []
+        for p in db.list_probes(collection_name):
+            score_field, residual_field = probe_score_field_names(
+                p["target_field"], p["kind"]
+            )
+            probes.append(
+                ProbeInfo(
+                    target_field=p["target_field"],
+                    kind=p["kind"],
+                    score_field=score_field,
+                    residual_field=residual_field,
+                    metrics=p["metrics"],
+                    n_train=p["n_train"] or 0,
+                    n_val=p["n_val"] or 0,
+                    created_at=p["created_at"],
+                )
+            )
+        return CollectionProbesResult(collection_name=collection_name, probes=probes)
+
+    @strawberry.field
+    def probe_scores(
+        self, collection_name: str, target_field: str, kind: str, info=None
+    ) -> ProbeScores | None:
+        """Per-item scores for one trained probe (parallel arrays), or None."""
+        db = get_duckdb_client()
+        data = db.get_probe_scores(collection_name, target_field, kind)
+        if data is None:
+            return None
+        residuals = data["residuals"]
+        if all(r is None for r in residuals):
+            residuals = None
+        return ProbeScores(
+            item_ids=data["item_ids"],
+            scores=data["scores"],
+            residuals=residuals,
         )
 
     @strawberry.field

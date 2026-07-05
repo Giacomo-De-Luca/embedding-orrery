@@ -625,3 +625,33 @@ export interface ChatSessionQueryResult {
     messages: ChatSessionQueryMessage[];
   } | null;
 }
+
+// ========== Embedding-space probes ==========
+
+export const GET_COLLECTION_PROBES = gql`
+  query GetCollectionProbes($collectionName: String!) {
+    collectionProbes(collectionName: $collectionName) {
+      collectionName
+      probes {
+        targetField
+        kind
+        scoreField
+        residualField
+        metrics
+        nTrain
+        nVal
+        createdAt
+      }
+    }
+  }
+`;
+
+export const GET_PROBE_SCORES = gql`
+  query GetProbeScores($collectionName: String!, $targetField: String!, $kind: String!) {
+    probeScores(collectionName: $collectionName, targetField: $targetField, kind: $kind) {
+      itemIds
+      scores
+      residuals
+    }
+  }
+`;
