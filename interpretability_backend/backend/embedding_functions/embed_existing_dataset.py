@@ -143,9 +143,7 @@ def embed_existing_dataset(
     collection = None
     db_path = str(DB_PATH.resolve())
     DB_PATH.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(
-        path=db_path, settings=Settings(anonymized_telemetry=False)
-    )
+    client = chromadb.PersistentClient(path=db_path, settings=Settings(anonymized_telemetry=False))
 
     try:
         existing_collection = client.get_collection(

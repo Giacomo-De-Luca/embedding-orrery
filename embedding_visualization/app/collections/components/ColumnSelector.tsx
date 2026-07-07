@@ -30,6 +30,12 @@ interface ColumnSelectorProps {
   idColumn: string;
   onIdColumnChange: (column: string) => void;
   dataType?: 'TEXT' | 'IMAGE' | 'VECTOR';
+  /**
+   * Hide the metadata pane / ID selector for flows where they have no
+   * effect (re-embed carries both over from the source dataset).
+   */
+  showMetadataColumns?: boolean;
+  showIdColumn?: boolean;
 }
 
 export function ColumnSelector({
@@ -43,6 +49,8 @@ export function ColumnSelector({
   idColumn,
   onIdColumnChange,
   dataType = 'TEXT',
+  showMetadataColumns = true,
+  showIdColumn = true,
 }: ColumnSelectorProps) {
   const isVectorMode = dataType === 'VECTOR';
   // Validation: check if template references non-selected columns
@@ -90,7 +98,7 @@ export function ColumnSelector({
   return (
     <div className="space-y-6">
       {/* Column selection grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className={`grid grid-cols-1 gap-6 ${showMetadataColumns ? 'md:grid-cols-2' : ''}`}>
         {/* Embedding / Vector column */}
         <div className="space-y-3">
           <div>
@@ -118,25 +126,30 @@ export function ColumnSelector({
               </SelectContent>
             </Select>
           ) : (
-            <ScrollArea className="space-y-2 max-h-60 overflow-y-auto border rounded-md p-3">
-              {columns.map((col) => (
-                <div key={col.name} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`embed-${col.name}`}
-                    checked={selectedEmbeddingColumns.includes(col.name)}
-                    onCheckedChange={(checked) => handleEmbeddingColumnToggle(col.name, checked as boolean)}
-                  />
-                  <Label
-                    htmlFor={`embed-${col.name}`}
-                    className="flex-1 font-normal cursor-pointer flex items-center gap-2"
-                  >
-                    <span>{col.name}</span>
-                    <Badge variant="outline" className="text-xs">
-                      {col.dtype}
-                    </Badge>
-                  </Label>
-                </div>
-              ))}
+            <ScrollArea
+              className="border rounded-md [&>[data-radix-scroll-area-viewport]>div]:block!"
+              viewportClassName="max-h-60"
+            >
+              <div className="space-y-2 p-3">
+                {columns.map((col) => (
+                  <div key={col.name} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`embed-${col.name}`}
+                      checked={selectedEmbeddingColumns.includes(col.name)}
+                      onCheckedChange={(checked) => handleEmbeddingColumnToggle(col.name, checked as boolean)}
+                    />
+                    <Label
+                      htmlFor={`embed-${col.name}`}
+                      className="flex-1 font-normal cursor-pointer flex items-center gap-2"
+                    >
+                      <span>{col.name}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {col.dtype}
+                      </Badge>
+                    </Label>
+                  </div>
+                ))}
+              </div>
             </ScrollArea>
           )}
           {selectedEmbeddingColumns.length === 0 && (
@@ -147,38 +160,46 @@ export function ColumnSelector({
         </div>
 
         {/* Metadata columns */}
-        <div className="space-y-3">
-          <div>
-            <Label className="text-base">Metadata Columns</Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              Additional fields to store (categories, labels, etc.)
-            </p>
-          </div>
-          <div className="space-y-2 max-h-60 overflow-y-auto border rounded-md p-3">
-            {columns.map((col) => (
-              <div key={col.name} className="flex items-center space-x-2">
-                <Checkbox
-                  id={`meta-${col.name}`}
-                  checked={selectedMetadataColumns.includes(col.name)}
-                  onCheckedChange={(checked) => handleMetadataColumnToggle(col.name, checked as boolean)}
-                />
-                <Label
-                  htmlFor={`meta-${col.name}`}
-                  className="flex-1 font-normal cursor-pointer flex items-center gap-2"
-                >
-                  <span>{col.name}</span>
-                  <Badge variant="outline" className="text-xs">
-                    {col.dtype}
-                  </Badge>
-                </Label>
+        {showMetadataColumns && (
+          <div className="space-y-3">
+            <div>
+              <Label className="text-base">Metadata Columns</Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Additional fields to store (categories, labels, etc.)
+              </p>
+            </div>
+            <ScrollArea
+              className="border rounded-md [&>[data-radix-scroll-area-viewport]>div]:block!"
+              viewportClassName="max-h-60"
+            >
+              <div className="space-y-2 p-3">
+                {columns.map((col) => (
+                  <div key={col.name} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`meta-${col.name}`}
+                      checked={selectedMetadataColumns.includes(col.name)}
+                      onCheckedChange={(checked) => handleMetadataColumnToggle(col.name, checked as boolean)}
+                    />
+                    <Label
+                      htmlFor={`meta-${col.name}`}
+                      className="flex-1 font-normal cursor-pointer flex items-center gap-2"
+                    >
+                      <span>{col.name}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {col.dtype}
+                      </Badge>
+                    </Label>
+                  </div>
+                ))}
               </div>
-            ))}
+            </ScrollArea>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Column selection info */}
-      {selectedEmbeddingColumns.length > 0 && (
+      {/* Column selection info (embed-flow copy — talks about metadata
+          duplication rules, which don't apply when the pane is hidden) */}
+      {showMetadataColumns && selectedEmbeddingColumns.length > 0 && (
         <div className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
           {isVectorMode ? (
             <>
@@ -227,27 +248,29 @@ export function ColumnSelector({
       )}
 
       {/* ID column selector */}
-      <div className="space-y-2">
-        <Label htmlFor="id-column">ID Column</Label>
-        <Select value={idColumn} onValueChange={onIdColumnChange}>
-          <SelectTrigger id="id-column">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Auto (sequential IDs)</SelectItem>
-            {columns.map((col) => (
-              <SelectItem key={col.name} value={col.name}>
-                {col.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          {idColumn === 'auto'
-            ? 'IDs will be generated automatically (collection_name_0, collection_name_1, ...)'
-            : `Use values from the '${idColumn}' column as unique identifiers`}
-        </p>
-      </div>
+      {showIdColumn && (
+        <div className="space-y-2">
+          <Label htmlFor="id-column">ID Column</Label>
+          <Select value={idColumn} onValueChange={onIdColumnChange}>
+            <SelectTrigger id="id-column">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto (sequential IDs)</SelectItem>
+              {columns.map((col) => (
+                <SelectItem key={col.name} value={col.name}>
+                  {col.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {idColumn === 'auto'
+              ? 'IDs will be generated automatically (collection_name_0, collection_name_1, ...)'
+              : `Use values from the '${idColumn}' column as unique identifiers`}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

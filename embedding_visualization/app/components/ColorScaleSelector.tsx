@@ -219,9 +219,8 @@ export function ColorScaleSelector() {
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger asChild>
         <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
+          variant="circularghost"
+          size="icon-sm"
           title="Color scale settings"
         >
           <Palette className="h-4 w-4" />

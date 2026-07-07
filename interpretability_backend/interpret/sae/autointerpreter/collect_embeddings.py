@@ -83,7 +83,6 @@ class EmbeddingCollector:
         (e.g. EmbeddingGemma), reusing the embedding factory's helper.
         """
         from huggingface_hub.errors import GatedRepoError
-
         from scripts.utils.embedding_database.create_embedding_function import (
             _ensure_hf_login,
         )

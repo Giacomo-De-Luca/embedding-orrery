@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { subscribeWithSelector } from 'zustand/middleware';
+import { persist, subscribeWithSelector } from 'zustand/middleware';
 import type {
   ColorScale,
   ColorScaleType,
@@ -110,7 +110,7 @@ export type VisualizationStore = VisualizationStoreState & VisualizationStoreAct
 // ---------------------------------------------------------------------------
 
 export const useVisualizationStore = create<VisualizationStore>()(
-  subscribeWithSelector((set) => ({
+  subscribeWithSelector(persist((set) => ({
     // ---- Initial state ----
     method: 'umap',
     mode: '3d',
@@ -207,9 +207,26 @@ export const useVisualizationStore = create<VisualizationStore>()(
       tooltipFields: undefined,
       temporalRange: null,
       hideFilteredPoints: false,
-      mutedPointOpacity: 0.15,
+      mutedPointOpacity: 0.20,
       textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
     }),
+  }), {
+    name: 'viz-preferences',
+    // Persist only global user preferences. Collection-scoped state (colorByField,
+    // colorScale, mutes, temporalRange, tooltipFields, …) keeps its existing
+    // lifecycle: URL params / per-collection defaults / resetForCollectionChange.
+    partialize: (s) => ({
+      method: s.method,
+      mode: s.mode,
+      nebulaMode: s.nebulaMode,
+      showClusterLabels: s.showClusterLabels,
+      showAllClusterLabels: s.showAllClusterLabels,
+      showAxes: s.showAxes,
+      pointOpacity: s.pointOpacity,
+      distanceMetric: s.distanceMetric,
+    }),
+    // SSR renders defaults; rehydrate post-mount (Providers) to avoid hydration mismatch.
+    skipHydration: true,
   }))
 );
 

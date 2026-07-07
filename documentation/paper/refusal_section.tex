@@ -1,0 +1,70 @@
+% §5.3 replacement — refusal direction on Gemma-3-4b-it. Drafted 2026-07-06.
+% Body carries the two equations + headline; full tables go to the appendix (see end of file).
+% Numbers from documentation/refusal_directions 1.md (actadd condition).
+
+\subsection{Refusal is a single direction on Gemma-3-4b-it}
+\label{sec:refusal}
+
+To validate the steering loop end-to-end, we reproduce \citet{arditi2024refusallanguagemodelsmediated} --- \emph{refusal is mediated by a single direction} --- on Gemma-3-4b-it, a model outside their suite. Following the reference, we take the difference-in-means direction at each candidate layer $\ell$,
+%
+\begin{equation}
+    r_\ell \;=\; \frac{1}{|H^{+}|}\!\sum_{x \in H^{+}}\! h_\ell(x) \;-\; \frac{1}{|H^{-}|}\!\sum_{x \in H^{-}}\! h_\ell(x),
+    \label{eq:diffmeans}
+\end{equation}
+%
+over $n=128$ harmful ($H^{+}$) and harmless ($H^{-}$) instructions, read at the end-of-instruction token. The original bypasses refusal by \emph{directional ablation} --- projecting $\hat r = r/\lVert r\rVert$ out of the residual stream at every layer, $h \leftarrow h - (\hat r^{\top} h)\,\hat r$. On Gemma-3 this collapses: its post-norm residual norms reach the thousands, so the projection perturbation drives logits to $\pm\infty$ and the model emits degenerate token loops. We therefore bypass with \emph{activation addition} (ActAdd; \citealp{turner2024steeringlanguagemodelsactivation}), the same additive mechanism as our SAE steering (\S\ref{sec:sae}) --- adding the raw, un-normalised direction at the selected layer $\ell^{*}$,
+%
+\begin{equation}
+    h_{\ell^{*}} \;\leftarrow\; h_{\ell^{*}} + \alpha\, r_{\ell^{*}},
+    \label{eq:actadd}
+\end{equation}
+%
+with $\alpha=-1$ to suppress refusal and $\alpha=+1$ to induce it. The direction is chosen by the reference's three-metric criterion --- the candidate that most reduces refusal subject to a ``surgical'' constraint (KL divergence to the baseline next-token distribution on harmless prompts below $0.1$) and a non-negative induction score (Appendix~\ref{app:refusal}); we sweep over the post-instruction token positions to \emph{extract} the direction, then \emph{inject} it across all token positions of the selected layer $\ell^{*}=14$. ActAdd$(-1)$ drives the substring refusal rate to \textbf{0.00} on both JailbreakBench (from 0.84) and HarmBench-test (from 0.75), while ActAdd$(+1)$ induces refusal on \textbf{100/100} entirely benign prompts (from 4/100). We report both of the paper's judges: alongside the refusal rate, a harmfulness classifier (Llama-Guard-4-12b) confirms the effect is behavioural, not lexical --- attack success rises from 0.11 to \textbf{0.83} on JailbreakBench and 0.21 to \textbf{0.86} on HarmBench-test, with genuinely harmful completions (synthesis instructions, malware, disinformation). The residual weak cell is disinformation (ASR 0.40 / 0.74; Appendix~\ref{app:refusal}), where refusal still drops to zero but the classifier under-flags persuasive-but-false text as harmful --- a limitation of the safety judge, not of the direction. We release the experiment code and the extracted refusal vector to support safety research.
+
+% ---------------------------------------------------------------------------
+% APPENDIX BLOCK — move to the appendix; \label{app:refusal} referenced above.
+% ---------------------------------------------------------------------------
+
+\section{Refusal-direction evaluation}
+\label{app:refusal}
+
+\paragraph{Candidate generation and selection.} Candidate directions are the mean activation difference $r_\ell$ of Eq.~\ref{eq:diffmeans} (128 harmful / 128 harmless instructions, bare Gemma chat template, no system prompt), computed at the \texttt{pre\_attn} residual point and captured at every position of the end-of-instruction window (the templated \texttt{<end\_of\_turn>\textbackslash n<start\_of\_turn>model} suffix, $n_{\mathrm{eoi}}$ token positions) --- an $(n_{\mathrm{eoi}} \times n_{\mathrm{layers}})$ grid of candidates. Each candidate is scored on 32 held-out prompts with three last-position-logit metrics: the \textbf{bypass score} (refusal on harmful-val under ActAdd$(-1)$), the \textbf{induce score} (refusal on harmless-val under ActAdd$(+1)$), and the \textbf{KL divergence} between baseline and intervened next-token distributions on harmless-val. The additive coefficient is fixed at $-1$ (bypass) and $+1$ (induce) throughout: the scale is supplied by the raw, un-normalised $r_\ell$ (norm $\approx 1.5\times10^{3}$ at layer 14), so no steering-strength search is performed --- $\alpha=-1$ subtracts exactly one mean-difference. Following the reference, we discard the top $20\%$ of layers (i.e.\ layers $\geq 27$ of $34$), any candidate with $\mathrm{KL} > 0.1$, and any with a negative induce score; among the survivors we select the lowest bypass score. Note that a candidate is chosen by \emph{extraction} position but the additive intervention is broadcast over \emph{all} token positions of the source layer (\S\ref{sec:refusal}, Eq.~\ref{eq:actadd}); the winning candidate here is \texttt{pre\_attn}, extraction position $-3$, layer $14$.
+
+\paragraph{Evaluation.} Behavioural evaluation greedy-generates 256-token completions and scores each with (i)~the reference substring refusal judge and (ii)~Llama-Guard-4-12b attack-success rate (ASR). We omit the ablation condition from harm scoring: its 0\% refusal is an artifact of the collapse above (degenerate loops the substring judge miscounts as non-refusal), which is precisely why the safety classifier is reported alongside.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llccc@{}}
+\toprule
+Set ($n$) & & base & ActAdd$(-1)$ & ActAdd$(+1)$ \\
+\midrule
+JailbreakBench (100) & refusal & 0.84 & \textbf{0.00} & --- \\
+                     & ASR     & 0.11 & \textbf{0.83} & --- \\
+HarmBench-test (159) & refusal & 0.75 & \textbf{0.00} & --- \\
+                     & ASR     & 0.21 & \textbf{0.86} & --- \\
+Harmless-test (100)  & refusal & 0.04 & ---           & \textbf{1.00} \\
+\bottomrule
+\end{tabular}
+\caption{Refusal rate and harm ASR under activation addition. The single direction controls both refusal and verified harmfulness in both directions.}
+\label{tab:refusal-main}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+HarmBench category & $n$ & base & ActAdd$(-1)$ \\
+\midrule
+chemical\_biological       & 19 & 0.37 & \textbf{1.00} \\
+cybercrime\_intrusion      & 33 & 0.45 & \textbf{1.00} \\
+harassment\_bullying       & 16 & 0.00 & 0.88 \\
+illegal                    & 47 & 0.15 & 0.87 \\
+misinfo\_disinfo           & 27 & 0.15 & 0.74 \\
+harmful                    & 17 & 0.00 & 0.59 \\
+\bottomrule
+\end{tabular}
+\caption{Per-category harm ASR (HarmBench-test). The weakest cells are disinformation and generic ``harmful'', where the model complies but the classifier under-scores the output.}
+\label{tab:refusal-cat}
+\end{table}

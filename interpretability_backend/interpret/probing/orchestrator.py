@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import torch
 import yaml
 
@@ -78,12 +77,10 @@ from interpret.probing.extraction.extract_sae_activations import (
     extract_sae_activations,
 )
 from interpret.probing.manifests.manifest_base import ManifestBuilder
-from interpret.probing.utils.enums import TaskType
 from interpret.probing.probes.mlp_probe import train_mlp_probes
 from interpret.probing.probes.sklearn_probes import (
     train_sklearn_probe,
 )
-from interpret.probing.visualisations import ExperimentVisualiser
 from interpret.probing.sae_analysis.correlation_map import (
     run_correlation_map,
 )
@@ -96,6 +93,8 @@ from interpret.probing.sae_analysis.lasso_alpha_sweep import (
 from interpret.probing.sae_analysis.top_features import (
     run_top_features,
 )
+from interpret.probing.utils.enums import TaskType
+from interpret.probing.visualisations import ExperimentVisualiser
 
 CACHE_ROOT = Path("resources/extracted_activations")
 

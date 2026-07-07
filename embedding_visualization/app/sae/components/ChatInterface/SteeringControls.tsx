@@ -12,6 +12,7 @@ import {
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
 import { cn } from '@/lib/utils/utils';
+import { activeSteeringFeatures } from '@/lib/hooks/useSteeringChat';
 import { useModelIdentityStore, steeringFeatureKey } from '@/lib/stores/useModelIdentityStore';
 import type { SaeFeature } from '@/lib/types/types';
 
@@ -37,6 +38,7 @@ export function SteeringControls({ currentFeature }: SteeringControlsProps) {
   const saeId = useModelIdentityStore((s) => s.saeId);
   const parsedSae = useModelIdentityStore((s) => s.parsedSae);
   const count = config.features.length;
+  const activeCount = activeSteeringFeatures(config.features).length;
 
   const isCurrentAlreadyAdded =
     currentFeature != null &&
@@ -73,8 +75,12 @@ export function SteeringControls({ currentFeature }: SteeringControlsProps) {
         />
         Steering
         {count > 0 && (
-          <Badge variant="secondary" className="ml-auto text-[10px] px-1.5 py-0">
-            {count}
+          <Badge
+            variant="secondary"
+            className="ml-auto text-[10px] px-1.5 py-0"
+            title={`${activeCount} of ${count} features actively steering (strength ≠ 0)`}
+          >
+            {activeCount}/{count}
           </Badge>
         )}
       </CollapsibleTrigger>
@@ -101,11 +107,15 @@ export function SteeringControls({ currentFeature }: SteeringControlsProps) {
               >
                 {/* Per-feature identicon — same visual language as the chat
                     history avatars, seeded from this single feature's label. */}
+                {/* Pulses while the feature is live (strength ≠ 0) — the
+                    visual cue that a preset has been dialled in. */}
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60 ring-1 ring-border/40">
                   <SteeringIdenticon
                     features={[f]}
                     size={16}
                     fallback={<Sparkles className="size-3 text-muted-foreground/70" />}
+                    animation="alternate-pulse"
+                    active={f.strength !== 0}
                   />
                 </span>
 

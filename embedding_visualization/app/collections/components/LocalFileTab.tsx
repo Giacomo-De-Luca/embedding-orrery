@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useLazyQuery } from '@apollo/client/react';
+import { useApolloClient } from '@apollo/client/react';
+import { toast } from 'sonner';
 import { Button } from '@/lib/ui-primitives/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Spinner } from '@/lib/ui-primitives/spinner';
@@ -12,7 +13,14 @@ import { TopicConfigForm } from './TopicConfigForm';
 import type { DataType, EmbedLocalFileInput, ReEmbedDatasetInput, LocalFileInfo, LocalFilePreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
 import type { EmbedSource } from '@/lib/hooks/useEmbedDataset';
 import type { CollectionInfo } from './CollectionManagerTab';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
+import {
+  Combobox,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+} from '@/lib/ui-primitives/combobox';
 import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 
 import { FileUploadZone } from './FileUploadZone';
@@ -87,29 +95,42 @@ export function LocalFileTab({
     randomSeed, setRandomSeed,
   } = form;
 
-  // Lazy query to fetch dataset preview for column detection
-  const [fetchPreview] = useLazyQuery<{ embeddings: Array<{ id: string; document: string | null; metadata: Record<string, unknown> | null }> }>(GET_COLLECTION_PREVIEW);
+  // Fetch a preview of the source dataset to detect its columns. Failures
+  // are surfaced (toast + reset) instead of silently rendering nothing.
+  const client = useApolloClient();
+  const [columnsLoading, setColumnsLoading] = useState(false);
 
   const fetchDatasetColumns = useCallback(async (datasetName: string) => {
-    const { data } = await fetchPreview({
-      variables: { collectionName: datasetName, limit: 10 },
-    });
-    if (data?.embeddings && data.embeddings.length > 0) {
-      // Extract unique metadata keys from preview items
+    setColumnsLoading(true);
+    try {
+      const { data } = await client.query<{ embeddings: Array<{ id: string; document: string | null; metadata: Record<string, unknown> | null }> }>({
+        query: GET_COLLECTION_PREVIEW,
+        variables: { collectionName: datasetName, limit: 10 },
+        fetchPolicy: 'network-only',
+      });
+      // Extract unique metadata keys from preview items; __document__ (the
+      // original embedded text) is always available even when the preview
+      // has no metadata.
       const keys = new Set<string>();
-      for (const item of data.embeddings) {
+      for (const item of data?.embeddings ?? []) {
         if (item.metadata) {
           Object.keys(item.metadata).forEach(k => keys.add(k));
         }
       }
-      // Add __document__ as a virtual column option
-      const cols = ['__document__', ...Array.from(keys).sort()];
-      setDatasetColumns(cols);
+      setDatasetColumns(['__document__', ...Array.from(keys).sort()]);
       // Auto-select __document__ by default
       setSelectedEmbeddingColumns(['__document__']);
       setSelectedMetadataColumns([]);
+    } catch (err) {
+      setSourceDataset(null);
+      setDatasetColumns([]);
+      toast.error(`Could not load columns for "${datasetName}"`, {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
+    } finally {
+      setColumnsLoading(false);
     }
-  }, [fetchPreview, setSelectedEmbeddingColumns, setSelectedMetadataColumns]);
+  }, [client, setSelectedEmbeddingColumns, setSelectedMetadataColumns]);
 
   const autoConfigureColumns = (columns: string[]) => {
     if (columns.length === 0) return;
@@ -174,8 +195,8 @@ export function LocalFileTab({
     await refreshCollections();
   };
 
-  const handleSourceDatasetChange = (value: string) => {
-    if (value === '__none__') {
+  const handleSourceDatasetChange = (value: string | null) => {
+    if (!value) {
       setSourceDataset(null);
       setDatasetColumns([]);
       return;
@@ -274,27 +295,46 @@ export function LocalFileTab({
             </>
           )}
 
-          {/* From Existing Dataset selector */}
+          {/* From Existing Dataset selector (searchable; clear to go back
+              to file mode) */}
           {collections.length > 0 && (
             <div className="space-y-2">
               <Label>Or re-embed from existing dataset:</Label>
-              <Select
-                value={sourceDataset || '__none__'}
+              <Combobox
+                items={collections.map(col => col.name)}
+                value={sourceDataset}
                 onValueChange={handleSourceDatasetChange}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a dataset..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None (use file above)</SelectItem>
-                  {collections.map(col => (
-                    <SelectItem key={col.name} value={col.name}>
-                      {col.name} ({col.numItems} items)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {sourceDatasetInfo && (
+                <ComboboxInput
+                  placeholder="Search collections... (leave empty to use the file above)"
+                  showClear
+                />
+                <ComboboxContent>
+                  <ComboboxEmpty>No collections match.</ComboboxEmpty>
+                  <ComboboxList>
+                    {(name: string) => {
+                      const col = collections.find(c => c.name === name);
+                      return (
+                        <ComboboxItem key={name} value={name}>
+                          <span className="truncate">{name}</span>
+                          {col && (
+                            <span className="ml-auto mr-4 text-xs text-muted-foreground shrink-0">
+                              {col.numItems.toLocaleString()} items
+                            </span>
+                          )}
+                        </ComboboxItem>
+                      );
+                    }}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+              {columnsLoading && (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  <Spinner className="h-3 w-3" />
+                  Loading columns from the source dataset...
+                </p>
+              )}
+              {sourceDatasetInfo && !columnsLoading && (
                 <p className="text-xs text-muted-foreground">
                   Source: {sourceDatasetInfo.numItems} items
                   {sourceDatasetInfo.embeddingModel && ` · Currently embedded with ${sourceDatasetInfo.embeddingModel}`}
@@ -461,7 +501,7 @@ export function LocalFileTab({
                 or select metadata fields to compose new text.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <ColumnSelector
                 columns={datasetColumns.map(name => ({ name, dtype: 'unknown' }))}
                 dataType="TEXT"
@@ -473,7 +513,13 @@ export function LocalFileTab({
                 onTemplateChange={setTextTemplate}
                 idColumn={idColumn}
                 onIdColumnChange={setIdColumn}
+                showMetadataColumns={false}
+                showIdColumn={false}
               />
+              <p className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
+                All metadata fields and item IDs are carried over from the source dataset
+                automatically — re-embedding only computes new vectors.
+              </p>
             </CardContent>
           </Card>
 

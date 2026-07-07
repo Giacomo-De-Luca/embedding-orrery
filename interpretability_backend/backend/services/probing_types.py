@@ -37,6 +37,19 @@ def sanitize_field_key(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
+def binary_target_mapping(values: list[str | None]) -> dict[str, float] | None:
+    """Map a binary categorical column to 0/1 targets, or None if not binary.
+
+    Exactly two distinct non-null values are required (case-sensitive). The
+    mapping is deterministic: the alphabetically first value becomes 0.0 and
+    the second 1.0 (e.g. {"safe": 0.0, "unsafe": 1.0}).
+    """
+    distinct = sorted({v for v in values if v is not None})
+    if len(distinct) != 2:
+        return None
+    return {distinct[0]: 0.0, distinct[1]: 1.0}
+
+
 def score_field_names(target_field: str, kind: str) -> tuple[str, str | None]:
     """Derived metadata field names for a probe's score and residual.
 

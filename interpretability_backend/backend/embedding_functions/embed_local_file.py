@@ -143,7 +143,13 @@ def embed_local_file(
             return embed_images(client, config, rows, total, device, start_time, progress_callback)
         else:  # TEXT
             return embed_text_from_local(
-                client, config, rows, total, device, start_time, progress_callback,
+                client,
+                config,
+                rows,
+                total,
+                device,
+                start_time,
+                progress_callback,
                 cancel_event=cancel_event,
             )
 

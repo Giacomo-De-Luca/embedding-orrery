@@ -4,6 +4,7 @@ import { useEffect, useMemo } from 'react';
 import { useLazyQuery } from '@apollo/client/react';
 import { SEMANTIC_SEARCH } from '@/lib/graphql/queries';
 import { Spinner } from '@/lib/ui-primitives/spinner';
+import { CollapsibleSection } from './CollapsibleSection';
 import {
   FeatureSearchResults,
   type SemanticFeatureResult,
@@ -69,11 +70,7 @@ export function SimilarFeatures({
   if (!featureLabel) return null;
 
   return (
-    <div>
-      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-        Similar Features
-        {results.length > 0 && <span className="ml-1">({results.length})</span>}
-      </h3>
+    <CollapsibleSection title="Similar Features" count={results.length} defaultOpen>
       {loading ? (
         <div className="flex justify-center py-4">
           <Spinner className="h-4 w-4" />
@@ -89,6 +86,6 @@ export function SimilarFeatures({
       ) : (
         <p className="text-xs text-muted-foreground">No similar features found.</p>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

@@ -6,8 +6,7 @@ import { JobProgressBody, type JobProgressBodyProps } from './JobProgressBody';
 /**
  * Blocking modal overlay displaying real-time job progress.
  * All progress logic lives in JobProgressBody / useJobProgress; this wrapper
- * only supplies the full-screen overlay layout. For a non-blocking surface
- * use JobProgressDock instead.
+ * only supplies the centered full-screen overlay layout.
  */
 export function ProgressModal({
   subtitle = 'This may take several minutes for large datasets.',

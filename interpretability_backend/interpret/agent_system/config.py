@@ -100,7 +100,7 @@ def load_config(task_name, variant=None, model_override=None):
     """
     config_path = find_task_config(task_name)
 
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         config = json.load(f)
 
     # Strip _comment keys (used for documentation in example configs)

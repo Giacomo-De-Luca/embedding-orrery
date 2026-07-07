@@ -162,9 +162,7 @@ def embed_huggingface_dataset(
         if not columns:
             # Auto-detect text columns (never embed the internal split tag)
             first_row = rows[0]
-            columns = [
-                k for k, v in first_row.items() if isinstance(v, str) and k != _SPLIT_KEY
-            ]
+            columns = [k for k, v in first_row.items() if isinstance(v, str) and k != _SPLIT_KEY]
             if not columns:
                 return EmbeddingResult(
                     collection_name=config.collection_name,

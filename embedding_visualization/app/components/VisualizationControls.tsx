@@ -1,12 +1,12 @@
 'use client';
 
 import React from 'react';
-import { RadioGroup, RadioGroupItem } from '@/lib/ui-primitives/radio-group';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
+import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import {
   Combobox,
   ComboboxChips,
@@ -19,13 +19,16 @@ import {
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
 import { Slider } from '@/lib/ui-primitives/slider';
-import type { ProjectionMethod, DimensionMode, DistanceMetric } from '../../lib/types/types';
+import type { ProjectionMethod, DimensionMode } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import { ColorScaleSelector } from './ColorScaleSelector';
 import { SaveColorDefaultButton } from './SaveColorDefaultButton';
 import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useShallow } from 'zustand/react/shallow';
+
+const SECTION_HEADER = 'text-xs font-medium uppercase tracking-wider text-muted-foreground';
+const SEGMENT_ITEM = 'text-xs h-7 px-3';
 
 interface VisualizationControlsProps {
   embeddingDim: number;
@@ -38,6 +41,10 @@ interface VisualizationControlsProps {
   nestedColorAvailable?: boolean;
   /** Active collection — enables saving the colouring as its default. */
   collectionName?: string | null;
+  /** Any points currently muted by search/temporal/category filters — gates the filtered-point controls. */
+  hasActiveFilter?: boolean;
+  /** Search highlights exist — gates the highlight-dependent controls. */
+  hasHighlights?: boolean;
 }
 
 export function VisualizationControls({
@@ -47,13 +54,15 @@ export function VisualizationControls({
   availableFields = [],
   nestedColorAvailable,
   collectionName,
+  hasActiveFilter,
+  hasHighlights,
 }: VisualizationControlsProps) {
   const store = useVisualizationStore;
   const {
     method, mode, colorByField, selectedDimensions,
     nebulaMode, hideUnclustered, nestedColorMode, showAxes,
     showClusterLabels, showAllClusterLabels, hideFilteredPoints, mutedPointOpacity,
-    pointOpacity, distanceMetric, tooltipFields,
+    pointOpacity, tooltipFields, showLabels, showOnlyHighlighted,
   } = store(useShallow((s) => ({
     method: s.method,
     mode: s.mode,
@@ -68,8 +77,9 @@ export function VisualizationControls({
     hideFilteredPoints: s.hideFilteredPoints,
     mutedPointOpacity: s.mutedPointOpacity,
     pointOpacity: s.pointOpacity,
-    distanceMetric: s.distanceMetric,
     tooltipFields: s.tooltipFields,
+    showLabels: s.showLabels,
+    showOnlyHighlighted: s.showOnlyHighlighted,
   })));
 
   // Handle field selection with auto-detection of scale type
@@ -86,146 +96,103 @@ export function VisualizationControls({
     store.getState().setColorByField(value, fieldOption.recommendedScale);
   };
 
+  const showLabelsGroup = Boolean(hasHighlights || colorByField);
+
   return (
     <div className="space-y-6">
-        {/* Projection Method */}
+        {/* View: projection method + dimensions + display effects */}
         <div className="space-y-3">
-          <Label className="text-base">Projection Method</Label>
-          <RadioGroup
-            value={method}
-            onValueChange={(value) => store.getState().setMethod(value as ProjectionMethod)}
-          >
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="pca" id="method-pca" />
-              <Label htmlFor="method-pca" className="font-normal cursor-pointer">
-                PCA (Principal Component Analysis)
-              </Label>
-            </div>
-            {metadata?.pca_2d_variance && mode === '2d' && method === 'pca' && (
-              <p className="text-xs text-muted-foreground ml-6">
-                Explained variance: {(metadata.pca_2d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
-              </p>
-            )}
-            {metadata?.pca_3d_variance && mode === '3d' && method === 'pca' && (
-              <p className="text-xs text-muted-foreground ml-6">
-                Explained variance: {(metadata.pca_3d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
-              </p>
-            )}
-
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="umap" id="method-umap" />
-              <Label htmlFor="method-umap" className="font-normal cursor-pointer">
-                UMAP (Uniform Manifold Approximation)
-              </Label>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="manual" id="method-manual" />
-              <Label htmlFor="method-manual" className="font-normal cursor-pointer">
-                Manual Dimension Selection
-              </Label>
-            </div>
-          </RadioGroup>
-        </div>
-
-        <Separator />
-
-        {/* Dimension Mode */}
-        <div className="space-y-3">
-          <Label className="text-base">Dimensions</Label>
-          <RadioGroup
-            value={mode}
-            onValueChange={(value) => store.getState().setMode(value as DimensionMode)}
-          >
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="2d" id="mode-2d" />
-              <Label htmlFor="mode-2d" className="font-normal cursor-pointer">
+          <Label className={SECTION_HEADER}>View</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs text-muted-foreground">Projection</Label>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={method}
+              onValueChange={(v) => v && store.getState().setMethod(v as ProjectionMethod)}
+            >
+              <ToggleGroupItem
+                value="pca"
+                className={SEGMENT_ITEM}
+                aria-label="PCA projection"
+                title="Principal Component Analysis"
+              >
+                PCA
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="umap"
+                className={SEGMENT_ITEM}
+                aria-label="UMAP projection"
+                title="Uniform Manifold Approximation and Projection"
+              >
+                UMAP
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="manual"
+                className={SEGMENT_ITEM}
+                aria-label="Manual dimension selection"
+                title="Pick raw embedding dimensions as axes"
+              >
+                Manual
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs text-muted-foreground">Dimensions</Label>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={mode}
+              onValueChange={(v) => v && store.getState().setMode(v as DimensionMode)}
+            >
+              <ToggleGroupItem value="2d" className={SEGMENT_ITEM} aria-label="2D view">
                 2D
-              </Label>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="3d" id="mode-3d" />
-              <Label htmlFor="mode-3d" className="font-normal cursor-pointer">
+              </ToggleGroupItem>
+              <ToggleGroupItem value="3d" className={SEGMENT_ITEM} aria-label="3D view">
                 3D
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+
+          {metadata?.pca_2d_variance && mode === '2d' && method === 'pca' && (
+            <p className="text-xs text-muted-foreground">
+              Explained variance: {(metadata.pca_2d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
+            </p>
+          )}
+          {metadata?.pca_3d_variance && mode === '3d' && method === 'pca' && (
+            <p className="text-xs text-muted-foreground">
+              Explained variance: {(metadata.pca_3d_variance.reduce((a, b) => a + b, 0) * 100).toFixed(2)}%
+            </p>
+          )}
+
+          {/* Manual dimension selection (axis lines label the hand-picked dimensions) */}
+          {method === 'manual' && (
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">
+                Dimensions (0–{embeddingDim - 1})
               </Label>
-            </div>
-          </RadioGroup>
-        </div>
-
-        {/* Nebula Cluster Effects (3D only) */}
-        {mode === '3d' && (
-          <>
-            <Separator />
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="nebula-mode"
-                checked={nebulaMode ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('nebulaMode', checked === true)}
-              />
-              <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
-                Nebula effects
-              </Label>
-            </div>
-          </>
-        )}
-
-        {/* Manual Dimension Selection */}
-        {method === 'manual' && (
-          <>
-            <Separator />
-            <div className="space-y-3">
-              <Label className="text-base">Select Dimensions (0-{embeddingDim - 1})</Label>
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="dim-x" className="text-xs">Dimension 1 (X-axis)</Label>
-                  <Input
-                    id="dim-x"
-                    type="number"
-                    min={0}
-                    max={embeddingDim - 1}
-                    value={selectedDimensions?.[0] ?? 0}
-                    onChange={(e) => {
-                      const dims = [...(selectedDimensions ?? [0, 1, 2])];
-                      dims[0] = parseInt(e.target.value);
-                      store.getState().setSelectedDimensions(dims);
-                    }}
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="dim-y" className="text-xs">Dimension 2 (Y-axis)</Label>
-                  <Input
-                    id="dim-y"
-                    type="number"
-                    min={0}
-                    max={embeddingDim - 1}
-                    value={selectedDimensions?.[1] ?? 1}
-                    onChange={(e) => {
-                      const dims = [...(selectedDimensions ?? [0, 1, 2])];
-                      dims[1] = parseInt(e.target.value);
-                      store.getState().setSelectedDimensions(dims);
-                    }}
-                  />
-                </div>
-
-                {mode === '3d' && (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="dim-z" className="text-xs">Dimension 3 (Z-axis)</Label>
-                    <Input
-                      id="dim-z"
-                      type="number"
-                      min={0}
-                      max={embeddingDim - 1}
-                      value={selectedDimensions?.[2] ?? 2}
-                      onChange={(e) => {
-                        const dims = [...(selectedDimensions ?? [0, 1, 2])];
-                        dims[2] = parseInt(e.target.value);
-                        store.getState().setSelectedDimensions(dims);
-                      }}
-                    />
-                  </div>
-                )}
+              <div className={mode === '3d' ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'}>
+                {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+                  (i < 2 || mode === '3d') && (
+                    <div key={axis} className="space-y-1">
+                      <Label htmlFor={`dim-${axis.toLowerCase()}`} className="text-xs">
+                        {axis}
+                      </Label>
+                      <Input
+                        id={`dim-${axis.toLowerCase()}`}
+                        type="number"
+                        min={0}
+                        max={embeddingDim - 1}
+                        value={selectedDimensions?.[i] ?? i}
+                        onChange={(e) => {
+                          const dims = [...(selectedDimensions ?? [0, 1, 2])];
+                          dims[i] = parseInt(e.target.value);
+                          store.getState().setSelectedDimensions(dims);
+                        }}
+                      />
+                    </div>
+                  )
+                ))}
               </div>
               <div className="flex items-center space-x-2 pt-1">
                 <Checkbox
@@ -238,14 +205,27 @@ export function VisualizationControls({
                 </Label>
               </div>
             </div>
-          </>
-        )}
+          )}
+
+          {mode === '3d' && (
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="nebula-mode"
+                checked={nebulaMode ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('nebulaMode', checked === true)}
+              />
+              <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
+                Nebula effects
+              </Label>
+            </div>
+          )}
+        </div>
 
         <Separator />
 
-        {/* Color By */}
+        {/* Color */}
         <div className="space-y-3">
-          <Label htmlFor="color-by" className="text-base">Color By</Label>
+          <Label htmlFor="color-by" className={SECTION_HEADER}>Color</Label>
           <div className="flex items-center gap-2">
             <Select
               value={colorByField ?? 'none'}
@@ -268,16 +248,10 @@ export function VisualizationControls({
                 ))}
               </SelectContent>
             </Select>
-            {/* Show scale selector when a field is selected (allows override of auto-detected type) */}
-            {colorByField && (
-              <ColorScaleSelector />
-            )}
+            {/* Scale selector (override of auto-detected type) + save-as-default, when a field is selected */}
+            {colorByField && <ColorScaleSelector />}
+            {colorByField && <SaveColorDefaultButton collectionName={collectionName ?? null} />}
           </div>
-
-          {/* Persist the current colouring as this collection's default */}
-          {colorByField && (
-            <SaveColorDefaultButton collectionName={collectionName ?? null} />
-          )}
 
           {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
           {colorByField &&
@@ -314,73 +288,67 @@ export function VisualizationControls({
               </Label>
             </div>
           )}
-
-          {colorByField && (
-            <div className="flex items-center space-x-2 mt-2">
-              <Checkbox
-                id="show-cluster-labels"
-                checked={showClusterLabels ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('showClusterLabels', checked === true)}
-              />
-              <Label
-                htmlFor="show-cluster-labels"
-                className="font-normal cursor-pointer text-sm"
-              >
-                Show cluster labels
-              </Label>
-            </div>
-          )}
-          {showClusterLabels && (
-            <div className="flex items-center space-x-2 mt-1 ml-6">
-              <Checkbox
-                id="show-all-cluster-labels"
-                checked={showAllClusterLabels ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('showAllClusterLabels', checked === true)}
-              />
-              <Label
-                htmlFor="show-all-cluster-labels"
-                className="font-normal cursor-pointer text-sm"
-              >
-                Show all labels
-              </Label>
-            </div>
-          )}
         </div>
+
+        {/* Labels */}
+        {showLabelsGroup && (
+          <>
+            <Separator />
+            <div className="space-y-3">
+              <Label className={SECTION_HEADER}>Labels</Label>
+
+              {hasHighlights && (
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="show-labels"
+                    checked={showLabels ?? false}
+                    onCheckedChange={(checked) => store.getState().setFlag('showLabels', checked === true)}
+                  />
+                  <Label htmlFor="show-labels" className="font-normal cursor-pointer text-sm">
+                    Label search results
+                  </Label>
+                </div>
+              )}
+
+              {colorByField && (
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="show-cluster-labels"
+                    checked={showClusterLabels ?? false}
+                    onCheckedChange={(checked) => store.getState().setFlag('showClusterLabels', checked === true)}
+                  />
+                  <Label
+                    htmlFor="show-cluster-labels"
+                    className="font-normal cursor-pointer text-sm"
+                  >
+                    Show cluster labels
+                  </Label>
+                </div>
+              )}
+              {colorByField && showClusterLabels && (
+                <div className="flex items-center space-x-2 mt-1 ml-6">
+                  <Checkbox
+                    id="show-all-cluster-labels"
+                    checked={showAllClusterLabels ?? false}
+                    onCheckedChange={(checked) => store.getState().setFlag('showAllClusterLabels', checked === true)}
+                  />
+                  <Label
+                    htmlFor="show-all-cluster-labels"
+                    className="font-normal cursor-pointer text-sm"
+                  >
+                    Show all labels
+                  </Label>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         <Separator />
 
-        {/* Filtered Points */}
+        {/* Points */}
         <div className="space-y-3">
-          <Label className="text-base">Filtered Points</Label>
-
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="hide-filtered"
-              checked={hideFilteredPoints ?? false}
-              onCheckedChange={(checked) => store.getState().setFlag('hideFilteredPoints', checked === true)}
-            />
-            <Label htmlFor="hide-filtered" className="font-normal cursor-pointer text-sm">
-              Hide filtered points
-            </Label>
-          </div>
-
-          {!(hideFilteredPoints) && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm font-normal">Muted opacity factor</Label>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {Math.round((mutedPointOpacity ?? 0.20) * 100)}%
-                </span>
-              </div>
-              <Slider
-                min={0}
-                max={100}
-                step={5}
-                value={[Math.round((mutedPointOpacity ?? 0.20) * 100)]}
-                onValueChange={([v]) => store.getState().setMutedPointOpacity(v / 100)}
-              />
-            </div>
-          )}
+          <Label className={SECTION_HEADER}>Points</Label>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -397,29 +365,50 @@ export function VisualizationControls({
               onValueChange={([v]) => store.getState().setPointOpacity(v / 100)}
             />
           </div>
-        </div>
 
-        <Separator />
+          {hasHighlights && (
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="show-only-highlighted"
+                checked={showOnlyHighlighted ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('showOnlyHighlighted', checked === true)}
+              />
+              <Label htmlFor="show-only-highlighted" className="font-normal cursor-pointer text-sm">
+                Show only highlighted
+              </Label>
+            </div>
+          )}
 
-        {/* Distance Metric */}
-        <div className="space-y-3">
-          <Label htmlFor="distance-metric" className="text-base">Distance Metric</Label>
-          <Select
-            value={distanceMetric ?? 'COSINE'}
-            onValueChange={(value) => store.getState().setDistanceMetric(value as DistanceMetric)}
-          >
-            <SelectTrigger id="distance-metric">
-              <SelectValue placeholder="Select metric" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="COSINE">Cosine Similarity</SelectItem>
-              <SelectItem value="L2">Euclidean (L2)</SelectItem>
-              <SelectItem value="IP">Inner Product</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Used for semantic search similarity calculations
-          </p>
+          {hasActiveFilter && (
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="hide-filtered"
+                checked={hideFilteredPoints ?? false}
+                onCheckedChange={(checked) => store.getState().setFlag('hideFilteredPoints', checked === true)}
+              />
+              <Label htmlFor="hide-filtered" className="font-normal cursor-pointer text-sm">
+                Hide filtered points
+              </Label>
+            </div>
+          )}
+
+          {hasActiveFilter && !hideFilteredPoints && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-normal">Filtered point opacity</Label>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {Math.round((mutedPointOpacity ?? 0.20) * 100)}%
+                </span>
+              </div>
+              <Slider
+                min={0}
+                max={100}
+                step={5}
+                value={[Math.round((mutedPointOpacity ?? 0.20) * 100)]}
+                onValueChange={([v]) => store.getState().setMutedPointOpacity(v / 100)}
+              />
+            </div>
+          )}
         </div>
 
         {/* Show Contours
@@ -443,7 +432,7 @@ export function VisualizationControls({
           <>
             <Separator />
             <div className="space-y-3">
-              <Label className="text-base">Tooltip Fields</Label>
+              <Label className={SECTION_HEADER}>Tooltip Fields</Label>
               <p className="text-xs text-muted-foreground">
                 Extra metadata shown on hover (label + document always shown)
               </p>

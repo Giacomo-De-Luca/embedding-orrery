@@ -30,6 +30,7 @@ from .types import (
     CollectionProbesResult,
     DocumentActivationResult,
     DocumentActivationSearchResponse,
+    DocumentRankingMode,
     EmbeddingItem,
     EmbeddingJob,
     ExtractTopicsResult,
@@ -61,6 +62,20 @@ from .types import (
     TopicInfo,
     TopicKeyword,
 )
+
+
+def _job_model_name(embedding_model) -> str | None:
+    """Model name from a job-config ``embedding_model`` entry.
+
+    HF/local jobs store a dict ``{provider, model_name, ...}`` (via
+    ``_build_job_config``); re-embed jobs historically stored a bare string.
+    Tolerate both so one malformed record can't null the whole jobs list.
+    """
+    if isinstance(embedding_model, dict):
+        return embedding_model.get("model_name")
+    if isinstance(embedding_model, str):
+        return embedding_model
+    return None
 
 
 def _resolve_dataset_name(db, collection_name: str) -> str:
@@ -149,9 +164,7 @@ class Query:
                 # Config summary for display
                 source=job.source,
                 columns=job.config.get("columns"),
-                embedding_model=job.config.get("embedding_model", {}).get("model_name")
-                if job.config.get("embedding_model")
-                else None,
+                embedding_model=_job_model_name(job.config.get("embedding_model")),
                 batch_size=job.config.get("batch_size", 100),
                 started_at=job.started_at,
                 # Full config for resume verification
@@ -419,19 +432,16 @@ class Query:
             duration_seconds=0.0,
             num_topics_before_reduction=topic_data.get("num_topics_before_reduction"),
             reduction_applied=topic_data.get("reduction_applied", False),
+            quality_metrics=topic_data.get("quality_metrics"),
         )
 
     @strawberry.field
-    def collection_probes(
-        self, collection_name: str, info=None
-    ) -> CollectionProbesResult:
+    def collection_probes(self, collection_name: str, info=None) -> CollectionProbesResult:
         """List trained embedding-space probes for a collection."""
         db = get_duckdb_client()
         probes = []
         for p in db.list_probes(collection_name):
-            score_field, residual_field = probe_score_field_names(
-                p["target_field"], p["kind"]
-            )
+            score_field, residual_field = probe_score_field_names(p["target_field"], p["kind"])
             probes.append(
                 ProbeInfo(
                     target_field=p["target_field"],
@@ -442,6 +452,7 @@ class Query:
                     n_train=p["n_train"] or 0,
                     n_val=p["n_val"] or 0,
                     created_at=p["created_at"],
+                    target_mapping=(p["config"] or {}).get("target_mapping"),
                 )
             )
         return CollectionProbesResult(collection_name=collection_name, probes=probes)
@@ -1005,31 +1016,38 @@ class Query:
         collection_name: str,
         feature_indices: list[int],
         limit: int = 50,
+        ranking: DocumentRankingMode = DocumentRankingMode.SCALED_SUM,
         info=None,
-    ) -> list[DocumentActivationResult]:
+    ) -> DocumentActivationSearchResponse:
         """Search documents by explicit SAE feature indices (user-selected from combobox).
 
         Unlike searchDocumentsByFeatures which does label→features→docs in one call,
         this takes pre-selected feature indices directly. Used when the frontend lets
         the user pick specific features from a multi-select combobox.
+        ``totalResults`` is the true number of matching documents (pre-limit).
         """
         db = get_duckdb_client()
-        results = db.search_documents_by_feature_indices(
+        result = db.search_documents_by_feature_indices(
             collection_name=collection_name,
             feature_indices=feature_indices,
             limit=limit,
+            ranking=ranking.value,
         )
-        return [
-            DocumentActivationResult(
-                item_id=r["item_id"],
-                document=r.get("document"),
-                metadata=r.get("metadata"),
-                score=r["score"],
-                matching_features=r["matching_features"],
-                row_index=r.get("row_index"),
-            )
-            for r in results
-        ]
+        return DocumentActivationSearchResponse(
+            results=[
+                DocumentActivationResult(
+                    item_id=r["item_id"],
+                    document=r.get("document"),
+                    metadata=r.get("metadata"),
+                    score=r["score"],
+                    matching_features=r["matching_features"],
+                    row_index=r.get("row_index"),
+                )
+                for r in result["results"]
+            ],
+            total_results=result["total_matches"],
+            matched_feature_count=len(feature_indices),
+        )
 
     @strawberry.field
     def has_document_activations(

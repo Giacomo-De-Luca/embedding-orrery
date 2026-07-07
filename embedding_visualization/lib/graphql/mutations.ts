@@ -458,6 +458,26 @@ export interface ExtractTopicsResult {
   error: string | null;
   numTopicsBeforeReduction: number | null;
   reductionApplied: boolean;
+  // Stored quality scores keyed by level: { topic: {...}, subtopic: {...} }.
+  // Only requested by GET_COLLECTION_TOPICS (absent on the extract mutation).
+  qualityMetrics?: Record<string, Record<string, unknown>> | null;
+}
+
+// ========== Topic Quality Scoring ==========
+
+export interface EvaluateTopicsInput {
+  collectionName: string;
+  level?: string;      // "topic" (default) | "subtopic"
+  metrics?: string[];  // subset of dbcv/silhouette/diversity/coherence_cv/coherence_umass; omit = all
+  sampleSize?: number; // silhouette subsample cap
+}
+
+export interface EvaluateTopicsResult {
+  collectionName: string;
+  level: string;
+  metrics: Record<string, unknown> | null;
+  durationSeconds: number;
+  error: string | null;
 }
 
 export interface ReduceTopicsInput {
@@ -703,6 +723,7 @@ export const TRAIN_PROBE = gql`
         nTrain
         nVal
         createdAt
+        targetMapping
       }
       durationSeconds
       error

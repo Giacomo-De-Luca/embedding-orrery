@@ -6,9 +6,12 @@
 # topic extraction and projections in DuckDB.
 collections = ["emotion"]
 
-# Which projection the projection-space silhouette is computed on.
-# One of: pca_2d, pca_3d, umap_2d, umap_3d
-projection_type = "umap_2d"
+# The projection used for the cluster-space silhouette is read from the
+# extraction's stored config snapshot (the projection the clustering ran on).
+
+# Optional metric selection; omit for all. Names:
+#   "dbcv", "silhouette", "diversity", "coherence_cv", "coherence_umass"
+# metrics = ["silhouette", "diversity", "coherence_cv", "coherence_umass"]
 
 # Which assignment level to score:
 #   "topic"    — the active (possibly reduced) topics

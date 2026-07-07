@@ -29,11 +29,13 @@ import {
 } from './components/FeatureSearchResults';
 import { FeatureStatistics } from './components/FeatureStatistics';
 import { SimilarFeatures } from './components/SimilarFeatures';
+import { CollapsibleSection } from './components/CollapsibleSection';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { PageNav } from '@/app/components/PageNav';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import { Slider } from '@/lib/ui-primitives/slider';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { RUN_PROMPT_ACTIVATIONS } from '@/lib/graphql/mutations';
 import type { PromptActivationsResult } from '@/lib/graphql/mutations';
 import { SAE_TO_COLLECTION, getSemanticCollectionName, getSemanticCollections, parseSaeId } from '@/lib/utils/saeCollections';
@@ -733,7 +735,7 @@ function FeaturesPageContent() {
                   )}
 
                   {/* Scrollable results area */}
-                  <div className="flex-1 min-h-0 overflow-y-auto">
+                  <ScrollArea className="flex-1 min-h-0 [&>[data-radix-scroll-area-viewport]>div]:block!">
                     {activeSearchLoading ? (
                       <div className="flex items-center justify-center gap-2 py-4">
                         <Spinner className="h-4 w-4" />
@@ -779,11 +781,16 @@ function FeaturesPageContent() {
                             : 'Search by label or browse with the arrow buttons.'}
                       </p>
                     )}
-                  </div>
+                  </ScrollArea>
                 </div>
 
                 {/* Right: Feature detail + statistics + similar + activations */}
-                <div className="lg:col-span-2 overflow-y-auto space-y-4">
+                {/* overflow-hidden matters: the ScrollArea root is not a scroll container
+                    (only its viewport is), so without it this grid item's automatic min
+                    height is content-sized and the auto row grows past lg:h-full — the
+                    viewport then never overflows and scrolling dies. */}
+                <ScrollArea className="lg:col-span-2 overflow-hidden [&>[data-radix-scroll-area-viewport]>div]:block!">
+                  <div className="space-y-4">
                   {selectedFeature == null ? (
                     <div className="text-center py-8 text-muted-foreground text-sm">
                       {pairs.length > 1
@@ -837,13 +844,7 @@ function FeaturesPageContent() {
                         />
                       )}
 
-                      <div>
-                        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                          Activations
-                          {activations.length > 0 && (
-                            <span className="ml-1">({activations.length})</span>
-                          )}
-                        </h3>
+                      <CollapsibleSection title="Activations" count={activations.length} defaultOpen>
                         {activationsLoading ? (
                           <div className="flex justify-center py-4">
                             <Spinner className="h-4 w-4" />
@@ -857,14 +858,15 @@ function FeaturesPageContent() {
                             onHoverActivation={setHoveredActivationValue}
                           />
                         )}
-                      </div>
+                      </CollapsibleSection>
                     </>
                   ) : (
                     <div className="text-center py-8 text-muted-foreground text-sm">
                       Feature #{selectedFeature.featureIndex} not found.
                     </div>
                   )}
-                </div>
+                  </div>
+                </ScrollArea>
               </div>
             </div>
           )}

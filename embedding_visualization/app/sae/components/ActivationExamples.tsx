@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { SaeActivation, SaeActivationQuantileGroup } from '@/lib/types/types';
 import { TokenStrip } from './TokenStrip';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 
 interface ActivationExamplesProps {
   activations: SaeActivation[];
@@ -179,7 +180,7 @@ function ActivationCard({
           max: {act.maxValue.toFixed(3)} @ token {act.maxValueTokenIndex}
         </span>
       </div>
-      <div className="max-h-40 overflow-y-auto">
+      <ScrollArea className="[&>[data-radix-scroll-area-viewport]>div]:block!" viewportClassName="max-h-40">
         <TokenStrip
           tokens={act.tokens}
           values={act.values}
@@ -187,7 +188,7 @@ function ActivationCard({
           globalMax={globalMax}
           onHoverActivation={onHoverActivation}
         />
-      </div>
+      </ScrollArea>
     </div>
   );
 }

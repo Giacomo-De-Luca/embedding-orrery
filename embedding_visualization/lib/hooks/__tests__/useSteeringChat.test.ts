@@ -7,7 +7,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { configKey, buildSteeringInputs, buildStreamInput } from '../useSteeringChat';
+import {
+  activeSteeringFeatures,
+  configKey,
+  buildSteeringInputs,
+  buildStreamInput,
+} from '../useSteeringChat';
 import type { SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
 const SAE_PRESET: SteeringFeature = {
@@ -37,6 +42,19 @@ const POETRY_PRESET: SteeringFeature = {
   strength: 0,
   directionName: 'poetry',
 };
+
+describe('activeSteeringFeatures', () => {
+  it('filters strength-0 entries and keeps the rest', () => {
+    const features = [SAE_PRESET, { ...REFUSAL_PRESET, strength: -1 }, POETRY_PRESET];
+    const active = activeSteeringFeatures(features);
+    expect(active).toHaveLength(1);
+    expect(active[0].directionName).toBe('refusal');
+  });
+
+  it('returns empty for an all-inert preset bundle', () => {
+    expect(activeSteeringFeatures([SAE_PRESET, REFUSAL_PRESET, POETRY_PRESET])).toEqual([]);
+  });
+});
 
 describe('buildSteeringInputs', () => {
   it('returns null when all features sit at strength 0', () => {
@@ -92,6 +110,10 @@ describe('buildStreamInput', () => {
 
   it('coalesces an omitted seed to null (non-deterministic)', () => {
     expect(buildStreamInput(TURNS, null, 256, 0.7).seed).toBeNull();
+  });
+
+  it('passes an explicit null seed through (unseeded default in ChatPanel)', () => {
+    expect(buildStreamInput(TURNS, null, 256, 0.7, null).seed).toBeNull();
   });
 
   it('a steered and a baseline call with the same seed share the seed', () => {

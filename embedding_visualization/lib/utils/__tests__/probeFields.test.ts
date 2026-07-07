@@ -8,6 +8,9 @@ import { describe, it, expect } from 'vitest';
 import {
   mergeProbeScores,
   buildProbeFieldOptions,
+  isProbeTargetOption,
+  formatTargetMapping,
+  resolveProbeTargetSelection,
   type ProbeWithScores,
 } from '../probeFields';
 
@@ -172,5 +175,89 @@ describe('buildProbeFieldOptions', () => {
 
   it('returns an empty list for no probes', () => {
     expect(buildProbeFieldOptions([])).toEqual([]);
+  });
+});
+
+describe('isProbeTargetOption', () => {
+  const numericOpt = {
+    field: 'rating',
+    displayName: 'rating',
+    valueType: 'numeric' as const,
+    uniqueCount: 120,
+    recommendedScale: 'sequential' as const,
+  };
+
+  it('accepts numeric fields', () => {
+    expect(isProbeTargetOption(numericOpt)).toBe(true);
+  });
+
+  it('rejects probe-derived fields', () => {
+    expect(
+      isProbeTargetOption({ ...numericOpt, field: 'probe_rating_ridge_score' }),
+    ).toBe(false);
+  });
+
+  it('accepts binary categorical fields (exactly 2 values)', () => {
+    expect(
+      isProbeTargetOption({
+        ...numericOpt,
+        field: 'safety',
+        valueType: 'string',
+        uniqueCount: 2,
+        recommendedScale: 'categorical',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects non-binary categorical fields', () => {
+    expect(
+      isProbeTargetOption({
+        ...numericOpt,
+        field: 'venue',
+        valueType: 'string',
+        uniqueCount: 7,
+        recommendedScale: 'categorical',
+      }),
+    ).toBe(false);
+    expect(
+      isProbeTargetOption({
+        ...numericOpt,
+        field: 'constant',
+        valueType: 'string',
+        uniqueCount: 1,
+        recommendedScale: 'categorical',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('formatTargetMapping', () => {
+  it('renders values sorted by mapped number', () => {
+    expect(formatTargetMapping({ unsafe: 1, safe: 0 })).toBe('safe → 0 · unsafe → 1');
+  });
+
+  it('returns null for missing mapping', () => {
+    expect(formatTargetMapping(null)).toBeNull();
+    expect(formatTargetMapping(undefined)).toBeNull();
+  });
+});
+
+
+describe('resolveProbeTargetSelection', () => {
+  it('clears the explicit selection when coloring by a real field (follow mode)', () => {
+    expect(resolveProbeTargetSelection('rating', 'rating', 'rating')).toBeNull();
+    expect(resolveProbeTargetSelection(null, 'x', 'x')).toBeNull();
+  });
+
+  it('pins the last target when auto-recolor lands on a probe field in follow mode', () => {
+    expect(
+      resolveProbeTargetSelection('probe_safety_massmean_score', null, 'safety'),
+    ).toBe('safety');
+  });
+
+  it('keeps an explicit selection over the last target', () => {
+    expect(
+      resolveProbeTargetSelection('probe_safety_massmean_score', 'other', 'safety'),
+    ).toBe('other');
   });
 });

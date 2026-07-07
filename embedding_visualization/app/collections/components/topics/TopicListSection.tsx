@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Button, buttonVariants } from '@/lib/ui-primitives/button';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Input } from '@/lib/ui-primitives/input';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { X, Pencil, Check, RotateCw } from 'lucide-react';
 import type { ExtractTopicsResult } from '@/lib/graphql/mutations';
 
@@ -44,7 +45,8 @@ export function TopicListSection({
         )}
       </div>
 
-      <div className="space-y-2 max-h-[400px] overflow-y-auto">
+      <ScrollArea className="[&>[data-radix-scroll-area-viewport]>div]:block!" viewportClassName="max-h-[400px]">
+      <div className="space-y-2">
         {(showAllTopics ? result.topics : result.topics.slice(0, 5)).map((topic) => (
           <div key={topic.topicId} className="text-sm border rounded-md p-2 group">
             <div className="flex items-center justify-between mb-1">
@@ -149,6 +151,7 @@ export function TopicListSection({
           </button>
         )}
       </div>
+      </ScrollArea>
 
       <Link
         href={`/?collection=${encodeURIComponent(collectionName)}&colorBy=topic_label`}

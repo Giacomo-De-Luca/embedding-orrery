@@ -9,12 +9,16 @@ type Direction = "ltr" | "rtl"
 
 type ScrollAreaProps = Omit<React.ComponentProps<typeof ScrollAreaPrimitive.Root>, 'dir'> & {
   dir?: Direction | (string & {})
+  /** Height constraints (max-h etc.) must go here, not on the root — the viewport is
+      the scrolling element, and an unconstrained viewport never overflows. */
+  viewportClassName?: string
 }
 
 function ScrollArea({
   className,
   children,
   dir,
+  viewportClassName,
   ...props
 }: ScrollAreaProps) {
   return (
@@ -26,7 +30,10 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+        className={cn(
+          "focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1",
+          viewportClassName
+        )}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

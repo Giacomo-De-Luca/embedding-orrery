@@ -20,6 +20,8 @@ export interface ProbeInfo {
   nTrain: number;
   nVal: number;
   createdAt: string;
+  /** Binary categorical targets only: applied value->0/1 mapping (e.g. {safe: 0, unsafe: 1}). */
+  targetMapping?: Record<string, number> | null;
 }
 
 export interface ProbeScoresData {
@@ -63,6 +65,51 @@ export function mergeProbeScores(
     }
   }
   return merged;
+}
+
+/**
+ * Whether a Color By field option is a valid probe target.
+ *
+ * Numeric fields (except probe-derived ones) train directly; string fields
+ * with exactly two distinct values train as binary 0/1 targets (the backend
+ * maps them alphabetically and reports the mapping on the probe).
+ */
+export function isProbeTargetOption(option: ColorFieldOption): boolean {
+  if (option.field.startsWith('probe_')) return false;
+  if (option.valueType === 'numeric') return true;
+  return option.valueType === 'string' && option.uniqueCount === 2;
+}
+
+/**
+ * Next target-field selection for the probe form when colorByField changes.
+ *
+ * The form defaults to following the active color field. When a probe is
+ * fitted the map auto-recolors to that probe's `probe_*` score field; if the
+ * user was in follow mode (no explicit pick) the followed field would then
+ * resolve to nothing and disable the Fit button. In that case we pin the
+ * field that was just probed (`lastResolvedTarget`) so another kind can be
+ * fitted on it. Coloring by any real field clears back to follow mode.
+ */
+export function resolveProbeTargetSelection(
+  colorByField: string | null,
+  prevSelected: string | null,
+  lastResolvedTarget: string | null,
+): string | null {
+  if (colorByField?.startsWith('probe_')) {
+    return prevSelected ?? lastResolvedTarget;
+  }
+  return null;
+}
+
+/** Human-readable "safe → 0 · unsafe → 1" line for a probe's target mapping. */
+export function formatTargetMapping(
+  mapping: Record<string, number> | null | undefined,
+): string | null {
+  if (!mapping) return null;
+  return Object.entries(mapping)
+    .sort((a, b) => a[1] - b[1])
+    .map(([value, num]) => `${value} → ${num}`)
+    .join(' · ');
 }
 
 function numericRange(values: number[]): { min: number; max: number } {

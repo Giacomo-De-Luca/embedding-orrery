@@ -49,6 +49,8 @@ from .types import (
     EmbedDatasetInput,
     EmbedDatasetResult,
     EmbedLocalFileInput,
+    EvaluateTopicsInput,
+    EvaluateTopicsResult,
     ExtractTopicsInput,
     ExtractTopicsResult,
     GenerateLlmLabelsInput,
@@ -325,6 +327,7 @@ class Mutation:
                 n_train=result.n_train,
                 n_val=result.n_val,
                 created_at="",
+                target_mapping=result.target_mapping,
             )
         return TrainProbeResult(
             collection_name=result.collection_name,
@@ -334,9 +337,7 @@ class Mutation:
         )
 
     @strawberry.mutation
-    def delete_probe(
-        self, collection_name: str, target_field: str, kind: str, info=None
-    ) -> bool:
+    def delete_probe(self, collection_name: str, target_field: str, kind: str, info=None) -> bool:
         """Delete a trained probe and its per-item scores."""
         db = get_duckdb_client()
         return db.delete_probe(collection_name, target_field, kind)
@@ -367,6 +368,52 @@ class Mutation:
             topic_mappings=topic_mappings,
             duration_seconds=result.duration_seconds,
             error=result.error,
+        )
+
+    @strawberry.mutation
+    async def evaluate_topics(self, input: EvaluateTopicsInput, info=None) -> EvaluateTopicsResult:
+        """Score the quality of a collection's active topic extraction.
+
+        Computes the selected metrics (silhouette in the clustering's stored
+        projection space, topic diversity, C_v / U_Mass coherence; DBCV is null
+        for stored labels), persists them on the extraction row keyed by level
+        (re-scoring a level REPLACES that level's stored metrics wholesale —
+        `metrics_computed` records what was run), and emits progress under job
+        id "{collection_name}_evaluate".
+        """
+        # Fail fast on unknown metric names so a typo can't clobber a level's
+        # stored metrics with an empty run. Literal duplicate of
+        # evaluation.quality_metrics.METRIC_NAMES (which can't be imported here
+        # at module level — lean-import boundary); a unit test keeps them in sync.
+        valid_names = {"dbcv", "silhouette", "diversity", "coherence_cv", "coherence_umass"}
+        unknown = set(input.metrics or []) - valid_names
+        if unknown:
+            return EvaluateTopicsResult(
+                collection_name=input.collection_name,
+                level=input.level,
+                error=f"Unknown metric names: {sorted(unknown)}. Valid: {sorted(valid_names)}",
+            )
+
+        # Deferred: the quality service pulls in the clustering stack
+        # (hdbscan → sklearn → scipy) + gensim, which must stay out of
+        # schema-build time (torch-free / lean-import boundary).
+        from ..services.topic_quality_service import score_topic_quality
+
+        result = await asyncio.to_thread(
+            score_topic_quality,
+            collection_name=input.collection_name,
+            level=input.level,
+            metrics=set(input.metrics) if input.metrics else None,
+            sample_size=input.sample_size,
+        )
+
+        error = result.get("error")
+        return EvaluateTopicsResult(
+            collection_name=input.collection_name,
+            level=input.level,
+            metrics=None if error else result,
+            duration_seconds=result.get("duration_seconds", 0.0) or 0.0,
+            error=error,
         )
 
     @strawberry.mutation

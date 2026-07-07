@@ -6,6 +6,12 @@ import type { HighlightMap } from '@/lib/types/types';
 
 type FeatureSearchStatus = 'idle' | 'searching' | 'error';
 
+/** Mirrors the backend DocumentRankingMode GraphQL enum. */
+export type DocumentRankingMode = 'MAX' | 'SUM' | 'SCALED_SUM' | 'MATCHING_FEATURES';
+
+/** How many ranked documents to fetch (drives the scatter-plot highlight map). */
+const FETCH_LIMIT = 100;
+
 interface SaeInfo {
   modelId: string;
   saeId: string;
@@ -29,6 +35,10 @@ export interface UseDocumentFeatureSearchReturn {
   removeFeature: (featureIndex: number) => void;
   clearFeatures: () => void;
 
+  // Ranking
+  rankingMode: DocumentRankingMode;
+  setRankingMode: (mode: DocumentRankingMode) => void;
+
   // Document results
   highlightMap: HighlightMap | undefined;
   results: DocumentActivationResult[];
@@ -50,6 +60,7 @@ export function useDocumentFeatureSearch(
 
   // Selection state
   const [selectedFeatures, setSelectedFeatures] = useState<SelectedFeature[]>([]);
+  const [rankingMode, setRankingMode] = useState<DocumentRankingMode>('SCALED_SUM');
 
   // Document results state
   const [results, setResults] = useState<DocumentActivationResult[]>([]);
@@ -153,6 +164,12 @@ export function useDocumentFeatureSearch(
   // Search documents by selected feature indices
   const searchDocuments = useCallback(
     async (features: SelectedFeature[]) => {
+      // Bump the request id even when clearing, so a clear invalidates any
+      // in-flight request (e.g. the query fired just before a collection
+      // switch resets the selection) instead of letting its late response
+      // repopulate the emptied results.
+      const currentId = ++docRequestId.current;
+
       if (!collectionName || features.length === 0) {
         setResults([]);
         setTotalResults(0);
@@ -161,27 +178,31 @@ export function useDocumentFeatureSearch(
         return;
       }
 
-      const currentId = ++docRequestId.current;
       setStatus('searching');
       setError(null);
 
       try {
         const { data } = await apolloClient.query<{
-          searchDocumentsByFeatureIndices: DocumentActivationResult[];
+          searchDocumentsByFeatureIndices: {
+            results: DocumentActivationResult[];
+            totalResults: number;
+          };
         }>({
           query: SEARCH_DOCUMENTS_BY_FEATURE_INDICES,
           variables: {
             collectionName,
             featureIndices: features.map((f) => f.featureIndex),
+            limit: FETCH_LIMIT,
+            ranking: rankingMode,
           },
           fetchPolicy: 'network-only',
         });
 
         if (docRequestId.current !== currentId) return;
 
-        const docs = data?.searchDocumentsByFeatureIndices ?? [];
-        setResults(docs);
-        setTotalResults(docs.length);
+        const response = data?.searchDocumentsByFeatureIndices;
+        setResults(response?.results ?? []);
+        setTotalResults(response?.totalResults ?? 0);
         setStatus('idle');
       } catch (err) {
         if (docRequestId.current !== currentId) return;
@@ -189,16 +210,13 @@ export function useDocumentFeatureSearch(
         setStatus('error');
       }
     },
-    [collectionName],
+    [collectionName, rankingMode],
   );
 
-  // Trigger document search whenever selectedFeatures changes
-  const selectedFeaturesRef = useRef<SelectedFeature[]>([]);
+  // Trigger document search whenever the selection or ranking mode changes.
+  // The request-id counter in searchDocuments handles overlapping calls.
   useEffect(() => {
-    if (selectedFeaturesRef.current !== selectedFeatures) {
-      selectedFeaturesRef.current = selectedFeatures;
-      searchDocuments(selectedFeatures);
-    }
+    searchDocuments(selectedFeatures);
   }, [selectedFeatures, searchDocuments]);
 
   const addFeature = useCallback(
@@ -245,6 +263,8 @@ export function useDocumentFeatureSearch(
     addFeature,
     removeFeature,
     clearFeatures,
+    rankingMode,
+    setRankingMode,
     highlightMap,
     results,
     totalResults,

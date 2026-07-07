@@ -115,6 +115,26 @@ export function getSemanticCollections(
 /** The metadata field on SAE collection items that holds the feature index */
 export const SAE_FEATURE_INDEX_FIELD = 'index';
 
+/** The metadata field on SAE collection items that holds the feature density */
+export const SAE_FEATURE_DENSITY_FIELD = 'density';
+
+/**
+ * True when the collection's points ARE SAE features (one item per feature,
+ * with Neuronpedia-style metadata as written by prepare_sae_data). Document
+ * collections merely linked to an SAE via `sae_model_id`/`sae_id` carry
+ * saeInfo for the two-hop feature search, but prompt-activation highlighting
+ * (featureIndex -> point) is meaningless for them.
+ */
+export function isSaeFeatureCollection(
+  availableFields: readonly string[] | null | undefined,
+): boolean {
+  if (!availableFields) return false;
+  return (
+    availableFields.includes(SAE_FEATURE_INDEX_FIELD) &&
+    availableFields.includes(SAE_FEATURE_DENSITY_FIELD)
+  );
+}
+
 // ── saeId parsing ──────────────────────────────────────────────────
 
 export type HookType = 'RESID_POST' | 'MLP_OUT' | 'ATTN_OUT';

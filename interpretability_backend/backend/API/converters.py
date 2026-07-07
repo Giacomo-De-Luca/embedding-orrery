@@ -158,9 +158,7 @@ def build_probe_config(input) -> ProbeConfig:
     validated here so bad input fails before any data is loaded.
     """
     if input.kind not in PROBE_KINDS:
-        raise ValueError(
-            f"Unknown probe kind {input.kind!r}. Expected one of {PROBE_KINDS}."
-        )
+        raise ValueError(f"Unknown probe kind {input.kind!r}. Expected one of {PROBE_KINDS}.")
     defaults = ProbeConfig(collection_name="", target_field="")
     return ProbeConfig(
         collection_name=input.collection_name,

@@ -53,10 +53,13 @@ export function SaeMultiSelect({
   const allSelected = selectedSaeIds.length === saeOptions.length && saeOptions.length > 0;
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    // `contents` makes the three children direct items of FeatureHeader's
+    // grid (md+) / flex-wrap (below md) container, so the model select and
+    // chips box land in the same columns as the index nav and search below.
+    <div className="contents">
       {/* Model */}
       <Select value={modelId ?? ''} onValueChange={onModelChange}>
-        <SelectTrigger className="w-44 h-8 text-xs">
+        <SelectTrigger className="w-44 md:w-full h-8 text-xs">
           <SelectValue placeholder="Model" />
         </SelectTrigger>
         <SelectContent>
@@ -69,7 +72,7 @@ export function SaeMultiSelect({
       </Select>
 
       {/* SAEs of the selected model */}
-      <div className="flex-1 min-w-64 max-w-xl">
+      <div className="flex-1 min-w-64 md:min-w-0 max-w-xl">
         <Combobox<string, true> multiple value={selectedSaeIds} onValueChange={onSaeIdsChange}>
           <ComboboxChips ref={chipsRef} className="min-h-8">
             {selectedSaeIds.map((saeId) => {
@@ -104,30 +107,31 @@ export function SaeMultiSelect({
         </Combobox>
       </div>
 
-      {/* All / Clear shortcuts */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 px-2 text-xs"
-        disabled={allSelected}
-        onClick={() => onSaeIdsChange(saeOptions.map((o) => o.saeId))}
-      >
-        All
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 px-2 text-xs"
-        disabled={selectedSaeIds.length === 0}
-        onClick={() => onSaeIdsChange([])}
-      >
-        Clear
-      </Button>
-
-      {/* Selected count badge */}
-      <Badge variant="secondary" className="text-[10px] shrink-0">
-        {selectedSaeIds.length === 1 ? '1 SAE' : `${selectedSaeIds.length} SAEs`}
-      </Badge>
+      {/* All / Clear shortcuts + count — one group so this component
+          contributes exactly three cells to the parent grid */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          disabled={allSelected}
+          onClick={() => onSaeIdsChange(saeOptions.map((o) => o.saeId))}
+        >
+          All
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          disabled={selectedSaeIds.length === 0}
+          onClick={() => onSaeIdsChange([])}
+        >
+          Clear
+        </Button>
+        <Badge variant="secondary" className="text-[10px] shrink-0">
+          {selectedSaeIds.length === 1 ? '1 SAE' : `${selectedSaeIds.length} SAEs`}
+        </Badge>
+      </div>
     </div>
   );
 }

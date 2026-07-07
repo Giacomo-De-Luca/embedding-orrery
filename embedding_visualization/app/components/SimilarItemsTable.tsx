@@ -53,6 +53,17 @@ const EXCLUDE_METADATA_FIELDS = new Set([
   'text',
 ]);
 
+// Overlay-scrollbar wrapper for tall cell content (replaces native overflow-y-auto,
+// whose permanent track looks heavy inside cells). Text styles go on the root and
+// inherit; the height cap must be on the viewport or the cell silently stops scrolling.
+function CellScroll({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <ScrollArea className={className} viewportClassName="max-h-20">
+      {children}
+    </ScrollArea>
+  );
+}
+
 // Convert field name to display name
 function fieldToDisplayName(field: string): string {
   if (field === 'pos') return 'Part of Speech';
@@ -91,13 +102,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       {
         accessorKey: 'id',
         header: 'ID',
-        size: 100,
+        size: 130,
         minSize: 80,
         maxSize: 150,
         cell: ({ row }) => (
-          <div className="font-mono text-xs max-h-[80px] overflow-y-auto">
+          <CellScroll className="font-mono text-xs">
             {row.getValue('id')}
-          </div>
+          </CellScroll>
         ),
       },
       // Label column
@@ -108,9 +119,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         minSize: 100,
         maxSize: 250,
         cell: ({ row }) => (
-          <div className="font-medium max-h-[80px] overflow-y-auto">
+          <CellScroll className="font-medium">
             {row.getValue('label')}
-          </div>
+          </CellScroll>
         ),
       },
       // Similarity column with progress bar
@@ -161,11 +172,11 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         cell: ({ row }) => {
           const category = row.getValue('category') as string;
           return category ? (
-            <div className="max-h-[80px] overflow-y-auto">
+            <CellScroll>
               <Badge variant="outline" className="uppercase">
                 {getCategoryLabel(categoryField ?? null, category)}
               </Badge>
-            </div>
+            </CellScroll>
           ) : null;
         },
       });
@@ -179,10 +190,9 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       minSize: 200,
       maxSize: 500,
       cell: ({ row }) => (
-<div className="text-sm text-muted-foreground whitespace-normal max-h-[80px] overflow-y-auto">
-          
+        <CellScroll className="text-sm text-muted-foreground whitespace-normal">
           {row.getValue('document')}
-        </div>
+        </CellScroll>
       ),
     });
 
@@ -205,24 +215,24 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
               typeof v === 'object' ? JSON.stringify(v) : String(v)
             ).join(', ');
             return (
-              <div className="text-sm whitespace-normal max-h-[80px] overflow-y-auto">
+              <CellScroll className="text-sm whitespace-normal">
                 {preview}{value.length > 2 ? ` (+${value.length - 2} more)` : ''}
-              </div>
+              </CellScroll>
             );
           }
           // Handle objects
           if (typeof value === 'object') {
             return (
-              <div className="text-sm font-mono whitespace-normal max-h-[80px] overflow-y-auto">
+              <CellScroll className="text-sm font-mono whitespace-normal">
                 {JSON.stringify(value)}
-              </div>
+              </CellScroll>
             );
           }
           // Handle primitives
           return (
-            <div className="text-sm whitespace-normal max-h-[80px] overflow-y-auto">
+            <CellScroll className="text-sm whitespace-normal">
               {String(value)}
-            </div>
+            </CellScroll>
           );
         },
       });
@@ -243,16 +253,45 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
     },
   });
 
+  const headerRef = React.useRef<HTMLDivElement>(null);
+  const tableWrapRef = React.useRef<HTMLDivElement>(null);
+
+  // Keep the header description aligned over the second table column. The table uses
+  // table-layout auto, so the ID column can render wider than its configured size —
+  // measure the real width and set the title cell's min-width accordingly.
+  React.useLayoutEffect(() => {
+    const headerEl = headerRef.current;
+    const wrapEl = tableWrapRef.current;
+    if (!headerEl || !wrapEl) return;
+    const firstTh = wrapEl.querySelector<HTMLTableCellElement>('thead th');
+    if (!firstTh) return;
+
+    const update = () => {
+      // 1 = table wrapper border, 8 = cell px-2, 32 = header pl-8, 16 = header gap-4
+      const labelTextLeft = wrapEl.getBoundingClientRect().left + 1 + firstTh.offsetWidth + 8;
+      const titleLeft = headerEl.getBoundingClientRect().left + 32;
+      headerEl.style.setProperty('--title-col', `${Math.max(labelTextLeft - titleLeft - 16, 0)}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(firstTh);
+    ro.observe(wrapEl);
+    return () => ro.disconnect();
+  }, [columns, results]);
+
   if (!results || results.length === 0) {
     return null;
   }
 
   return (
-    <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm">
-      <CardHeader className="flex flex-row items-center gap-4 shrink-0">
-        <CardTitle>{isActivationResults ? 'Top Activated Features' : 'Similar Items'}</CardTitle>
+    <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm py-3 gap-2">
+      {/* pl-8 puts the title on the ID cell text; the title cell's min-width is set by
+          the measurement effect (--title-col) so the description starts over the second
+          column's cell text, tracking the ID column's real rendered width. */}
+      <CardHeader ref={headerRef} className="grid grid-cols-[max-content_1fr_auto] grid-rows-1 items-center gap-4 shrink-0 pl-8">
+        <CardTitle className="text-base leading-5 py-1 min-w-(--title-col,115px)">{isActivationResults ? 'Top Activated Features' : 'Similar Items'}</CardTitle>
         {queryLabel && (
-          <CardDescription className="ml-2">
+          <CardDescription>
             {isActivationResults
               ? <>Features activated by <span className="font-semibold text-foreground">&ldquo;{queryLabel}&rdquo;</span></>
               : <>Items semantically similar to <span className="font-semibold text-foreground">{queryLabel}</span></>
@@ -267,7 +306,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
         )}
       </CardHeader>
       <CardContent className="flex-1 min-h-0">
-        <div className="h-full rounded-md border overflow-hidden">
+        <div ref={tableWrapRef} className="h-full rounded-md border overflow-hidden">
           <ScrollArea className="h-full">
             <Table style={{ minWidth: table.getTotalSize() }}>
               <TableHeader>

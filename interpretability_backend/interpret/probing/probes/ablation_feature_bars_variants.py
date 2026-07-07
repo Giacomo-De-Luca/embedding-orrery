@@ -30,8 +30,8 @@ Driven from
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt

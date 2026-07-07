@@ -315,6 +315,20 @@ export function DashboardPanel({
     return set.size > 0 ? set : null;
   }, [temporallyMutedIndices, searchMutedIndices]);
 
+  // Signals for the Controls sidebar: gate the filtered-point and highlight-dependent controls
+  const hasActiveFilter = combinedMutedIndices !== null || effectiveMutedCategories.length > 0;
+  const hasHighlights = Boolean(highlightedCount && highlightedCount > 0);
+
+  // If highlights disappear while "Show only highlighted" is on, its (now hidden) checkbox
+  // could no longer be unchecked and the plot would stay empty — clear the flag instead.
+  // hideFilteredPoints deliberately gets no such reset: a stale `true` only re-applies once
+  // a new filter mutes points again (desirable continuity), never empties the plot.
+  useEffect(() => {
+    if (!hasHighlights && showOnlyHighlighted) {
+      useVisualizationStore.getState().setFlag('showOnlyHighlighted', false);
+    }
+  }, [hasHighlights, showOnlyHighlighted]);
+
   // Compute per-category filtered counts (points surviving all filters) in a single pass.
   // Shared between Legend and AnalyticsSidebar to avoid duplicate iteration.
   const { filteredCategoryCounts, filteredTopicCounts, filteredSubtopicCounts } = useMemo(() => {
@@ -772,6 +786,8 @@ export function DashboardPanel({
           availableFields={availableFields}
           nestedColorAvailable={nestedColorAvailable}
           collectionName={collectionName}
+          hasActiveFilter={hasActiveFilter}
+          hasHighlights={hasHighlights}
           variant="floating"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
@@ -783,11 +799,6 @@ export function DashboardPanel({
         <SearchSidebar
           searchQuery={searchQuery ?? ''}
           onSearchChange={(value) => useVisualizationStore.getState().setSearchQuery(value)}
-          showOnlyHighlighted={showOnlyHighlighted ?? false}
-          onShowOnlyHighlightedChange={(checked) => useVisualizationStore.getState().setFlag('showOnlyHighlighted', checked)}
-          showLabels={showLabels ?? false}
-          onShowLabelsChange={(checked) => useVisualizationStore.getState().setFlag('showLabels', checked)}
-          hasHighlights={Boolean(highlightedCount && highlightedCount > 0)}
           textSearchResults={textSearchResults}
           selectedPointId={selectedPoint?.id}
           onResultClick={onTextResultClick}

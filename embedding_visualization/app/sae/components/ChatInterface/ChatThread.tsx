@@ -26,6 +26,10 @@ interface ChatThreadProps {
   onEdit?: (messageIndex: number, newContent: string) => void;
   /** Omitted (read-only) in compare mode. Receives the assistant message index. */
   onRegenerate?: (assistantIndex: number) => void;
+  /** True for the unsteered baseline column in compare mode. */
+  isBaseline?: boolean;
+  /** Shows a "Compare with baseline" pill on the empty state (single mode only). */
+  onStartCompare?: () => void;
 }
 
 /**
@@ -42,6 +46,8 @@ export function ChatThread({
   onVote,
   onEdit,
   onRegenerate,
+  isBaseline,
+  onStartCompare,
 }: ChatThreadProps) {
   const { containerRef, endRef, isAtBottom, scrollToBottom } = useScrollToBottom();
 
@@ -52,7 +58,13 @@ export function ChatThread({
 
   return (
     <div className="relative flex-1 overflow-hidden">
-      {isEmpty && <ChatGreeting featureCount={steeringFeatures.length} />}
+      {isEmpty && (
+        <ChatGreeting
+          features={steeringFeatures}
+          isBaseline={isBaseline}
+          onStartCompare={onStartCompare}
+        />
+      )}
 
       <div ref={containerRef} className="absolute inset-0 overflow-y-auto">
         <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">

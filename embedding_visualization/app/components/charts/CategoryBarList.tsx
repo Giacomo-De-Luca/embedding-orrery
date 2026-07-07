@@ -199,7 +199,10 @@ export function CategoryBarList({
       {hasData && (
         <CardContent className="px-0">
           {rows.length > 0 ? (
-            <ScrollArea className="[&>[data-radix-scroll-area-viewport]]:max-h-56">
+            // The block! override stops Radix's display:table viewport wrapper from
+            // growing to the nowrap (truncated) labels' min-content and clipping the
+            // rows' right edge.
+            <ScrollArea className="[&>[data-radix-scroll-area-viewport]]:max-h-56 [&>[data-radix-scroll-area-viewport]>div]:block!">
               <ul className="space-y-0.5 pr-3">
                 {rows.map(row => {
                   const color = colorMap[row.value] ?? FALLBACK_COLOR;
@@ -225,14 +228,14 @@ export function CategoryBarList({
                         {filterActive && (
                           <span
                             aria-hidden
-                            className="absolute inset-y-0 left-0 rounded-l-sm rounded-r-full transition-[width] duration-300"
+                            className="absolute inset-y-0.5 left-0 rounded-r-sm transition-[width] duration-300"
                             style={{ width: barWidth(row.trackFraction), backgroundColor: color, opacity: 0.15 }}
                           />
                         )}
                         <span
                           aria-hidden
-                          className="absolute inset-y-0 left-0 rounded-l-sm rounded-r-full transition-[width] duration-300"
-                          style={{ width: barWidth(fillFraction), backgroundColor: color, opacity: 0.35 }}
+                          className="absolute inset-y-0.5 left-0 rounded-r-sm transition-[width] duration-300"
+                          style={{ width: barWidth(fillFraction), backgroundColor: color, opacity: 0.4 }}
                         />
                         <span className={cn('relative z-10 min-w-0 flex-1 truncate text-xs', isMuted && 'line-through')}>
                           {row.label}

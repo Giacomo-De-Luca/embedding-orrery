@@ -112,6 +112,7 @@ export function AppHeader({
           size="icon"
           onClick={onToggleControls}
           aria-label="Toggle controls panel"
+          title="Visualization controls"
           className="-ml-1"
         >
           <Settings2 className="h-4 w-4" />
@@ -121,6 +122,7 @@ export function AppHeader({
           size="icon"
           onClick={onToggleSearch}
           aria-label="Toggle search panel"
+          title="Search & filters"
         >
           <Search className="h-4 w-4" />
         </Button>
@@ -129,6 +131,7 @@ export function AppHeader({
           size="icon"
           onClick={onToggleAnalytics}
           aria-label="Toggle analytics panel"
+          title="Analytics"
         >
           <BarChart3 className="h-4 w-4" />
         </Button>

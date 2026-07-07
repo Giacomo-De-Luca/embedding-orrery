@@ -201,20 +201,22 @@ function TopicList({
   topicColorMap: Record<string, string>;
 }) {
   return (
-    <div className="max-h-64 overflow-y-auto space-y-0.5 pr-1">
-      {topics.map(topic => (
-        <TopicRow
-          key={topic.topicId}
-          topic={topic}
-          selected={selectedTopicIds.has(topic.topicId)}
-          onToggle={() => onToggleTopic(topic.topicId)}
-          color={topicColorMap[String(topic.topicId)] ?? '#888'}
-        />
-      ))}
-      {topics.length === 0 && (
-        <p className="text-xs text-muted-foreground py-2">No matching topics</p>
-      )}
-    </div>
+    <ScrollArea className="[&>[data-radix-scroll-area-viewport]>div]:block!" viewportClassName="max-h-64">
+      <div className="space-y-0.5 pr-1">
+        {topics.map(topic => (
+          <TopicRow
+            key={topic.topicId}
+            topic={topic}
+            selected={selectedTopicIds.has(topic.topicId)}
+            onToggle={() => onToggleTopic(topic.topicId)}
+            color={topicColorMap[String(topic.topicId)] ?? '#888'}
+          />
+        ))}
+        {topics.length === 0 && (
+          <p className="text-xs text-muted-foreground py-2">No matching topics</p>
+        )}
+      </div>
+    </ScrollArea>
   );
 }
 
@@ -317,17 +319,19 @@ function TopicResultsList({
   topicColorMap: Record<string, string>;
 }) {
   return (
-    <div className="max-h-64 overflow-y-auto space-y-0.5 pr-1">
-      {results.map(r => (
-        <TopicRow
-          key={r.topic.topicId}
-          topic={r.topic}
-          selected={selectedTopicIds.has(r.topic.topicId)}
-          onToggle={() => onToggleTopic(r.topic.topicId)}
-          color={topicColorMap[String(r.topic.topicId)] ?? '#888'}
-          relevanceBar={r.relevance}
-        />
-      ))}
-    </div>
+    <ScrollArea className="[&>[data-radix-scroll-area-viewport]>div]:block!" viewportClassName="max-h-64">
+      <div className="space-y-0.5 pr-1">
+        {results.map(r => (
+          <TopicRow
+            key={r.topic.topicId}
+            topic={r.topic}
+            selected={selectedTopicIds.has(r.topic.topicId)}
+            onToggle={() => onToggleTopic(r.topic.topicId)}
+            color={topicColorMap[String(r.topic.topicId)] ?? '#888'}
+            relevanceBar={r.relevance}
+          />
+        ))}
+      </div>
+    </ScrollArea>
   );
 }

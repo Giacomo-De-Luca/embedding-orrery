@@ -1,7 +1,8 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import type { Point2D, Point3D } from '../../lib/types/types';
 import { HighlightedText } from '../utils/highlightedText';
 
@@ -32,8 +33,9 @@ export function TextSearchResultsList({
         Text matches ({results.length})
       </p>
       <ScrollArea
-        className="rounded-md border"
-        style={{ height: maxHeight }}
+        className="rounded-md border [&>[data-radix-scroll-area-viewport]>div]:block!"
+        viewportClassName="max-h-(--results-max-h)"
+        style={{ '--results-max-h': `${maxHeight}px` } as CSSProperties}
       >
         <div className="p-1">
           {results.map((point) => (
@@ -63,8 +65,6 @@ export function TextSearchResultsList({
             </button>
           ))}
         </div>
-        <ScrollBar orientation="vertical" />
-        <ScrollBar orientation="horizontal" />
       </ScrollArea>
     </div>
   );

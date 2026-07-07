@@ -1,10 +1,11 @@
 # Evaluation
 
 Standalone metrics for scoring embedding analyses, plus config-driven runners.
-This package is intentionally decoupled from the extraction pipeline and from the
-GraphQL/DuckDB layers — it reads existing data, computes scores, and reports them.
-Persisting metrics to DuckDB or exposing them over GraphQL is deliberately **not**
-done here yet (a later decision).
+The metric implementations here are pure (no DB/model). Topic-quality scoring is
+orchestrated by `backend/services/topic_quality_service.py::score_topic_quality`,
+which persists results on the `topic_extractions.quality_metrics` JSON column
+(keyed by level) and is shared by the GraphQL `evaluateTopics` mutation and the
+TOML runner below.
 
 Two independent evaluators live here:
 
@@ -21,7 +22,7 @@ Two independent evaluators live here:
 | File | Purpose |
 |---|---|
 | `quality_metrics.py` | `TopicQualityEvaluator` — topic metric implementations (pure, no DB/model). |
-| `run_evaluation.py` | Config-driven topic-quality runner: loads current labels + projections + embeddings, evaluates, prints a report, writes JSON. |
+| `run_evaluation.py` | Config-driven topic-quality runner: thin caller of `score_topic_quality` (loads current labels + projections, evaluates, persists, prints a report, writes JSON). |
 | `eval_config.toml` | Which collections to evaluate and the metric parameters. |
 | `evaluation_results.json` | Topic-quality output (generated). |
 | `projection_fidelity.py` | `ProjectionFidelityEvaluator` — Mantel-test projection fidelity (pure, no DB/model). |
@@ -42,24 +43,31 @@ listed in `eval_config.toml`.
 
 ## Metrics
 
+Metric selection: pass `metrics = [...]` in the config (or `EvaluateTopicsInput.metrics`
+over GraphQL) to compute a subset — names `dbcv`, `silhouette`, `diversity`,
+`coherence_cv`, `coherence_umass`. C_v is the expensive one on large collections.
+
 | Metric | Measures | Range / direction | Notes |
 |---|---|---|---|
 | **DBCV** | Density-based cluster validity | [-1, 1], higher better | The HDBSCAN-appropriate metric. **Only available from a live fitted model** — `null` when scoring stored labels (see below). |
-| **Silhouette (embedding)** | Are the clusters real in the original vector space | [-1, 1], higher better | Cosine; noise excluded; subsampled to `sample_size`. |
-| **Silhouette (projection)** | Separation in the 2D/3D space clustering ran on | [-1, 1], higher better | Euclidean. Partly circular when clustering was done on the projection — read alongside the embedding-space number. |
+| **Silhouette (cluster space)** | Separation in the space the clustering ran in | [-1, 1], higher better | Euclidean; noise excluded; subsampled to `sample_size`. Result key `silhouette_cluster_space`. |
 | **Topic diversity** | Redundancy across topics | (0, 1], higher = less overlap | Unique words ÷ total words across topics' top-N keywords. |
 | **Coherence C_v** | Keyword interpretability (best human correlation) | typically (0, 1) | gensim `CoherenceModel`. Primary coherence metric. |
 | **Coherence U_Mass** | Keyword co-occurrence | ≤ 0, higher (closer to 0) better | gensim `CoherenceModel`. |
 
-### Projection vs embedding space
-Clustering space is selected by `TopicExtractionConfig.cluster_on`; the **default is
-`"cluster_umap"`** (a fresh BERTopic-style 5-D UMAP on the raw vectors before
-HDBSCAN), with `"projection"` (stored 2D/3D viz coords) and `"embedding"`
-(L2-normalised raw vectors) as alternatives. For extractions clustered on the
-projection, a silhouette on those same coordinates is partly circular (it scores
-the space clustering optimized in) — the embedding-space silhouette is the more
-meaningful "are these clusters real?" number. This circularity caveat does not
-apply to the default `cluster_umap` mode.
+### Why there is no raw-embedding silhouette
+An earlier revision also computed cosine silhouette on the original high-dimensional
+vectors. It was removed after a controlled comparison (emotion, 1k docs): identical
+clusterings (ARI = 1.0) and clearly different-quality clusterings all scored
+~0.05–0.08 in raw 384-D space — cosine distances concentrate in high dimensions, so
+the number cannot discriminate good from bad clusterings and reads as a false
+negative. Measured in the clustering's own reduced space the same clusterings score
+~0.55, tracking human judgment. Silhouette is therefore reported **only in the
+clustering space** (`silhouette_cluster_space`); DBCV is the geometric metric of
+record for HDBSCAN. One caveat: the stored-label scorer uses the extraction's stored
+projection as the silhouette space, which for `cluster_on="cluster_umap"` extractions
+is a *proxy* (the ephemeral 5-D clustering UMAP is not persisted) — the
+`cluster_space` field in the result records this provenance.
 
 ### Coherence uses no embedding model
 C_v / U_Mass are computed against the documents themselves via gensim, so no

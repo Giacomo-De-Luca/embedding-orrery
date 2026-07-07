@@ -35,6 +35,7 @@ from .probing_types import (
     _PREDICTIVE_KINDS,
     PROBE_KINDS,
     ProbeConfig,
+    binary_target_mapping,
     sanitize_field_key,
     score_field_names,
 )
@@ -81,6 +82,9 @@ class ProbeRunResult:
     residual_field: str | None = None
     duration_seconds: float = 0.0
     error: str | None = None
+    # For binary categorical targets: the applied value->0/1 mapping
+    # (e.g. {"safe": 0.0, "unsafe": 1.0}); None for numeric targets.
+    target_mapping: dict | None = None
 
 
 def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
@@ -396,10 +400,26 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
         ids = [r[0] for r in rows]
         y = np.array([np.nan if r[1] is None else float(r[1]) for r in rows], dtype=np.float64)
         n_valid = int(np.isfinite(y).sum())
+        target_mapping: dict[str, float] | None = None
+        if n_valid < MIN_VALID_SAMPLES:
+            # Not usable as numbers — try a binary categorical column
+            # (e.g. "safe"/"unsafe" -> 0/1). Mapping is deterministic
+            # (alphabetical: first value -> 0) and surfaced in the UI.
+            text_rows = db.get_text_metadata_field(dataset_name, config.target_field)
+            values = [r[1] for r in text_rows]
+            target_mapping = binary_target_mapping(values)
+            if target_mapping is not None:
+                ids = [r[0] for r in text_rows]
+                y = np.array(
+                    [np.nan if v is None else target_mapping[v] for v in values],
+                    dtype=np.float64,
+                )
+                n_valid = int(np.isfinite(y).sum())
         if n_valid < MIN_VALID_SAMPLES:
             raise ProbeTrainingError(
-                f"Field {config.target_field!r} has {n_valid} usable numeric "
-                f"values; at least {MIN_VALID_SAMPLES} are required."
+                f"Field {config.target_field!r} has {n_valid} usable values; at least "
+                f"{MIN_VALID_SAMPLES} are required. Targets must be numeric or a binary "
+                "categorical column (exactly two distinct values)."
             )
 
         _progress(1, f"Loading {len(ids)} embedding vectors...")
@@ -425,7 +445,7 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             config.collection_name,
             config.target_field,
             config.kind,
-            config=asdict(config),
+            config={**asdict(config), "target_mapping": target_mapping},
             metrics=core.metrics,
             direction=core.direction,
             scaler_mean=core.scaler_mean,
@@ -450,6 +470,7 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
         result.n_train = core.n_train
         result.n_val = core.n_val
         result.n_scored = len(ids)
+        result.target_mapping = target_mapping
         result.duration_seconds = time.time() - start_time
         _progress(4, "Probe complete.", status="completed")
         logger.info(

@@ -77,6 +77,7 @@ class EmbeddingResult:
     embedding_provider: str | None = None
     embedding_model: str | None = None
 
+
 @dataclass(kw_only=True)
 class BaseConfig:
     """base configuration for embedding collections"""

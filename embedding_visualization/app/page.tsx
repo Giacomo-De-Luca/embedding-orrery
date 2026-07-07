@@ -19,7 +19,7 @@ import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch'
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
 import type { HighlightMap, ColorScale } from '../lib/types/types';
-import { getSaeInfo, getSaeInfoFromMetadata } from '../lib/utils/saeCollections';
+import { getSaeInfo, getSaeInfoFromMetadata, isSaeFeatureCollection } from '../lib/utils/saeCollections';
 import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
@@ -221,8 +221,11 @@ function HomeContent() {
 
   // SAE prompt activation highlight — prefer metadata-based lookup, fall back to hardcoded
   const saeInfo = getSaeInfoFromMetadata(data?.metadata) ?? getSaeInfo(selectedCollection);
+  // Prompt activation only applies when the points themselves are SAE features;
+  // document collections linked to an SAE keep saeInfo for the feature search.
+  const saeFeatureInfo = isSaeFeatureCollection(data?.availableFields) ? saeInfo : null;
   const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(null);
-  const promptHighlight = usePromptHighlight(saeInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
+  const promptHighlight = usePromptHighlight(saeFeatureInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
 
   // Document feature search (two-hop: label → features → documents)
   const featureSearch = useDocumentFeatureSearch(selectedCollection, saeInfo);
@@ -417,7 +420,7 @@ function HomeContent() {
                   promptHighlightStatus={promptHighlight.status}
                   promptHighlightError={promptHighlight.error}
                   promptHighlightActivePrompt={promptHighlight.activePrompt}
-                  onPromptHighlightSubmit={promptHighlight.submit}
+                  onPromptHighlightSubmit={saeFeatureInfo ? promptHighlight.submit : undefined}
                   onPromptHighlightClear={promptHighlight.clear}
                   promptHighlightResults={promptHighlightResults}
                   promptMaxDensity={promptMaxDensity}

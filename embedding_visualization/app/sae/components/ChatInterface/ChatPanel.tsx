@@ -1,13 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Columns2, Dices, Download, History, PanelRightIcon, RotateCcw } from 'lucide-react';
+import { Columns2, Dices, Download, History, PanelRightIcon, SquarePen } from 'lucide-react';
 import { useLazyQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils/utils';
 import { Button } from '@/lib/ui-primitives/button';
 import { Input } from '@/lib/ui-primitives/input';
 import { Slider } from '@/lib/ui-primitives/slider';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
 import {
   configKey,
   useSteeringChat,
@@ -49,6 +51,33 @@ interface ChatPanelProps {
 /** Baseline (no steering) config — stable identity so the baseline hook never auto-resets. */
 const EMPTY_CONFIG: SteeringConfig = { features: [] };
 
+/** Random seed for reproducible sampling (dice button + compare auto-roll). */
+const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
+
+/** Chat-header icon button with a tooltip (the icons alone are cryptic). */
+function HeaderIconButton({
+  label,
+  children,
+  className,
+  ...buttonProps
+}: { label: string } & ComponentProps<typeof Button>) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon"
+          {...buttonProps}
+          className={cn('size-7 text-muted-foreground', className)}
+        >
+          {children}
+          <span className="sr-only">{label}</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ChatPanel({
   currentFeature,
   onClose,
@@ -67,7 +96,17 @@ export function ChatPanel({
   const steeringConfig = useModelIdentityStore((s) => s.steeringConfig);
   const [maxTokens, setMaxTokens] = useState(256);
   const [temperature, setTemperature] = useState(0.7);
-  const [seed, setSeed] = useState(42);
+  // null = unseeded (natural sampling). Compare mode auto-rolls a seed.
+  // seedText is the free-form input draft — it can transiently disagree with
+  // `seed` while typing (e.g. "-5" is rejected → unseeded) and snaps back to
+  // the committed value on blur, so the display never lies about the seed.
+  const [seed, setSeed] = useState<number | null>(null);
+  const [seedText, setSeedText] = useState('');
+
+  const applySeed = useCallback((value: number | null) => {
+    setSeed(value);
+    setSeedText(value?.toString() ?? '');
+  }, []);
   const [showHistory, setShowHistory] = useState(false);
   const [compareMode, setCompareMode] = useState(false);
   const prevLoadedRef = useRef<ChatMessageType[] | null | undefined>(undefined);
@@ -185,12 +224,17 @@ export function ChatPanel({
   }, [steeredReset, baselineReset, onNewChat]);
 
   // Toggling compare mode resets both threads for a clean side-by-side comparison.
+  // Entering compare with no seed rolls one, so steered-vs-baseline differences
+  // stay attributable to steering rather than sampling noise. The rolled seed
+  // deliberately survives compare exit (visible + reproducible); clear the
+  // field manually to return to natural sampling.
   const handleToggleCompare = useCallback(() => {
     steeredReset();
     baselineReset();
     onNewChat?.();
+    if (!compareMode && seed == null) applySeed(rollSeed());
     setCompareMode((v) => !v);
-  }, [steeredReset, baselineReset, onNewChat]);
+  }, [steeredReset, baselineReset, onNewChat, compareMode, seed, applySeed]);
 
   const handleRegenerate = useCallback(
     (assistantMessageIndex: number) => {
@@ -273,53 +317,35 @@ export function ChatPanel({
         <div className="flex items-center justify-between px-4 pt-4 pb-0">
           <h2 className="text-sm font-semibold">Steered Chat</h2>
           <div className="flex items-center gap-1">
-            <Button
-              size="icon"
+            <HeaderIconButton
+              label={compareMode ? 'Exit compare mode' : 'Compare with baseline'}
               variant={compareMode ? 'secondary' : 'ghost'}
               onClick={handleToggleCompare}
-              className="size-7 text-muted-foreground"
             >
               <Columns2 className="size-3.5" />
-              <span className="sr-only">Toggle compare mode</span>
-            </Button>
-            <Button
-              size="icon"
+            </HeaderIconButton>
+            <HeaderIconButton
+              label="History"
               variant={showHistory ? 'secondary' : 'ghost'}
               onClick={() => setShowHistory((v) => !v)}
-              className="size-7 text-muted-foreground"
             >
               <History className="size-3.5" />
-              <span className="sr-only">Toggle history</span>
-            </Button>
-            <Button
-              size="icon"
+            </HeaderIconButton>
+            <HeaderIconButton
+              label="Download chat as JSON"
               variant="ghost"
               onClick={handleDownload}
               disabled={!canDownload}
-              className="size-7 text-muted-foreground"
             >
               <Download className="size-3.5" />
-              <span className="sr-only">Download chat as JSON</span>
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={handleNewChat}
-              className="size-7 text-muted-foreground"
-            >
-              <RotateCcw className="size-3.5" />
-              <span className="sr-only">New chat</span>
-            </Button>
+            </HeaderIconButton>
+            <HeaderIconButton label="New chat" variant="ghost" onClick={handleNewChat}>
+              <SquarePen className="size-3.5" />
+            </HeaderIconButton>
             {onClose && (
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={onClose}
-                className="size-7 text-muted-foreground"
-              >
+              <HeaderIconButton label="Close chat" variant="ghost" onClick={onClose}>
                 <PanelRightIcon className="size-3.5" />
-                <span className="sr-only">Close chat</span>
-              </Button>
+              </HeaderIconButton>
             )}
           </div>
         </div>
@@ -359,27 +385,36 @@ export function ChatPanel({
               {temperature.toFixed(2)}
             </span>
           </div>
-          {/* One shared seed for both threads. It is re-applied verbatim each
-              turn (not advanced), so compare-mode differences stay attributable
-              to steering rather than sampling noise; dice for variety. */}
+          {/* One shared seed for both threads, re-applied verbatim each turn
+              (not advanced). Empty = natural sampling; entering compare mode
+              auto-rolls one so differences stay attributable to steering. */}
           <div className="flex items-center gap-3">
             <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Seed</span>
-            <Input
-              type="number"
-              value={seed}
-              onChange={(e) => setSeed(Number(e.target.value) || 0)}
-              className="h-7 flex-1 font-mono text-[11px]"
-              aria-label="Generation seed"
-            />
+            <div className="flex-1" />
             <Button
               size="icon"
               variant="ghost"
-              onClick={() => setSeed(Math.floor(Math.random() * 2 ** 31))}
+              onClick={() => applySeed(rollSeed())}
               className="size-7 shrink-0 text-muted-foreground"
             >
               <Dices className="size-3.5" />
               <span className="sr-only">Randomize seed</span>
             </Button>
+            <Input
+              type="number"
+              min={0}
+              value={seedText}
+              placeholder="random"
+              onChange={(e) => {
+                const raw = e.target.value;
+                setSeedText(raw);
+                const n = Math.floor(Number(raw));
+                setSeed(raw !== '' && Number.isFinite(n) && n >= 0 ? n : null);
+              }}
+              onBlur={() => setSeedText(seed?.toString() ?? '')}
+              className="no-spinner h-7 w-24 shrink-0 px-2 text-right font-mono text-[10px]! tabular-nums"
+              aria-label="Generation seed (empty for natural sampling)"
+            />
           </div>
         </div>
 
@@ -410,6 +445,7 @@ export function ChatPanel({
                 steeringFeatures={EMPTY_CONFIG.features}
                 votes={votes}
                 onVote={handleVote}
+                isBaseline
               />
             </div>
           </div>
@@ -423,6 +459,7 @@ export function ChatPanel({
             onVote={handleVote}
             onEdit={steeredEdit}
             onRegenerate={handleRegenerate}
+            onStartCompare={handleToggleCompare}
           />
         )}
 

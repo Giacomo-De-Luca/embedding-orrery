@@ -160,8 +160,7 @@ class ProjectionFidelityEvaluator:
         for name in lengths:
             if name not in usable:
                 logger.warning(
-                    "Distance %r is not a usable condensed vector of length %d "
-                    "(got %d); skipping",
+                    "Distance %r is not a usable condensed vector of length %d (got %d); skipping",
                     name,
                     n_pairs,
                     lengths[name],

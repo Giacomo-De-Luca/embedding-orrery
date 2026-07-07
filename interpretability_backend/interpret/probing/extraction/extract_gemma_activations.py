@@ -33,7 +33,7 @@ from interpret.probing.utils.enums import TokenPosition
 def extract_gemma_activations(
     config: GemmaExtractionConfig,
     samples: list[str],
-    model: "GemmaPytorchInference",  # noqa: F821 — avoid heavy import
+    model: GemmaPytorchInference,  # noqa: F821 — avoid heavy import
 ) -> ActivationDataset:
     """Run inference over `samples` (text mode) and collect activations.
 
@@ -122,7 +122,7 @@ def extract_gemma_activations(
 def extract_gemma_activations_from_dataframe(
     config: GemmaExtractionConfig,
     manifest_df: pd.DataFrame,
-    model: "GemmaPytorchInference",  # noqa: F821
+    model: GemmaPytorchInference,  # noqa: F821
 ) -> ActivationDataset:
     """Image / multimodal mode: iterate DataFrame rows, use `image_column`."""
     if config.image_column is None:

@@ -278,6 +278,22 @@ export const GENERATE_LLM_LABELS = gql`
 `;
 
 /**
+ * Mutation to score the quality of a collection's active topic extraction.
+ * Metrics are persisted server-side on the extraction row, keyed by level.
+ */
+export const EVALUATE_TOPICS = gql`
+  mutation EvaluateTopics($input: EvaluateTopicsInput!) {
+    evaluateTopics(input: $input) {
+      collectionName
+      level
+      metrics
+      durationSeconds
+      error
+    }
+  }
+`;
+
+/**
  * Subscription to receive real-time progress updates for topic extraction
  */
 export const TOPIC_EXTRACTION_PROGRESS_SUBSCRIPTION = gql`
@@ -319,6 +335,7 @@ export const GET_COLLECTION_TOPICS = gql`
       }
       numTopicsBeforeReduction
       reductionApplied
+      qualityMetrics
     }
   }
 `;
@@ -515,24 +532,30 @@ export const SEARCH_DOCUMENTS_BY_FEATURES = gql`
 
 /**
  * Search documents by explicit SAE feature indices (user-selected from combobox).
+ * totalResults is the true number of matching documents (pre-limit).
  */
 export const SEARCH_DOCUMENTS_BY_FEATURE_INDICES = gql`
   query SearchDocumentsByFeatureIndices(
     $collectionName: String!
     $featureIndices: [Int!]!
-    $limit: Int = 50
+    $limit: Int = 100
+    $ranking: DocumentRankingMode = SCALED_SUM
   ) {
     searchDocumentsByFeatureIndices(
       collectionName: $collectionName
       featureIndices: $featureIndices
       limit: $limit
+      ranking: $ranking
     ) {
-      itemId
-      document
-      metadata
-      score
-      matchingFeatures
-      rowIndex
+      results {
+        itemId
+        document
+        metadata
+        score
+        matchingFeatures
+        rowIndex
+      }
+      totalResults
     }
   }
 `;
@@ -641,6 +664,7 @@ export const GET_COLLECTION_PROBES = gql`
         nTrain
         nVal
         createdAt
+        targetMapping
       }
     }
   }

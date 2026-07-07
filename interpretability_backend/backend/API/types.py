@@ -208,6 +208,32 @@ class ExtractTopicsResult:
     num_topics_before_reduction: int | None = None
     reduction_applied: bool = False
 
+    # Stored quality metrics, keyed by level: {"topic": {...}, "subtopic": {...}}
+    quality_metrics: JSON | None = None
+
+
+@strawberry.input
+class EvaluateTopicsInput:
+    """Input for scoring the quality of a collection's active topic extraction."""
+
+    collection_name: str
+    level: str = "topic"  # "topic" or "subtopic" (pre-reduction clusters)
+    # Subset of {"dbcv","silhouette","diversity","coherence_cv","coherence_umass"};
+    # None = all. DBCV is null for stored labels (needs the live fitted model).
+    metrics: list[str] | None = None
+    sample_size: int = 10000  # silhouette subsample cap
+
+
+@strawberry.type
+class EvaluateTopicsResult:
+    """Result of topic-quality scoring (also persisted on the extraction row)."""
+
+    collection_name: str
+    level: str
+    metrics: JSON | None = None
+    duration_seconds: float = 0.0
+    error: str | None = None
+
 
 @strawberry.input
 class ReduceTopicsInput:
@@ -796,6 +822,9 @@ class ProbeInfo:
     n_train: int
     n_val: int
     created_at: str
+    # Binary categorical targets only: the applied value->0/1 mapping
+    # (e.g. {"safe": 0, "unsafe": 1}); null for numeric targets.
+    target_mapping: JSON | None = None
 
 
 @strawberry.type
@@ -871,6 +900,16 @@ class SaeCollectionMode(Enum):
 
     DECODER_VECTORS = "decoder_vectors"
     LABEL_EMBEDDINGS = "label_embeddings"
+
+
+@strawberry.enum
+class DocumentRankingMode(Enum):
+    """Ranking mode for document search over selected SAE features."""
+
+    MAX = "max"
+    SUM = "sum"
+    SCALED_SUM = "scaled_sum"
+    MATCHING_FEATURES = "matching_features"
 
 
 @strawberry.input

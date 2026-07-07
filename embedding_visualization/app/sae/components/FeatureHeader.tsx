@@ -102,8 +102,12 @@ export function FeatureHeader({
   const indexNavDisabled = !isSingleSae;
 
   return (
-    <div className="space-y-2">
-      {/* Row 1: Model + SAE multi-select */}
+    // One container for both rows: flex-wrap below md, a 3-column grid at md+
+    // so the model select / index nav share column 1 and the chips box /
+    // search share column 2 (capped at 36rem = max-w-xl, stopping the search
+    // bar from stretching indefinitely). SaeMultiSelect contributes its three
+    // cells via `display: contents`.
+    <div className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-[11rem_minmax(0,36rem)_auto] md:gap-x-3 md:gap-y-2">
       <SaeMultiSelect
         modelId={modelId}
         modelOptions={modelOptions}
@@ -113,39 +117,39 @@ export function FeatureHeader({
         onSaeIdsChange={onSaeIdsChange}
       />
 
-      {/* Row 2: Feature navigation + search */}
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Feature index navigation */}
-        <div className="flex items-center gap-1" title={indexNavDisabled ? 'Select a single SAE to browse by index' : undefined}>
-          <Button
-            variant="outline" size="icon" className="h-8 w-8"
-            onClick={handlePrev}
-            disabled={indexNavDisabled || featureIndex == null || featureIndex <= 0}
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-          </Button>
-          <Input
-            type="number"
-            min={0}
-            max={maxFeatureIndex ? maxFeatureIndex - 1 : undefined}
-            value={indexNavDisabled ? '' : indexInput}
-            onChange={(e) => setIndexInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={handleGoToFeature}
-            className="w-24 h-8 text-center font-mono text-sm"
-            placeholder={indexNavDisabled ? 'Multi' : 'Index'}
-            disabled={indexNavDisabled}
-          />
-          <Button
-            variant="outline" size="icon" className="h-8 w-8"
-            onClick={handleNext}
-            disabled={indexNavDisabled || featureIndex == null || (maxFeatureIndex != null && featureIndex >= maxFeatureIndex - 1)}
-          >
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+      {/* Feature index navigation — fills the model-select column at md+ */}
+      <div className="flex items-center gap-1 md:w-full" title={indexNavDisabled ? 'Select a single SAE to browse by index' : undefined}>
+        <Button
+          variant="outline" size="icon" className="h-8 w-8 shrink-0"
+          onClick={handlePrev}
+          disabled={indexNavDisabled || featureIndex == null || featureIndex <= 0}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </Button>
+        <Input
+          type="number"
+          min={0}
+          max={maxFeatureIndex ? maxFeatureIndex - 1 : undefined}
+          value={indexNavDisabled ? '' : indexInput}
+          onChange={(e) => setIndexInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={handleGoToFeature}
+          className="no-spinner w-24 md:w-auto md:flex-1 md:min-w-0 h-8 text-center font-mono text-sm"
+          placeholder={indexNavDisabled ? 'Multi' : 'Index'}
+          disabled={indexNavDisabled}
+        />
+        <Button
+          variant="outline" size="icon" className="h-8 w-8 shrink-0"
+          onClick={handleNext}
+          disabled={indexNavDisabled || featureIndex == null || (maxFeatureIndex != null && featureIndex >= maxFeatureIndex - 1)}
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Button>
+      </div>
 
-        {/* Search mode toggle + search input */}
+      {/* Search mode toggle + search input — one cell so the conditional
+          toggle never shifts grid placement */}
+      <div className="flex items-center gap-2 flex-1 min-w-48 md:min-w-0">
         {(hasSemanticSearch || hasPromptSearch) && onSearchModeChange && (
           <ToggleGroup
             type="single"
@@ -163,7 +167,7 @@ export function FeatureHeader({
             )}
           </ToggleGroup>
         )}
-        <div className="flex items-center gap-1 flex-1 min-w-48">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
           <Input
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
@@ -181,17 +185,17 @@ export function FeatureHeader({
             <Search className="h-3.5 w-3.5" />
           </Button>
         </div>
-
-        {/* Link back to visualization */}
-        {collectionLink && (
-          <a
-            href={`/?collection=${encodeURIComponent(collectionLink)}`}
-            className="text-xs text-blue-500 hover:underline shrink-0"
-          >
-            View in scatter plot
-          </a>
-        )}
       </div>
+
+      {/* Link back to visualization */}
+      {collectionLink && (
+        <a
+          href={`/?collection=${encodeURIComponent(collectionLink)}`}
+          className="text-xs text-blue-500 hover:underline shrink-0 whitespace-nowrap justify-self-start"
+        >
+          View in scatter plot
+        </a>
+      )}
     </div>
   );
 }

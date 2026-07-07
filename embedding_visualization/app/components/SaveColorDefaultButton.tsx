@@ -62,47 +62,20 @@ export function SaveColorDefaultButton({ collectionName }: SaveColorDefaultButto
     }
   }, [collectionName, colorByField, colorScale, categoricalPalette, updateMetadata, flashSaved]);
 
-  const handleClear = useCallback(async () => {
-    if (!collectionName) return;
-    try {
-      // Sending null removes the key (backend update_dataset drops null values).
-      await updateMetadata({
-        variables: { collectionName, metadata: { default_color_scheme: null } },
-      });
-    } catch (err) {
-      console.error('Failed to clear default colour scheme:', err);
-    }
-  }, [collectionName, updateMetadata]);
-
   const disabled = !collectionName || !colorByField || loading;
 
   return (
-    <div className="flex items-center gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={handleSave}
-        disabled={disabled}
-        title={hasDefault
-          ? 'Update this collection’s default colour scheme'
-          : 'Save the current colouring as this collection’s default'}
-      >
-        {justSaved ? <Check className="text-green-600" /> : <Save />}
-        {justSaved ? 'Saved' : hasDefault ? 'Update default' : 'Save as default'}
-      </Button>
-      {hasDefault && !justSaved && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          onClick={handleClear}
-          disabled={loading}
-          className="text-muted-foreground"
-        >
-          Clear
-        </Button>
-      )}
-    </div>
+    <Button
+      type="button"
+      variant="circularghost"
+      size="icon-sm"
+      onClick={handleSave}
+      disabled={disabled}
+      title={hasDefault
+        ? 'Update this collection’s default colour scheme'
+        : 'Save the current colouring as this collection’s default'}
+    >
+      {justSaved ? <Check className="h-4 w-4 text-green-600" /> : <Save className="h-4 w-4" />}
+    </Button>
   );
 }

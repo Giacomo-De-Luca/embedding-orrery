@@ -56,6 +56,7 @@ try:
 except:
     print("Internet not accessible or HF token not in env.")
 
+
 def _load_known_dimensions() -> dict[str, int]:
     """Load dimensions from the JSON file."""
     if not DIMENSIONS_FILE.exists():

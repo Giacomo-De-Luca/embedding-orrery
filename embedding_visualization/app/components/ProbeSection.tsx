@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSubscription } from '@apollo/client/react';
 import { Trash2 } from 'lucide-react';
 
@@ -19,7 +19,12 @@ import { EMBEDDING_PROGRESS_SUBSCRIPTION } from '@/lib/graphql/queries';
 import type { JobProgress } from '@/lib/graphql/mutations';
 import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
 import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
-import type { ProbeInfo } from '@/lib/utils/probeFields';
+import {
+  formatTargetMapping,
+  isProbeTargetOption,
+  resolveProbeTargetSelection,
+  type ProbeInfo,
+} from '@/lib/utils/probeFields';
 import type { UseProbesReturn } from '@/lib/hooks/useProbes';
 
 const PROBE_KINDS = [
@@ -49,7 +54,7 @@ function metricsBadge(probe: ProbeInfo): string {
   return parts.join(' · ') || 'no metrics';
 }
 
-/** Native tooltip listing every stored validation metric. */
+/** Native tooltip: every stored validation metric + the 0/1 class mapping. */
 function metricsTitle(probe: ProbeInfo): string {
   const m = probe.metrics ?? {};
   const labels: [string, string][] = [
@@ -63,6 +68,8 @@ function metricsTitle(probe: ProbeInfo): string {
   const lines = labels
     .filter(([key]) => m[key] !== undefined)
     .map(([key, label]) => `${label}: ${fmtMetric(m[key])}`);
+  const mapping = formatTargetMapping(probe.targetMapping);
+  if (mapping) lines.push(`Classes: ${mapping}`);
   return lines.join('\n') || 'No metrics recorded';
 }
 
@@ -81,29 +88,34 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
   const [kind, setKind] = useState<string>('ridge');
   const [progress, setProgress] = useState<JobProgress | null>(null);
 
-  // Numeric, non-derived fields are probe targets (never probe a probe).
+  // Numeric fields + binary categorical fields (trained as 0/1) are probe
+  // targets; probe-derived fields never are (never probe a probe).
   const targetOptions = useMemo(
-    () =>
-      (colorFieldOptions ?? []).filter(
-        (o) => o.valueType === 'numeric' && !o.field.startsWith('probe_'),
-      ),
+    () => (colorFieldOptions ?? []).filter(isProbeTargetOption),
     [colorFieldOptions],
   );
-
-  // Follow the active color field by default, like CategoryBarList — but a
-  // switch TO a probe-derived field is the auto-recolor after training, not
-  // the user picking a new target: keep the selection so they can retrain
-  // the same field with another kind.
-  useEffect(() => {
-    if (colorByField?.startsWith('probe_')) return;
-    setSelectedField(null);
-  }, [colorByField]);
 
   const followedField =
     colorByField && targetOptions.some((o) => o.field === colorByField)
       ? colorByField
       : null;
   const effectiveField = selectedField ?? followedField ?? null;
+
+  // Remember the last real (non-probe) target so follow-mode selection can be
+  // pinned when training auto-recolors the map to a probe_* field.
+  const lastTargetRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (effectiveField) lastTargetRef.current = effectiveField;
+  });
+
+  // Follow the active color field by default, like CategoryBarList — but when
+  // training auto-recolors to a probe_* field, keep (or pin) the just-probed
+  // target so another kind can be fitted on it instead of disabling Fit.
+  useEffect(() => {
+    setSelectedField((prev) =>
+      resolveProbeTargetSelection(colorByField, prev, lastTargetRef.current),
+    );
+  }, [colorByField]);
 
   const { data: progressData } = useSubscription<SubscriptionData>(
     EMBEDDING_PROGRESS_SUBSCRIPTION,

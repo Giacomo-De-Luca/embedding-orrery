@@ -211,9 +211,23 @@ class DuckDBClient:
                 reduction_target            INTEGER,
                 num_topics_before_reduction INTEGER,
                 topic_hierarchy             JSON,
+                quality_metrics             JSON,
                 is_active                   BOOLEAN DEFAULT TRUE
             )
         """)
+
+        # Migration for DBs created before quality metrics existed. Guarded by an
+        # explicit column check and followed by a CHECKPOINT: replaying an
+        # ALTER TABLE on this FK-referencing table from the WAL crashes DuckDB
+        # 1.4/1.5 ("GetDefaultDatabase with no default database set"), so the
+        # ALTER must never be a repeated no-op nor linger in the WAL.
+        has_quality_metrics = self._exec(
+            "SELECT count(*) FROM pragma_table_info('topic_extractions') "
+            "WHERE name = 'quality_metrics'"
+        ).fetchone()[0]
+        if not has_quality_metrics:
+            self._exec("ALTER TABLE topic_extractions ADD COLUMN quality_metrics JSON")
+            self._exec("CHECKPOINT")
 
         self._exec("""
             CREATE TABLE IF NOT EXISTS topic_info (
@@ -356,9 +370,7 @@ class DuckDBClient:
         """)
 
         # Idempotent migration for DBs created before steering_snapshot existed.
-        self._exec(
-            "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS steering_snapshot JSON"
-        )
+        self._exec("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS steering_snapshot JSON")
 
         self._exec("""
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session
@@ -444,9 +456,7 @@ class DuckDBClient:
             datasets_by_name[d["name"]] = d
 
         # Get all vector_collections
-        vc_cur = self._exec(
-            "SELECT * FROM vector_collections ORDER BY created_at DESC"
-        )
+        vc_cur = self._exec("SELECT * FROM vector_collections ORDER BY created_at DESC")
         vc_rows = vc_cur.fetchall()
         vc_columns = [desc[0] for desc in vc_cur.description]
         all_vcs = [dict(zip(vc_columns, vr)) for vr in vc_rows]
@@ -695,9 +705,7 @@ class DuckDBClient:
 
         # Update cached item count
         count = self._exec(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        self._exec(
-            "UPDATE datasets SET item_count = ? WHERE name = ?", [count, dataset_name]
-        )
+        self._exec("UPDATE datasets SET item_count = ? WHERE name = ?", [count, dataset_name])
 
         self._fts_dirty.add(dataset_name)
         return len(ids)
@@ -935,9 +943,7 @@ class DuckDBClient:
                 f"SELECT {col_str} FROM {table} WHERE id IN ({placeholders})",
                 list(where_ids),
             ).fetchall()
-        return self._exec(
-            f"SELECT {col_str} FROM {table} ORDER BY row_index"
-        ).fetchall()
+        return self._exec(f"SELECT {col_str} FROM {table} ORDER BY row_index").fetchall()
 
     # ------------------------------------------------------------------
     # Projections
@@ -1366,6 +1372,8 @@ class DuckDBClient:
 
         columns = [desc[0] for desc in ext_cur.description]
         extraction = dict(zip(columns, rows[0]))
+        if isinstance(extraction.get("quality_metrics"), str):
+            extraction["quality_metrics"] = json.loads(extraction["quality_metrics"])
 
         ti_cur = self._exec(
             """
@@ -1386,6 +1394,30 @@ class DuckDBClient:
 
         extraction["topics"] = topics
         return extraction
+
+    def update_topic_quality_metrics(self, extraction_id: str, level: str, metrics: dict) -> None:
+        """Store quality metrics on an extraction, keyed by level.
+
+        Read-modify-write so re-scoring one level ("topic"/"subtopic") preserves
+        the other level's stored metrics.
+        """
+        cur = self._exec(
+            "SELECT quality_metrics FROM topic_extractions WHERE id = ?", [extraction_id]
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise ValueError(f"No topic extraction with id {extraction_id!r}")
+
+        existing = rows[0][0]
+        if isinstance(existing, str):
+            existing = json.loads(existing)
+        merged = dict(existing or {})
+        merged[level] = metrics
+
+        self._exec(
+            "UPDATE topic_extractions SET quality_metrics = ? WHERE id = ?",
+            [json.dumps(merged), extraction_id],
+        )
 
     def get_items_for_topic(self, extraction_id: str, topic_id: int) -> list[str]:
         """Get item IDs assigned to a specific topic."""
@@ -1815,9 +1847,7 @@ class DuckDBClient:
             }
         )
         with self._write_lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df"
-            )
+            self._conn.execute("INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df")
         return len(activations)
 
     def insert_document_activations_bulk(
@@ -1831,9 +1861,7 @@ class DuckDBClient:
         if df.empty:
             return 0
         with self._write_lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df"
-            )
+            self._conn.execute("INSERT OR REPLACE INTO sae_document_activations SELECT * FROM df")
         return len(df)
 
     def get_document_activation_item_ids(self, collection_name: str) -> set[str]:
@@ -1966,9 +1994,7 @@ class DuckDBClient:
             return 0
         n = len(scores_df)
         residual = (
-            scores_df["residual"]
-            if "residual" in scores_df.columns
-            else pd.Series([None] * n)
+            scores_df["residual"] if "residual" in scores_df.columns else pd.Series([None] * n)
         )
         # Nullable Float64 keeps None as SQL NULL (plain float64 would coerce
         # None to NaN, which DuckDB stores as NaN, not NULL).
@@ -1989,9 +2015,7 @@ class DuckDBClient:
             self._conn.execute("INSERT INTO probe_scores SELECT * FROM insert_df")
         return n
 
-    def get_probe_scores(
-        self, collection_name: str, target_field: str, kind: str
-    ) -> dict | None:
+    def get_probe_scores(self, collection_name: str, target_field: str, kind: str) -> dict | None:
         """Return {"item_ids", "scores", "residuals"} for a probe, or None if absent."""
         probe = self._exec(
             "SELECT 1 FROM probes WHERE collection_name = ? AND target_field = ? AND kind = ?",
@@ -2034,9 +2058,7 @@ class DuckDBClient:
             [collection_name, target_field, kind],
         )
         if existed:
-            logger.info(
-                "Deleted probe %s/%s/%s", collection_name, target_field, kind
-            )
+            logger.info("Deleted probe %s/%s/%s", collection_name, target_field, kind)
         return existed is not None
 
     def get_numeric_metadata_field(
@@ -2068,6 +2090,31 @@ class DuckDBClient:
             return float(value)
 
         return [(r[0], _clean(r[1])) for r in rows]
+
+    def get_text_metadata_field(
+        self, dataset_name: str, field: str
+    ) -> list[tuple[str, str | None]]:
+        """Read one metadata field as raw strings for all items, ordered by row_index.
+
+        Same quoted-JSONPath handling as ``get_numeric_metadata_field``; used
+        as the fallback for binary categorical probe targets (e.g.
+        "safe"/"unsafe"). Missing keys and JSON nulls come back as None;
+        scalar non-strings come back in their JSON string form.
+        """
+        if not self.get_dataset(dataset_name):
+            return []
+        escaped = field.replace("\\", "\\\\").replace('"', '\\"')
+        json_path = f'$."{escaped}"'
+        table = self._items_table(dataset_name)
+        rows = self._exec(
+            f"""
+            SELECT id, json_extract_string(metadata, ?)
+            FROM {table}
+            ORDER BY row_index
+            """,
+            [json_path],
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     def search_documents_by_feature_labels(
         self,
@@ -2158,37 +2205,76 @@ class DuckDBClient:
             "matched_features": matched_features,
         }
 
+    # Ranking modes for search_documents_by_feature_indices. `norm` is the
+    # activation scaled by that feature's max over the whole collection, so
+    # scaled modes treat selected features as equally important regardless
+    # of their absolute magnitudes (which differ ~100x).
+    _FEATURE_RANKING_MODES = {
+        "max": ("MAX(activation)", "score DESC, item_id"),
+        "sum": ("SUM(activation)", "score DESC, item_id"),
+        "scaled_sum": ("SUM(norm)", "score DESC, item_id"),
+        "matching_features": (
+            "SUM(norm)",
+            "matching_features DESC, score DESC, item_id",
+        ),
+    }
+
     def search_documents_by_feature_indices(
         self,
         collection_name: str,
         feature_indices: list[int],
         limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Rank documents by MAX(activation) over explicit feature indices.
+        ranking: str = "scaled_sum",
+    ) -> dict[str, Any]:
+        """Rank documents over explicit feature indices.
 
         This is hop-2 only — the caller has already selected which features
         to search for (e.g. from a multi-select combobox in the frontend).
 
-        Returns list of dicts with keys: item_id, document, metadata, score,
-        matching_features, row_index.
+        Ranking modes (see ``_FEATURE_RANKING_MODES``): ``max`` (strongest
+        single activation), ``sum`` (raw sum), ``scaled_sum`` (default; sum
+        of activations each normalized by that feature's collection-wide
+        max), ``matching_features`` (number of selected features present,
+        tie-broken by scaled sum).
+
+        Returns ``{"results": [...], "total_matches": int}`` where each
+        result dict has keys: item_id, document, metadata, score,
+        matching_features, row_index. ``total_matches`` is the number of
+        matching documents before ``limit`` is applied.
         """
         if not feature_indices:
-            return []
+            return {"results": [], "total_matches": 0}
+
+        if ranking not in self._FEATURE_RANKING_MODES:
+            raise ValueError(
+                f"Unknown ranking mode {ranking!r}; "
+                f"expected one of {sorted(self._FEATURE_RANKING_MODES)}"
+            )
+        score_expr, order_clause = self._FEATURE_RANKING_MODES[ranking]
 
         placeholders = ", ".join(["?"] * len(feature_indices))
+        # COUNT(*) OVER () is evaluated after GROUP BY but before LIMIT,
+        # so every returned row carries the total number of matching docs.
         rows = self._exec(
-            f"SELECT item_id, MAX(activation) AS score, COUNT(*) AS matching_features "
-            f"FROM sae_document_activations "
-            f"WHERE collection_name = ? AND feature_index IN ({placeholders}) "
+            f"WITH scoped AS ("
+            f"    SELECT item_id, activation, "
+            f"           activation / MAX(activation) OVER (PARTITION BY feature_index) AS norm "
+            f"    FROM sae_document_activations "
+            f"    WHERE collection_name = ? AND feature_index IN ({placeholders}) "
+            f") "
+            f"SELECT item_id, {score_expr} AS score, COUNT(*) AS matching_features, "
+            f"       COUNT(*) OVER () AS total_matches "
+            f"FROM scoped "
             f"GROUP BY item_id "
-            f"ORDER BY score DESC "
+            f"ORDER BY {order_clause} "
             f"LIMIT ?",
             [collection_name, *feature_indices, limit],
         ).fetchall()
 
         if not rows:
-            return []
+            return {"results": [], "total_matches": 0}
 
+        total_matches = rows[0][3]
         item_ids = [r[0] for r in rows]
         scores = {r[0]: (r[1], r[2]) for r in rows}
 
@@ -2203,17 +2289,20 @@ class DuckDBClient:
             for item in items:
                 enriched[item["id"]] = item
 
-        return [
-            {
-                "item_id": item_id,
-                "document": enriched.get(item_id, {}).get("document"),
-                "metadata": enriched.get(item_id, {}).get("metadata"),
-                "score": scores[item_id][0],
-                "matching_features": scores[item_id][1],
-                "row_index": enriched.get(item_id, {}).get("row_index"),
-            }
-            for item_id in item_ids
-        ]
+        return {
+            "results": [
+                {
+                    "item_id": item_id,
+                    "document": enriched.get(item_id, {}).get("document"),
+                    "metadata": enriched.get(item_id, {}).get("metadata"),
+                    "score": scores[item_id][0],
+                    "matching_features": scores[item_id][1],
+                    "row_index": enriched.get(item_id, {}).get("row_index"),
+                }
+                for item_id in item_ids
+            ],
+            "total_matches": total_matches,
+        }
 
     def search_documents_by_activations(
         self,
@@ -2315,9 +2404,7 @@ class DuckDBClient:
             """,
             [session_id, title, config_json],
         )
-        cur = self._exec(
-            "SELECT * FROM chat_sessions WHERE id = ?", [session_id]
-        )
+        cur = self._exec("SELECT * FROM chat_sessions WHERE id = ?", [session_id])
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
         return _sanitize_for_json(dict(zip(cols, row)), json_columns=("config",))
@@ -2339,9 +2426,7 @@ class DuckDBClient:
 
     def get_chat_session_with_messages(self, session_id: str) -> dict | None:
         """Get a session with all its messages."""
-        cur = self._exec(
-            "SELECT * FROM chat_sessions WHERE id = ?", [session_id]
-        )
+        cur = self._exec("SELECT * FROM chat_sessions WHERE id = ?", [session_id])
         row = cur.fetchone()
         if not row:
             return None
@@ -2389,9 +2474,7 @@ class DuckDBClient:
             "UPDATE chat_sessions SET updated_at = current_timestamp WHERE id = ?",
             [session_id],
         )
-        cur = self._exec(
-            "SELECT * FROM chat_messages WHERE id = ?", [message_id]
-        )
+        cur = self._exec("SELECT * FROM chat_messages WHERE id = ?", [message_id])
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
         return _sanitize_for_json(

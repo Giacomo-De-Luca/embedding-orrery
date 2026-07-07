@@ -9,7 +9,6 @@ import {
   SidebarHeader,
 } from '@/lib/ui-primitives/sidebar';
 import { Separator } from '@/lib/ui-primitives/separator';
-import { ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { CategoryBarList } from './charts/CategoryBarList';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { ProbeSection } from './ProbeSection';
@@ -257,7 +256,6 @@ export function AnalyticsSidebar({
             </>
           )}
         </div>
-        <ScrollBar orientation="vertical" />
       </SidebarContent>
 
       <SidebarFooter className="border-t px-4 py-3">

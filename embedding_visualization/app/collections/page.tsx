@@ -15,7 +15,7 @@ import { LocalFileTab } from './components/LocalFileTab';
 import { CollectionManagerTab, type CollectionInfo } from './components/CollectionManagerTab';
 import { SaeTab } from './components/SaeTab';
 import { ActiveJobsStrip } from './components/ActiveJobsStrip';
-import { JobProgressDock, JobProgressDockContainer } from './components/JobProgressDock';
+import { ProgressModal } from './components/EmbeddingProgressModal';
 import { useCollectionsUrlState, type DataSourceTab } from './lib/urlState';
 import { resumeJob } from './lib/embeddingFormUtils';
 
@@ -242,8 +242,8 @@ function CollectionsPageContent() {
 
       {/* Page-global jobs strip below the tab content: driven by polled
           server state so jobs survive page reloads. Jobs whose progress is
-          already on screen (dock or Manage-tab modal) are hidden to avoid
-          showing the same operation twice. */}
+          already on screen (progress modal) are hidden to avoid showing the
+          same operation twice. */}
       <div className="mt-6 empty:hidden">
         <ActiveJobsStrip
           onResumeJob={handleResumeJob}
@@ -257,25 +257,22 @@ function CollectionsPageContent() {
         />
       </div>
 
-      {/* Non-blocking progress docks for client-initiated jobs: the page
-          stays usable while an embed or LLM-labeling run is in flight. */}
-      <JobProgressDockContainer>
-        {embedLoading && activeJobCollectionName && (
-          <JobProgressDock
-            jobId={activeJobCollectionName}
-            onCancel={() => cancelEmbeddingJob(activeJobCollectionName)}
-            cancelLoading={cancelJobLoading}
-          />
-        )}
-        {llmResumeJobId && (
-          <JobProgressDock
-            jobId={llmResumeJobId}
-            title="Generating LLM Labels"
-            subtitle="Each topic is labeled individually via LLM API calls."
-            itemsLabel="topics"
-          />
-        )}
-      </JobProgressDockContainer>
+      {/* Centered progress modal for client-initiated jobs */}
+      {embedLoading && activeJobCollectionName && (
+        <ProgressModal
+          jobId={activeJobCollectionName}
+          onCancel={() => cancelEmbeddingJob(activeJobCollectionName)}
+          cancelLoading={cancelJobLoading}
+        />
+      )}
+      {llmResumeJobId && (
+        <ProgressModal
+          jobId={llmResumeJobId}
+          title="Generating LLM Labels"
+          subtitle="Each topic is labeled individually via LLM API calls."
+          itemsLabel="topics"
+        />
+      )}
     </div>
   );
 }

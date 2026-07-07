@@ -17,17 +17,17 @@ Usage:
     python job_queue.py --task clean_books reset [--item file.json]
 """
 
-import os
-import sys
-import json
-import fcntl
-import shutil
-import uuid
-import socket
 import argparse
+import fcntl
+import json
+import os
+import shutil
+import socket
 import subprocess
+import sys
 import unicodedata
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -78,7 +78,7 @@ def _atomic_write(path, data_str):
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _generate_worker_id():
@@ -91,7 +91,7 @@ def _generate_worker_id():
 def _reset_stale_items(manifest):
     """Reset items that have been in_progress for too long."""
     timeout = manifest.get("stale_timeout_minutes", 30)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for item_info in manifest["items"].values():
         if item_info["status"] != "in_progress":
             continue

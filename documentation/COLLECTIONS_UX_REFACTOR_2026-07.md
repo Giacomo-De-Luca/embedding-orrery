@@ -21,14 +21,17 @@ All paths below are relative to `embedding_visualization/`.
   `?collection=` without `?tab=` implies the manage tab. Manage-tab selection
   was lifted from `CollectionManagerTab` to the page (controlled props).
 
-## Phase B — Jobs visibility & non-blocking progress
+## Phase B — Jobs visibility & progress
 
 - Progress logic layered: pure math in `app/collections/lib/jobProgress.ts`
   (`computePercent`, `formatElapsed`, `nextEtaState` — unit-tested) →
   `useJobProgress(jobId)` (WebSocket subscription + elapsed + ETA; resets on
   jobId change) → presentational `JobProgressBody` → wrapped by
-  `ProgressModal` (blocking overlay, still used by Manage-tab topic/SAE ops)
-  and the new `JobProgressDock` (fixed bottom-right, non-blocking).
+  `ProgressModal` (centered blocking overlay, used by all client-initiated
+  jobs). A non-blocking bottom-right `JobProgressDock` was tried for embeds
+  and **reverted on user feedback** (off-center, cramped at 420px — judged a
+  downgrade vs. the centered modal); the strip below covers the
+  visibility-after-reload goal on its own.
 - Page-global `ActiveJobsStrip` (polls `GET_EMBEDDING_JOBS`, all statuses,
   5s) lists running + interrupted jobs on every tab — driven purely by server
   state, so jobs stay visible after a reload. Resume dispatches on

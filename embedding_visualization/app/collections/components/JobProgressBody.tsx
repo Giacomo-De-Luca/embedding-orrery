@@ -26,7 +26,7 @@ export interface JobProgressBodyProps {
 /**
  * Layout-agnostic live progress display for a job: header with status badge,
  * elapsed/ETA, optional cancel, progress bar, and counters. Wrapped by
- * ProgressModal (blocking overlay) and JobProgressDock (floating card).
+ * ProgressModal (centered blocking overlay).
  *
  * Supports two progress models:
  * - Stage-based (totalBatches > 1): bar tracks currentBatch/totalBatches,

@@ -6,6 +6,7 @@ import { Input } from '@/lib/ui-primitives/input';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { RefreshCw, Search, Tags } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CollectionInfo } from '../CollectionManagerTab';
@@ -76,7 +77,7 @@ export function CollectionListPane({
             No collections match &quot;{query}&quot;.
           </p>
         ) : (
-          <div className="max-h-[420px] overflow-y-auto">
+          <ScrollArea className="[&>[data-radix-scroll-area-viewport]>div]:block!" viewportClassName="max-h-[420px]">
             <div className="space-y-1">
               {filtered.map((collection) => {
                 const isSelected = collection.name === selectedCollection;
@@ -114,7 +115,7 @@ export function CollectionListPane({
                 );
               })}
             </div>
-          </div>
+          </ScrollArea>
         )}
       </CardContent>
     </Card>

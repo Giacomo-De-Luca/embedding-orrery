@@ -4,10 +4,11 @@ import * as React from 'react';
 import { ChevronDown, Settings2, Loader2, X } from 'lucide-react';
 import {
   Sidebar,
-  SidebarContentPlain,
+  SidebarContent,
   SidebarFooter,
   SidebarHeader,
 } from '@/lib/ui-primitives/sidebar';
+import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { Label } from '@/lib/ui-primitives/label';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Button } from '@/lib/ui-primitives/button';
@@ -29,15 +30,15 @@ import {
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import { TopicSearchSection } from './TopicSearchSection';
 import { MetadataFilters } from './MetadataFilters';
-import type { Point2D, Point3D, TopicInfo, TextSearchConfig } from '../../lib/types/types';
+import type { Point2D, Point3D, TopicInfo, TextSearchConfig, DistanceMetric } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
-import type { UseDocumentFeatureSearchReturn, SelectedFeature } from '../../lib/hooks/useDocumentFeatureSearch';
-import { cn } from '@/lib/utils/utils';
+import type { UseDocumentFeatureSearchReturn, SelectedFeature, DocumentRankingMode } from '../../lib/hooks/useDocumentFeatureSearch';
 import { fieldToDisplayName } from '../../lib/utils/fieldAnalysis';
 import { MAX_HIGHLIGHTED_FEATURES } from '../../lib/hooks/usePromptHighlight';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
@@ -45,14 +46,12 @@ import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 // Must match ChromaDBClient.DOCUMENT_SENTINEL in the backend
 const DOCUMENT_SENTINEL = '__document__';
 
+// Max feature-search result rows rendered in the sidebar preview list
+const FEATURE_RESULTS_PREVIEW_LIMIT = 50;
+
 interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  showOnlyHighlighted: boolean;
-  onShowOnlyHighlightedChange: (checked: boolean) => void;
-  showLabels: boolean;
-  onShowLabelsChange: (checked: boolean) => void;
-  hasHighlights: boolean;
   textSearchResults?: (Point2D | Point3D)[];
   selectedPointId?: string | null;
   onResultClick?: (point: Point2D | Point3D) => void;
@@ -98,11 +97,6 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
 export function SearchSidebar({
   searchQuery,
   onSearchChange,
-  showOnlyHighlighted,
-  onShowOnlyHighlightedChange,
-  showLabels,
-  onShowLabelsChange,
-  hasHighlights,
   textSearchResults,
   selectedPointId,
   onResultClick,
@@ -217,6 +211,7 @@ export function SearchSidebar({
   // Read search config from store
   const textSearchConfig = useVisualizationStore((s) => s.textSearchConfig);
   const setTextSearchConfig = useVisualizationStore((s) => s.setTextSearchConfig);
+  const distanceMetric = useVisualizationStore((s) => s.distanceMetric);
 
   // Derive selected fields for combobox (null = document only → [DOCUMENT_SENTINEL])
   const selectedFields = textSearchConfig.fields ?? [DOCUMENT_SENTINEL];
@@ -239,7 +234,7 @@ export function SearchSidebar({
         </div>
       </SidebarHeader>
 
-      <SidebarContentPlain className="gap-0">
+      <SidebarContent className="gap-0">
 
         <div className="p-4 space-y-6 ">
           {/* Search Input */}
@@ -432,9 +427,38 @@ export function SearchSidebar({
                     </Button>
                   </div>
 
+                  {/* Ranking mode — only meaningful with 2+ features */}
+                  {featureSearch.selectedFeatures.length >= 2 && (
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="feature-ranking" className="text-xs whitespace-nowrap">
+                        Ranking
+                      </Label>
+                      <Select
+                        value={featureSearch.rankingMode}
+                        onValueChange={(value) =>
+                          featureSearch.setRankingMode(value as DocumentRankingMode)
+                        }
+                      >
+                        <SelectTrigger id="feature-ranking" className="h-7 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="SCALED_SUM">Scaled sum</SelectItem>
+                          <SelectItem value="MAX">Max activation</SelectItem>
+                          <SelectItem value="SUM">Sum</SelectItem>
+                          <SelectItem value="MATCHING_FEATURES">Feature count</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
                   {featureSearch.results.length > 0 && (
-                    <div className="max-h-60 overflow-y-auto rounded-md border p-1 space-y-0.5">
-                      {featureSearch.results.slice(0, 20).map((r, i) => (
+                    <ScrollArea
+                      className="rounded-md border [&>[data-radix-scroll-area-viewport]>div]:block!"
+                      viewportClassName="max-h-60"
+                    >
+                      <div className="p-1 space-y-0.5">
+                      {featureSearch.results.slice(0, FEATURE_RESULTS_PREVIEW_LIMIT).map((r, i) => (
                         <button
                           key={r.itemId ?? i}
                           className="w-full text-left px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -452,7 +476,13 @@ export function SearchSidebar({
                           </p>
                         </button>
                       ))}
-                    </div>
+                      {featureSearch.totalResults > FEATURE_RESULTS_PREVIEW_LIMIT && (
+                        <p className="px-3 py-1.5 text-xs text-muted-foreground">
+                          Showing top {Math.min(FEATURE_RESULTS_PREVIEW_LIMIT, featureSearch.results.length)} of {featureSearch.totalResults.toLocaleString()} matches
+                        </p>
+                      )}
+                      </div>
+                    </ScrollArea>
                   )}
                 </div>
               )}
@@ -473,48 +503,10 @@ export function SearchSidebar({
             </div>
           )}
 
-          {/* Show Only Highlighted */}
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="show-only-highlighted"
-              checked={showOnlyHighlighted}
-              onCheckedChange={(checked) => onShowOnlyHighlightedChange(checked === true)}
-              disabled={!hasHighlights}
-            />
-            <Label
-              htmlFor="show-only-highlighted"
-              className={cn(
-                "font-normal cursor-pointer",
-                !hasHighlights && "text-muted-foreground"
-              )}
-            >
-              Show only highlighted
-            </Label>
-          </div>
-
-          {/* Show Labels */}
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="show-labels"
-              checked={showLabels}
-              onCheckedChange={(checked) => onShowLabelsChange(checked === true)}
-              disabled={!hasHighlights}
-            />
-            <Label
-              htmlFor="show-labels"
-              className={cn(
-                "font-normal cursor-pointer",
-                !hasHighlights && "text-muted-foreground"
-              )}
-            >
-              Show labels
-            </Label>
-          </div>
-
           {/* Advanced Search Options */}
           <Collapsible>
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="w-full justify-between px-0 h-8">
+              <Button variant="ghost" size="sm" className="group w-full justify-between px-0 h-8">
                 <span className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Settings2 className="h-4 w-4" />
                   Advanced
@@ -523,8 +515,6 @@ export function SearchSidebar({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-4 pt-2">
-              
-
               {/* Match mode toggle */}
               <div className="space-y-2">
                 <Label className="text-sm">Match mode</Label>
@@ -586,6 +576,29 @@ export function SearchSidebar({
                   Task-specific prompt for models like Gemma Embedding. Type a custom prompt or select a preset.
                 </p>
               </div>
+
+              {/* Distance metric (semantic search) */}
+              <div className="space-y-2">
+                <Label htmlFor="distance-metric" className="text-sm">Distance Metric</Label>
+                <Select
+                  value={distanceMetric ?? 'COSINE'}
+                  onValueChange={(value) =>
+                    useVisualizationStore.getState().setDistanceMetric(value as DistanceMetric)
+                  }
+                >
+                  <SelectTrigger id="distance-metric">
+                    <SelectValue placeholder="Select metric" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="COSINE">Cosine Similarity</SelectItem>
+                    <SelectItem value="L2">Euclidean (L2)</SelectItem>
+                    <SelectItem value="IP">Inner Product</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Used for semantic search similarity calculations
+                </p>
+              </div>
             </CollapsibleContent>
           </Collapsible>
 
@@ -624,7 +637,7 @@ export function SearchSidebar({
           )}
         </div>
 
-      </SidebarContentPlain>
+      </SidebarContent>
 
       <SidebarFooter className="border-t px-4 py-3">
         <div className="text-xs text-muted-foreground text-center">

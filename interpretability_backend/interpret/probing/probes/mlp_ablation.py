@@ -43,9 +43,6 @@ import torch
 from tqdm import tqdm
 
 from interpret.probing.activation_dataset import ActivationDataset
-from interpret.probing.probes.ablation_feature_bars import (
-    render_single_experiment_pair,
-)
 from interpret.probing.configs.csv_features_extraction import (
     CSVFeaturesExtractionConfig,
 )
@@ -59,6 +56,9 @@ from interpret.probing.configs.probe import (
     SklearnProbeSpec,
 )
 from interpret.probing.manifests.manifest_base import ManifestBuilder
+from interpret.probing.probes.ablation_feature_bars import (
+    render_single_experiment_pair,
+)
 from interpret.probing.probes.mlp_probe import train_mlp_probes
 from interpret.probing.probes.sklearn_probes import (
     train_sklearn_probe,

@@ -4,7 +4,7 @@ import { apolloClient } from '@/lib/utils/apollo-client';
 import { GENERATE_STREAM } from '@/lib/graphql/queries';
 import { ensureModelLoaded } from '@/lib/utils/modelLoader';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
-import type { ChatMessage, ChatStatus, SteeringConfig } from '@/lib/types/types';
+import type { ChatMessage, ChatStatus, SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
 export interface UseSteeringChatReturn {
   messages: ChatMessage[];
@@ -23,15 +23,23 @@ export interface SteeringChatOptions {
   onAssistantMessageComplete?: (message: ChatMessage) => void;
 }
 
+/** Features that actually steer the model. Strength-0 entries are inert
+ * (auto-loaded presets sitting idle) and are excluded from the GraphQL
+ * payload, change detection, and UI "active" counts alike.
+ *
+ * Exported for UI consumers (greeting subtitle, steering badge) + tests. */
+export function activeSteeringFeatures(features: SteeringFeature[]): SteeringFeature[] {
+  return features.filter((f) => f.strength !== 0);
+}
+
 /** Serialise config into a stable key for change detection.
  *
- * Strength-0 entries are inert (auto-loaded presets sitting idle) and
- * are excluded so dialling them in/out is what resets the chat, not the
- * mere act of loading the preset list.
+ * Strength-0 entries are excluded so dialling a preset in/out is what
+ * resets the chat, not the mere act of loading the preset list.
  *
  * Exported for unit testing. */
 export function configKey(config: SteeringConfig): string {
-  const features = (config?.features ?? []).filter((f) => f.strength !== 0);
+  const features = activeSteeringFeatures(config?.features ?? []);
   const tokens = features.map((f) =>
     f.directionName
       ? `dir:${f.directionName}:${f.strength}`
@@ -64,7 +72,7 @@ const DEFAULT_TOP_K = 64;
  *
  * Exported for unit testing. */
 export function buildSteeringInputs(config: SteeringConfig) {
-  const active = config.features.filter((f) => f.strength !== 0);
+  const active = activeSteeringFeatures(config.features);
   if (active.length === 0) return null;
   return active.map((f) => ({
     featureIndex: f.featureIndex,
@@ -93,7 +101,7 @@ export function buildStreamInput(
   steering: ReturnType<typeof buildSteeringInputs>,
   maxTokens: number,
   temperature: number,
-  seed?: number,
+  seed?: number | null,
 ) {
   return {
     turns,
@@ -111,7 +119,7 @@ export function useSteeringChat(
   config: SteeringConfig,
   maxTokens: number = DEFAULT_OUTPUT_LEN,
   temperature: number = 0.7,
-  seed?: number,
+  seed?: number | null,
   options?: SteeringChatOptions,
 ): UseSteeringChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

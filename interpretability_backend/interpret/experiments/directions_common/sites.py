@@ -46,7 +46,7 @@ class CaptureSite(Enum):
     RESID_POST = "post_mlp"  # residual stream at layer exit (block output)
 
     @classmethod
-    def from_name(cls, name: str) -> "CaptureSite":
+    def from_name(cls, name: str) -> CaptureSite:
         """Resolve a canonical string (e.g. ``"pre_attn"``) to a CaptureSite."""
         for site in cls:
             if site.value == name:

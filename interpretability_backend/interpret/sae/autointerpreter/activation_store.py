@@ -31,11 +31,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-
-import numpy as np
 
 
 class ActivationStore(ABC):

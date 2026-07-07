@@ -366,6 +366,11 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-sidebar="content"
       className={cn(
         "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        // Radix's viewport wrapper is display:table, which grows past the viewport
+        // when a child has a fixed pixel width (e.g. a measured recharts svg) and
+        // clips the content's right padding. Sidebars never scroll horizontally,
+        // so force it to block and let the viewport width win.
+        "[&>[data-radix-scroll-area-viewport]>div]:block!",
         className
       )}
       {...props}

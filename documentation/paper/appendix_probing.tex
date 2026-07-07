@@ -1,0 +1,104 @@
+% Appendix: Probe configuration for the in-platform embedding-space probing.
+% Requires \usepackage{booktabs}. Uses \(\ell_2\) etc. — standard amsmath.
+
+\section{Probe Configuration}
+\label{app:probe-config}
+
+All probes are trained \emph{in-platform} on the stored embedding vectors of a
+collection (read from ChromaDB) against a chosen metadata field, with no model
+inference: training is a few seconds of CPU. We expose three probe families.
+
+\paragraph{Targets.}
+A target field is either numeric or binary categorical. Numeric fields are used
+directly. A categorical field with exactly two distinct non-null values is mapped
+to $\{0,1\}$ deterministically (the lexicographically first value $\mapsto 0$; e.g.
+\texttt{safe}$\mapsto 0$, \texttt{unsafe}$\mapsto 1$), following the two-class
+setup of \citet{marks2023geometry}. Items whose target is null are excluded from
+training but are still scored by the fitted probe. We require at least
+$N_{\min}=50$ valid targets.
+
+\paragraph{Train/validation split.}
+For each field we draw a single random $80/20$ train/validation split
+(seed $=42$) and reuse the \emph{same} split across all three probe families, so
+their validation metrics are directly comparable. When more than $5\!\times\!10^{4}$
+valid targets are present, the probe is trained on a fixed random subsample of that
+size (all items are still scored). Inputs are cast to \texttt{float32}.
+
+\paragraph{Ridge probe.}
+$\ell_2$-regularised linear regression on per-feature standardised activations
+($z$-scored using train-split statistics), $\alpha=1.0$. The learned direction
+$\hat{\bm{\theta}}$ is the regression weight vector; every item is scored as
+$s(\bm{x}) = \hat{\bm{\theta}}^{\top} \tilde{\bm{x}} + b$, where $\tilde{\bm{x}}$ is
+the standardised activation and $b$ the fitted intercept.
+
+\paragraph{Mass-mean probe.}
+The closed-form difference-of-class-means direction of
+\citet{marks2023geometry}, computed on standardised activations: with a median
+split of the target,
+$\hat{\bm{\theta}}_{\mathrm{mm}} = \bm{\mu}_{+} - \bm{\mu}_{-}$
+(unit-normalised), where $\bm{\mu}_{\pm}$ are the mean activations of the
+above-/below-median groups. Scores are the projection
+$s(\bm{x}) = \hat{\bm{\theta}}_{\mathrm{mm}}^{\top}\tilde{\bm{x}}$. Because the
+projection is uncalibrated, we report a calibrated $R^2$: we fit a univariate
+least-squares readout $y \approx a\,s(\bm{x}) + c$ on the training split and
+evaluate its $R^2$ on the validation split. (Standardising the activations makes
+this a diagonal-covariance variant of the raw mass-mean probe; we do not apply the
+full $\Sigma^{-1}$ correction, whose regularised form is subsumed by the ridge
+probe.)
+
+\paragraph{MLP probe.}
+A nonlinear baseline: one hidden layer of width $256$ with ReLU and dropout $0.1$,
+i.e. $\mathrm{Linear}(d,256)\to\mathrm{ReLU}\to\mathrm{Dropout}(0.1)\to
+\mathrm{Linear}(256,1)$, trained with Adam (learning rate $10^{-3}$, weight decay
+$10^{-4}$), mean-squared-error loss, batch size $64$, for up to $100$ epochs with
+early stopping (patience $10$) on validation loss; the best-validation checkpoint
+is restored. It has no explicit direction vector; scores are the network's
+predictions. Training is seeded (seed $=42$) for reproducibility.
+
+\paragraph{Reported metrics.}
+For every (field, probe) we report the validation coefficient of determination
+$R^2$ and Spearman rank correlation $\rho$ between predictions (or the mass-mean
+projection) and the target; the underlying store additionally records Pearson $r$,
+MSE, MAE, and the corresponding train-split values. Non-finite values arising from
+degenerate targets are recorded as null rather than reported.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    \textbf{Setting} & \textbf{Value} \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{Shared}} \\
+    Train/validation split      & $80/20$ \\
+    Random seed                 & $42$ \\
+    Min.\ valid targets $N_{\min}$ & $50$ \\
+    Max.\ training subsample    & $5\times10^{4}$ \\
+    Input dtype                 & \texttt{float32} \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{Ridge}} \\
+    Standardisation             & per-feature $z$-score \\
+    Regularisation $\alpha$     & $1.0$ \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{Mass-mean}} \\
+    Standardisation             & per-feature $z$-score \\
+    Class split                 & target median \\
+    Direction                   & $\bm{\mu}_{+}-\bm{\mu}_{-}$, unit-norm \\
+    $R^2$                       & calibrated (OLS readout) \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{MLP}} \\
+    Hidden layer                & $1\times256$, ReLU \\
+    Dropout                     & $0.1$ \\
+    Optimiser                   & Adam \\
+    Learning rate               & $10^{-3}$ \\
+    Weight decay                & $10^{-4}$ \\
+    Batch size                  & $64$ \\
+    Max.\ epochs / patience     & $100$ / $10$ \\
+    Loss                        & MSE \\
+    \bottomrule
+  \end{tabular}
+  \caption{Probe hyperparameters. Ridge and mass-mean are linear probes over
+  standardised embedding activations; the MLP is a nonlinear baseline sharing the
+  same split.}
+  \label{tab:probe-config}
+\end{table}

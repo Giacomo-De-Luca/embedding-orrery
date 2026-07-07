@@ -18,6 +18,7 @@ import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicCo
 import { TopicListSection } from './topics/TopicListSection';
 import { ReduceTopicsSection } from './topics/ReduceTopicsSection';
 import { LlmLabelingSection } from './topics/LlmLabelingSection';
+import { TopicQualitySection } from './topics/TopicQualitySection';
 
 interface TopicExtractionCardProps {
   collectionName: string;
@@ -170,6 +171,14 @@ export function TopicExtractionCard({
                   otherOpsLoading={topicsLoading || reduceTopicsLoading}
                   lastLlmLabelsResult={lastLlmLabelsResult}
                   onLabeled={onTopicsExtracted}
+                />
+
+                <Separator />
+                <TopicQualitySection
+                  collectionName={collectionName}
+                  hasSubtopics={hasSubtopics}
+                  otherOpsLoading={topicsLoading || reduceTopicsLoading || llmLabelsLoading}
+                  storedQualityMetrics={lastTopicsResult?.qualityMetrics}
                 />
               </>
             )}
