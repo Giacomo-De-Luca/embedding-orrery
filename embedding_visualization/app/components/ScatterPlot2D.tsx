@@ -25,11 +25,14 @@ import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import {
   computeClusterLabelPlacements,
   computeCurrentScale,
+  plotAreaFromFullLayout,
   projectDataToScreen,
   type AxisRanges,
-  type PlotArea,
   type ClusterLabelPlacement,
 } from '../utils/labelPlacement2D';
+import { useDensityOverlay } from '../../lib/hooks/useDensityOverlay';
+import { useDensityClusterLabels } from '../../lib/hooks/useDensityClusterLabels';
+import { assignCategoryChannels, type ActiveCategory } from '../../lib/utils/densityRenderer/densityMath';
 
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { build2DModeBarButtons } from '../../lib/utils/plotlyIcons';
@@ -184,6 +187,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       gd: gd ?? graphDivRef.current,
       plotlyLib: plotlyLibRef.current,
       container: containerRef.current,
+      densityCanvas: densityCanvasRef.current,
       labelCanvas: labelCanvasRef.current,
       isDark,
     })
@@ -208,9 +212,13 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette, colorOverrides);
   }, [categoryField, categoryValues, categoricalPalette, colorOverrides]);
 
-  // --- Cluster label data (shared with 3D pattern via groupPointsByCluster) ---
-  const clusterDataMap = useMemo(() => {
-    if (!showClusterLabels || !categoryField) return new Map<string, ClusterData>();
+  const densityMode = useVisualizationStore((s) => s.densityMode);
+  const densityIntensity = useVisualizationStore((s) => s.densityIntensity);
+
+  // --- Visibly active points: shared input for cluster labels and the density
+  // overlay, so both track the same filters (mirrors the 3D clusterDataMap).
+  const visiblePoints = useMemo(() => {
+    if (!showClusterLabels && !densityMode) return [] as Point2D[];
 
     let displayPoints: Point2D[] = hideUnclustered
       ? points.filter(p => {
@@ -222,7 +230,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         })
       : points;
 
-    if (mutedCategories.length > 0) {
+    if (categoryField && mutedCategories.length > 0) {
       const mutedSet = new Set(mutedCategories);
       displayPoints = displayPoints.filter(p => {
         const category = p.metadata?.[categoryField];
@@ -230,15 +238,89 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       });
     }
 
-    // Exclude points muted by text search / temporal filters, so cluster
-    // labels track the visibly active points (mirrors the 3D clusterDataMap).
+    // Exclude points muted by text search / temporal filters.
     if (combinedMutedIndices && combinedMutedIndices.size > 0) {
       displayPoints = displayPoints.filter(p => !combinedMutedIndices.has(p.index));
     }
 
+    return displayPoints;
+  }, [showClusterLabels, densityMode, points, categoryField, hideUnclustered, mutedCategories, combinedMutedIndices]);
+
+  // --- Cluster label data (shared with 3D pattern via groupPointsByCluster) ---
+  const clusterDataMap = useMemo(() => {
+    if (!showClusterLabels || !categoryField) return new Map<string, ClusterData>();
     // groupPointsByCluster works with Point3D but Point2D is compatible (z defaults via centroid calc)
-    return groupPointsByCluster(displayPoints as any, categoryField, colorMap, nestedColorMap);
-  }, [showClusterLabels, points, categoryField, colorMap, nestedColorMap, hideUnclustered, mutedCategories, combinedMutedIndices]);
+    return groupPointsByCluster(visiblePoints as any, categoryField, colorMap, nestedColorMap);
+  }, [showClusterLabels, visiblePoints, categoryField, colorMap, nestedColorMap]);
+
+  // --- Density overlay: category → RGBA channel assignment (≤4 active
+  // categorical categories get per-category colors, else muted tint) ---
+  const channelAssignment = useMemo(() => {
+    const isCategoricalField =
+      colorScale.type === 'categorical' && categoryField != null && categoryValues.length > 0;
+    let active: ActiveCategory[] = [];
+    if (densityMode && isCategoricalField && categoryField) {
+      const counts = new Map<string, number>();
+      for (const p of visiblePoints) {
+        const raw = p.metadata?.[categoryField];
+        const cat = raw !== null && raw !== undefined && raw !== '' ? String(raw) : 'unknown';
+        counts.set(cat, (counts.get(cat) ?? 0) + 1);
+      }
+      active = Array.from(counts, ([name, count]) => ({
+        name,
+        count,
+        color: (nestedColorMap?.subtopicColors[name] ?? colorMap[name]) || '#7f7f7f',
+      }));
+    }
+    return assignCategoryChannels(active, isCategoricalField, isDark);
+  }, [densityMode, visiblePoints, categoryField, categoryValues.length, colorScale.type, colorMap, nestedColorMap, isDark]);
+
+  const densityCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [plotReady, setPlotReady] = useState(false);
+
+  // Initial (full-extent) axis ranges: data bounds + Plotly's ~5% auto-pad.
+  const initialRanges = useMemo((): AxisRanges | null => {
+    if (!bounds) return null;
+    const padX = (bounds.maxX - bounds.minX) * 0.05 || 0.5;
+    const padY = (bounds.maxY - bounds.minY) * 0.05 || 0.5;
+    return {
+      xRange: [bounds.minX - padX, bounds.maxX + padX],
+      yRange: [bounds.minY - padY, bounds.maxY + padY],
+    };
+  }, [bounds]);
+
+  const { scheduleRender: scheduleDensityRender, supported: densitySupported } = useDensityOverlay({
+    enabled: densityMode && plotReady,
+    canvasRef: densityCanvasRef,
+    graphDivRef,
+    visiblePoints,
+    categoryField,
+    channelAssignment,
+    initialRanges,
+    intensity: densityIntensity,
+    isDark,
+    width,
+    height,
+  });
+
+  // Density-blob cluster labels (hybrid text): only attempted in density mode;
+  // null falls back to the topic-centroid placements below.
+  const hasTopicLabels = useMemo(
+    () => points.some(p => p.metadata?.['topic_label'] != null),
+    [points],
+  );
+  const densityPlacements = useDensityClusterLabels({
+    enabled: densityMode && showClusterLabels && plotReady,
+    visiblePoints,
+    topicLabelField: hasTopicLabels ? 'topic_label' : null,
+    colorMap,
+    nestedColorMap,
+    isDark,
+    initialRanges,
+    graphDivRef,
+    width,
+    height,
+  });
 
   // --- Cluster label font constant ---
   const CLUSTER_FONT = 'bold 13px Geist Mono, monospace';
@@ -246,7 +328,19 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
   // --- Recompute Apple placements when clusters or layout change ---
   useEffect(() => {
-    if (!showClusterLabels || clusterDataMap.size === 0 || !bounds) {
+    if (!showClusterLabels || !initialRanges) {
+      clusterPlacementsRef.current = [];
+      return;
+    }
+    initialRangesRef.current = initialRanges;
+
+    // Density-blob labels take over when the pipeline produced them.
+    if (densityPlacements && densityPlacements.length > 0) {
+      clusterPlacementsRef.current = densityPlacements;
+      return;
+    }
+
+    if (clusterDataMap.size === 0) {
       clusterPlacementsRef.current = [];
       return;
     }
@@ -256,31 +350,16 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Compute initial ranges from data bounds with some padding (Plotly auto-pads ~5%)
-    const padX = (bounds.maxX - bounds.minX) * 0.05 || 0.5;
-    const padY = (bounds.maxY - bounds.minY) * 0.05 || 0.5;
-    const initRanges: AxisRanges = {
-      xRange: [bounds.minX - padX, bounds.maxX + padX],
-      yRange: [bounds.minY - padY, bounds.maxY + padY],
-    };
-    initialRangesRef.current = initRanges;
-
-    // Use the Plotly layout area (approximate — margins are 50px each side)
-    const plotArea: PlotArea = {
-      left: 50,
-      top: 50,
-      width: Math.max(width - 100, 100),
-      height: Math.max(height - 100, 100),
-    };
+    const plotArea = plotAreaFromFullLayout(graphDivRef.current?._fullLayout, width, height);
 
     clusterPlacementsRef.current = computeClusterLabelPlacements(
       clusterDataMap,
       ctx,
       CLUSTER_FONT,
-      initRanges,
+      initialRanges,
       plotArea,
     );
-  }, [showClusterLabels, clusterDataMap, bounds, width, height]);
+  }, [showClusterLabels, clusterDataMap, densityPlacements, initialRanges, width, height]);
 
   // --- Render cluster labels on the canvas overlay ---
   const renderClusterLabels = useCallback(() => {
@@ -326,15 +405,8 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     const scale = computeCurrentScale(curRanges, initRanges);
 
     // Get the plot area from Plotly's internal layout for accurate coordinate mapping
-    const fl = gd?._fullLayout;
-    const plotArea: PlotArea = {
-      left: fl?.margin?.l ?? 50,
-      top: fl?.margin?.t ?? 50,
-      width: (fl?.width ?? cssW) - (fl?.margin?.l ?? 50) - (fl?.margin?.r ?? 50),
-      height: (fl?.height ?? cssH) - (fl?.margin?.t ?? 50) - (fl?.margin?.b ?? 50),
-    };
+    const plotArea = plotAreaFromFullLayout(gd?._fullLayout, cssW, cssH);
 
-    ctx.font = CLUSTER_FONT;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
 
@@ -352,14 +424,20 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       if (screen.x < plotArea.left - 20 || screen.x > plotArea.left + plotArea.width + 20) continue;
       if (screen.y < plotArea.top - 20 || screen.y > plotArea.top + plotArea.height + 20) continue;
 
+      // Density labels carry per-level font sizes; topic-centroid labels use the default
+      const fontSize = cl.fontSize ?? CLUSTER_FONT_SIZE;
+      ctx.font = fontSize === CLUSTER_FONT_SIZE ? CLUSTER_FONT : `bold ${fontSize}px Geist Mono, monospace`;
+
       const textWidth = ctx.measureText(cl.label).width;
       const pad = 4;
       const box = {
         loX: screen.x - textWidth / 2 - pad,
-        loY: screen.y - CLUSTER_FONT_SIZE * 0.6 - pad,
+        loY: screen.y - fontSize * 0.6 - pad,
         hiX: screen.x + textWidth / 2 + pad,
-        hiY: screen.y + CLUSTER_FONT_SIZE * 0.6 + pad,
-        label: cl.label,
+        hiY: screen.y + fontSize * 0.6 + pad,
+        // Topic-backed density labels stay clickable via topicLabelToIdMap;
+        // summarizer labels miss the lookup (no-op click).
+        label: cl.topicLabel ?? cl.label,
       };
 
       // Draw label with stroke outline for readability (same style as 3D)
@@ -378,17 +456,23 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     ctx.globalAlpha = 1.0;
   }, [width, height, isDark]);
 
-  // --- Handle Plotly relayout (zoom/pan) to re-render cluster labels ---
+  const labelsActive = showClusterLabels &&
+    (clusterDataMap.size > 0 || (densityPlacements?.length ?? 0) > 0);
+
+  // --- Handle Plotly relayout (zoom/pan) to re-render the overlays.
+  // `relayouting` fires continuously during drag/scroll so the density map and
+  // labels track the gesture live; `relayout` fires once at the end.
   const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
-    if (showClusterLabels && clusterDataMap.size > 0) {
+    scheduleDensityRender();
+    if (labelsActive) {
       // Use rAF to let Plotly finish its layout update first
       requestAnimationFrame(() => renderClusterLabels());
     }
-  }, [showClusterLabels, clusterDataMap.size, renderClusterLabels]);
+  }, [labelsActive, renderClusterLabels, scheduleDensityRender]);
 
   // Re-render labels when cluster data, size, or theme changes
   useEffect(() => {
-    if (showClusterLabels && clusterDataMap.size > 0) {
+    if (labelsActive) {
       // Small delay to ensure Plotly has laid out
       const timer = setTimeout(() => renderClusterLabels(), 50);
       return () => clearTimeout(timer);
@@ -397,7 +481,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       if (ctx) ctx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
       drawnLabelBoxesRef.current = [];
     }
-  }, [showClusterLabels, clusterDataMap, width, height, renderClusterLabels]);
+  }, [labelsActive, clusterDataMap, densityPlacements, width, height, renderClusterLabels]);
 
   // --- Click handler for cluster labels (intercept before Plotly) ---
   const handleContainerClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -537,21 +621,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     return calculateHighlightScale(points.length);
   }, [points.length]);
 
-  //const { generateClusters, isLoaded: isClusteringLoaded } = useDensityClustering();
-  //const [clusters, setClusters] = useState<DensityCluster[]>([]);
-
-  //useEffect(() => {
-   // if (isClusteringLoaded && points.length > 0) {
-      // Run in a timeout to avoid blocking render
-  //    const timer = setTimeout(() => {
-  //      const result = generateClusters(points);
-  //      setClusters(result);
-  //    }, 100);
-  //    return () => clearTimeout(timer);
-  //  } else {
-  //    setClusters([]);
-  //  }
-  //}, [isClusteringLoaded, points, generateClusters]);
   const plotData = useMemo((): PlotlyData[] => {
     let traces: PlotlyData[] = [];
 
@@ -1276,42 +1345,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       }
     }
 
-    // Add cluster traces
-    //if (clusters.length > 0) {
-    //   const x: (number | null)[] = [];
-    //   const y: (number | null)[] = [];
-       
-    //   clusters.forEach(cluster => {
-    //     cluster.contour.forEach(p => {
-    //       x.push(p.x);
-    //       y.push(p.y);
-    //     });
-         // Close the loop
-    /*     if (cluster.contour.length > 0) {
-            x.push(cluster.contour[0].x);
-            y.push(cluster.contour[0].y);
-         }
-         // Separator
-         x.push(null);
-         y.push(null);
-       });
-
-       traces.push({
-         x,
-         y,
-         mode: 'lines',
-         type: 'scattergl',
-         name: 'Clusters',
-         line: {
-           color: isDark ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.5)',
-           width: 1
-         },
-         hoverinfo: 'skip',
-         showlegend: false
-       });
-    }
-        */
-
     // E. Text Labels for highlighted points (rendered last, on top)
     if (showLabels && highlightedIndices && highlightedIndices.size > 0) {
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
@@ -1407,7 +1440,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
   };
 
-  const [plotReady, setPlotReady] = useState(false);
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
 
   const handleHover = (event: PlotHoverEvent) => {
@@ -1440,7 +1472,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     setTooltipData(null);
   };
 
-  const hasClusterLabels = showClusterLabels && clusterDataMap.size > 0;
+  const hasClusterLabels = labelsActive;
 
 return (
   <div
@@ -1463,8 +1495,23 @@ return (
       onHover={handleHover}
       onUnhover={handleUnhover}
       onRelayout={handleRelayout}
+      // Fires continuously during pan/zoom gestures; supported by react-plotly
+      // at runtime but missing from its type declarations.
+      {...({ onRelayouting: handleRelayout } as Partial<PlotParams>)}
       onInitialized={(_figure, graphDiv) => { graphDivRef.current = graphDiv; setPlotReady(true); }}
     />
+    {densityMode && densitySupported && (
+      <canvas
+        ref={densityCanvasRef}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      />
+    )}
     {hasClusterLabels && (
       <canvas
         ref={labelCanvasRef}

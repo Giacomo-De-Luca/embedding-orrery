@@ -2,6 +2,17 @@
 
 import * as cluster from "./pkg/density_clustering_wasm.js";
 
+// The .wasm binary is served from public/ and fetched at runtime; passing an
+// explicit URL keeps both bundlers (Turbopack + webpack) out of wasm handling
+// entirely (the glue's `new URL(..., import.meta.url)` fallback never runs).
+// Keep public/wasm/density_clustering_wasm_bg.wasm in sync with pkg/.
+let initPromise: Promise<unknown> | null = null;
+
+function ensureInit(): Promise<unknown> {
+  initPromise ??= cluster.default("/wasm/density_clustering_wasm_bg.wasm");
+  return initPromise;
+}
+
 /** A resulting cluster from the find clusters function */
 export interface Cluster {
   /** Cluster identifier */
@@ -44,7 +55,7 @@ export async function findClusters(
   height: number,
   options: Partial<FindClustersOptions> = {}
 ): Promise<Cluster[]> {
-  await cluster.default();
+  await ensureInit();
   const t0 = new Date().getTime();
   const input = new cluster.DensityMap(width, height, densityMap);
   const result = cluster.find_clusters(input, {

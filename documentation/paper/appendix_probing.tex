@@ -1,71 +1,97 @@
-% Appendix: Probe configuration for the in-platform embedding-space probing.
+% Appendix: probe protocol + per-dimension results for the psycholinguistic-
+% norms probing study (Section~\ref{sec:glasgow}).
 % Requires \usepackage{booktabs}. Uses \(\ell_2\) etc. — standard amsmath.
 
-\section{Probe Configuration}
-\label{app:probe-config}
+\section{Probe Protocol and Per-Dimension Results}
+\label{app:probes}
 
-All probes are trained \emph{in-platform} on the stored embedding vectors of a
-collection (read from ChromaDB) against a chosen metadata field, with no model
-inference: training is a few seconds of CPU. We expose three probe families.
+Each norm is treated as an independent 1-D target recovered from a frozen
+embedding by a probe; we compare probe families and embedding spaces on one
+shared evaluation surface. Activations are extracted once per model and cached,
+so re-runs only re-train probes.
+
+\paragraph{Embedding spaces.}
+Two sentence encoders are probed over the $4{,}682$ Glasgow words: MiniLM
+(\texttt{all-MiniLM-L6-v2}, $384$-d, CLS pooling, hidden layers $\{0,3,6\}$)
+and EmbeddingGemma (\texttt{google/embeddinggemma-300M}, $768$-d, mean pooling,
+hidden layers $\{0,12,24\}$). Each extraction emits one pooled hidden vector per
+word per layer; a probe is fit independently at every layer and we report the
+best-layer validation score. The concreteness-only study (Brysbaert et al.,
+$39{,}954$ words) probes the final pooled MiniLM embedding.
 
 \paragraph{Targets.}
-A target field is either numeric or binary categorical. Numeric fields are used
-directly. A categorical field with exactly two distinct non-null values is mapped
-to $\{0,1\}$ deterministically (the lexicographically first value $\mapsto 0$; e.g.
-\texttt{safe}$\mapsto 0$, \texttt{unsafe}$\mapsto 1$), following the two-class
-setup of \citet{marks2023geometry}. Items whose target is null are excluded from
-training but are still scored by the fitted probe. We require at least
-$N_{\min}=50$ valid targets.
+Norms are used as continuous regression targets. For the logistic probe only,
+a target is binarised at its median (above/below), following the two-class
+framing of \citet{marks2023geometry}. Items with a null target are excluded
+from training but still scored. We require at least $N_{\min}=50$ valid targets.
 
 \paragraph{Train/validation split.}
-For each field we draw a single random $80/20$ train/validation split
-(seed $=42$) and reuse the \emph{same} split across all three probe families, so
-their validation metrics are directly comparable. When more than $5\!\times\!10^{4}$
-valid targets are present, the probe is trained on a fixed random subsample of that
-size (all items are still scored). Inputs are cast to \texttt{float32}.
+For each (space, target) we draw a single random $80/20$ train/validation split
+(seed $=42$) and reuse the \emph{same} split across all probe families, so their
+validation metrics are directly comparable. Inputs are cast to \texttt{float32}.
+Unless noted, activations are per-feature $z$-scored using train-split
+statistics.
 
 \paragraph{Ridge probe.}
-$\ell_2$-regularised linear regression on per-feature standardised activations
-($z$-scored using train-split statistics), $\alpha=1.0$. The learned direction
-$\hat{\bm{\theta}}$ is the regression weight vector; every item is scored as
-$s(\bm{x}) = \hat{\bm{\theta}}^{\top} \tilde{\bm{x}} + b$, where $\tilde{\bm{x}}$ is
-the standardised activation and $b$ the fitted intercept.
+$\ell_2$-regularised linear regression on standardised activations,
+$\alpha=1.0$. The learned direction $\hat{\bm{\theta}}$ is the weight vector;
+each item is scored $s(\bm{x}) = \hat{\bm{\theta}}^{\top}\tilde{\bm{x}} + b$.
+
+\paragraph{Lasso probe.}
+$\ell_1$-regularised linear regression, $\alpha=0.01$ (up to $5000$
+coordinate-descent iterations), used mainly for the sparse direction vectors it
+exposes for downstream feature analysis.
+
+\paragraph{SVR probe.}
+Support-vector regression with an RBF kernel, $C=1.0$ — the nonlinear regressor;
+it is the strongest probe for both small encoders. Scores are the SVR
+predictions.
 
 \paragraph{Mass-mean probe.}
-The closed-form difference-of-class-means direction of
-\citet{marks2023geometry}, computed on standardised activations: with a median
-split of the target,
-$\hat{\bm{\theta}}_{\mathrm{mm}} = \bm{\mu}_{+} - \bm{\mu}_{-}$
-(unit-normalised), where $\bm{\mu}_{\pm}$ are the mean activations of the
-above-/below-median groups. Scores are the projection
-$s(\bm{x}) = \hat{\bm{\theta}}_{\mathrm{mm}}^{\top}\tilde{\bm{x}}$. Because the
-projection is uncalibrated, we report a calibrated $R^2$: we fit a univariate
+The closed-form difference-of-class-means direction of \citet{marks2023geometry}
+on standardised activations: with a median split of the target,
+$\hat{\bm{\theta}}_{\mathrm{mm}} = \bm{\mu}_{+}-\bm{\mu}_{-}$ (unit-normalised),
+scored by the projection $s(\bm{x}) = \hat{\bm{\theta}}_{\mathrm{mm}}^{\top}
+\tilde{\bm{x}}$. Because the projection is uncalibrated, its natural metrics are
+Pearson/Spearman correlation; where an $R^2$ is reported we fit a univariate
 least-squares readout $y \approx a\,s(\bm{x}) + c$ on the training split and
-evaluate its $R^2$ on the validation split. (Standardising the activations makes
-this a diagonal-covariance variant of the raw mass-mean probe; we do not apply the
-full $\Sigma^{-1}$ correction, whose regularised form is subsumed by the ridge
-probe.)
+evaluate it on validation. Standardising the activations makes this a
+diagonal-covariance variant of the raw mass-mean probe; the full $\Sigma^{-1}$
+correction, whose regularised form is subsumed by the ridge probe, is not
+applied.
+
+\paragraph{Logistic-regression probe.}
+The discriminative counterpart to the mass-mean $\sigma(\cdot)$ probe. Each norm
+is split at its median into two equal-frequency classes (concrete vs.\ abstract,
+etc.); we fit $\ell_2$-regularised logistic regression (scikit-learn
+\texttt{LogisticRegression}, inverse-regularisation $C=1.0$, L-BFGS, up to
+$1000$ iterations, uniform class weights) on the same standardised activations
+and $80/20$ split. The class direction is the fitted weight vector
+$\hat{\bm{\theta}}$; items are scored by the decision value
+$\hat{\bm{\theta}}^{\top}\tilde{\bm{x}} + b$. Because the target is binary, this
+probe reports \emph{classification} metrics (accuracy, weighted $F_1$, ROC-AUC)
+rather than $R^2$.
 
 \paragraph{MLP probe.}
-A nonlinear baseline: one hidden layer of width $256$ with ReLU and dropout $0.1$,
-i.e. $\mathrm{Linear}(d,256)\to\mathrm{ReLU}\to\mathrm{Dropout}(0.1)\to
-\mathrm{Linear}(256,1)$, trained with Adam (learning rate $10^{-3}$, weight decay
-$10^{-4}$), mean-squared-error loss, batch size $64$, for up to $100$ epochs with
-early stopping (patience $10$) on validation loss; the best-validation checkpoint
-is restored. It has no explicit direction vector; scores are the network's
-predictions. Training is seeded (seed $=42$) for reproducibility.
+A nonlinear baseline: one hidden layer of width $256$ with ReLU and dropout
+$0.1$, i.e. $\mathrm{Linear}(d,256)\!\to\!\mathrm{ReLU}\!\to\!\mathrm{Dropout}
+(0.1)\!\to\!\mathrm{Linear}(256,1)$, trained with Adam (learning rate $10^{-3}$,
+weight decay $10^{-4}$), mean-squared-error loss, batch size $64$, for up to
+$100$ epochs with early stopping (patience $10$) on validation loss; the
+best-validation checkpoint is restored. It has no explicit direction vector;
+scores are the network's predictions. Training is seeded (seed $=42$).
 
 \paragraph{Reported metrics.}
-For every (field, probe) we report the validation coefficient of determination
-$R^2$ and Spearman rank correlation $\rho$ between predictions (or the mass-mean
-projection) and the target; the underlying store additionally records Pearson $r$,
-MSE, MAE, and the corresponding train-split values. Non-finite values arising from
-degenerate targets are recorded as null rather than reported.
+For regression probes we report the best-layer validation $R^2$ and Spearman
+$\rho$; the store additionally records Pearson $r$, MSE, MAE and the train-split
+values. The mass-mean probe is reported as $\rho$ (a correlation, not $R^2$).
+The logistic probe is reported as validation accuracy and ROC-AUC. Non-finite
+values from degenerate targets are recorded as null rather than reported.
 
 \begin{table}[t]
   \centering
   \small
-  \begin{tabular}{@{}lll@{}}
+  \begin{tabular}{@{}ll@{}}
     \toprule
     \textbf{Setting} & \textbf{Value} \\
     \midrule
@@ -73,32 +99,144 @@ degenerate targets are recorded as null rather than reported.
     Train/validation split      & $80/20$ \\
     Random seed                 & $42$ \\
     Min.\ valid targets $N_{\min}$ & $50$ \\
-    Max.\ training subsample    & $5\times10^{4}$ \\
+    Standardisation             & per-feature $z$-score \\
     Input dtype                 & \texttt{float32} \\
     \midrule
-    \multicolumn{2}{@{}l}{\emph{Ridge}} \\
-    Standardisation             & per-feature $z$-score \\
-    Regularisation $\alpha$     & $1.0$ \\
+    \multicolumn{2}{@{}l}{\emph{Ridge / Lasso}} \\
+    Ridge $\alpha$              & $1.0$ \\
+    Lasso $\alpha$ / max iter   & $0.01$ / $5000$ \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{SVR}} \\
+    Kernel / $C$                & RBF / $1.0$ \\
     \midrule
     \multicolumn{2}{@{}l}{\emph{Mass-mean}} \\
-    Standardisation             & per-feature $z$-score \\
     Class split                 & target median \\
     Direction                   & $\bm{\mu}_{+}-\bm{\mu}_{-}$, unit-norm \\
-    $R^2$                       & calibrated (OLS readout) \\
+    Metric                      & Spearman $\rho$ (uncalibrated) \\
+    \midrule
+    \multicolumn{2}{@{}l}{\emph{Logistic regression}} \\
+    Target binning              & median split ($2$ classes) \\
+    Inverse reg.\ $C$ / max iter & $1.0$ / $1000$ \\
+    Class weighting             & uniform \\
+    Metric                      & accuracy / $F_1$ / ROC-AUC \\
     \midrule
     \multicolumn{2}{@{}l}{\emph{MLP}} \\
-    Hidden layer                & $1\times256$, ReLU \\
-    Dropout                     & $0.1$ \\
-    Optimiser                   & Adam \\
-    Learning rate               & $10^{-3}$ \\
-    Weight decay                & $10^{-4}$ \\
+    Hidden layer / dropout      & $1\times256$, ReLU / $0.1$ \\
+    Optimiser / lr / wd         & Adam / $10^{-3}$ / $10^{-4}$ \\
     Batch size                  & $64$ \\
     Max.\ epochs / patience     & $100$ / $10$ \\
     Loss                        & MSE \\
     \bottomrule
   \end{tabular}
-  \caption{Probe hyperparameters. Ridge and mass-mean are linear probes over
-  standardised embedding activations; the MLP is a nonlinear baseline sharing the
-  same split.}
+  \caption{Probe hyperparameters. Ridge, lasso, mass-mean and logistic are
+  linear probes over standardised activations; SVR and the MLP are nonlinear.
+  All share the same $80/20$ seed-$42$ split per (space, target).}
   \label{tab:probe-config}
 \end{table}
+
+\begin{table}[t]
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    \textbf{Norm} & \textbf{Ridge} & \textbf{SVR} & \textbf{MLP} & \textbf{Mass-mean} \\
+     & $R^2$ & $R^2$ & $R^2$ & $\rho$ \\
+    \midrule
+    \multicolumn{5}{@{}l}{\emph{MiniLM-384}} \\
+    concreteness & 0.752 & \textbf{0.756} & 0.711 & 0.714 \\
+    imageability & 0.693 & \textbf{0.715} & 0.664 & 0.703 \\
+    valence      & 0.587 & \textbf{0.678} & 0.656 & 0.671 \\
+    aoa          & 0.607 & \textbf{0.647} & 0.578 & 0.661 \\
+    semsize      & 0.532 & \textbf{0.595} & 0.568 & 0.616 \\
+    gender       & 0.486 & \textbf{0.588} & 0.529 & 0.649 \\
+    familiarity  & 0.519 & \textbf{0.552} & 0.502 & 0.598 \\
+    arousal      & 0.434 & \textbf{0.511} & 0.462 & 0.540 \\
+    dominance    & 0.396 & \textbf{0.502} & 0.445 & 0.534 \\
+    \midrule
+    \multicolumn{5}{@{}l}{\emph{EmbeddingGemma-768}} \\
+    concreteness & 0.765 & \textbf{0.812} & 0.660 & 0.860 \\
+    imageability & 0.692 & \textbf{0.756} & 0.594 & 0.809 \\
+    valence      & 0.676 & \textbf{0.725} & 0.583 & 0.774 \\
+    aoa          & 0.606 & \textbf{0.668} & 0.493 & 0.676 \\
+    semsize      & 0.654 & \textbf{0.700} & 0.484 & 0.727 \\
+    gender       & 0.533 & \textbf{0.613} & 0.347 & 0.651 \\
+    familiarity  & 0.487 & \textbf{0.574} & 0.258 & 0.673 \\
+    arousal      & 0.508 & \textbf{0.584} & 0.346 & 0.614 \\
+    dominance    & 0.469 & \textbf{0.553} & 0.322 & 0.629 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Per-dimension recovery of the nine Glasgow norms ($4{,}682$ words),
+  best-layer validation. Regression probes report $R^2$; the mass-mean direction
+  reports Spearman $\rho$ (an uncalibrated projection, not comparable to the
+  $R^2$ columns and therefore not bolded). SVR (bold) is the best regressor for
+  every norm, and EmbeddingGemma beats MiniLM on every norm at its best probe.
+  Norms are ordered by encodability.}
+  \label{tab:glasgow-reg}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    & \multicolumn{2}{c}{\textbf{MiniLM-384}} & \multicolumn{2}{c}{\textbf{EmbGemma-768}} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+    \textbf{Norm} & Acc & AUC & Acc & AUC \\
+    \midrule
+    concreteness & \textbf{0.871} & 0.953 & 0.838 & 0.922 \\
+    imageability & 0.846 & 0.921 & 0.813 & 0.904 \\
+    valence      & 0.790 & 0.870 & 0.801 & 0.877 \\
+    aoa          & 0.795 & 0.877 & 0.777 & 0.848 \\
+    semsize      & 0.793 & 0.873 & 0.794 & 0.874 \\
+    gender       & 0.756 & 0.829 & 0.749 & 0.820 \\
+    familiarity  & 0.809 & 0.881 & 0.758 & 0.835 \\
+    arousal      & 0.741 & 0.815 & 0.730 & 0.804 \\
+    dominance    & 0.712 & 0.793 & 0.710 & 0.775 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Logistic-regression probe (median split) on the nine Glasgow norms,
+  best-layer validation accuracy and ROC-AUC. A linear classifier separates the
+  above-/below-median halves of every norm well above chance ($0.5$), with
+  concreteness the most separable ($0.87$ accuracy / $0.95$ AUC on MiniLM).}
+  \label{tab:glasgow-logreg}
+\end{table}
+
+\paragraph{Concreteness at scale.}
+Table~\ref{tab:conc-only} extends the concreteness probe to the full Brysbaert
+set of $39{,}954$ words, using the final pooled MiniLM embedding (a single
+vector, not the layer sweep). All five families recover concreteness strongly at
+$8.5\times$ the vocabulary: the nonlinear probes lead (MLP $R^2=0.744$, SVR
+$0.724$), the linear ridge direction reaches $R^2=0.697$, and a median-split
+logistic classifier attains $0.842$ accuracy / $0.926$ AUC. Scores run slightly
+below the $4{,}682$-word Glasgow figures, consistent with the larger, more
+diverse vocabulary and the use of the pooled output rather than the best
+internal layer.
+
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}lccccc@{}}
+    \toprule
+    & \textbf{Ridge} & \textbf{SVR} & \textbf{MLP} & \textbf{Mass-mean} & \textbf{Logistic} \\
+    \midrule
+    $R^2$        & 0.697 & 0.724 & \textbf{0.744} & 0.603 & --- \\
+    $\rho$       & 0.835 & 0.846 & \textbf{0.856} & 0.802 & --- \\
+    Acc / AUC    & ---   & ---   & ---   & ---   & 0.842 / 0.926 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Concreteness recovery on the full Brysbaert set ($39{,}954$ words),
+  MiniLM final pooled embedding, seed-$42$ $80/20$ split. Mass-mean $R^2$ is the
+  calibrated readout; the logistic probe uses a median split and reports
+  accuracy/AUC.}
+  \label{tab:conc-only}
+\end{table}
+
+\paragraph{In-platform variant.}
+The same probe families are also exposed as an interactive ``find directions''
+tool that trains on a collection's stored embedding vectors (read from the
+vector store, no fresh model inference — a few seconds of CPU) against any
+numeric metadata field, with a $5\times10^{4}$ training-subsample cap and full
+scoring of all items. It reproduces the offline numbers: e.g.\ the in-platform
+ridge probe on the $39{,}954$-word concreteness collection scores validation
+$R^2=0.700$, matching Table~\ref{tab:conc-only}.

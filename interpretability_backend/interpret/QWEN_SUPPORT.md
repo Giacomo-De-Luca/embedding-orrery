@@ -87,10 +87,20 @@ uv run python -m interpret.diagnostics.qwen_scope_smoke --model Qwen/Qwen3-8B   
 uv run python -m interpret.diagnostics.qwen_scope_smoke --model Qwen/Qwen3.5-27B  --size 27B  # server
 ```
 
-## Backend readiness (out of scope here)
+## Backend readiness
 
-To serve Qwen-scope live, `backend/services/interpret_service.py` would need a
-family switch (build `QwenScopeSAEConfig` + instantiate `Qwen3Inference` instead
-of the Gemma wrapper) and a Qwen `sae_id`/`model_id` scheme (Qwen-scope is **not**
-on Neuronpedia, so labels need autointerp). The `generate_stream` subscription can
-consume the new wrapper method as-is.
+**Phase 1 is wired** (2026-07): `backend/services/interpret_service.py` carries a
+family switch — `load_model` dispatches on the checkpoint (`Qwen/Qwen3-1.7B` →
+`Qwen3Inference`), `_make_sae_config()` builds `QwenScopeSAEConfig` (k=50) for
+steering/highlight, streaming chat translates the Gemma `"model"` role to
+`"assistant"` and exposes `enable_thinking` end-to-end (GraphQL
+`GenerateStreamInput.enableThinking`, default off). The id scheme is
+`model_id="qwen3-1.7B-base"` / `sae_id="{layer}-qwenscope-1-res-{width}"`
+(`source_ids.qwen_source_id`). Verified live on MPS: smoke test, steered
+generation, streaming with thinking on/off, prompt highlight.
+
+Still Gemma-only: `PromptExplorer` / `run_prompt_activations` (clean
+NotImplementedError for qwen — Phase 1.5), and labels/densities/activation
+examples (Qwen-scope is **not** on Neuronpedia, so labels need the autointerp
+pass — Phase 2). Bootstrap decoder-vector ingestion:
+`scripts/extract_qwen_decoder_vectors.py`.

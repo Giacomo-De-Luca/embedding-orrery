@@ -42,7 +42,10 @@ Each is an independent 1-D regression target (Glasgow Norms, Scott et al.):
 
 - **Probes** (per extraction × target × layer, seed 42, 80/20 split): `ridge`
   (α=1.0), `lasso` (α=0.01, saves directions), `svr` (rbf, C=1.0), `massmean`
-  (median-split difference-of-means direction), `mlp` (`[256]`, 100 epochs).
+  (median-split difference-of-means direction), `logreg` (C=1.0, binary
+  **median split** of each norm via `classification_bins=2` → accuracy/F1/AUC,
+  not R²; the discriminative counterpart to the Geometry-of-Truth σ(·) mass-mean
+  probe), `mlp` (`[256]`, 100 epochs).
 - **Activation cache**: `resources/extracted_activations/glasgow_psycholinguistic/`
   — re-runs hit the cache and only re-train probes.
 
@@ -85,6 +88,50 @@ R²** (R² needs calibrated predictions — `val_r2` is blank for `massmean`). B
 | familiarity | 0.575 | 0.749 (svr) | 0.651 | 0.762 (svr) |
 | arousal | 0.534 | 0.721 (svr) | 0.627 | 0.768 (svr) |
 | dominance | 0.535 | 0.714 (svr) | 0.617 | 0.751 (svr) |
+
+## Logistic-regression probe (median split → accuracy)
+
+`logreg` binarises each norm at its median and fits L2 logistic regression on
+the same layers/split. It reports **accuracy / ROC-AUC** (not R²). Best-layer
+validation accuracy (AUC in parentheses):
+
+| Norm | MiniLM acc (AUC) | EmbGemma acc (AUC) |
+|---|---|---|
+| concreteness | **0.871** (0.953) | 0.838 (0.922) |
+| imageability | 0.846 (0.921) | 0.813 (0.904) |
+| familiarity | 0.809 (0.881) | 0.758 (0.835) |
+| aoa | 0.795 (0.877) | 0.777 (0.848) |
+| semsize | 0.793 (0.873) | 0.794 (0.874) |
+| valence | 0.790 (0.870) | 0.801 (0.877) |
+| gender | 0.756 (0.829) | 0.749 (0.820) |
+| arousal | 0.741 (0.815) | 0.730 (0.804) |
+| dominance | 0.712 (0.793) | 0.710 (0.775) |
+
+Every norm's above-/below-median halves are linearly separable well above chance
+(0.5). Interestingly MiniLM edges EmbeddingGemma on the *binary* split for most
+norms, even though EmbeddingGemma wins on continuous R² — the extra signal
+EmbeddingGemma carries is in fine-grained ordering, not the coarse median cut.
+
+## Concreteness at scale (full Brysbaert, 39,954 words)
+
+The full probe set on the **final pooled MiniLM embedding** of all 39,954
+Brysbaert concreteness words (seed 42, 80/20), for direct comparison with the
+4,682-word Glasgow concreteness row:
+
+| Probe | Metric | Value |
+|---|---|---|
+| MLP | R² / ρ | **0.744** / 0.856 |
+| SVR | R² / ρ | 0.724 / 0.846 |
+| Ridge | R² / ρ | 0.697 / 0.835 |
+| Mass-mean | R² (calibrated) / ρ | 0.603 / 0.802 |
+| Logistic (median split) | acc / AUC | 0.842 / 0.926 |
+
+Reproduces the live in-platform ridge probe (val R²=0.700) on the
+`Concreteness-Ratings` collection. Scores sit just below the 4,682-word Glasgow
+figures — larger, more diverse vocabulary + the pooled output rather than the
+best internal layer. (This run uses the in-platform `run_probe_core` on
+freshly-embedded MiniLM vectors, so mass-mean also gets a calibrated R²; the
+offline orchestrator leaves `massmean.val_r2` blank.)
 
 ## Findings
 

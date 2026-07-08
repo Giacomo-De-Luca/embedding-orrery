@@ -167,9 +167,9 @@ export const HOOK_TYPE_DISPLAY: Record<HookType, string> = {
 };
 
 /**
- * Parse a Neuronpedia-format saeId into its structured components.
- * Format: "{layer}-gemmascope-{version}-{hookAbbrev}-{width}"
- * Example: "9-gemmascope-2-res-16k" → { layerIndex: 9, hookType: 'RESID_POST', width: '16k' }
+ * Parse an saeId into its structured components. Positional — both id
+ * schemes share the shape "{layer}-{scope}-{version}-{hookAbbrev}-{width}"
+ * (gemma-scope "9-gemmascope-2-res-16k", qwen-scope "14-qwenscope-1-res-32k").
  */
 export function parseSaeId(saeId: string): ParsedSaeId {
   const parts = saeId.split('-');
@@ -181,10 +181,25 @@ export function parseSaeId(saeId: string): ParsedSaeId {
 }
 
 /**
- * Build a Neuronpedia-format saeId from structured components — the inverse
- * of parseSaeId. Matches the backend's `neuronpedia_source_id` derivation
- * (interpret/sae/source_ids.py).
+ * Extract the scope segment ("gemmascope-2" | "qwenscope-1") from an saeId,
+ * for rebuilding sibling ids of the same family via buildSaeId.
  */
-export function buildSaeId(layerIndex: number, hookType: HookType, width: string): string {
-  return `${layerIndex}-gemmascope-2-${HOOK_TYPE_SHORT[hookType]}-${width}`;
+export function saeIdScope(saeId: string): string {
+  const parts = saeId.split('-');
+  return parts.length >= 5 ? `${parts[1]}-${parts[2]}` : 'gemmascope-2';
+}
+
+/**
+ * Build an saeId from structured components — the inverse of parseSaeId.
+ * The default scope matches the backend's `neuronpedia_source_id` derivation;
+ * pass `saeIdScope(someSaeId)` to stay within another family's scheme
+ * (`qwen_source_id` in interpret/sae/source_ids.py).
+ */
+export function buildSaeId(
+  layerIndex: number,
+  hookType: HookType,
+  width: string,
+  scope: string = 'gemmascope-2',
+): string {
+  return `${layerIndex}-${scope}-${HOOK_TYPE_SHORT[hookType]}-${width}`;
 }

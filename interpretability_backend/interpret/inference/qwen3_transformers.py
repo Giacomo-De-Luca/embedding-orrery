@@ -368,9 +368,10 @@ class Qwen3Inference:
         temperature: float | None = None,
         top_p: float = 0.95,
         top_k: int = 64,
+        enable_thinking: bool = True,
     ) -> str:
         """Generate a text response from a single-turn user prompt."""
-        formatted = self.format_prompt(prompt)
+        formatted = self.format_prompt(prompt, enable_thinking=enable_thinking)
         return self._generate(formatted, output_len, temperature, top_p, top_k)
 
     def generate_chat(
@@ -523,9 +524,10 @@ class Qwen3Inference:
         top_p: float = 0.95,
         top_k: int = 64,
         cancel_event: threading.Event | None = None,
+        enable_thinking: bool = False,
     ) -> Generator[TokenStreamEvent, None, None]:
-        """Stream tokens from a single-turn user prompt (thinking disabled)."""
-        formatted = self.format_prompt(prompt, enable_thinking=False)
+        """Stream tokens from a single-turn user prompt (thinking off by default)."""
+        formatted = self.format_prompt(prompt, enable_thinking=enable_thinking)
         yield from self._generate_stream(
             formatted, output_len, temperature, top_p, top_k, cancel_event
         )
@@ -538,10 +540,15 @@ class Qwen3Inference:
         top_p: float = 0.95,
         top_k: int = 64,
         cancel_event: threading.Event | None = None,
+        enable_thinking: bool = False,
     ) -> Generator[TokenStreamEvent, None, None]:
-        """Stream tokens from a multi-turn conversation. Roles: 'user'/'assistant'/'system'."""
+        """Stream tokens from a multi-turn conversation. Roles: 'user'/'assistant'/'system'.
+
+        ``enable_thinking`` defaults to False so ``<think>`` blocks stay out of
+        the visible output; callers (e.g. the backend chat toggle) may opt in.
+        """
         messages = [{"role": role, "content": content} for role, content in turns]
-        formatted = self.format_prompt(messages, enable_thinking=False)
+        formatted = self.format_prompt(messages, enable_thinking=enable_thinking)
         yield from self._generate_stream(
             formatted, output_len, temperature, top_p, top_k, cancel_event
         )

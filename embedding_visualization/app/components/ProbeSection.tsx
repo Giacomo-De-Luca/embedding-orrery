@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSubscription } from '@apollo/client/react';
-import { Trash2 } from 'lucide-react';
+import { Settings2, Trash2 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Button } from '@/lib/ui-primitives/button';
 import { Badge } from '@/lib/ui-primitives/badge';
+import { Input } from '@/lib/ui-primitives/input';
+import { Label } from '@/lib/ui-primitives/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/lib/ui-primitives/popover';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import {
   Select,
@@ -25,13 +28,16 @@ import {
   resolveProbeTargetSelection,
   type ProbeInfo,
 } from '@/lib/utils/probeFields';
+import {
+  DEFAULT_PROBE_PARAMS,
+  PROBE_KIND_OPTIONS,
+  buildTrainProbeInput,
+  isBinaryKind,
+  probeParamFields,
+  type ProbeKind,
+  type ProbeParams,
+} from '@/lib/utils/probeParams';
 import type { UseProbesReturn } from '@/lib/hooks/useProbes';
-
-const PROBE_KINDS = [
-  { value: 'ridge', label: 'Ridge (linear)' },
-  { value: 'massmean', label: 'Mass-mean' },
-  { value: 'mlp', label: 'MLP (nonlinear)' },
-] as const;
 
 interface ProbeSectionProps {
   probes: UseProbesReturn;
@@ -45,10 +51,16 @@ interface SubscriptionData {
 const fmtMetric = (value: number | null | undefined) =>
   value === null || value === undefined ? '—' : value.toFixed(2);
 
-/** Compact badge: validation R² (massmean's is calibrated) + Spearman ρ. */
+/** Compact badge: classification kinds show AUC + accuracy; regression kinds
+ * show validation R² (massmean's is calibrated) + Spearman ρ. */
 function metricsBadge(probe: ProbeInfo): string {
   const m = probe.metrics ?? {};
   const parts: string[] = [];
+  if (m.val_auc !== undefined || m.val_accuracy !== undefined) {
+    if (m.val_auc !== undefined) parts.push(`AUC ${fmtMetric(m.val_auc)}`);
+    if (m.val_accuracy !== undefined) parts.push(`acc ${fmtMetric(m.val_accuracy)}`);
+    return parts.join(' · ');
+  }
   if (m.val_r2 !== undefined) parts.push(`R² ${fmtMetric(m.val_r2)}`);
   if (m.val_spearman !== undefined) parts.push(`ρ ${fmtMetric(m.val_spearman)}`);
   return parts.join(' · ') || 'no metrics';
@@ -64,6 +76,9 @@ function metricsTitle(probe: ProbeInfo): string {
     ['val_mse', 'MSE (validation)'],
     ['val_mae', 'MAE (validation)'],
     ['train_r2', 'R² (train)'],
+    ['val_auc', 'ROC-AUC (validation)'],
+    ['val_accuracy', 'Accuracy (validation)'],
+    ['val_f1_weighted', 'F1 weighted (validation)'],
   ];
   const lines = labels
     .filter(([key]) => m[key] !== undefined)
@@ -71,6 +86,192 @@ function metricsTitle(probe: ProbeInfo): string {
   const mapping = formatTargetMapping(probe.targetMapping);
   if (mapping) lines.push(`Classes: ${mapping}`);
   return lines.join('\n') || 'No metrics recorded';
+}
+
+/** One compact labeled number input row for the settings popover.
+
+ * Holds local text state so the field can be cleared while typing
+ * (`Number('') === 0` would otherwise instantly commit 0 on backspace);
+ * valid parses are clamped to [min, max] and committed as you type, and the
+ * text resyncs to the committed value on blur. */
+function ParamNumberRow({
+  label,
+  value,
+  onChange,
+  step = 1,
+  min,
+  max,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  step?: number;
+  min?: number;
+  max?: number;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
+      <Input
+        type="number"
+        className="h-7 w-24 text-right text-xs"
+        value={text}
+        step={step}
+        min={min}
+        max={max}
+        onChange={(e) => {
+          setText(e.target.value);
+          if (e.target.value.trim() === '') return;
+          let v = Number(e.target.value);
+          if (!Number.isFinite(v)) return;
+          if (min !== undefined) v = Math.max(min, v);
+          if (max !== undefined) v = Math.min(max, v);
+          onChange(v);
+        }}
+        onBlur={() => setText(String(value))}
+      />
+    </div>
+  );
+}
+
+/**
+ * Gear-icon popover exposing the hyperparameters of the selected probe kind
+ * plus shared advanced settings. Everything defaults to the backend's own
+ * defaults; only changed values are sent (buildTrainProbeInput).
+ */
+function ProbeSettingsPopover({
+  kind,
+  params,
+  onChange,
+}: {
+  kind: ProbeKind;
+  params: ProbeParams;
+  onChange: (p: ProbeParams) => void;
+}) {
+  const fields = probeParamFields(kind);
+  const set = (patch: Partial<ProbeParams>) => onChange({ ...params, ...patch });
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-7 shrink-0 text-muted-foreground"
+          aria-label="Probe parameters"
+        >
+          <Settings2 className="size-3.5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-60 space-y-2 p-3">
+        <p className="text-xs font-medium">Probe parameters</p>
+        {fields.includes('alpha') && (
+          <ParamNumberRow
+            label="Alpha (L2)"
+            value={params.alpha}
+            step={0.1}
+            min={0}
+            onChange={(v) => set({ alpha: v })}
+          />
+        )}
+        {fields.includes('c') && (
+          <ParamNumberRow
+            label="C"
+            value={params.c}
+            step={0.1}
+            min={0.001}
+            onChange={(v) => set({ c: v })}
+          />
+        )}
+        {fields.includes('kernel') && (
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs font-normal text-muted-foreground">Kernel</Label>
+            <Select
+              value={params.kernel}
+              onValueChange={(v) => set({ kernel: v as ProbeParams['kernel'] })}
+            >
+              <SelectTrigger size="sm" className="h-7 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rbf">rbf</SelectItem>
+                <SelectItem value="linear">linear</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {fields.includes('classWeight') && (
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs font-normal text-muted-foreground">Class weight</Label>
+            <Select
+              value={params.classWeight}
+              onValueChange={(v) => set({ classWeight: v as ProbeParams['classWeight'] })}
+            >
+              <SelectTrigger size="sm" className="h-7 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">none</SelectItem>
+                <SelectItem value="balanced">balanced</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {fields.includes('hiddenSize') && (
+          <ParamNumberRow
+            label="Hidden size"
+            value={params.hiddenSize}
+            step={32}
+            min={8}
+            onChange={(v) => set({ hiddenSize: v })}
+          />
+        )}
+        {fields.includes('epochs') && (
+          <ParamNumberRow
+            label="Max epochs"
+            value={params.epochs}
+            step={10}
+            min={1}
+            onChange={(v) => set({ epochs: v })}
+          />
+        )}
+        {fields.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            Mass-mean is closed-form — no hyperparameters.
+          </p>
+        )}
+        <div className="border-t pt-2">
+          <ParamNumberRow
+            label="Seed"
+            value={params.seed}
+            onChange={(v) => set({ seed: v })}
+          />
+          <div className="pt-2">
+            <ParamNumberRow
+              label="Train split"
+              value={params.trainSplit}
+              step={0.05}
+              min={0.5}
+              max={0.95}
+              onChange={(v) => set({ trainSplit: v })}
+            />
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 w-full text-xs text-muted-foreground"
+          onClick={() => onChange(DEFAULT_PROBE_PARAMS)}
+        >
+          Reset to defaults
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /**
@@ -85,7 +286,8 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
   const setColorByField = useVisualizationStore((s) => s.setColorByField);
 
   const [selectedField, setSelectedField] = useState<string | null>(null);
-  const [kind, setKind] = useState<string>('ridge');
+  const [kind, setKind] = useState<ProbeKind>('ridge');
+  const [params, setParams] = useState<ProbeParams>(DEFAULT_PROBE_PARAMS);
   const [progress, setProgress] = useState<JobProgress | null>(null);
 
   // Numeric fields + binary categorical fields (trained as 0/1) are probe
@@ -116,6 +318,15 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
       resolveProbeTargetSelection(colorByField, prev, lastTargetRef.current),
     );
   }, [colorByField]);
+
+  // Binary-only kinds (logreg) need a two-class target; a numeric field with
+  // exactly two distinct values qualifies too. Fall back to ridge when the
+  // selected target stops being binary.
+  const selectedOption = targetOptions.find((o) => o.field === effectiveField);
+  const isBinaryTarget = selectedOption?.uniqueCount === 2;
+  useEffect(() => {
+    if (isBinaryKind(kind) && !isBinaryTarget) setKind('ridge');
+  }, [kind, isBinaryTarget]);
 
   const { data: progressData } = useSubscription<SubscriptionData>(
     EMBEDDING_PROGRESS_SUBSCRIPTION,
@@ -167,24 +378,33 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
               </SelectContent>
             </Select>
             <div className="flex items-center gap-2">
-              <Select value={kind} onValueChange={setKind}>
+              <Select value={kind} onValueChange={(v) => setKind(v as ProbeKind)}>
                 <SelectTrigger size="sm" className="h-7 flex-1 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PROBE_KINDS.map((k) => (
-                    <SelectItem key={k.value} value={k.value}>
+                  {PROBE_KIND_OPTIONS.map((k) => (
+                    <SelectItem
+                      key={k.value}
+                      value={k.value}
+                      disabled={isBinaryKind(k.value) && !isBinaryTarget}
+                    >
                       <span className="text-xs">{k.label}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <ProbeSettingsPopover kind={kind} params={params} onChange={setParams} />
               <Button
                 size="sm"
                 className="h-7 shrink-0 text-xs"
                 disabled={!effectiveField || probes.training}
                 onClick={() => {
-                  if (effectiveField) void probes.train(effectiveField, kind);
+                  if (effectiveField && probes.collectionName) {
+                    void probes.train(
+                      buildTrainProbeInput(probes.collectionName, effectiveField, kind, params),
+                    );
+                  }
                 }}
               >
                 {probes.training ? <Spinner className="size-3" /> : 'Fit probe'}

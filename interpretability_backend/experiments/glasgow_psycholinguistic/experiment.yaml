@@ -78,9 +78,14 @@ targets:
 probes:
   # Linear (ridge), sparse-linear (lasso, saves directions for feature analysis),
   # nonlinear (SVR rbf — wins for small encoders), closed-form mass-mean
-  # (median-split difference-of-means direction), and a small MLP.
+  # (median-split difference-of-means direction), a small MLP, and a binary
+  # logistic regression on a median split of each norm (classification_bins=2
+  # => concrete-vs-abstract style split; reports accuracy/F1/AUC, not R²) —
+  # the discriminative counterpart to the Geometry-of-Truth σ(·) mass-mean probe.
   - {type: sklearn, kind: ridge, alpha: 1.0}
   - {type: sklearn, kind: lasso, alpha: 0.01, save_directions: true}
   - {type: sklearn, kind: svr,   C: 1.0, kernel: rbf}
   - {type: sklearn, kind: massmean}
+  - {type: sklearn, kind: massmean, standardise: false, name: massmean_raw}
+  - {type: sklearn, kind: logreg, C: 1.0, classification_bins: 2}
   - {type: mlp, hidden_dims: [256], epochs: 100, patience: 10, learning_rate: 0.001}

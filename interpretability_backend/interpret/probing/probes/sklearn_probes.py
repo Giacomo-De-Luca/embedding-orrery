@@ -36,6 +36,7 @@ import json
 import warnings
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
@@ -109,6 +110,9 @@ def train_sklearn_probe(
     )
     if directions_dir is not None:
         directions_dir.mkdir(parents=True, exist_ok=True)
+    models_dir = output_dir / "models" if spec.save_models else None
+    if models_dir is not None:
+        models_dir.mkdir(parents=True, exist_ok=True)
 
     # Pre-compute classification labels BEFORE splitting so that
     # StratifiedKFold gets the actual class labels (not raw continuous
@@ -163,6 +167,7 @@ def train_sklearn_probe(
                     layer=layer,
                     intermediate=intermediate,
                     directions_dir=directions_dir,
+                    models_dir=models_dir,
                     fold_label=fold_label if len(folds) > 1 else None,
                 )
                 row.update(metrics)
@@ -304,7 +309,7 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
         ), True
     if kind == "logreg":
         return LogisticRegression(
-            max_iter=spec.logreg_max_iter, class_weight=spec.class_weight,
+            C=spec.C, max_iter=spec.logreg_max_iter, class_weight=spec.class_weight,
         ), True
     if kind == "massmean":
         # Closed-form: handled separately in `_fit_one`.
@@ -323,6 +328,7 @@ def _fit_one(
     layer: int,
     intermediate: str,
     directions_dir: Path | None,
+    models_dir: Path | None = None,
     fold_label: str | None,
 ) -> tuple[dict, np.ndarray | None]:
     """Fit a single (layer, intermediate, spec, fold) probe.
@@ -438,6 +444,22 @@ def _fit_one(
                     scaler_scale=scaler_scale,
                     fold_label=fold_label,
                 )
+
+    if models_dir is not None:
+        # Persist the fitted estimator itself (with the scaler params needed
+        # to reproduce its input space) — the non-linear analogue of
+        # save_directions, mirroring the MLP checkpoint artifact.
+        suffix = f"_{fold_label}" if fold_label else ""
+        joblib.dump(
+            {
+                "estimator": estimator,
+                "scaler_mean": np.asarray(scaler_mean),
+                "scaler_scale": (
+                    np.asarray(scaler_scale) if scaler_scale is not None else None
+                ),
+            },
+            models_dir / f"L{layer}_{intermediate}_{spec.kind}{suffix}.joblib",
+        )
 
     return metrics, coef_for_aggregation
 
@@ -627,6 +649,7 @@ def _write_summary(
             "train_split": spec.train_split,
             "seed": spec.seed,
             "save_directions": spec.save_directions,
+            "save_models": spec.save_models,
             "center_only": spec.center_only,
             "standardise": spec.standardise,
             "n_folds": spec.n_folds,

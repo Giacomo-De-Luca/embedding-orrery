@@ -1,0 +1,38 @@
+# Config for scripts/profile_residual_norms.py
+#
+# Measures per-layer residual-stream norms for each checkpoint and writes them
+# (plus steering-direction vector norms) to the frontend as a steering-strength
+# hint. Run from interpretability_backend/:
+#   uv run python -m scripts.profile_residual_norms
+#
+# output_path defaults to embedding_visualization/lib/utils/residualNorms.json
+# (relative paths are resolved from the repo root). Only the prompt prefill is
+# read, so output_len stays at 1.
+
+output_len = 1
+# output_path = "embedding_visualization/lib/utils/residualNorms.json"
+
+# v1: the live steering demo model. Add "Qwen/Qwen3-4B" here once its
+# TopK-SAE decoder norms have been re-checked (see the plan's scope note).
+checkpoints = ["google/gemma-3-4b-it"]
+
+# A small, deliberately diverse prompt set — factual, instruction, opinion,
+# code, narrative, refusal-adjacent, multilingual, short and long. Residual
+# norms are ~prompt-stable, so ~15 varied prompts give a robust table.
+prompts = [
+  "What is the capital of France?",
+  "Explain how a rainbow forms in one sentence.",
+  "Write a haiku about the ocean.",
+  "def fibonacci(n):",
+  "List three reasons regular exercise is good for you.",
+  "Once upon a time, in a village at the edge of a great forest,",
+  "Translate 'good morning' into Spanish, French, and Japanese.",
+  "I'm feeling anxious about a job interview tomorrow. Any advice?",
+  "Summarize the plot of Romeo and Juliet.",
+  "What are the main differences between TCP and UDP?",
+  "Give me a recipe for a simple tomato pasta.",
+  "Describe the taste of coffee to someone who has never had it.",
+  "Why is the sky blue?",
+  "Compose a short, polite email declining a meeting invitation.",
+  "What comes after the number ninety-nine?",
+]

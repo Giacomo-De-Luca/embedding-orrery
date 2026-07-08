@@ -3,6 +3,8 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { Columns2, Sparkles } from 'lucide-react';
 import { activeSteeringFeatures } from '@/lib/hooks/useSteeringChat';
+import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
+import { modelDisplayName } from '@/lib/utils/modelCheckpoints';
 import type { SteeringFeature } from '@/lib/types/types';
 import { SteeringIdenticon } from './SteeringIdenticon';
 
@@ -19,6 +21,8 @@ export function ChatGreeting({ features, isBaseline = false, onStartCompare }: C
   // Only features actually steering (strength ≠ 0) count — auto-loaded
   // presets sit at strength 0 and are filtered from the GraphQL payload.
   const activeCount = activeSteeringFeatures(features).length;
+  // Model identity is thread-independent (only `features` differ per thread).
+  const modelName = modelDisplayName(useModelIdentityStore((s) => s.modelId));
 
   return (
     // z-10: the message scroll container is a later `absolute inset-0`
@@ -66,7 +70,7 @@ export function ChatGreeting({ features, isBaseline = false, onStartCompare }: C
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.35, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         >
-          {isBaseline ? 'Chat with Gemma' : 'Chat with Steered Gemma'}
+          {isBaseline ? `Chat with ${modelName}` : `Chat with Steered ${modelName}`}
         </motion.h3>
 
         {/* Subtitle */}

@@ -804,10 +804,16 @@ class TrainProbeInput:
 
     collection_name: str
     target_field: str
-    kind: str = "ridge"  # ridge | massmean | mlp
-    alpha: float | None = None
-    epochs: int | None = None
-    hidden_dims: list[int] | None = None
+    kind: str = "ridge"  # ridge | massmean | svr | logreg | mlp
+    alpha: float | None = None  # ridge
+    c: float | None = None  # svr / logreg
+    kernel: str | None = None  # svr
+    class_weight: str | None = None  # logreg: null | "balanced"
+    epochs: int | None = None  # mlp
+    hidden_dims: list[int] | None = None  # mlp
+    seed: int | None = None
+    train_split: float | None = None
+    max_train_samples: int | None = None
 
 
 @strawberry.type
@@ -1166,6 +1172,7 @@ class GenerateStreamInput:
     top_k: int = 64
     steering: list[SteeringInput] | None = None
     seed: int | None = None  # When set, torch.manual_seed() before sampling for reproducible output
+    enable_thinking: bool = False  # Qwen only: stream raw <think> reasoning; ignored for Gemma
 
 
 @strawberry.type

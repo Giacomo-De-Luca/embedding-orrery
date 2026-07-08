@@ -7,6 +7,7 @@ import { useLazyQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils/utils';
 import { Button } from '@/lib/ui-primitives/button';
+import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Input } from '@/lib/ui-primitives/input';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
@@ -16,6 +17,7 @@ import {
   type SteeringChatOptions,
 } from '@/lib/hooks/useSteeringChat';
 import { downloadJson } from '@/lib/utils/downloadJson';
+import { isQwenModel } from '@/lib/utils/modelCheckpoints';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { STEERING_PRESETS } from '@/lib/utils/steeringPresets';
 import { GET_CHAT_SESSION, type ChatSessionQueryResult } from '@/lib/graphql/queries';
@@ -102,6 +104,8 @@ export function ChatPanel({
   // the committed value on blur, so the display never lies about the seed.
   const [seed, setSeed] = useState<number | null>(null);
   const [seedText, setSeedText] = useState('');
+  // Qwen-only: stream the model's raw <think> reasoning (off = suppressed).
+  const [enableThinking, setEnableThinking] = useState(false);
 
   const applySeed = useCallback((value: number | null) => {
     setSeed(value);
@@ -130,7 +134,7 @@ export function ChatPanel({
     regenerate: steeredRegenerate,
     editAndResend: steeredEdit,
     loadMessages: steeredLoad,
-  } = useSteeringChat(steeringConfig, maxTokens, temperature, seed, chatOptions);
+  } = useSteeringChat(steeringConfig, maxTokens, temperature, seed, chatOptions, enableThinking);
 
   // Baseline thread — no steering, no persistence callbacks (ephemeral).
   const {
@@ -140,7 +144,7 @@ export function ChatPanel({
     send: baselineSend,
     stop: baselineStop,
     reset: baselineReset,
-  } = useSteeringChat(EMPTY_CONFIG, maxTokens, temperature, seed);
+  } = useSteeringChat(EMPTY_CONFIG, maxTokens, temperature, seed, undefined, enableThinking);
 
   const [votes, setVotes] = useState<Map<string, MessageVote>>(new Map());
 
@@ -174,6 +178,7 @@ export function ChatPanel({
   // a model that has a preset bundle and no features are configured yet.
   // Presets ship at strength 0 — the user activates them via the slider.
   const modelId = useModelIdentityStore((s) => s.modelId);
+  const isQwen = isQwenModel(modelId);
   useEffect(() => {
     if (!modelId) return;
     const presets = STEERING_PRESETS[modelId];
@@ -416,6 +421,19 @@ export function ChatPanel({
               aria-label="Generation seed (empty for natural sampling)"
             />
           </div>
+          {/* Qwen-only: stream the raw <think> reasoning. Off (default)
+              suppresses it via the chat template's enable_thinking flag. */}
+          {isQwen && (
+            <div className="flex items-center gap-3">
+              <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Thinking</span>
+              <div className="flex-1" />
+              <Checkbox
+                checked={enableThinking}
+                onCheckedChange={(checked) => setEnableThinking(checked === true)}
+                aria-label="Stream the model's <think> reasoning (Qwen only)"
+              />
+            </div>
+          )}
         </div>
 
         {/* Messages area — single thread, or steered vs. baseline side-by-side */}

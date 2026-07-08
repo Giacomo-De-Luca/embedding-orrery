@@ -37,6 +37,41 @@ export interface ClusterLabelPlacement {
   placement: Placement | null;
   /** Priority (cluster point count) */
   priority: number;
+  /** Font size in px; renderers default to 13 when absent */
+  fontSize?: number;
+  /** Topic label backing this text, when it differs from `label` semantics
+   *  (density labels use it to keep topic-click behavior) */
+  topicLabel?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Plot area
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the plot-area rect (CSS px within the plot div) from Plotly's
+ * internal `_fullLayout`. Prefers the exact `_size` object, falling back to
+ * margins when the plot hasn't fully laid out yet.
+ */
+export function plotAreaFromFullLayout(
+  fl: any,
+  fallbackWidth: number,
+  fallbackHeight: number,
+): PlotArea {
+  const size = fl?._size;
+  if (size && typeof size.l === 'number' && typeof size.w === 'number') {
+    return { left: size.l, top: size.t, width: size.w, height: size.h };
+  }
+  const ml = fl?.margin?.l ?? 50;
+  const mr = fl?.margin?.r ?? 50;
+  const mt = fl?.margin?.t ?? 50;
+  const mb = fl?.margin?.b ?? 50;
+  return {
+    left: ml,
+    top: mt,
+    width: Math.max((fl?.width ?? fallbackWidth) - ml - mr, 1),
+    height: Math.max((fl?.height ?? fallbackHeight) - mt - mb, 1),
+  };
 }
 
 // ---------------------------------------------------------------------------

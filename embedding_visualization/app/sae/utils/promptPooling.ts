@@ -8,7 +8,7 @@
  */
 
 import type { LayerActivationsResult } from '@/lib/graphql/mutations';
-import { buildSaeId, parseSaeId } from '@/lib/utils/saeCollections';
+import { buildSaeId, parseSaeId, saeIdScope } from '@/lib/utils/saeCollections';
 import type { SemanticFeatureResult } from '../components/FeatureSearchResults';
 
 export type PromptPooling = 'max' | 'mean' | 'last';
@@ -32,8 +32,9 @@ export interface PooledFeatureRow extends SemanticFeatureResult {
 /**
  * Tag each layer result with its (modelId, saeId). The saeId is resolved by
  * matching (layer, width) back to the selection pairs — exact DB ids — with
- * the derived gemmascope id as fallback. The prompt path hooks RESID_POST
- * only, so (layer, width) identifies the SAE.
+ * a derived id as fallback, staying within the selection's id scheme
+ * (gemma-scope or qwen-scope). The prompt path hooks RESID_POST only, so
+ * (layer, width) identifies the SAE.
  */
 export function attachSaeIdentity(
   layers: LayerActivationsResult[],
@@ -45,12 +46,13 @@ export function attachSaeIdentity(
     const parsed = parseSaeId(pair.saeId);
     pairByKey.set(`${parsed.layerIndex}::${parsed.width}`, pair.saeId);
   }
+  const fallbackScope = pairs.length > 0 ? saeIdScope(pairs[0].saeId) : undefined;
   return layers.map((layer) => ({
     ...layer,
     modelId,
     saeId:
       pairByKey.get(`${layer.layer}::${layer.width}`) ??
-      buildSaeId(layer.layer, 'RESID_POST', layer.width),
+      buildSaeId(layer.layer, 'RESID_POST', layer.width, fallbackScope),
   }));
 }
 

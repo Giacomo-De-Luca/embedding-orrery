@@ -95,6 +95,9 @@ interface StreamTurn {
  * concrete seed makes generation reproducible, so a steered and a baseline call
  * sharing one seed differ only by steering, not by sampling noise.
  *
+ * `enableThinking` is Qwen-only (streams raw `<think>` reasoning when on);
+ * the backend ignores it for Gemma.
+ *
  * Exported for unit testing. */
 export function buildStreamInput(
   turns: StreamTurn[],
@@ -102,6 +105,7 @@ export function buildStreamInput(
   maxTokens: number,
   temperature: number,
   seed?: number | null,
+  enableThinking: boolean = false,
 ) {
   return {
     turns,
@@ -111,6 +115,7 @@ export function buildStreamInput(
     topP: DEFAULT_TOP_P,
     topK: DEFAULT_TOP_K,
     seed: seed ?? null,
+    enableThinking,
   };
 }
 
@@ -121,6 +126,7 @@ export function useSteeringChat(
   temperature: number = 0.7,
   seed?: number | null,
   options?: SteeringChatOptions,
+  enableThinking: boolean = false,
 ): UseSteeringChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('idle');
@@ -251,7 +257,7 @@ export function useSteeringChat(
         const observable = apolloClient.subscribe<TokenChunkData>({
           query: GENERATE_STREAM,
           variables: {
-            input: buildStreamInput(turns, steering, maxTokens, temperature, seed),
+            input: buildStreamInput(turns, steering, maxTokens, temperature, seed, enableThinking),
           },
         });
 
@@ -307,7 +313,7 @@ export function useSteeringChat(
 
       startStreaming();
     },
-    [config, status, maxTokens, temperature, seed],
+    [config, status, maxTokens, temperature, seed, enableThinking],
   );
 
   const regenerate = useCallback(

@@ -28,6 +28,7 @@ import torch
 # The sys.path bootstrap for `interpret.*` absolute imports lives in
 # services/__init__.py, which always runs before this module.
 from interpret.inference.gemma_pytorch import GemmaPytorchInference
+from interpret.inference.qwen3_transformers import Qwen3Inference
 from interpret.sae import paths as sae_paths
 from interpret.sae.exploration.prompt_explorer import (
     PromptExplorer,
@@ -37,11 +38,13 @@ from interpret.sae.hook_manager import HookManager
 from interpret.sae.loading import clear_sae_cache
 from interpret.sae.sae_config import (
     HOOK_TYPE_FROM_STR,
+    QWEN_SCOPE_MODELS,
     WIDTH_TO_D_SAE,
     GemmaScopeSAEConfig,
     HookType,
+    QwenScopeSAEConfig,
 )
-from interpret.sae.source_ids import neuronpedia_source_id
+from interpret.sae.source_ids import neuronpedia_source_id, qwen_source_id
 from interpret.sae.steering import SteeringMode, SteeringOp
 
 from ..utils.resource_paths import DIRECTIONS_DIR
@@ -61,6 +64,10 @@ _DEFAULT_LAYERS_BY_SIZE: dict[str, list[int]] = {
     "27b": [16, 31, 40, 53],
 }
 _DEFAULT_LAYERS = [9, 17, 22, 29]  # fallback for unknown sizes
+
+# Qwen-scope publishes L0_50 and L0_100 TopK variants per model; the service
+# pins k=50 (adding a GraphQL knob later is additive).
+_QWEN_DEFAULT_K = 50
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +168,10 @@ class FeatureActivation:
 
 
 class InterpretService:
-    """Manages Gemma3 model lifecycle and SAE inference operations.
+    """Manages base-model lifecycle (Gemma3 or Qwen3) and SAE inference operations.
+
+    ``_family`` ("gemma" | "qwen") selects the inference wrapper and SAE
+    config class; both wrappers share the same generation/streaming contract.
 
     The ``_lock`` attribute is an :class:`asyncio.Lock` intended to be
     acquired by the GraphQL mutation layer (not inside service methods)
@@ -174,9 +184,10 @@ class InterpretService:
     NEURONPEDIA_TOP_K: int = 50
 
     def __init__(self) -> None:
-        self._wrapper: GemmaPytorchInference | None = None
+        self._wrapper: GemmaPytorchInference | Qwen3Inference | None = None
         self._prompt_explorer: PromptExplorer | None = None
         self._model_name: str | None = None
+        self._family: str = "gemma"
         self._model_size: str = "4b"
         self._variant: str = "it"
         self._lock = asyncio.Lock()
@@ -199,31 +210,49 @@ class InterpretService:
         )
 
     @staticmethod
-    def _parse_checkpoint(checkpoint: str) -> tuple[str, str]:
-        """Extract (model_size, variant) from a checkpoint string.
+    def _parse_checkpoint(checkpoint: str) -> tuple[str, str, str]:
+        """Extract (family, model_size, variant) from a checkpoint string.
 
         Handles formats like:
-            "google/gemma-3-4b-it"  → ("4b", "it")
-            "google/gemma-3-1b"     → ("1b", "pt")
-            "gemma-3-12b-it"        → ("12b", "it")
+            "google/gemma-3-4b-it"  → ("gemma", "4b", "it")
+            "google/gemma-3-1b"     → ("gemma", "1b", "pt")
+            "Qwen/Qwen3-1.7B"       → ("qwen", "1.7B", "it")
+            "Qwen/Qwen3-1.7B-Base"  → ("qwen", "1.7B", "pt")
         """
         # Strip org prefix
-        name = checkpoint.rsplit("/", 1)[-1]  # "gemma-3-4b-it"
+        name = checkpoint.rsplit("/", 1)[-1]  # "gemma-3-4b-it" / "Qwen3-1.7B"
+
+        if name.startswith(("Qwen3.5-", "Qwen3-")):
+            # Family prefix (Qwen3 vs Qwen3.5) and the optional "-Base"
+            # segment bracket the size: "Qwen3-1.7B[-Base]".
+            rest = name.split("-", 1)[1]  # "1.7B" or "1.7B-Base"
+            variant = "pt" if rest.endswith("-Base") else "it"
+            model_size = rest.removesuffix("-Base")
+            if model_size not in QWEN_SCOPE_MODELS:
+                raise ValueError(
+                    f"No Qwen-scope SAEs for model size {model_size!r}. "
+                    f"Valid: {sorted(QWEN_SCOPE_MODELS)}"
+                )
+            return "qwen", model_size, variant
+
         # Remove "gemma-3-" prefix if present
         if name.startswith("gemma-3-"):
             name = name[len("gemma-3-") :]  # "4b-it" or "1b"
         parts = name.split("-", 1)
         model_size = parts[0]  # "4b"
         variant = parts[1] if len(parts) > 1 else "pt"  # "it" or default "pt"
-        return model_size, variant
+        return "gemma", model_size, variant
 
     @staticmethod
-    def _normalize_checkpoint(checkpoint: str, model_size: str, variant: str) -> str:
+    def _normalize_checkpoint(checkpoint: str, family: str, model_size: str, variant: str) -> str:
         """Ensure the checkpoint string has the variant suffix.
 
-        HuggingFace repos require explicit variant: google/gemma-3-1b-pt
-        (google/gemma-3-1b alone returns 404).
+        Gemma HuggingFace repos require an explicit variant: google/gemma-3-1b-pt
+        (google/gemma-3-1b alone returns 404). Qwen checkpoints are already
+        canonical and pass through unchanged.
         """
+        if family == "qwen":
+            return checkpoint
         name = checkpoint.rsplit("/", 1)[-1]
         # If it already ends with the variant, leave it alone
         if name.endswith(f"-{variant}"):
@@ -237,7 +266,7 @@ class InterpretService:
         self,
         checkpoint: str = "google/gemma-3-4b-it",
     ) -> ModelStatusResult:
-        """Load the Gemma model into GPU memory.
+        """Load the base model (Gemma or Qwen, by checkpoint name) into GPU memory.
 
         Raises:
             RuntimeError: If a model is already loaded.
@@ -246,12 +275,17 @@ class InterpretService:
             raise RuntimeError(
                 f"Model already loaded ({self._model_name}). Call unloadModel first."
             )
-        self._model_size, self._variant = self._parse_checkpoint(checkpoint)
-        checkpoint = self._normalize_checkpoint(checkpoint, self._model_size, self._variant)
-        logger.info("Loading model %s ...", checkpoint)
-        self._wrapper = GemmaPytorchInference(
-            checkpoint, model_size=self._model_size, precision="bfloat16"
+        self._family, self._model_size, self._variant = self._parse_checkpoint(checkpoint)
+        checkpoint = self._normalize_checkpoint(
+            checkpoint, self._family, self._model_size, self._variant
         )
+        logger.info("Loading model %s ...", checkpoint)
+        if self._family == "qwen":
+            self._wrapper = Qwen3Inference(checkpoint, dtype="bfloat16")
+        else:
+            self._wrapper = GemmaPytorchInference(
+                checkpoint, model_size=self._model_size, precision="bfloat16"
+            )
         self._model_name = checkpoint
         self._prompt_explorer = None  # rebuilt lazily
         logger.info("Model loaded on %s", self._wrapper.device)
@@ -259,7 +293,17 @@ class InterpretService:
 
     @property
     def _neuronpedia_model_id(self) -> str:
-        """Derive Neuronpedia model ID from the loaded model's size and variant."""
+        """Stable model id for DuckDB keys, preset bundles, and label lookups.
+
+        Gemma ids are real Neuronpedia model ids; Qwen-scope has no
+        Neuronpedia listing, so the id delegates to the config's shim
+        (e.g. ``"qwen3-1.7B-base"``) — it must match exactly what the
+        bootstrap ingest wrote as ``model_id``.
+        """
+        if self._family == "qwen":
+            return QwenScopeSAEConfig(
+                layer_index=0, model_size=self._model_size
+            ).neuronpedia_model_id
         base = f"gemma-3-{self._model_size}"
         return base if self._variant == "pt" else f"{base}-{self._variant}"
 
@@ -273,6 +317,7 @@ class InterpretService:
         self._wrapper = None
         self._prompt_explorer = None
         self._model_name = None
+        self._family = "gemma"
         self._model_size = "4b"
         self._variant = "it"
         self._direction_cache.clear()
@@ -289,7 +334,7 @@ class InterpretService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _require_model(self) -> GemmaPytorchInference:
+    def _require_model(self) -> GemmaPytorchInference | Qwen3Inference:
         if self._wrapper is None:
             raise RuntimeError("Model not loaded. Call loadModel first.")
         return self._wrapper
@@ -334,7 +379,8 @@ class InterpretService:
             (registry lookup provides the application layer; site is
             ``RESID_POST``).
           - SAE specs validate ``(width, feature_index, hook_type)`` and add
-            the matching ``GemmaScopeSAEConfig`` (deduped by key).
+            the family-matching SAE config via ``_make_sae_config`` (deduped
+            by key).
         """
         manager = HookManager()
         seen_sae_keys: set[tuple[int, str, str]] = set()
@@ -365,17 +411,7 @@ class InterpretService:
             sae_key = (spec.layer, spec.hook_type, spec.width)
             if sae_key not in seen_sae_keys:
                 seen_sae_keys.add(sae_key)
-                manager.add_sae(
-                    GemmaScopeSAEConfig(
-                        layer_index=spec.layer,
-                        hook_type=ht,
-                        width=spec.width,
-                        model_size=self._model_size,
-                        variant=self._variant,
-                        device=device,
-                        read_only=True,
-                    )
-                )
+                manager.add_sae(self._make_sae_config(spec.layer, spec.width, ht, device))
             manager.add_steering(
                 SteeringOp(
                     layer_index=spec.layer,
@@ -436,6 +472,51 @@ class InterpretService:
                 f"Unknown hook_type '{hook_type}'. Valid: {list(HOOK_TYPE_FROM_STR.keys())}"
             )
         return ht
+
+    def _make_sae_config(
+        self,
+        layer: int,
+        width: str,
+        hook_type: HookType,
+        device: str,
+        prefill_only: bool = False,
+    ) -> GemmaScopeSAEConfig | QwenScopeSAEConfig:
+        """Build the family-matching SAE config for the loaded model.
+
+        Qwen-scope configs reject non-residual hooks in their own
+        ``__post_init__`` — the ValueError propagates to the caller.
+        """
+        if self._family == "qwen":
+            return QwenScopeSAEConfig(
+                layer_index=layer,
+                hook_type=hook_type,
+                width=width,
+                model_size=self._model_size,
+                k=_QWEN_DEFAULT_K,
+                device=device,
+                prefill_only=prefill_only,
+                read_only=True,
+            )
+        return GemmaScopeSAEConfig(
+            layer_index=layer,
+            hook_type=hook_type,
+            width=width,
+            model_size=self._model_size,
+            variant=self._variant,
+            device=device,
+            prefill_only=prefill_only,
+            read_only=True,
+        )
+
+    def _thinking_kwargs(self, enable_thinking: bool = False) -> dict[str, bool]:
+        """Extra kwargs for chat-templated ``generate*`` calls.
+
+        Qwen's template supports thinking mode (``Qwen3Inference.generate``
+        defaults it ON, the streaming methods OFF) — the service pins it
+        explicitly so all paths share the chat default (off) unless the
+        caller opts in. Gemma's methods don't accept the kwarg.
+        """
+        return {"enable_thinking": enable_thinking} if self._family == "qwen" else {}
 
     # ------------------------------------------------------------------
     # UC1: Prompt activations
@@ -541,6 +622,12 @@ class InterpretService:
         from backend.API.duckdb_instance import get_duckdb_client
 
         self._require_model()
+        if self._family == "qwen":
+            # PromptExplorer (and the chat-template token trimming it relies
+            # on) is Gemma-only for now — Phase 1.5 generalises it.
+            raise NotImplementedError(
+                "Per-token prompt activations are not yet supported for Qwen models."
+            )
         if saes:
             specs = [(int(layer), str(w)) for layer, w in saes]
         else:
@@ -589,6 +676,16 @@ class InterpretService:
             # Batch fetch labels + densities from DuckDB
             if db_sae_id:
                 sae_id = db_sae_id
+            elif self._family == "qwen":
+                # Unreachable until the qwen guard above is lifted (Phase 1.5),
+                # but keeps the derivation family-correct when it is.
+                sae_id = qwen_source_id(
+                    QwenScopeSAEConfig(
+                        layer_index=layer_idx,
+                        width=layer_width,
+                        model_size=self._model_size,
+                    )
+                )
             else:
                 sae_id = neuronpedia_source_id(
                     GemmaScopeSAEConfig(
@@ -690,6 +787,7 @@ class InterpretService:
                 prompt,
                 output_len=output_len,
                 temperature=temperature,
+                **self._thinking_kwargs(),
             )
 
         # --- Steered ---
@@ -706,6 +804,7 @@ class InterpretService:
                     prompt,
                     output_len=output_len,
                     temperature=temperature,
+                    **self._thinking_kwargs(),
                 )
 
         return SteeredGenerationResult(
@@ -765,16 +864,7 @@ class InterpretService:
         ht = self._parse_hook_type(hook_type)
         device = str(wrapper.device)
 
-        sae_config = GemmaScopeSAEConfig(
-            layer_index=layer,
-            hook_type=ht,
-            width=width,
-            model_size=self._model_size,
-            variant=self._variant,
-            device=device,
-            prefill_only=True,
-            read_only=True,
-        )
+        sae_config = self._make_sae_config(layer, width, ht, device, prefill_only=True)
 
         manager = HookManager()
         manager.add_sae(sae_config)
@@ -783,7 +873,7 @@ class InterpretService:
             if self._variant == "pt":
                 wrapper.generate_from_template(prompt, output_len=1)
             else:
-                wrapper.generate(prompt, output_len=1)
+                wrapper.generate(prompt, output_len=1, **self._thinking_kwargs())
             record = store.prefill(layer=layer, hook_type=ht)
 
         if record is None:
@@ -836,16 +926,7 @@ class InterpretService:
         ht = self._parse_hook_type(hook_type)
         device = str(wrapper.device)
 
-        sae_config = GemmaScopeSAEConfig(
-            layer_index=layer,
-            hook_type=ht,
-            width=width,
-            model_size=self._model_size,
-            variant=self._variant,
-            device=device,
-            prefill_only=True,
-            read_only=True,
-        )
+        sae_config = self._make_sae_config(layer, width, ht, device, prefill_only=True)
 
         manager = HookManager()
         manager.add_sae(sae_config)
@@ -860,7 +941,7 @@ class InterpretService:
                     if self._variant == "pt":
                         wrapper.generate_from_template(text, output_len=1)
                     else:
-                        wrapper.generate(text, output_len=1)
+                        wrapper.generate(text, output_len=1, **self._thinking_kwargs())
                     record = store.prefill(layer=layer, hook_type=ht)
                 except Exception:
                     logger.exception("Failed inference for item %s (%d/%d)", item_id, i + 1, total)
@@ -897,6 +978,7 @@ class InterpretService:
         cancel_event: threading.Event | None = None,
         steering_specs: list[SteeringSpec] | None = None,
         seed: int | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         """Run streaming chat generation, emitting tokens via token_emitter.
 
@@ -913,6 +995,9 @@ class InterpretService:
         streams, so a steered and a baseline call sharing one seed each get
         an identical fresh RNG state — making their differences attributable
         to steering rather than sampling noise.
+
+        ``enable_thinking`` is Qwen-only (raw ``<think>`` text streams into
+        the visible output when on); ignored for Gemma.
         """
         wrapper = self._require_model()
 
@@ -933,6 +1018,8 @@ class InterpretService:
                         (content for role, content in reversed(turns) if role == "user"),
                         "",
                     )
+                    # (Qwen pt is also single-blob: Qwen3Inference has no
+                    # raw-prompt streaming method — same UX as gemma-pt.)
                     text = wrapper.generate_from_template(
                         last_user_content,
                         output_len=output_len,
@@ -942,13 +1029,23 @@ class InterpretService:
                     emit_token(stream_id, 0, 0, text, done=False)
                     emit_token(stream_id, 1, 0, "", done=True)
                 else:
+                    stream_turns = turns
+                    stream_kwargs = self._thinking_kwargs(enable_thinking)
+                    if self._family == "qwen":
+                        # The frontend sends Gemma's "model" role; Qwen's chat
+                        # template only knows "assistant".
+                        stream_turns = [
+                            ("assistant" if role == "model" else role, content)
+                            for role, content in turns
+                        ]
                     for event in wrapper.generate_chat_stream(
-                        turns,
+                        stream_turns,
                         output_len,
                         temperature,
                         top_p,
                         top_k,
                         cancel_event=cancel_event,
+                        **stream_kwargs,
                     ):
                         emit_token(
                             stream_id,

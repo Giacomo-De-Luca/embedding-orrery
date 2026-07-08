@@ -160,13 +160,41 @@ def build_probe_config(input) -> ProbeConfig:
     if input.kind not in PROBE_KINDS:
         raise ValueError(f"Unknown probe kind {input.kind!r}. Expected one of {PROBE_KINDS}.")
     defaults = ProbeConfig(collection_name="", target_field="")
+
+    def _or(value, fallback):
+        return value if value is not None else fallback
+
+    # class_weight is a nullable enum-like string; only "balanced" is valid.
+    class_weight = input.class_weight or None
+    if class_weight not in (None, "balanced"):
+        raise ValueError(f"class_weight must be null or 'balanced', got {class_weight!r}.")
+
+    # Range-check the numeric knobs here so bad input fails as a clean
+    # converter error instead of an opaque sklearn traceback mid-job.
+    if input.train_split is not None and not (0.0 < input.train_split < 1.0):
+        raise ValueError(f"train_split must be in (0, 1), got {input.train_split}.")
+    if input.c is not None and input.c <= 0:
+        raise ValueError(f"c must be > 0, got {input.c}.")
+    if input.alpha is not None and input.alpha < 0:
+        raise ValueError(f"alpha must be >= 0, got {input.alpha}.")
+    if input.kernel is not None and input.kernel not in ("rbf", "linear", "poly", "sigmoid"):
+        raise ValueError(f"kernel must be one of rbf/linear/poly/sigmoid, got {input.kernel!r}.")
+    if input.max_train_samples is not None and input.max_train_samples < 1:
+        raise ValueError(f"max_train_samples must be >= 1, got {input.max_train_samples}.")
+
     return ProbeConfig(
         collection_name=input.collection_name,
         target_field=input.target_field,
         kind=input.kind,
-        alpha=input.alpha if input.alpha is not None else defaults.alpha,
-        epochs=input.epochs if input.epochs is not None else defaults.epochs,
+        alpha=_or(input.alpha, defaults.alpha),
+        c=_or(input.c, defaults.c),
+        kernel=_or(input.kernel, defaults.kernel),
+        class_weight=class_weight,
+        epochs=_or(input.epochs, defaults.epochs),
         hidden_dims=list(input.hidden_dims) if input.hidden_dims else None,
+        seed=_or(input.seed, defaults.seed),
+        train_split=_or(input.train_split, defaults.train_split),
+        max_train_samples=_or(input.max_train_samples, defaults.max_train_samples),
     )
 
 

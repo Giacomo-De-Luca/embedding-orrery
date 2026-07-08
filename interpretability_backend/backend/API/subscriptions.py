@@ -153,6 +153,7 @@ class Subscription:
                         cancel_event=cancel_event,
                         steering_specs=steering_specs,
                         seed=input.seed,
+                        enable_thinking=input.enable_thinking,
                     )
                 )
                 while True:

@@ -82,6 +82,11 @@ class SklearnProbeSpec:
     train_split: float = 0.8
     seed: int = 42
     save_directions: bool = False  # write probe coef_ + scaler stats as .npz
+    # Persist the fitted estimator itself (joblib dict with scaler params) to
+    # models/L{layer}_{intermediate}_{kind}.joblib — the non-linear analogue of
+    # save_directions (SVR/SVC have no coef_ to save). Mirrors MLP checkpoints.
+    # No-op for massmean (closed-form; there is no estimator to save).
+    save_models: bool = False
     center_only: bool = False       # if True, StandardScaler(with_std=False)
     # When False, skip StandardScaler entirely. The fitted coef_ is then
     # in the feature's native units rather than per-feature z-scores —

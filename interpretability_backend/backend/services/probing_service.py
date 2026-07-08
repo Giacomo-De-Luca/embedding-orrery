@@ -18,6 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -32,6 +33,7 @@ from ..utils.duckdb_sync import _get_db as _get_duckdb
 from ..utils.embedding_loader import load_embeddings_for_ids
 from ..utils.resource_paths import PROBING_RESULTS_DIR
 from .probing_types import (
+    _BINARY_KINDS,
     _PREDICTIVE_KINDS,
     PROBE_KINDS,
     ProbeConfig,
@@ -46,6 +48,16 @@ logger = logging.getLogger("orrery." + __name__)
 MIN_VALID_SAMPLES = 50
 
 _MLP_SCORING_BATCH = 8192
+# RBF SVR training is O(n^2); cap its training pool well below the linear cap.
+_SVR_MAX_TRAIN = 10_000
+
+# Score bundle for kinds with no persisted linear direction (mlp, svr).
+_EMPTY_BUNDLE = {
+    "direction": None,
+    "scaler_mean": None,
+    "scaler_scale": None,
+    "intercept": None,
+}
 
 
 class ProbeTrainingError(Exception):
@@ -93,6 +105,30 @@ def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
         return SklearnProbeSpec(
             kind=config.kind,
             alpha=config.alpha,
+            standardise=True,
+            save_directions=True,
+            seed=config.seed,
+            train_split=config.train_split,
+        )
+    if config.kind == "svr":
+        # RBF SVR is nonlinear: no coef_/direction, so persist the fitted
+        # estimator (with scaler params) to score the whole collection.
+        return SklearnProbeSpec(
+            kind="svr",
+            C=config.c,
+            kernel=config.kernel,
+            standardise=True,
+            save_models=True,
+            seed=config.seed,
+            train_split=config.train_split,
+        )
+    if config.kind == "logreg":
+        # Binary classifier; the saved direction is the separating hyperplane
+        # normal, and scores are P(class 1) recomputed from it.
+        return SklearnProbeSpec(
+            kind="logreg",
+            C=config.c,
+            class_weight=config.class_weight,
             standardise=True,
             save_directions=True,
             seed=config.seed,
@@ -215,6 +251,79 @@ def _score_mlp(X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec) -> np.n
     return np.concatenate(chunks).astype(np.float64)
 
 
+def _load_sklearn_model(model_path: Path) -> tuple[object, np.ndarray, np.ndarray | None]:
+    """Load a persisted sklearn estimator + its scaler params."""
+    bundle = joblib.load(model_path)
+    scale = bundle["scaler_scale"]
+    return (
+        bundle["estimator"],
+        np.asarray(bundle["scaler_mean"], dtype=np.float64),
+        np.asarray(scale, dtype=np.float64) if scale is not None else None,
+    )
+
+
+def _standardize_chunks(X: np.ndarray, mean: np.ndarray, scale: np.ndarray | None):
+    """Yield standardized float64 chunks of X without a full second copy."""
+    denom = scale if scale is not None else 1.0
+    for start in range(0, X.shape[0], _MLP_SCORING_BATCH):
+        chunk = X[start : start + _MLP_SCORING_BATCH].astype(np.float64)
+        yield (chunk - mean) / denom
+
+
+def _score_svr(X: np.ndarray, model_path: Path) -> np.ndarray:
+    """Score all rows with a persisted (rbf) SVR estimator, batched."""
+    estimator, mean, scale = _load_sklearn_model(model_path)
+    chunks = [estimator.predict(c) for c in _standardize_chunks(X, mean, scale)]
+    return np.concatenate(chunks).astype(np.float64)
+
+
+def _score_logreg(X: np.ndarray, npz_path: Path) -> tuple[np.ndarray, dict]:
+    """Score all rows as P(class 1) from a saved logreg hyperplane, batched.
+
+    The toolkit saves the standardised coef/intercept; P(class 1) is the
+    sigmoid of the linear logit. Returns (scores, direction bundle).
+    """
+    data = np.load(npz_path)
+    coef = np.asarray(data["coef"], dtype=np.float64).ravel()
+    intercept = float(np.asarray(data["intercept"]).ravel()[0])
+    mean = np.asarray(data["scaler_mean"], dtype=np.float64)
+    scale = np.asarray(data["scaler_scale"], dtype=np.float64) if "scaler_scale" in data else None
+    scores = np.empty(X.shape[0], dtype=np.float64)
+    pos = 0
+    # exp overflow at extreme logits saturates cleanly to 0/1; silence the warning.
+    with np.errstate(over="ignore"):
+        for chunk in _standardize_chunks(X, mean, scale):
+            logits = chunk @ coef + intercept
+            scores[pos : pos + len(logits)] = 1.0 / (1.0 + np.exp(-logits))
+            pos += len(logits)
+    bundle = {
+        "direction": [float(v) for v in coef],
+        "scaler_mean": [float(v) for v in mean],
+        "scaler_scale": [float(v) for v in scale] if scale is not None else None,
+        "intercept": intercept,
+    }
+    return scores, bundle
+
+
+def _binarize_for_logreg(y: np.ndarray, valid_idx: np.ndarray) -> np.ndarray:
+    """Validate a binary target and remap the two classes to {0, 1}.
+
+    Returns a float64 copy of y with valid rows in {0.0, 1.0} (larger source
+    value -> 1) and NaN elsewhere. Raises if not exactly two classes.
+    """
+    distinct = np.unique(y[valid_idx])
+    if len(distinct) != 2:
+        raise ProbeTrainingError(
+            "Logistic regression requires a binary target (exactly two distinct "
+            f"values); {len(distinct)} found. Use ridge, SVR, or MLP for "
+            "continuous or multi-class fields."
+        )
+    out = np.full_like(y, np.nan)
+    out[y == distinct[1]] = 1.0
+    out[y == distinct[0]] = 0.0
+    return out
+
+
 def run_probe_core(
     X: np.ndarray,
     y: np.ndarray,
@@ -237,6 +346,7 @@ def run_probe_core(
     """
     spec = _build_spec(config)
     output_dir = Path(output_dir)
+    is_classification = config.kind in _BINARY_KINDS
 
     valid_idx = np.flatnonzero(np.isfinite(y))
     if len(valid_idx) < MIN_VALID_SAMPLES:
@@ -245,9 +355,18 @@ def run_probe_core(
             f"values; at least {MIN_VALID_SAMPLES} are required."
         )
 
+    if config.kind in _BINARY_KINDS:
+        # Validate + remap the two classes to {0, 1} before splitting.
+        y = _binarize_for_logreg(y, valid_idx)
+
+    # RBF SVR is O(n^2); cap its training pool tighter than the linear cap.
+    train_cap = config.max_train_samples
+    if config.kind == "svr":
+        train_cap = min(train_cap, _SVR_MAX_TRAIN)
+
     rng = np.random.default_rng(config.seed)
-    if len(valid_idx) > config.max_train_samples:
-        pool_idx = rng.choice(valid_idx, size=config.max_train_samples, replace=False)
+    if len(valid_idx) > train_cap:
+        pool_idx = rng.choice(valid_idx, size=train_cap, replace=False)
         pool_idx.sort()
     else:
         pool_idx = valid_idx
@@ -258,7 +377,21 @@ def run_probe_core(
     n_train, n_val = len(perm[:cut]), len(perm[cut:])
 
     X_pool = np.ascontiguousarray(X[pool_idx], dtype=np.float32)
-    y_pool = y[pool_idx].astype(np.float64)
+    # Classification kinds need integer class labels; the toolkit passes an
+    # integer target through verbatim (a float 0/1 would be percentile-binned).
+    y_pool = y[pool_idx].astype(np.int64 if is_classification else np.float64)
+
+    if is_classification:
+        # The shared split is not stratified; near the sample floor a random
+        # 80/20 cut can strand one class entirely, which sklearn reports as an
+        # opaque fit failure. Fail with a targeted message instead.
+        for part, name in ((indices_override[0], "train"), (indices_override[1], "validation")):
+            if len(np.unique(y_pool[part])) < 2:
+                raise ProbeTrainingError(
+                    f"The random split left only one class in the {name} set — "
+                    "the target is too imbalanced or too small for logistic "
+                    "regression. Try another seed, more data, or ridge/SVR."
+                )
     dataset = ActivationDataset(
         activations={(0, "embedding"): torch.from_numpy(X_pool)},
         sample_ids=[ids[i] for i in pool_idx],
@@ -269,6 +402,8 @@ def run_probe_core(
     # artifact. Remove it up front and require the trainer to recreate it.
     if isinstance(spec, MLPProbeSpec):
         artifact_path = output_dir / "checkpoints" / "layer_0_embedding.pt"
+    elif config.kind == "svr":
+        artifact_path = output_dir / "models" / f"L0_embedding_{spec.kind}.joblib"
     else:
         artifact_path = output_dir / "directions" / f"L0_embedding_{spec.kind}.npz"
     artifact_path.unlink(missing_ok=True)
@@ -299,12 +434,12 @@ def run_probe_core(
 
     if isinstance(spec, MLPProbeSpec):
         scores = _score_mlp(X.astype(np.float32, copy=False), artifact_path, spec)
-        bundle = {
-            "direction": None,
-            "scaler_mean": None,
-            "scaler_scale": None,
-            "intercept": None,
-        }
+        bundle = dict(_EMPTY_BUNDLE)
+    elif config.kind == "svr":
+        scores = _score_svr(X, artifact_path)
+        bundle = dict(_EMPTY_BUNDLE)
+    elif config.kind == "logreg":
+        scores, bundle = _score_logreg(X, artifact_path)
     else:
         scores, bundle = _score_linear(X, artifact_path, config.kind)
 

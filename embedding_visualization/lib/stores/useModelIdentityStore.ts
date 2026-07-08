@@ -3,7 +3,7 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import type { SteeringConfig, SteeringFeature } from '../types/types';
 import type { ParsedSaeId } from '../utils/saeCollections';
 import { parseSaeId } from '../utils/saeCollections';
-import { modelIdToCheckpoint } from '../utils/modelLoader';
+import { modelIdToCheckpoint } from '../utils/modelCheckpoints';
 
 // ---------------------------------------------------------------------------
 // Steering feature key (single source of truth across the app)

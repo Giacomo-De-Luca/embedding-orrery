@@ -32,6 +32,7 @@ from interpret.sae.paths import (
     vectors_dir as _default_vectors_dir,
     vectors_parquet_path as _default_vectors_parquet_path,
 )
+from interpret.sae.sae_config import QwenScopeSAEConfig
 from interpret.sae.source_ids import neuronpedia_source_id
 
 DEFAULT_LAYERS = [9, 17, 22, 29]
@@ -141,12 +142,17 @@ def load_feature_labels(
 
 
 def extract_and_merge(
-    config: SAEConfig,
+    config: SAEConfig | QwenScopeSAEConfig,
     output_path: Path | None = None,
     skip_labels: bool = False,
     resolved_labels_dir: Path | None = None,
 ) -> Path:
     """Load SAE decoder vectors, merge with labels, write parquet.
+
+    Accepts either SAE-config family — ``load_sae`` dispatches on type.
+    Qwen-scope callers must pass an explicit ``output_path`` and
+    ``skip_labels=True`` (the default path/label derivations are
+    Neuronpedia/gemma-scope-shaped and qwen-scope has no Neuronpedia data).
 
     Returns the output parquet path.
     """

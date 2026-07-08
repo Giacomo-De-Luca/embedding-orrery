@@ -22,6 +22,7 @@ from ..services.embedding_pipeline import (
     ReEmbeddingPipeline,
 )
 from ..services.job_state import JobStatus, get_job_state_service
+from ..services.model_registry import checkpoint_for_model_id
 from ..services.progress_emitter import emit_progress_sync
 from ..services.steering_types import SteeringSpec
 from ..services.topic_extraction_service import (
@@ -784,7 +785,7 @@ class Mutation:
 
     @strawberry.mutation
     async def load_model(self, checkpoint: str = "google/gemma-3-4b-it", info=None) -> ModelStatus:
-        """Load the Gemma interpretability model into GPU memory."""
+        """Load the interpretability base model (Gemma or Qwen, by checkpoint) into GPU memory."""
         service = get_interpret_service()
         try:
             async with service._lock:
@@ -799,7 +800,9 @@ class Mutation:
                 variant=result.variant,
                 model_size=result.model_size,
             )
-        except (TimeoutError, RuntimeError) as e:
+        except (TimeoutError, RuntimeError, ValueError) as e:
+            # ValueError: unparseable checkpoint (e.g. a Qwen size with no
+            # published qwen-scope SAEs) — same error envelope as load failures.
             return ModelStatus(loaded=False, model_name=str(e))
 
     @strawberry.mutation
@@ -977,7 +980,7 @@ class Mutation:
             )
 
         # Parse sae_id → layer, hook_type, width
-        # Format: "{layer}-gemmascope-{version}-{hookAbbrev}-{width}"
+        # Format: "{layer}-{scope}-{version}-{hookAbbrev}-{width}" (gemma- and qwen-scope)
         parts = sae_id.split("-")
         layer = int(parts[0]) if parts else 9
         hook_abbrev = parts[3] if len(parts) > 3 else "res"
@@ -985,11 +988,9 @@ class Mutation:
         hook_map = {"res": "resid_post", "mlp": "mlp_out", "att": "attn_out"}
         hook_type = hook_map.get(hook_abbrev, "resid_post")
 
-        # Derive expected checkpoint from model_id (e.g. "gemma-3-4b-it")
-        # and ensure the correct model is loaded before running inference.
-        # model_id is the Neuronpedia ID (e.g. "gemma-3-1b"), but load_model
-        # expects a HuggingFace checkpoint (e.g. "google/gemma-3-1b-pt").
-        expected_checkpoint = f"google/{model_id}" if "/" not in model_id else model_id
+        # model_id is the stored id (e.g. "gemma-3-1b", "qwen3-1.7B-base"), but
+        # load_model expects a HuggingFace checkpoint — resolve via the registry.
+        expected_checkpoint = checkpoint_for_model_id(model_id)
 
         # --- Load all items ---
         all_items = db.get_filtered_items(dataset_name, filters=[], limit=100_000)
@@ -1100,9 +1101,11 @@ class Mutation:
 
         try:
             async with service._lock:
-                # Ensure the correct model is loaded for this SAE
+                # Ensure the correct model is loaded for this SAE. Compare
+                # model ids, not checkpoints — _neuronpedia_model_id is the
+                # stored-id form ("gemma-3-1b"), never a "google/..." path.
                 status = service.get_status()
-                if status.loaded and service._neuronpedia_model_id != expected_checkpoint:
+                if status.loaded and service._neuronpedia_model_id != model_id:
                     await asyncio.to_thread(service.unload_model)
                     status = service.get_status()
                 if not status.loaded:
@@ -1247,6 +1250,19 @@ class Mutation:
                 results=[],
                 prompt_feature_count=0,
                 error="Model not loaded. Call loadModel first.",
+            )
+
+        # The loaded model must match the collection's SAE — a mismatched
+        # family/size would otherwise trigger a doomed SAE-repo download.
+        sae_model_id = extra.get("sae_model_id")
+        if sae_model_id and service._neuronpedia_model_id != sae_model_id:
+            return PromptDocumentSearchResponse(
+                results=[],
+                prompt_feature_count=0,
+                error=(
+                    f"Loaded model '{service._neuronpedia_model_id}' does not match "
+                    f"this collection's SAE model '{sae_model_id}'. Load that model first."
+                ),
             )
 
         try:

@@ -13,6 +13,8 @@ interface Capture2DOptions {
   gd: any;
   plotlyLib: any;
   container: HTMLElement;
+  /** 2D density overlay canvas (covers the plot area only), if active */
+  densityCanvas?: HTMLCanvasElement | null;
   labelCanvas: HTMLCanvasElement | null;
   isDark: boolean;
 }
@@ -69,7 +71,13 @@ function snapshotCanvas(source: HTMLCanvasElement): HTMLCanvasElement | null {
  * then the label overlay is drawn on top.
  */
 export async function capture2DPlot(opts: Capture2DOptions): Promise<HTMLCanvasElement> {
-  const { gd, plotlyLib, container, labelCanvas, isDark } = opts;
+  const { gd, plotlyLib, container, densityCanvas, labelCanvas, isDark } = opts;
+  // Snapshot GL-backed pixels synchronously, before any await, and record the
+  // overlay's on-screen rect (it covers the plot area only, not the container).
+  const densitySnapshot = densityCanvas ? snapshotCanvas(densityCanvas) : null;
+  const containerRect = container.getBoundingClientRect();
+  const densityRect = densityCanvas?.getBoundingClientRect() ?? null;
+
   const { canvas, ctx, cssW, cssH, dpr } = createOutputCanvas(container, isDark);
   // toImage clones gd synchronously at call time, so interaction during the await is safe
   const dataUrl = await plotlyLib.toImage(gd, {
@@ -80,6 +88,15 @@ export async function capture2DPlot(opts: Capture2DOptions): Promise<HTMLCanvasE
   });
   const plotImg = await loadImage(dataUrl);
   ctx.drawImage(plotImg, 0, 0, canvas.width, canvas.height);
+  if (densitySnapshot && densityRect) {
+    ctx.drawImage(
+      densitySnapshot,
+      (densityRect.left - containerRect.left) * dpr,
+      (densityRect.top - containerRect.top) * dpr,
+      densityRect.width * dpr,
+      densityRect.height * dpr,
+    );
+  }
   if (labelCanvas) {
     ctx.drawImage(labelCanvas, 0, 0, canvas.width, canvas.height);
   }

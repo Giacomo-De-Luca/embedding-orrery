@@ -60,7 +60,7 @@ export function VisualizationControls({
   const store = useVisualizationStore;
   const {
     method, mode, colorByField, selectedDimensions,
-    nebulaMode, hideUnclustered, nestedColorMode, showAxes,
+    nebulaMode, densityMode, densityIntensity, hideUnclustered, nestedColorMode, showAxes,
     showClusterLabels, showAllClusterLabels, hideFilteredPoints, mutedPointOpacity,
     pointOpacity, tooltipFields, showLabels, showOnlyHighlighted,
   } = store(useShallow((s) => ({
@@ -69,6 +69,8 @@ export function VisualizationControls({
     colorByField: s.colorByField,
     selectedDimensions: s.selectedDimensions,
     nebulaMode: s.nebulaMode,
+    densityMode: s.densityMode,
+    densityIntensity: s.densityIntensity,
     showAxes: s.showAxes,
     hideUnclustered: s.hideUnclustered,
     nestedColorMode: s.nestedColorMode,
@@ -217,6 +219,38 @@ export function VisualizationControls({
               <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
                 Nebula effects
               </Label>
+            </div>
+          )}
+
+          {mode === '2d' && (
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="density-mode"
+                  checked={densityMode ?? false}
+                  onCheckedChange={(checked) => store.getState().setFlag('densityMode', checked === true)}
+                />
+                <Label htmlFor="density-mode" className="font-normal cursor-pointer text-sm">
+                  Density overlay
+                </Label>
+              </div>
+              {densityMode && (
+                <div className="space-y-2 pl-6">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-normal">Density intensity</Label>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {(densityIntensity ?? 1.5).toFixed(2)}×
+                    </span>
+                  </div>
+                  <Slider
+                    min={25}
+                    max={400}
+                    step={25}
+                    value={[Math.round((densityIntensity ?? 1.5) * 100)]}
+                    onValueChange={([v]) => store.getState().setDensityIntensity(v / 100)}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

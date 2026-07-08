@@ -3,11 +3,17 @@
 A Neuronpedia "source" identifies one SAE within a model, e.g.
 ``"9-gemmascope-2-res-65k"`` (layer 9, residual-stream hook, 65k-wide).
 
-All code that needs this string should import from here rather than
-constructing it ad-hoc.
+Qwen-scope SAEs are **not** on Neuronpedia; ``qwen_source_id`` mints an
+analogous 5-part string (``"14-qwenscope-1-res-32k"``) used purely as the
+DuckDB ``sae_id`` key. Both schemes share the positional shape
+``{layer}-{scope}-{version}-{hookAbbrev}-{width}`` that the API layer and
+frontend parse by dash-split positions 0/3/4.
+
+All code that needs these strings should import from here rather than
+constructing them ad-hoc.
 """
 
-from interpret.sae.sae_config import GemmaScopeSAEConfig
+from interpret.sae.sae_config import GemmaScopeSAEConfig, QwenScopeSAEConfig
 
 # Mapping from HookType enum values to the abbreviations Neuronpedia uses
 # in S3 bucket paths and source identifiers.
@@ -40,3 +46,13 @@ def neuronpedia_source_id_prefixed(config: GemmaScopeSAEConfig) -> str:
     Used by ``FeatureLabelStore`` as the SQLite source key.
     """
     return f"{config.neuronpedia_model_id}_{neuronpedia_source_id(config)}"
+
+
+def qwen_source_id(config: QwenScopeSAEConfig) -> str:
+    """Canonical qwen-scope source string: ``'14-qwenscope-1-res-32k'``.
+
+    Qwen-scope SAEs are residual-stream only, so the hook abbreviation is
+    always ``res``. The ``1`` version segment exists only to preserve the
+    5-part positional shape shared with the gemma-scope scheme.
+    """
+    return f"{config.layer_index}-qwenscope-1-res-{config.width}"

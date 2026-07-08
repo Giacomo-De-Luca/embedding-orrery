@@ -10,10 +10,14 @@ heavy ``train_probe_for_collection`` import happens lazily inside the
 import re
 from dataclasses import dataclass
 
-PROBE_KINDS = ("ridge", "massmean", "mlp")
+PROBE_KINDS = ("ridge", "massmean", "svr", "logreg", "mlp")
+
+# Kinds requiring a binary (two-class) target — scores are P(class 1).
+_BINARY_KINDS = ("logreg",)
 
 # Kinds whose scores are predictions in target units (residuals meaningful).
-_PREDICTIVE_KINDS = ("ridge", "mlp")
+# Excludes logreg (probability) and massmean (uncalibrated projection).
+_PREDICTIVE_KINDS = ("ridge", "mlp", "svr")
 
 
 @dataclass
@@ -23,7 +27,10 @@ class ProbeConfig:
     collection_name: str
     target_field: str
     kind: str = "ridge"
-    alpha: float = 1.0
+    alpha: float = 1.0  # ridge L2 strength
+    c: float = 1.0  # SVR / logreg inverse-regularisation
+    kernel: str = "rbf"  # SVR kernel
+    class_weight: str | None = None  # logreg: None | "balanced"
     hidden_dims: list[int] | None = None  # MLP only; None -> [256]
     epochs: int = 100
     patience: int = 10

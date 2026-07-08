@@ -124,6 +124,14 @@ describe('buildStreamInput', () => {
     expect(steered.steering).not.toBeNull();
     expect(baseline.steering).toBeNull();
   });
+
+  it('defaults enableThinking to false (thinking suppressed)', () => {
+    expect(buildStreamInput(TURNS, null, 256, 0.7).enableThinking).toBe(false);
+  });
+
+  it('passes enableThinking through when toggled on (Qwen thinking mode)', () => {
+    expect(buildStreamInput(TURNS, null, 256, 0.7, null, true).enableThinking).toBe(true);
+  });
 });
 
 describe('configKey', () => {

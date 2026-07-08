@@ -44,6 +44,9 @@ export interface VisualizationStoreState {
   showClusterLabels: boolean;
   showAllClusterLabels: boolean;
   nebulaMode: boolean;
+  densityMode: boolean;
+  /** Brightness multiplier for the 2D density overlay (1 = Apple's tuning). */
+  densityIntensity: number;
   showAxes: boolean;
 
   // Muting / filtering
@@ -86,11 +89,12 @@ interface VisualizationStoreActions {
   setFlag: (flag: keyof Pick<VisualizationStoreState,
     'showOnlyHighlighted' | 'showLabels' | 'showContours' |
     'hideUnclustered' | 'showClusterLabels' | 'showAllClusterLabels' | 'nebulaMode' |
-    'showAxes' | 'hideFilteredPoints'
+    'densityMode' | 'showAxes' | 'hideFilteredPoints'
   >, value: boolean) => void;
 
   // Muting / filtering
   setMutedCategories: (categories: string[]) => void;
+  setDensityIntensity: (intensity: number) => void;
   setMutedPointOpacity: (opacity: number) => void;
   setPointOpacity: (opacity: number) => void;
   setTemporalRange: (range: TemporalRange | null) => void;
@@ -131,6 +135,8 @@ export const useVisualizationStore = create<VisualizationStore>()(
     showClusterLabels: false,
     showAllClusterLabels: false,
     nebulaMode: false,
+    densityMode: false,
+    densityIntensity: 1.5,
     showAxes: false,
     mutedCategories: [],
     hideFilteredPoints: false,
@@ -189,6 +195,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
     setFlag: (flag, value) => set({ [flag]: value }),
 
     setMutedCategories: (categories) => set({ mutedCategories: categories }),
+    setDensityIntensity: (intensity) => set({ densityIntensity: intensity }),
     setMutedPointOpacity: (opacity) => set({ mutedPointOpacity: opacity }),
     setPointOpacity: (opacity) => set({ pointOpacity: opacity }),
     setTemporalRange: (range) => set({ temporalRange: range }),
@@ -219,6 +226,8 @@ export const useVisualizationStore = create<VisualizationStore>()(
       method: s.method,
       mode: s.mode,
       nebulaMode: s.nebulaMode,
+      densityMode: s.densityMode,
+      densityIntensity: s.densityIntensity,
       showClusterLabels: s.showClusterLabels,
       showAllClusterLabels: s.showAllClusterLabels,
       showAxes: s.showAxes,

@@ -8,8 +8,8 @@ recovers each norm best over the ~4,700 Glasgow words.
 ## What it does
 
 For each word it extracts one pooled hidden vector per layer (encoder extraction,
-`output_hidden_states`), then trains ridge / lasso / SVR / **mass-mean** / MLP
-probes to predict each norm. Output is a per-`(extraction, target, probe, layer)`
+`output_hidden_states`), then trains ridge / lasso / SVR / **mass-mean** /
+**logistic** (median split → accuracy/AUC) / MLP probes to predict each norm. Output is a per-`(extraction, target, probe, layer)`
 tree of metrics + probe directions, plus seaborn figures (layer curves,
 probe×target heatmap).
 

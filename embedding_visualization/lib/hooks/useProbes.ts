@@ -15,6 +15,7 @@ import {
   type ProbeScoresData,
   type ProbeWithScores,
 } from '../utils/probeFields';
+import type { TrainProbeInputVars } from '../utils/probeParams';
 
 interface CollectionProbesData {
   collectionProbes: {
@@ -30,6 +31,8 @@ interface ProbeScoresQueryData {
 const probeKey = (targetField: string, kind: string) => `${targetField}::${kind}`;
 
 export interface UseProbesReturn {
+  /** The collection these probes belong to (null when none loaded). */
+  collectionName: string | null;
   /** Trained probes for the loaded collection. */
   probes: ProbeInfo[];
   /**
@@ -41,7 +44,7 @@ export interface UseProbesReturn {
   augmentedData: EmbeddingData | null;
   /** ColorFieldOption entries for probe score/residual fields. */
   fieldOptions: ColorFieldOption[];
-  train: (targetField: string, kind: string) => Promise<void>;
+  train: (input: TrainProbeInputVars) => Promise<void>;
   deleteProbe: (probe: ProbeInfo) => Promise<void>;
   training: boolean;
   trainingError: string | null;
@@ -174,8 +177,9 @@ export function useProbes(
   }, [fieldOptions]);
 
   const train = useCallback(
-    async (targetField: string, kind: string) => {
+    async (input: TrainProbeInputVars) => {
       if (!collectionName) return;
+      const { targetField, kind } = input;
       const startedFor = collectionName;
       const stillCurrent = () => collectionRef.current === startedFor;
       setTraining(true);
@@ -183,7 +187,7 @@ export function useProbes(
       setActiveJobId(`${startedFor}_probe`);
       try {
         const { data: res, error: mutationError } = await trainProbeMutation({
-          variables: { input: { collectionName, targetField, kind } },
+          variables: { input },
           // Mirrors the long-running-mutation convention (extractTopics).
           context: { fetchOptions: { timeout: 600000 } },
         });
@@ -252,6 +256,7 @@ export function useProbes(
   );
 
   return {
+    collectionName,
     probes,
     augmentedData,
     fieldOptions,
