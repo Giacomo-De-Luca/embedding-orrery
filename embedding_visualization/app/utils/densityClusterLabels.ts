@@ -250,24 +250,51 @@ export function resolveClusterLabelTexts(
   return results;
 }
 
+/**
+ * Collapse labeled clusters that resolve to the same text, keeping the densest
+ * (highest sumDensity) blob per unique label.
+ *
+ * The pipeline finds blobs *by density* at two bandwidths, so one topic can
+ * yield several blobs — surfaced at both the coarse and fine level, or split
+ * across a spatially multimodal region. In the hybrid path those all take the
+ * same majority topic_label, so without this step the same title is drawn more
+ * than once. c-TF-IDF (no-topic) labels differ per region, so only genuine
+ * duplicates collapse. Because coarse blobs integrate more mass, the surviving
+ * blob is usually the coarse (level-0) one, which also keeps the label visible
+ * across the whole zoom range instead of vanishing past the fine-level band.
+ */
+export function dedupeLabeledClusters(labeled: LabeledDensityCluster[]): LabeledDensityCluster[] {
+  const bestByText = new Map<string, LabeledDensityCluster>();
+  for (const c of labeled) {
+    if (!c.text) continue;
+    const existing = bestByText.get(c.text);
+    if (!existing || c.sumDensity > existing.sumDensity) {
+      bestByText.set(c.text, c);
+    }
+  }
+  return Array.from(bestByText.values());
+}
+
 // ---------------------------------------------------------------------------
 // Placement (labels.ts layoutLabels port)
 // ---------------------------------------------------------------------------
 
 const LEVEL_FONT_SIZES: [number, number] = [14, 12];
-const LEVEL_THRESHOLD = 2;
 const GLOBAL_MAX_SCALE = 2;
 const PAD = 4;
 
 /**
- * Assign per-level zoom bands and run dynamic label placement.
+ * Run dynamic label placement over the (deduped) cluster labels.
  *
- * The app's computeCurrentScale (current span / initial span; 1 = full view,
- * smaller = zoomed in) is exactly Apple's inverse-scale space with normalScale
- * normalized to 1, so their layoutLabels formulas apply with threshold = 2 and
- * no flip: coarse (level 0) labels get minScale 1/(2·1.2) ≈ 0.42 — they hide
- * once you zoom in past ~2.4× — and fine (level 1) labels get maxScale 0.5 —
- * they appear from ~2× zoom-in onward. Bands only apply when both levels exist.
+ * Every label is a candidate at every zoom; `dynamicLabelPlacement` alone
+ * declutters — at the overview it shows the highest-priority (densest) labels
+ * and suppresses those that would overlap, revealing more as you zoom in and
+ * the overlaps clear. We deliberately do NOT impose embedding-atlas's two-level
+ * scale bands: those exist to swap coarse keyword text for finer text on
+ * zoom-in, but our hybrid labels reuse the same topic name at both bandwidths,
+ * so the band's only effect would be to hard-hide the fine-level labels at the
+ * overview. Level still drives font size for a coarse/fine visual hierarchy.
+ * (computeCurrentScale = current span / initial span; 1 = full view.)
  */
 export function computeDensityLabelPlacements(
   labeled: LabeledDensityCluster[],
@@ -278,9 +305,6 @@ export function computeDensityLabelPlacements(
 ): DensityLabelPlacement[] {
   const visible = labeled.filter((c) => c.text.length > 0);
   if (visible.length === 0) return [];
-
-  const minLevel = Math.min(...visible.map((c) => c.level));
-  const maxLevel = Math.max(...visible.map((c) => c.level));
 
   const entries: DensityLabelPlacement[] = [];
   const appleLabels: Label[] = [];
@@ -316,12 +340,6 @@ export function computeDensityLabelPlacements(
       },
       locationAtZero: { x: screen.x, y: screen.y },
       priority: cluster.sumDensity,
-      minScale: cluster.level === maxLevel
-        ? undefined
-        : 1 / (LEVEL_THRESHOLD * Math.pow(2, cluster.level) * 1.2),
-      maxScale: cluster.level === minLevel
-        ? undefined
-        : 1 / (LEVEL_THRESHOLD * Math.pow(2, cluster.level - 1)),
     });
   }
 

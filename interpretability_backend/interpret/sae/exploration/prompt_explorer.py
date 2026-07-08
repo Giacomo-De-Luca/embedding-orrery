@@ -1,8 +1,9 @@
-"""Per-token SAE feature explorer for Gemma3.
+"""Per-token SAE feature explorer for Gemma3 / Qwen3.
 
-Runs a text prompt through Gemma with SAE hooks attached, then returns
-per-token top-k feature activations with Neuronpedia labels. Designed
-for interactive use in Jupyter notebooks.
+Runs a text prompt through the model with SAE hooks attached, then returns
+per-token top-k feature activations with Neuronpedia labels (Gemma; Qwen
+features are label-free until autointerp). Designed for interactive use in
+Jupyter notebooks and reused by the backend prompt-activations service.
 
 Usage::
 
@@ -38,7 +39,10 @@ from interpret.sae.hook_manager import HookManager
 from interpret.sae.sae_config import SAEConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from interpret.inference.gemma_pytorch import GemmaPytorchInference
+    from interpret.inference.qwen3_transformers import Qwen3Inference
 
 _DEFAULT_LABELS_DIR = Path("resources/sae_labels/neuronpedia_gemma-3-4b-it")
 
@@ -50,14 +54,22 @@ _DEFAULT_LABELS_DIR = Path("resources/sae_labels/neuronpedia_gemma-3-4b-it")
 class PromptExplorerConfig:
     """Configuration for PromptExplorer. Edit fields or pass to constructor.
 
-    The ``wrapper`` must be a loaded :class:`GemmaPytorchInference` instance.
+    The ``wrapper`` must be a loaded :class:`GemmaPytorchInference` or
+    :class:`Qwen3Inference` instance. The wrapper supplies the chat template
+    (``format_prompt``) and per-token pieces (``token_strings``), so this class
+    stays family-agnostic.
 
     SAEs to hook are given either as ``layers`` (all at the shared ``width``)
     or, for mixed widths — including two widths at the same layer — as
     explicit ``saes`` (layer, width) specs, which take precedence.
+
+    ``sae_config_factory`` maps a ``(layer, width)`` pair to the SAE config to
+    hook. When ``None`` (the default, used by notebooks), a Gemma-scope config
+    is built. The service injects a family-aware factory (its ``_make_sae_config``)
+    so Qwen-scope configs are built for Qwen models.
     """
 
-    wrapper: GemmaPytorchInference
+    wrapper: GemmaPytorchInference | Qwen3Inference
     layers: list[int] = field(default_factory=lambda: [9, 17, 22, 29])
     width: str = "16k"
     saes: list[tuple[int, str]] | None = None
@@ -67,6 +79,7 @@ class PromptExplorerConfig:
     skip_labels: bool = False
     model_size: str = "4b"
     variant: str = "it"
+    sae_config_factory: Callable[[int, str], SAEConfig] | None = None
 
     def effective_saes(self) -> list[tuple[int, str]]:
         """The (layer, width) specs to hook: explicit ``saes`` or layers × width."""
@@ -351,7 +364,11 @@ class FeatureDetail:
 
 
 class PromptExplorer:
-    """Run prompts through Gemma + SAE hooks and explore per-token features.
+    """Run prompts through a model + SAE hooks and explore per-token features.
+
+    Family-agnostic: the ``wrapper`` (Gemma or Qwen) supplies the chat template
+    and per-token pieces, and ``config.sae_config_factory`` builds the family's
+    SAE configs. The notebook default (no factory, Gemma wrapper) is unchanged.
 
     Example::
 
@@ -410,19 +427,25 @@ class PromptExplorer:
 
     # ── Prompt execution ─────────────────────────────────────────────────
 
-    @staticmethod
-    def _format_prompt(prompt: str) -> str:
-        """Apply the standard Gemma chat template.
+    def _build_sae_config(self, layer: int, width: str) -> SAEConfig:
+        """Build the SAE config to hook for one ``(layer, width)`` spec.
 
-        Must match the formatting in GemmaPytorchInference.generate().
+        Uses the injected ``sae_config_factory`` when present (the service
+        supplies a family-aware one) so Qwen-scope configs are built for Qwen
+        models. Falls back to a Gemma-scope config for standalone/notebook use.
         """
-        return f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
-
-    def _tokenize_to_strings(self, formatted_prompt: str) -> list[str]:
-        """Tokenize a formatted prompt and return per-token string pieces."""
-        sp = self._wrapper.tokenizer.sp_model
-        token_ids = self._wrapper.tokenize(formatted_prompt, bos=True)
-        return [sp.IdToPiece(tid) for tid in token_ids]
+        factory = self._config.sae_config_factory
+        if factory is not None:
+            return factory(layer, width)
+        return SAEConfig(
+            layer_index=layer,
+            width=width,
+            model_size=self._config.model_size,
+            variant=self._config.variant,
+            device=str(self._wrapper.device),
+            prefill_only=True,
+            read_only=True,
+        )
 
     def _get_density_mask(self, sae_config: SAEConfig) -> torch.Tensor:
         """Get or build a boolean density mask for a layer (True = keep)."""
@@ -445,7 +468,7 @@ class PromptExplorer:
         output_len: int = 1,
         top_k: int | None = None,
     ) -> PromptResult:
-        """Run a prompt through Gemma with SAE hooks and collect features.
+        """Run a prompt through the model with SAE hooks and collect features.
 
         Args:
             prompt: Raw user prompt. Chat template is applied for IT models;
@@ -463,26 +486,20 @@ class PromptExplorer:
         sae_configs: list[SAEConfig] = []
         manager = HookManager()
         for layer, width in self._config.effective_saes():
-            cfg = SAEConfig(
-                layer_index=layer,
-                width=width,
-                model_size=self._config.model_size,
-                variant=self._config.variant,
-                device=str(self._wrapper.device),
-                prefill_only=True,
-                read_only=True,
-            )
+            cfg = self._build_sae_config(layer, width)
             sae_configs.append(cfg)
             manager.add_sae(cfg)
         read_plan = _store_read_plan(sae_configs)
 
         # Base models: pass raw text (no chat template).
-        # IT models: wrap in chat template as before.
+        # IT models: the wrapper applies its family's chat template.
+        # token_strings is aligned to the prefill sequence by the wrapper
+        # (see GemmaPytorchInference/Qwen3Inference.token_strings).
         if self._is_base_model:
             formatted = prompt
         else:
-            formatted = self._format_prompt(prompt)
-        token_strings = self._tokenize_to_strings(formatted)
+            formatted = self._wrapper.format_prompt(prompt)
+        token_strings = self._wrapper.token_strings(formatted)
 
         # Run inference with hooks
         with manager.session(self._wrapper.model.model.layers) as store:

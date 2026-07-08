@@ -331,6 +331,21 @@ class Qwen3Inference:
         """Tokenize a string. Defaults to no special tokens (for offset use)."""
         return self._tokenizer.encode(text, add_special_tokens=add_special_tokens)
 
+    def token_strings(self, text: str) -> list[str]:
+        """Per-token byte-level BPE pieces for ``text``.
+
+        Aligned to the prefill sequence ``generate_from_template`` produces:
+        it tokenizes with ``add_special_tokens=True`` and Qwen has no BOS, so
+        the length matches (any ChatML special tokens already in ``text`` are
+        preserved as discrete pieces, e.g. ``<|im_start|>``). Pieces are raw
+        byte-level BPE (spaces shown as ``Ġ``), not decoded text.
+
+        Mirrors ``GemmaPytorchInference.token_strings`` so the per-token SAE
+        explorer can render token labels for either family.
+        """
+        ids = self.tokenize(text, add_special_tokens=True)
+        return self._tokenizer.convert_ids_to_tokens(ids)
+
     @property
     def prepends_bos(self) -> bool:
         """Whether ``generate_from_template`` sequences start with a BOS token.

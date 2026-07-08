@@ -443,13 +443,16 @@ class InterpretService:
             or self._prompt_explorer.config.top_k != top_k
         )
         if need_rebuild:
-            resolved_labels_dir = sae_paths.labels_dir(
-                GemmaScopeSAEConfig(
-                    layer_index=0,
-                    model_size=self._model_size,
-                    variant=self._variant,
+            device = str(wrapper.device)
+
+            # Family-aware SAE config construction: reuse the single factory
+            # so Qwen models build QwenScopeSAEConfig (the prompt path hooks
+            # RESID_POST only). skip_labels=True → labels come from DuckDB.
+            def _sae_config_factory(layer: int, width: str):
+                return self._make_sae_config(
+                    layer, width, HookType.RESID_POST, device, prefill_only=True
                 )
-            )
+
             config = PromptExplorerConfig(
                 wrapper=wrapper,
                 saes=saes,
@@ -457,9 +460,19 @@ class InterpretService:
                 skip_labels=True,
                 model_size=self._model_size,
                 variant=self._variant,
+                sae_config_factory=_sae_config_factory,
             )
-            if resolved_labels_dir.is_dir():
-                config.labels_dir = resolved_labels_dir
+            # Neuronpedia label dir is Gemma-only; Qwen-scope has none.
+            if self._family != "qwen":
+                resolved_labels_dir = sae_paths.labels_dir(
+                    GemmaScopeSAEConfig(
+                        layer_index=0,
+                        model_size=self._model_size,
+                        variant=self._variant,
+                    )
+                )
+                if resolved_labels_dir.is_dir():
+                    config.labels_dir = resolved_labels_dir
             self._prompt_explorer = PromptExplorer(config)
 
         return self._prompt_explorer
@@ -525,19 +538,25 @@ class InterpretService:
     def _find_prompt_token_range(self, token_strings: list[str], prompt: str) -> tuple[int, int]:
         """Find the start/end indices of the actual user prompt tokens.
 
-        For IT models, the chat template wraps as:
-          <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model
+        For IT models, the chat template wraps the prompt, e.g.:
+          Gemma: <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model
+          Qwen:  <|im_start|>user\\n{prompt}<|im_end|>\\n<|im_start|>assistant (no BOS)
 
-        For base (pt) models, there's no template — just BOS + prompt tokens.
+        For base (pt) models, there's no template — just an optional BOS + prompt.
 
         Returns (start, end) where token_strings[start:end] are the prompt tokens.
         """
-        # Base models: no chat template, skip only BOS (position 0)
-        if self._variant == "pt":
-            return 1, len(token_strings)
-
-        # IT models: strip the chat template prefix/suffix
         wrapper = self._require_model()
+
+        # Base models: no chat template. Skip position 0 only if the model
+        # prepends a BOS (Gemma does, Qwen does not).
+        if self._variant == "pt":
+            return (1 if wrapper.prepends_bos else 0), len(token_strings)
+
+        if self._family == "qwen":
+            return self._qwen_prompt_token_range(token_strings)
+
+        # Gemma IT: strip the chat template prefix/suffix.
         prefix = "<start_of_turn>user\n"
         prefix_ids = wrapper.tokenize(prefix, bos=True)
         start = len(prefix_ids)
@@ -547,6 +566,39 @@ class InterpretService:
         for i in range(len(token_strings) - 1, start - 1, -1):
             if "<end_of_turn>" in token_strings[i]:
                 end = i
+                break
+
+        return start, end
+
+    @staticmethod
+    def _qwen_prompt_token_range(token_strings: list[str]) -> tuple[int, int]:
+        """Locate user-prompt tokens in a Qwen ChatML-templated sequence.
+
+        ChatML wraps the turn as (an injected system turn may precede it):
+          <|im_start|>user\\n{prompt}<|im_end|>\\n<|im_start|>assistant\\n
+        Qwen has no BOS. Forward-scan the pieces for the user-turn opener
+        (robust to a preceding system turn) and take content up to the next
+        <|im_end|>. Byte-level BPE emits the role and newline as their own
+        pieces; a standalone whitespace piece after the role is skipped.
+        """
+        n = len(token_strings)
+        start = 0
+        for i, tok in enumerate(token_strings):
+            if "<|im_start|>" not in tok:
+                continue
+            role = token_strings[i + 1] if i + 1 < n else ""
+            # The role can sit on the marker piece itself or the next piece.
+            if "user" in tok or "user" in role:
+                start = i + 2 if "user" in role else i + 1
+                # Skip a standalone whitespace/newline piece (byte-BPE "Ċ").
+                if start < n and token_strings[start].strip("Ġ▁Ċ \n\t") == "":
+                    start += 1
+                break
+
+        end = n
+        for j in range(start, n):
+            if "<|im_end|>" in token_strings[j]:
+                end = j
                 break
 
         return start, end
@@ -622,12 +674,6 @@ class InterpretService:
         from backend.API.duckdb_instance import get_duckdb_client
 
         self._require_model()
-        if self._family == "qwen":
-            # PromptExplorer (and the chat-template token trimming it relies
-            # on) is Gemma-only for now — Phase 1.5 generalises it.
-            raise NotImplementedError(
-                "Per-token prompt activations are not yet supported for Qwen models."
-            )
         if saes:
             specs = [(int(layer), str(w)) for layer, w in saes]
         else:
@@ -652,7 +698,10 @@ class InterpretService:
         # Determine which token positions belong to the actual prompt
         all_token_strings = list(prompt_result.token_strings)
         if skip_chat_template:
-            prompt_start, prompt_end = 1, len(all_token_strings)
+            # Raw-token mode: only a leading BOS (if the model prepends one)
+            # is template, not content — Gemma has one, Qwen does not.
+            bos_offset = 1 if self._require_model().prepends_bos else 0
+            prompt_start, prompt_end = bos_offset, len(all_token_strings)
         else:
             prompt_start, prompt_end = self._find_prompt_token_range(all_token_strings, prompt)
         prompt_token_strings = all_token_strings[prompt_start:prompt_end]
@@ -677,8 +726,9 @@ class InterpretService:
             if db_sae_id:
                 sae_id = db_sae_id
             elif self._family == "qwen":
-                # Unreachable until the qwen guard above is lifted (Phase 1.5),
-                # but keeps the derivation family-correct when it is.
+                # Per-spec width-aware id (qwen-scope labels are absent until
+                # the Phase-2 autointerp pass, so this typically resolves to
+                # an empty label_map — features show index + activation only).
                 sae_id = qwen_source_id(
                     QwenScopeSAEConfig(
                         layer_index=layer_idx,

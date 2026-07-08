@@ -7,7 +7,6 @@ import { useLazyQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils/utils';
 import { Button } from '@/lib/ui-primitives/button';
-import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Input } from '@/lib/ui-primitives/input';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
@@ -421,19 +420,6 @@ export function ChatPanel({
               aria-label="Generation seed (empty for natural sampling)"
             />
           </div>
-          {/* Qwen-only: stream the raw <think> reasoning. Off (default)
-              suppresses it via the chat template's enable_thinking flag. */}
-          {isQwen && (
-            <div className="flex items-center gap-3">
-              <span className="w-16 shrink-0 text-[11px] text-muted-foreground">Thinking</span>
-              <div className="flex-1" />
-              <Checkbox
-                checked={enableThinking}
-                onCheckedChange={(checked) => setEnableThinking(checked === true)}
-                aria-label="Stream the model's <think> reasoning (Qwen only)"
-              />
-            </div>
-          )}
         </div>
 
         {/* Messages area — single thread, or steered vs. baseline side-by-side */}
@@ -489,6 +475,9 @@ export function ChatPanel({
           showSuggestions={steeredEmpty}
           onSuggest={handleSend}
           onSelectModel={onSelectModel}
+          showThinking={isQwen}
+          thinkingEnabled={enableThinking}
+          onToggleThinking={() => setEnableThinking((v) => !v)}
         />
       </div>
     </div>

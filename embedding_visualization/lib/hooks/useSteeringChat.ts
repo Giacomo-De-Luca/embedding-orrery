@@ -4,7 +4,13 @@ import { apolloClient } from '@/lib/utils/apollo-client';
 import { GENERATE_STREAM } from '@/lib/graphql/queries';
 import { ensureModelLoaded } from '@/lib/utils/modelLoader';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
-import type { ChatMessage, ChatStatus, SteeringConfig, SteeringFeature } from '@/lib/types/types';
+import type {
+  ChatMessage,
+  ChatMessagePart,
+  ChatStatus,
+  SteeringConfig,
+  SteeringFeature,
+} from '@/lib/types/types';
 
 export interface UseSteeringChatReturn {
   messages: ChatMessage[];
@@ -48,6 +54,52 @@ export function configKey(config: SteeringConfig): string {
   // Sort by token string so two direction presets (which share featureIndex=0)
   // don't swap order with insertion-order changes.
   return [...tokens].sort().join(',');
+}
+
+const THINK_OPEN = '<think>';
+const THINK_CLOSE = '</think>';
+
+/** Split raw streamed content into renderable message parts, routing
+ * `<think>…</think>` blocks (Qwen thinking mode) into `reasoning` parts so
+ * `ChatMessage` shows them in the collapsible reasoning panel instead of
+ * dumping the raw reasoning into the answer bubble.
+ *
+ * With no `<think>` marker this returns a single `text` part — byte-identical
+ * to the old raw-content rendering, so the Gemma path is unchanged.
+ *
+ * `done` closes a still-open reasoning block (generation ended mid-thought)
+ * so the "Thinking…" shimmer resolves to "Thought for N seconds".
+ *
+ * Exported for unit testing. */
+export function parseMessageParts(content: string, done = false): ChatMessagePart[] {
+  if (!content) return [];
+  if (!content.includes(THINK_OPEN)) return [{ type: 'text', text: content }];
+
+  const parts: ChatMessagePart[] = [];
+  let rest = content;
+  while (rest.length > 0) {
+    const open = rest.indexOf(THINK_OPEN);
+    if (open === -1) {
+      if (rest) parts.push({ type: 'text', text: rest });
+      break;
+    }
+    const before = rest.slice(0, open);
+    if (before.trim()) parts.push({ type: 'text', text: before });
+    rest = rest.slice(open + THINK_OPEN.length);
+
+    const close = rest.indexOf(THINK_CLOSE);
+    if (close === -1) {
+      // Reasoning still streaming (no closing tag yet).
+      parts.push({ type: 'reasoning', text: rest, state: done ? 'done' : 'streaming' });
+      break;
+    }
+    // Drop an empty closed block (the model chose not to reason) so thinking
+    // mode doesn't leave a stray "Thought for 0 seconds" panel above the answer.
+    const reasoning = rest.slice(0, close);
+    if (reasoning.trim()) parts.push({ type: 'reasoning', text: reasoning, state: 'done' });
+    rest = rest.slice(close + THINK_CLOSE.length);
+  }
+  return parts;
 }
 
 interface TokenChunkData {
@@ -276,6 +328,15 @@ export function useSteeringChat(
             if (chunk.done) {
               setStatus('idle');
               subscriptionRef.current = null;
+              // Finalize parts: close any reasoning block left open when
+              // generation ended (so "Thinking…" resolves to "Thought for N s").
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantIdRef.current
+                    ? { ...m, parts: parseMessageParts(m.content, true) }
+                    : m
+                )
+              );
               // Notify parent of completed assistant message
               const completedMsg = messagesRef.current.find(
                 (m) => m.id === assistantIdRef.current
@@ -286,13 +347,14 @@ export function useSteeringChat(
               return;
             }
 
-            // Append token text to the assistant message
+            // Append token text to the assistant message, re-deriving parts so
+            // Qwen <think> blocks stream into the collapsible reasoning panel.
             setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantIdRef.current
-                  ? { ...m, content: m.content + chunk.text }
-                  : m
-              )
+              prev.map((m) => {
+                if (m.id !== assistantIdRef.current) return m;
+                const content = m.content + chunk.text;
+                return { ...m, content, parts: parseMessageParts(content) };
+              })
             );
           },
           error(err) {

@@ -99,8 +99,19 @@ steering/highlight, streaming chat translates the Gemma `"model"` role to
 (`source_ids.qwen_source_id`). Verified live on MPS: smoke test, steered
 generation, streaming with thinking on/off, prompt highlight.
 
-Still Gemma-only: `PromptExplorer` / `run_prompt_activations` (clean
-NotImplementedError for qwen — Phase 1.5), and labels/densities/activation
-examples (Qwen-scope is **not** on Neuronpedia, so labels need the autointerp
-pass — Phase 2). Bootstrap decoder-vector ingestion:
-`scripts/extract_qwen_decoder_vectors.py`.
+**Phase 1.5 is wired** (2026-07): per-token prompt activations
+(`PromptExplorer` / `run_prompt_activations`) now work for Qwen. `PromptExplorer`
+is family-agnostic — the `wrapper` supplies the chat template (`format_prompt`)
+and per-token pieces (a new symmetric `token_strings()` on both
+`GemmaPytorchInference` and `Qwen3Inference`), and `PromptExplorerConfig.sae_config_factory`
+(injected by the service from its `_make_sae_config`) builds the family's SAE
+config, so the explorer no longer constructs Gemma-scope configs itself. The
+service's `_find_prompt_token_range` gained a Qwen ChatML branch
+(`<|im_start|>`/`<|im_end|>` markers, forward-scan robust to an injected system
+turn; base offset derived from `wrapper.prepends_bos`). Features come back with
+index + activation; **labels stay blank** (see Phase 2). Aligned to the prefill
+sequence via each wrapper's `token_strings` (Gemma prepends BOS, Qwen does not).
+
+Still Gemma-only: labels/densities/activation examples (Qwen-scope is **not** on
+Neuronpedia, so labels need the autointerp pass — Phase 2). Bootstrap
+decoder-vector ingestion: `scripts/extract_qwen_decoder_vectors.py`.

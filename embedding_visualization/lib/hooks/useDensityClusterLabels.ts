@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Point2D, NestedColorMap } from '../types/types';
 import {
   computeDensityLabelPlacements,
+  dedupeLabeledClusters,
   generateDensityClusters,
   resolveClusterLabelTexts,
   type DensityLabelPlacement,
@@ -86,7 +87,9 @@ export function useDensityClusterLabels({
             }
           : null;
         const texts = resolveClusterLabelTexts(clusters, textPoints, topicOf);
-        const labeled = clusters.map((c, i) => ({ ...c, ...texts[i] }));
+        // Blobs sharing a resolved title (same topic surfaced at both
+        // bandwidths or across a multimodal region) collapse to their densest.
+        const labeled = dedupeLabeledClusters(clusters.map((c, i) => ({ ...c, ...texts[i] })));
 
         const { colorMap: cm, nestedColorMap: ncm, neutralColor: neutral } = lookupRef.current;
         const plotArea = plotAreaFromFullLayout(graphDivRef.current?._fullLayout, width, height);

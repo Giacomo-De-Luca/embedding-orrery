@@ -147,6 +147,20 @@ class GemmaPytorchInference:
         """
         return self.tokenizer.encode(text, bos=bos)
 
+    def token_strings(self, text: str) -> list[str]:
+        """Per-token SentencePiece pieces for ``text``.
+
+        Aligned to the prefill sequence ``generate_from_template`` produces:
+        the underlying ``model.generate`` always prepends ``<bos>``, so this
+        tokenizes with ``bos=True`` and position 0 is the BOS piece. Pieces are
+        raw SentencePiece (word boundaries shown as ``▁``), not decoded text.
+
+        Mirrors ``Qwen3Inference.token_strings`` so the per-token SAE explorer
+        can render token labels for either family without knowing which it has.
+        """
+        sp = self.tokenizer.sp_model
+        return [sp.IdToPiece(tid) for tid in self.tokenize(text, bos=True)]
+
     @staticmethod
     def format_prompt(text: str) -> str:
         return f"<start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n"

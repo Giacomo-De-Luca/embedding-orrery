@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent } from 'react';
 import { motion } from 'motion/react';
-import { ArrowUp, Paperclip, Square } from 'lucide-react';
+import { ArrowUp, Lightbulb, Paperclip, Square } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
 import { ModelStatusButton } from './ModelStatusButton';
 
@@ -23,9 +23,24 @@ interface ChatInputProps {
   showSuggestions?: boolean;
   onSuggest?: (prompt: string) => void;
   onSelectModel?: (modelId: string, saeId: string) => void;
+  /** Show the reasoning-mode toggle pill (Qwen only). */
+  showThinking?: boolean;
+  thinkingEnabled?: boolean;
+  onToggleThinking?: () => void;
 }
 
-export function ChatInput({ onSend, onStop, isGenerating, disabled, showSuggestions, onSuggest, onSelectModel }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  onStop,
+  isGenerating,
+  disabled,
+  showSuggestions,
+  onSuggest,
+  onSelectModel,
+  showThinking,
+  thinkingEnabled,
+  onToggleThinking,
+}: ChatInputProps) {
   const [input, setInput] = useState(() => {
     if (typeof window === 'undefined') return '';
     return localStorage.getItem(DRAFT_KEY) ?? '';
@@ -147,6 +162,26 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled, showSuggesti
             </div>
             {/* Model status indicator */}
             <ModelStatusButton onSelectModel={onSelectModel} />
+            {/* Reasoning-mode toggle (Qwen only): streams the model's <think>
+                block into the collapsible reasoning panel. Applies to the next
+                message. */}
+            {showThinking && (
+              <button
+                type="button"
+                onClick={onToggleThinking}
+                aria-pressed={!!thinkingEnabled}
+                title="Show the model's step-by-step reasoning"
+                className={cn(
+                  'flex h-7 items-center gap-1.5 rounded-lg border px-2 text-[12px] transition-colors',
+                  thinkingEnabled
+                    ? 'border-transparent bg-foreground text-background'
+                    : 'border-border/40 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Lightbulb style={{ width: 13, height: 13 }} />
+                Thinking
+              </button>
+            )}
           </div>
 
           {/* Send / Stop */}

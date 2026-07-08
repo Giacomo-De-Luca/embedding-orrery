@@ -12,6 +12,7 @@ import {
   configKey,
   buildSteeringInputs,
   buildStreamInput,
+  parseMessageParts,
 } from '../useSteeringChat';
 import type { SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
@@ -161,5 +162,52 @@ describe('configKey', () => {
       ],
     };
     expect(configKey(a)).toBe(configKey(b));
+  });
+});
+
+describe('parseMessageParts', () => {
+  it('returns a single text part when there is no <think> block (Gemma path)', () => {
+    expect(parseMessageParts('Hello, world.')).toEqual([{ type: 'text', text: 'Hello, world.' }]);
+  });
+
+  it('returns [] for empty content (streaming placeholder)', () => {
+    expect(parseMessageParts('')).toEqual([]);
+  });
+
+  it('marks an unclosed <think> block as streaming reasoning', () => {
+    expect(parseMessageParts('<think>Let me work this out')).toEqual([
+      { type: 'reasoning', text: 'Let me work this out', state: 'streaming' },
+    ]);
+  });
+
+  it('splits a closed <think> block and the answer into two parts', () => {
+    const parts = parseMessageParts('<think>17 + 25 = 42</think>\n\nThe answer is 42.');
+    expect(parts).toEqual([
+      { type: 'reasoning', text: '17 + 25 = 42', state: 'done' },
+      { type: 'text', text: '\n\nThe answer is 42.' },
+    ]);
+  });
+
+  it('closes an open reasoning block when finalized (done=true)', () => {
+    expect(parseMessageParts('<think>cut off mid-thought', true)).toEqual([
+      { type: 'reasoning', text: 'cut off mid-thought', state: 'done' },
+    ]);
+  });
+
+  it('keeps leading answer text before a think block', () => {
+    const parts = parseMessageParts('Sure.<think>reasoning</think>Done.');
+    expect(parts).toEqual([
+      { type: 'text', text: 'Sure.' },
+      { type: 'reasoning', text: 'reasoning', state: 'done' },
+      { type: 'text', text: 'Done.' },
+    ]);
+  });
+});
+
+describe('parseMessageParts — empty think block', () => {
+  it('drops an empty closed <think></think> and keeps only the answer', () => {
+    expect(parseMessageParts('<think>  </think>  Hi there!')).toEqual([
+      { type: 'text', text: '  Hi there!' },
+    ]);
   });
 });

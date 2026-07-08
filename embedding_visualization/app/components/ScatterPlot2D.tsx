@@ -1414,7 +1414,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         showline: false,
         showtitle: false,
       },
-      margin: { l: 50, r: 50, t: 50, b: 50 },
+      // No decorative border. When axes are shown, keep just enough room for
+      // tick labels (left/bottom); otherwise let the plot fill the container.
+      margin: showAxes ? { l: 40, r: 8, t: 8, b: 30 } : { l: 0, r: 0, t: 0, b: 0 },
     }),
     [axisColor, categoryField, categoryValues.length, gridColor, height, legendBg, paperBg, plotBg, width, showAxes]
   );

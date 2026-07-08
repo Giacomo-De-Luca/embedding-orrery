@@ -76,6 +76,7 @@ export const Reasoning = memo(
     });
 
     const hasEverStreamedRef = useRef(isStreaming);
+    const wasStreamingRef = useRef(false);
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
     const startTimeRef = useRef<number | null>(null);
 
@@ -92,12 +93,16 @@ export const Reasoning = memo(
       }
     }, [isStreaming, setDuration]);
 
-    // Auto-open when streaming starts (unless explicitly closed)
+    // Auto-open only on the rising edge of streaming (not every render) so a
+    // manual collapse while the model is still reasoning sticks instead of
+    // being re-opened on the next token — matters most on slow backends where
+    // the streaming window lasts many seconds.
     useEffect(() => {
-      if (isStreaming && !isOpen && !isExplicitlyClosed) {
+      if (isStreaming && !wasStreamingRef.current && !isExplicitlyClosed) {
         setIsOpen(true);
       }
-    }, [isStreaming, isOpen, setIsOpen, isExplicitlyClosed]);
+      wasStreamingRef.current = isStreaming;
+    }, [isStreaming, setIsOpen, isExplicitlyClosed]);
 
     // Auto-close when streaming ends (once only)
     useEffect(() => {

@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   clustersFromFindClustersResult,
   resolveClusterLabelTexts,
+  dedupeLabeledClusters,
   computeDensityLabelPlacements,
   type DensityCluster,
   type LabeledDensityCluster,
@@ -170,6 +171,50 @@ describe('resolveClusterLabelTexts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// dedupeLabeledClusters
+// ---------------------------------------------------------------------------
+
+const labeledCluster = (
+  text: string, sumDensity: number, topicLabel: string | null = text, level: 0 | 1 = 0,
+): LabeledDensityCluster => ({
+  x: 0, y: 0, sumDensity, rects: [], level, text, topicLabel,
+});
+
+describe('dedupeLabeledClusters', () => {
+  it('keeps the densest blob per unique title', () => {
+    const out = dedupeLabeledClusters([
+      labeledCluster('Poetry', 100, 'Poetry', 0),
+      labeledCluster('Poetry', 250, 'Poetry', 0), // denser coarse blob wins
+      labeledCluster('Poetry', 40, 'Poetry', 1),  // fine-level duplicate
+      labeledCluster('Chemistry', 80, 'Chemistry', 1),
+    ]);
+    expect(out).toHaveLength(2);
+    const poetry = out.find((c) => c.text === 'Poetry')!;
+    expect(poetry.sumDensity).toBe(250);
+    expect(out.map((c) => c.text).sort()).toEqual(['Chemistry', 'Poetry']);
+  });
+
+  it('preserves distinct c-TF-IDF texts (only exact duplicates collapse)', () => {
+    const out = dedupeLabeledClusters([
+      labeledCluster('quantum-computing', 100, null, 0),
+      labeledCluster('molecular-biology', 90, null, 1),
+      labeledCluster('quantum-computing', 60, null, 1), // exact dup → dropped
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.map((c) => c.text).sort()).toEqual(['molecular-biology', 'quantum-computing']);
+  });
+
+  it('drops empty-text clusters', () => {
+    const out = dedupeLabeledClusters([
+      labeledCluster('', 100, null, 0),
+      labeledCluster('Poetry', 50, 'Poetry', 0),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toBe('Poetry');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // computeDensityLabelPlacements — per-level scale bands
 // ---------------------------------------------------------------------------
 
@@ -194,7 +239,7 @@ const labeled = (
 });
 
 describe('computeDensityLabelPlacements', () => {
-  it('assigns Apple’s per-level scale bands when both levels are present', () => {
+  it('does NOT impose per-level scale bands — fine labels stay visible at overview', () => {
     const placements = computeDensityLabelPlacements(
       [
         labeled({ x: 20, y: 20, level: 0, text: 'Coarse' }),
@@ -202,20 +247,16 @@ describe('computeDensityLabelPlacements', () => {
       ],
       fakeCtx, ranges, plotArea, () => '#888888',
     );
-    const coarse = placements.find((p) => p.level === 0)!;
-    const fine = placements.find((p) => p.level === 1)!;
-    // Far apart → no conflicts → placements exist and respect the level bands
-    expect(coarse.placement).not.toBeNull();
-    expect(fine.placement).not.toBeNull();
-    // Level 0: minScale = 1/(2·2⁰·1.2) ≈ 0.4167, visible out to the global max
-    expect(coarse.placement!.minScale).toBeCloseTo(1 / 2.4, 6);
-    expect(coarse.placement!.maxScale).toBeGreaterThanOrEqual(2);
-    // Level 1: maxScale = 1/(2·2⁰) = 0.5, visible down to full zoom-in
-    expect(fine.placement!.maxScale).toBeCloseTo(0.5, 6);
-    expect(fine.placement!.minScale).toBeLessThanOrEqual(1e-6);
+    // Far apart → no conflicts → both span the full zoom range regardless of
+    // level (no maxScale=0.5 cutoff that would hide the fine label at scale≈1).
+    for (const p of placements) {
+      expect(p.placement).not.toBeNull();
+      expect(p.placement!.minScale).toBeLessThanOrEqual(1e-6);
+      expect(p.placement!.maxScale).toBeGreaterThanOrEqual(2);
+    }
   });
 
-  it('single-level input gets no per-level band constraints', () => {
+  it('non-overlapping labels are all visible across the full zoom range', () => {
     const placements = computeDensityLabelPlacements(
       [labeled({ x: 20, y: 20, level: 0 }), labeled({ x: 80, y: 80, level: 0, text: 'Other' })],
       fakeCtx, ranges, plotArea, () => '#888888',

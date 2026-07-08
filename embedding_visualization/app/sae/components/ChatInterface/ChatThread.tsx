@@ -57,7 +57,7 @@ export function ChatThread({
   const isBusy = isLoadingModel || isGenerating;
 
   return (
-    <div className="relative flex-1 overflow-hidden">
+    <div className="group relative flex-1 overflow-hidden">
       {isEmpty && (
         <ChatGreeting
           features={steeringFeatures}
@@ -131,7 +131,13 @@ export function ChatThread({
           'transition-all duration-200',
           isAtBottom
             ? 'pointer-events-none scale-90 opacity-0'
-            : 'pointer-events-auto scale-100 opacity-100',
+            : cn(
+                // Not at bottom: hidden until the thread is hovered (or the
+                // button is keyboard-focused), then it fades/scales in.
+                'scale-100 pointer-events-none opacity-0',
+                'group-hover:pointer-events-auto group-hover:opacity-100',
+                'focus-visible:pointer-events-auto focus-visible:opacity-100',
+              ),
         )}
         aria-label="Scroll to bottom"
       >
