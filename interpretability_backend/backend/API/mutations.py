@@ -658,6 +658,7 @@ class Mutation:
             hook_type=input.hook_type,
             model_size=input.model_size,
             variant=input.variant,
+            family=input.family,
             skip_download=input.skip_download,
             include_activations=input.include_activations,
             job_id=job_id,
@@ -677,9 +678,18 @@ class Mutation:
                 input.hook_type, "res"
             )
             mode = input.collection_mode or SaeCollectionMode.DECODER_VECTORS
+            if input.family == "qwen" and mode == SaeCollectionMode.LABEL_EMBEDDINGS:
+                # qwen-scope features have no labels to embed yet
+                mode = SaeCollectionMode.DECODER_VECTORS
             mode_suffix = "vectors" if mode == SaeCollectionMode.DECODER_VECTORS else "labels"
-            variant_suffix = f"_{input.variant}" if input.variant != "it" else ""
-            collection_name = f"sae_{input.model_size}{variant_suffix}_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
+            if input.family == "qwen":
+                model_prefix = f"qwen_{input.model_size}"
+            else:
+                variant_suffix = f"_{input.variant}" if input.variant != "it" else ""
+                model_prefix = f"{input.model_size}{variant_suffix}"
+            collection_name = (
+                f"sae_{model_prefix}_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
+            )
 
             try:
                 emb_model_config = build_embedding_model_config(input.embedding_model)

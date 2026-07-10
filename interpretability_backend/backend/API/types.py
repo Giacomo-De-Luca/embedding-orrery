@@ -927,6 +927,9 @@ class PrepareSaeInput:
     hook_type: str = "resid_post"
     model_size: str = "4b"
     variant: str = "it"
+    # SAE family: "gemma" (Neuronpedia download) or "qwen" (qwen-scope,
+    # extract-only — no labels/activations; variant is ignored).
+    family: str = "gemma"
     skip_download: bool = False
     include_activations: bool = False
     # Collection creation options

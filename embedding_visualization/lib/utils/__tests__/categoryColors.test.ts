@@ -273,10 +273,17 @@ describe('color validity', () => {
 });
 
 describe('categoryPalettes registry', () => {
-  it('should include all three built-in palettes', () => {
-    expect(BUILTIN_PALETTE_NAMES).toContain('cosmicGalaxy');
-    expect(BUILTIN_PALETTE_NAMES).toContain('category10');
-    expect(BUILTIN_PALETTE_NAMES).toContain('category20');
+  it('should keep all built-in palette keys stable (persisted in URLs and collection defaults)', () => {
+    expect(BUILTIN_PALETTE_NAMES).toEqual(expect.arrayContaining([
+      'cosmicGalaxy', 'cosmicGalaxyLight', 'cosmicGalaxyXL',
+      'emeraldGalaxy', 'azureGalaxy', 'emberGalaxy', 'violetGalaxy',
+      'Galaxy', 'category10', 'category20',
+    ]));
+  });
+
+  it('cosmicGalaxyXL starts with cosmicGalaxy verbatim, so switching keeps existing colors', () => {
+    expect(CATEGORY_PALETTES.cosmicGalaxyXL.colors.slice(0, 20))
+      .toEqual([...CATEGORY_PALETTES.cosmicGalaxy.colors]);
   });
 
   it('should return colors via getPaletteColors', () => {

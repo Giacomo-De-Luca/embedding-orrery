@@ -5,9 +5,10 @@
   "description": "FPS + RAM benchmark harness for the embedding visualization frontend",
   "scripts": {
     "bench:3d": "node bench.mjs 3d",
+    "bench:topics": "node bench.mjs 3d-topics",
     "bench:nebula": "node bench.mjs 3d-nebula",
     "bench:2d": "node bench.mjs 2d",
-    "bench:all": "node bench.mjs 3d && node bench.mjs 3d-nebula && node bench.mjs 2d"
+    "bench:all": "node bench.mjs 3d; node bench.mjs 3d-topics; node bench.mjs 3d-nebula; node bench.mjs 2d"
   },
   "dependencies": {
     "playwright-core": "^1.53.0"

@@ -1,0 +1,24 @@
+% Parity check: Orrery topic pipeline vs BERTopic (identical UMAP seed/params,
+% HDBSCAN min_cluster_size=10, english stop words; all-MiniLM-L6-v2 embeddings).
+% Full metrics (noise %, diversity, U_Mass, DBCV, ARI) in bertopic_parity.json.
+% No extra packages needed beyond booktabs.
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrrr}
+\toprule
+Dataset & Pipeline & Topics & Silhouette & $C_v$ \\
+\midrule
+emotion (1k) & Orrery & 22 & 0.5259 & 0.3279 \\
+ & BERTopic & 22 & 0.5259 & 0.3431 \\
+\midrule
+20 Newsgroups (18.8k) & Orrery & 214 & 0.6166 & 0.6113 \\
+ & BERTopic & 214 & 0.6166 & 0.6128 \\
+\bottomrule
+\end{tabular}
+\caption{Parity with BERTopic on identical inputs (same MiniLM embeddings and
+UMAP/HDBSCAN configuration). Document--topic assignments are identical
+(ARI $=1.0$), making silhouette match exactly; the small $C_v$ gap stems from
+minor differences in c-TF-IDF keyword extraction, not clustering.}
+\label{tab:bertopic-parity}
+\end{table}

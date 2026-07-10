@@ -30,11 +30,17 @@ import type { SaeModelInfo } from '@/lib/types/types';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-interface GemmaModelConfig {
+interface SaeModelConfig {
+  /** Unique select value ("gemma-27b" vs "qwen-27B" would collide on size alone) */
+  key: string;
+  family: 'gemma' | 'qwen';
+  /** Backend model_size ("4b" for gemma, "1.7B" for qwen) */
   size: string;
   label: string;
   layers: number;
   dIn: number;
+  /** Qwen-scope ships exactly one width per model; gemma offers WIDTH_OPTIONS */
+  fixedWidth?: string;
   labelledLayers: Set<number>;
 }
 
@@ -44,11 +50,20 @@ interface GemmaModelConfig {
 // dropdown and enable "Label embeddings" vector mode.
 // Source (retrieved 2026-07) — Neuronpedia datasets S3 catalog:
 //   https://neuronpedia-datasets.s3.us-east-1.amazonaws.com/?prefix=v1/<model_id>/&delimiter=/
-const GEMMA_MODELS: GemmaModelConfig[] = [
-  { size: '1b', label: 'Gemma 3 1B', layers: 26, dIn: 1152, labelledLayers: new Set([7, 13, 17, 22]) },
-  { size: '4b', label: 'Gemma 3 4B', layers: 34, dIn: 2560, labelledLayers: new Set([9, 17, 22, 29]) },
-  { size: '12b', label: 'Gemma 3 12B', layers: 48, dIn: 3840, labelledLayers: new Set([12, 24, 31, 41]) },
-  { size: '27b', label: 'Gemma 3 27B', layers: 62, dIn: 5376, labelledLayers: new Set([16, 31, 40, 53]) },
+// Qwen-scope TopK SAEs (residual-stream only, k pinned to 50 server-side) are
+// not on Neuronpedia: decoder vectors are extracted straight from the HF
+// weights with empty labels/densities and no activation examples, so
+// labelledLayers stays empty. Sizes/layers/widths mirror QWEN_SCOPE_MODELS in
+// interpret/sae/sae_config.py.
+const SAE_MODELS: SaeModelConfig[] = [
+  { key: 'gemma-1b', family: 'gemma', size: '1b', label: 'Gemma 3 1B', layers: 26, dIn: 1152, labelledLayers: new Set([7, 13, 17, 22]) },
+  { key: 'gemma-4b', family: 'gemma', size: '4b', label: 'Gemma 3 4B', layers: 34, dIn: 2560, labelledLayers: new Set([9, 17, 22, 29]) },
+  { key: 'gemma-12b', family: 'gemma', size: '12b', label: 'Gemma 3 12B', layers: 48, dIn: 3840, labelledLayers: new Set([12, 24, 31, 41]) },
+  { key: 'gemma-27b', family: 'gemma', size: '27b', label: 'Gemma 3 27B', layers: 62, dIn: 5376, labelledLayers: new Set([16, 31, 40, 53]) },
+  { key: 'qwen-1.7B', family: 'qwen', size: '1.7B', label: 'Qwen3 1.7B', layers: 28, dIn: 2048, fixedWidth: '32k', labelledLayers: new Set() },
+  { key: 'qwen-2B', family: 'qwen', size: '2B', label: 'Qwen3.5 2B', layers: 24, dIn: 2048, fixedWidth: '32k', labelledLayers: new Set() },
+  { key: 'qwen-8B', family: 'qwen', size: '8B', label: 'Qwen3 8B', layers: 36, dIn: 4096, fixedWidth: '64k', labelledLayers: new Set() },
+  { key: 'qwen-27B', family: 'qwen', size: '27B', label: 'Qwen3.5 27B', layers: 64, dIn: 5120, fixedWidth: '80k', labelledLayers: new Set() },
 ];
 
 const VARIANT_OPTIONS = [
@@ -85,9 +100,10 @@ function formatCount(n: number): string {
 
 export function SaeTab() {
   // Model selection state
-  const [modelSize, setModelSize] = useState('4b');
+  const [modelKey, setModelKey] = useState('gemma-4b');
   const [variant, setVariant] = useState('it');
-  const activeModel = GEMMA_MODELS.find((m) => m.size === modelSize) ?? GEMMA_MODELS[1];
+  const activeModel = SAE_MODELS.find((m) => m.key === modelKey) ?? SAE_MODELS[1];
+  const isQwen = activeModel.family === 'qwen';
 
   // Form state
   const [layer, setLayer] = useState(9);
@@ -95,9 +111,9 @@ export function SaeTab() {
   const [hookType, setHookType] = useState('resid_post');
   const [includeActivations, setIncludeActivations] = useState(false);
 
-  const handleModelSizeChange = (size: string) => {
-    setModelSize(size);
-    const newModel = GEMMA_MODELS.find((m) => m.size === size);
+  const handleModelChange = (key: string) => {
+    setModelKey(key);
+    const newModel = SAE_MODELS.find((m) => m.key === key);
     if (newModel && layer >= newModel.layers) {
       setLayer(0);
     }
@@ -110,7 +126,9 @@ export function SaeTab() {
 
   // Embedding model & topic config (reuse shared hook + components)
   const embeddingModel = useEmbeddingModelState();
-  const isLabelMode = collectionMode === 'LABEL_EMBEDDINGS';
+  // Label mode only takes effect on layers that actually have labels
+  const isLabelMode =
+    collectionMode === 'LABEL_EMBEDDINGS' && activeModel.labelledLayers.has(layer);
 
   // Job state
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -165,7 +183,18 @@ export function SaeTab() {
   });
 
   const handleDownload = () => {
-    const jobId = `sae_prepare_${modelSize}_${variant}_${layer}_${hookType}_${width}`;
+    // Qwen-scope is residual-stream only, single-width, unlabelled, no
+    // activation examples — pin the fields the hidden controls would set.
+    const effWidth = activeModel.fixedWidth ?? width;
+    const effHook = isQwen ? 'resid_post' : hookType;
+    const effVariant = isQwen ? 'base' : variant;
+    // Label-embeddings mode needs labels; fall back when the selected layer
+    // has none (mode picked on a labelled layer, then layer/model switched).
+    const effMode: SaeCollectionMode = activeModel.labelledLayers.has(layer)
+      ? collectionMode
+      : 'DECODER_VECTORS';
+
+    const jobId = `sae_prepare_${activeModel.size}_${effVariant}_${layer}_${effHook}_${effWidth}`;
     setActiveJobId(jobId);
     setLastResult(null);
 
@@ -174,16 +203,20 @@ export function SaeTab() {
       variables: {
         input: {
           layer,
-          width,
-          hookType,
-          modelSize,
-          variant,
-          includeActivations,
+          width: effWidth,
+          hookType: effHook,
+          modelSize: activeModel.size,
+          variant: effVariant,
+          family: activeModel.family,
+          includeActivations: isQwen ? false : includeActivations,
           skipDownload: false,
           createCollection,
           ...(createCollection && {
-            collectionMode,
-            embeddingModel: isLabelMode ? embeddingModel.buildEmbeddingModelInput() : undefined,
+            collectionMode: effMode,
+            embeddingModel:
+              effMode === 'LABEL_EMBEDDINGS'
+                ? embeddingModel.buildEmbeddingModelInput()
+                : undefined,
             extractTopics: topicParams.extractTopics,
             topicConfig: topicParams.topicConfig,
             deleteSourceFiles,
@@ -204,22 +237,34 @@ export function SaeTab() {
         <CardContent className="pt-6 space-y-4">
           <h3 className="text-sm font-semibold">Download SAE Data</h3>
           <p className="text-xs text-muted-foreground">
-            Download features and decoder vectors from Neuronpedia S3. Features and
-            activations are ingested into DuckDB. The output parquet can also be imported
-            as a vector collection via the Local Files tab for visualization.
+            {isQwen ? (
+              <>
+                Extract decoder vectors from the Qwen-scope SAE weights on HuggingFace.
+                Qwen-scope is not on Neuronpedia, so features are ingested without labels,
+                densities, or activation examples (labels arrive with a later autointerp
+                pass). The output parquet can also be imported as a vector collection via
+                the Local Files tab for visualization.
+              </>
+            ) : (
+              <>
+                Download features and decoder vectors from Neuronpedia S3. Features and
+                activations are ingested into DuckDB. The output parquet can also be
+                imported as a vector collection via the Local Files tab for visualization.
+              </>
+            )}
           </p>
 
           <div className="flex flex-wrap items-end gap-3">
-            {/* Model Size */}
+            {/* Model */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Model</label>
-              <Select value={modelSize} onValueChange={handleModelSizeChange}>
+              <Select value={modelKey} onValueChange={handleModelChange}>
                 <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {GEMMA_MODELS.map((m) => (
-                    <SelectItem key={m.size} value={m.size}>
+                  {SAE_MODELS.map((m) => (
+                    <SelectItem key={m.key} value={m.key}>
                       {m.label}
                     </SelectItem>
                   ))}
@@ -227,22 +272,24 @@ export function SaeTab() {
               </Select>
             </div>
 
-            {/* Variant */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Variant</label>
-              <Select value={variant} onValueChange={setVariant}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {VARIANT_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Variant (gemma only — qwen-scope repos are fixed per model) */}
+            {!isQwen && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Variant</label>
+                <Select value={variant} onValueChange={setVariant}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VARIANT_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
@@ -270,28 +317,45 @@ export function SaeTab() {
               </Select>
             </div>
 
-            {/* Width */}
+            {/* Width (fixed per model for qwen-scope) */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Width</label>
-              <Select value={width} onValueChange={setWidth}>
-                <SelectTrigger className="w-52">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {WIDTH_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      <span>{opt.label}</span>
-                      <span className="ml-2 text-muted-foreground text-xs">{opt.desc}</span>
+              {activeModel.fixedWidth ? (
+                <Select value={activeModel.fixedWidth} disabled>
+                  <SelectTrigger className="w-52">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={activeModel.fixedWidth}>
+                      {activeModel.fixedWidth}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Select value={width} onValueChange={setWidth}>
+                  <SelectTrigger className="w-52">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WIDTH_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <span>{opt.label}</span>
+                        <span className="ml-2 text-muted-foreground text-xs">{opt.desc}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
-            {/* Hook Type */}
+            {/* Hook Type (qwen-scope is residual-stream only) */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Hook Type</label>
-              <Select value={hookType} onValueChange={setHookType}>
+              <Select
+                value={isQwen ? 'resid_post' : hookType}
+                onValueChange={setHookType}
+                disabled={isQwen}
+              >
                 <SelectTrigger className="w-44">
                   <SelectValue />
                 </SelectTrigger>
@@ -306,14 +370,16 @@ export function SaeTab() {
             </div>
           </div>
 
-          {/* Activations checkbox with dynamic size */}
-          <label className="flex items-center gap-2 text-xs">
-            <Checkbox
-              checked={includeActivations}
-              onCheckedChange={(c) => setIncludeActivations(c === true)}
-            />
-            Include activation examples ({ACTIVATION_SIZE[width] ?? '~336 MB'})
-          </label>
+          {/* Activations checkbox with dynamic size (no activation data for qwen-scope) */}
+          {!isQwen && (
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox
+                checked={includeActivations}
+                onCheckedChange={(c) => setIncludeActivations(c === true)}
+              />
+              Include activation examples ({ACTIVATION_SIZE[width] ?? '~336 MB'})
+            </label>
+          )}
 
           <Separator className="my-2" />
 
@@ -504,7 +570,9 @@ export function SaeTab() {
           subtitle={
             createCollection
               ? "Downloading, extracting, embedding, and computing projections. This may take several minutes."
-              : "Downloading from Neuronpedia and extracting decoder vectors. This may take several minutes."
+              : isQwen
+                ? "Downloading SAE weights from HuggingFace and extracting decoder vectors. This may take several minutes."
+                : "Downloading from Neuronpedia and extracting decoder vectors. This may take several minutes."
           }
           itemsLabel="batches"
         />

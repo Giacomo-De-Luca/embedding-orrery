@@ -618,6 +618,8 @@ export interface PrepareSaeInput {
   hookType?: string;
   modelSize?: string;
   variant?: string;
+  /** SAE family: 'gemma' (Neuronpedia download) or 'qwen' (extract-only, label-free) */
+  family?: 'gemma' | 'qwen';
   skipDownload?: boolean;
   includeActivations?: boolean;
   createCollection?: boolean;

@@ -24,12 +24,16 @@ import fs from 'node:fs';
 const pExecFile = promisify(execFile);
 
 const BASE = 'http://localhost:3000';
-const PASS = ['3d', '2d', '3d-nebula'].includes(process.argv[2]) ? process.argv[2] : '3d';
+const PASSES = ['3d', '2d', '3d-nebula', '3d-topics'];
+const PASS = PASSES.includes(process.argv[2]) ? process.argv[2] : '3d';
 const MODE = PASS === '2d' ? '2d' : '3d';
 const NEBULA = PASS === '3d-nebula';
+const COLOR_TOPICS = NEBULA || PASS === '3d-topics';
+// Opt-in renderer heap raise (MB), e.g. BENCH_HEAP_MB=7168 for 1M attempts on big machines.
+const HEAP_MB = Number(process.env.BENCH_HEAP_MB) || 0;
 const DRAG_MS = 8000;
 const SETTLE_MS = 4000;
-const SYN_CLUSTERS = 50;
+const SYN_CLUSTERS = Number(process.env.BENCH_SYN_CLUSTERS) || 50;
 const RESULTS_DIR = new URL('./results/', import.meta.url).pathname;
 const RESULTS_PATH = `${RESULTS_DIR}results_${PASS}.json`;
 const BENCH_MARKER = '--bench-run-id=fpsbench';
@@ -45,7 +49,10 @@ const LADDER = [
   { name: 'wordnet_senses_full', expected: 212478 },
   { name: 'synthetic_250k', expected: 250000, synthetic: true },
   { name: 'synthetic_500k', expected: 500000, synthetic: true },
-  { name: 'synthetic_1m', expected: 1000000, synthetic: true },
+  // synthetic_1m is deliberately NOT in the default ladder: it exceeds
+  // Chrome's ~3.5-4 GB tab-heap cap with the current load-everything
+  // architecture and OOM-crashes the browser. Run it explicitly when wanted:
+  //   node bench.mjs 3d synthetic_1m   (optionally BENCH_HEAP_MB=7168)
 ];
 
 function parseTargets() {
@@ -132,50 +139,71 @@ function buildSyntheticBody(n, clusters) {
 }
 
 /**
- * Intercept GraphQL so the app sees the synthetic collection as real:
- * - GetCollectionData for it → generated payload
- * - GetCollections → real list + appended synthetic entry (page.tsx only
- *   loads a URL collection that exists in the list)
- * - topics/probes/activations queries for it → benign empties
+ * GraphQL interception, installed for EVERY run:
+ * - GetCollections → strips each collection's saved default_color_scheme so
+ *   every baseline run loads uncolored/single-trace (a saved scheme splits
+ *   points into one WebGL trace per category — not comparable across
+ *   collections; coloring is exercised deliberately by 3d-topics/3d-nebula).
+ *   For synthetic targets the generated entry is appended (page.tsx only
+ *   loads a URL collection that exists in the list).
+ * - Synthetic only: GetCollectionData for the target → generated payload;
+ *   topics/probes/activations queries for it → benign empties.
  * Everything else passes through to the real backend.
  */
-async function installSyntheticRoutes(context, target, body) {
+async function installRoutes(context, target, synBody) {
   await context.route('**/graphql', async (route) => {
-    let payload = {};
-    try { payload = JSON.parse(route.request().postData() || '{}'); } catch { /* not JSON */ }
-    const op = payload.operationName;
-    const vars = payload.variables || {};
-
-    if (op === 'GetCollectionData' && vars.name === target.name) {
-      return route.fulfill({ contentType: 'application/json', body });
+    try {
+      await handleGraphqlRoute(route, target, synBody);
+    } catch {
+      // Page/browser died mid-request — never let a route handler rejection
+      // escape (it would take down the whole Node process).
+      await route.continue().catch(() => {});
     }
+  });
+}
+
+async function handleGraphqlRoute(route, target, synBody) {
+  let payload = {};
+  try { payload = JSON.parse(route.request().postData() || '{}'); } catch { /* not JSON */ }
+  const op = payload.operationName;
+  const vars = payload.variables || {};
+
     if (op === 'GetCollections') {
       const resp = await route.fetch();
       const json = await resp.json();
       if (json.data?.collections) {
-        json.data.collections.push({
-          name: target.name,
-          count: target.expected,
-          metadata: { embedding_dim: 384, timestamp: 'synthetic', has_projections: true },
-        });
+        for (const col of json.data.collections) {
+          if (col.metadata) delete col.metadata.default_color_scheme;
+        }
+        if (synBody) {
+          json.data.collections.push({
+            name: target.name,
+            count: target.expected,
+            metadata: { embedding_dim: 384, timestamp: 'synthetic', has_projections: true },
+          });
+        }
       }
       return route.fulfill({ response: resp, body: JSON.stringify(json) });
     }
-    if (vars.collectionName === target.name) {
-      const empties = {
-        GetCollectionTopics: { collectionTopics: null },
-        GetCollectionProbes: { collectionProbes: [] },
-        HasDocumentActivations: { hasDocumentActivations: false },
-      };
-      if (op in empties) {
-        return route.fulfill({
-          contentType: 'application/json',
-          body: JSON.stringify({ data: empties[op] }),
-        });
+    if (synBody) {
+      if (op === 'GetCollectionData' && vars.name === target.name) {
+        return route.fulfill({ contentType: 'application/json', body: synBody });
+      }
+      if (vars.collectionName === target.name) {
+        const empties = {
+          GetCollectionTopics: { collectionTopics: null },
+          GetCollectionProbes: { collectionProbes: [] },
+          HasDocumentActivations: { hasDocumentActivations: false },
+        };
+        if (op in empties) {
+          return route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ data: empties[op] }),
+          });
+        }
       }
     }
-    return route.continue();
-  });
+  return route.continue();
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +222,10 @@ async function psTable() {
 
 async function findBenchChromeRoot() {
   const rows = await psTable();
-  const root = rows.find((r) => r.args.includes(BENCH_MARKER) && !r.args.includes('--type='));
-  if (!root) throw new Error('bench Chrome root process not found');
-  return root.pid;
+  const roots = rows.filter((r) => r.args.includes(BENCH_MARKER) && !r.args.includes('--type='));
+  if (!roots.length) throw new Error('bench Chrome root process not found');
+  // Newest launch wins — orphans from previously crashed harness runs may linger.
+  return Math.max(...roots.map((r) => r.pid));
 }
 
 /** RSS of the launched Chrome's process tree, split by role. MB. */
@@ -244,8 +273,15 @@ async function systemMem() {
   };
 }
 
-async function jsHeap(page) {
-  return page.evaluate(() => {
+/**
+ * usedJSHeapSize includes not-yet-collected garbage, so readings depend on GC
+ * timing (observed: baseline 500k "3.2 GB" vs nebula 500k "0.55 GB" on the
+ * same data — the nebula pipeline's allocations forced a major GC first).
+ * Pass a CDP session to force a full GC before sampling → true live heap.
+ * Do NOT force GC for mid-drag samples — the GC pause would distort FPS.
+ */
+async function jsHeap(page, cdp) {
+  const read = () => page.evaluate(() => {
     const m = performance.memory;
     return m ? {
       heapUsedMB: Math.round(m.usedJSHeapSize / 1048576),
@@ -253,11 +289,17 @@ async function jsHeap(page) {
       heapLimitMB: Math.round(m.jsHeapSizeLimit / 1048576),
     } : null;
   });
+  if (!cdp) return read();
+  // Record pre-GC too — the delta shows the GC fired and how much was garbage.
+  const pre = await read();
+  await cdp.send('HeapProfiler.collectGarbage').catch(() => {});
+  const post = await read();
+  return post ? { ...post, heapPreGcMB: pre?.heapUsedMB } : pre;
 }
 
-async function memSnapshot(page, rootPid) {
+async function memSnapshot(page, rootPid, cdp = null) {
   const [heap, chrome, sys] = await Promise.all([
-    jsHeap(page).catch(() => null),
+    jsHeap(page, cdp).catch(() => null),
     chromeMem(rootPid).catch(() => null),
     systemMem().catch(() => null),
   ]);
@@ -319,26 +361,29 @@ const countPoints = ({ mode }) => {
 
 async function runOne(browser, rootPid, target) {
   const { name, expected } = target;
-  const context = await browser.newContext({ viewport: { width: 1600, height: 950 } });
-  await context.addInitScript((prefs) => {
-    window.localStorage.setItem('viz-preferences', prefs);
-  }, VIZ_PREFS);
-
-  if (target.synthetic) {
-    console.log(`  generating ${expected.toLocaleString()} synthetic points…`);
-    const body = buildSyntheticBody(expected, SYN_CLUSTERS);
-    console.log(`  payload ${(body.length / 1048576).toFixed(0)} MB`);
-    await installSyntheticRoutes(context, target, body);
-  }
-
-  const page = await context.newPage();
   const pageErrors = [];
-  page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 200)));
-
   const result = { collection: name, expected, pass: PASS, synthetic: !!target.synthetic };
+  let context = null;
   try {
+    context = await browser.newContext({ viewport: { width: 1600, height: 950 } });
+    await context.addInitScript((prefs) => {
+      window.localStorage.setItem('viz-preferences', prefs);
+    }, VIZ_PREFS);
+
+    let synBody = null;
+    if (target.synthetic) {
+      console.log(`  generating ${expected.toLocaleString()} synthetic points…`);
+      synBody = buildSyntheticBody(expected, SYN_CLUSTERS);
+      console.log(`  payload ${(synBody.length / 1048576).toFixed(0)} MB`);
+    }
+    await installRoutes(context, target, synBody);
+
+    const page = await context.newPage();
+    page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 200)));
+    const cdp = await context.newCDPSession(page);
+
     const t0 = Date.now();
-    const colorBy = NEBULA ? '&colorBy=topic_label' : '';
+    const colorBy = COLOR_TOPICS ? '&colorBy=topic_label' : '';
     await page.goto(`${BASE}/?collection=${encodeURIComponent(name)}${colorBy}`, {
       waitUntil: 'domcontentloaded', timeout: 60000,
     });
@@ -362,13 +407,26 @@ async function runOne(browser, rootPid, target) {
       { timeout: 300000, polling: 500 },
     );
     result.loadSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+
+    // gl3d emits plotly_click on ANY frame where the held-button pick lands
+    // within 5px of a point (forked scene.js:459) — over dense clouds an orbit
+    // drag fires mid-drag point selections whose fly-to animation pollutes the
+    // FPS window. Swallow the event; hover picking and relayout stay live.
+    await page.evaluate(() => {
+      const gd = document.querySelector('.js-plotly-plot');
+      if (gd && typeof gd.emit === 'function') {
+        const orig = gd.emit.bind(gd);
+        gd.emit = (name, ...args) => (name === 'plotly_click' ? undefined : orig(name, ...args));
+      }
+    });
+
     if (NEBULA) {
       // Give the haze overlay time to build its sprites before settling.
       await page.waitForTimeout(2000);
     }
     await page.waitForTimeout(SETTLE_MS);
     result.renderedPoints = await page.evaluate(countPoints, { mode: MODE });
-    result.memPostLoad = await memSnapshot(page, rootPid);
+    result.memPostLoad = await memSnapshot(page, rootPid, cdp);
 
     // Locate the WebGL canvas to drag on.
     const canvas = page.locator('.js-plotly-plot canvas').first();
@@ -416,14 +474,25 @@ async function runOne(browser, rootPid, target) {
     });
     result.stats = stats(deltas);
     result.memMidDrag = midMemPromise ? await midMemPromise : null;
-    result.memPostDrag = await memSnapshot(page, rootPid);
+    result.memPostDrag = await memSnapshot(page, rootPid, cdp);
     result.pageErrors = pageErrors.slice(0, 5);
     await page.screenshot({ path: `${RESULTS_DIR}shot_${PASS}_${name}.png` });
   } catch (e) {
-    result.error = String(e).slice(0, 300);
+    let msg = String(e).slice(0, 300);
+    if (/closed|crash/i.test(msg)) {
+      msg += ' [tab or browser crashed — usually JS-heap/system-memory exhaustion]';
+    }
+    result.error = msg;
     result.pageErrors = pageErrors.slice(0, 5);
   } finally {
-    await context.close();
+    // The context (or whole browser) may already be dead — never let cleanup
+    // throw or hang.
+    if (context) {
+      await Promise.race([
+        context.close().catch(() => {}),
+        new Promise((r) => setTimeout(r, 10000)),
+      ]);
+    }
   }
   return result;
 }
@@ -435,12 +504,38 @@ async function runOne(browser, rootPid, target) {
 fs.mkdirSync(RESULTS_DIR, { recursive: true });
 const targets = parseTargets();
 
-const browser = await chromium.launch({
+// An OOM-thrashed Chrome can hang Playwright calls indefinitely (observed:
+// browser.close() never returning after the 1M tab crash). Never let a
+// rejection or a hung call take the harness down — log and keep going.
+process.on('unhandledRejection', (err) => {
+  console.error('  unhandled rejection (continuing):', String(err).slice(0, 200));
+});
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const TARGET_WATCHDOG_MS = 600000;
+
+const LAUNCH_ARGS = ['--window-size=1680,1050', '--window-position=40,40', BENCH_MARKER];
+if (HEAP_MB) LAUNCH_ARGS.push(`--js-flags=--max-old-space-size=${HEAP_MB}`);
+
+const launchBrowser = () => chromium.launch({
   channel: 'chrome',
   headless: false,
-  args: ['--window-size=1680,1050', '--window-position=40,40', BENCH_MARKER],
+  args: LAUNCH_ARGS,
 });
-const rootPid = await findBenchChromeRoot();
+
+/** Close politely with a timeout, then SIGKILL whatever bench Chrome remains. */
+async function closeBrowserHard(b) {
+  await Promise.race([b.close().catch(() => {}), sleep(15000)]);
+  try {
+    const rows = await psTable();
+    for (const row of rows.filter((r) => r.args.includes(BENCH_MARKER))) {
+      try { process.kill(row.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  } catch { /* best effort */ }
+}
+
+let browser = await launchBrowser();
+let rootPid = await findBenchChromeRoot();
 
 // Calibrate the display refresh ceiling on a blank page.
 const calPage = await browser.newPage();
@@ -452,17 +547,44 @@ const sysBaseline = await systemMem();
 console.log(`display refresh ceiling ≈ ${idleRefresh.toFixed(0)} Hz`);
 console.log(`system RAM baseline: ${sysBaseline.freeGB} GB free / ${sysBaseline.availableGB} GB available of ${sysBaseline.totalGB} GB`);
 
+// Merge with any existing results for this pass: re-running a subset of
+// targets updates those entries without clobbering the rest of the ladder.
+let existingRuns = [];
+try { existingRuns = JSON.parse(fs.readFileSync(RESULTS_PATH, 'utf8')).runs || []; } catch { /* first run */ }
+const runsByName = new Map(existingRuns.map((r) => [r.collection, r]));
+
 const results = {
   pass: PASS, idleRefreshHz: +idleRefresh.toFixed(1), sysBaseline, runs: [],
 };
 for (const target of targets) {
   console.log(`\n=== ${target.name} (${target.expected.toLocaleString()} pts, ${PASS}) ===`);
-  const r = await runOne(browser, rootPid, target);
-  results.runs.push(r);
+  if (!browser.isConnected()) {
+    console.log('  browser is gone (crashed on a previous target) — relaunching Chrome');
+    await closeBrowserHard(browser);
+    browser = await launchBrowser();
+    rootPid = await findBenchChromeRoot();
+  }
+  let r = await Promise.race([
+    runOne(browser, rootPid, target),
+    sleep(TARGET_WATCHDOG_MS).then(() => null),
+  ]);
+  if (!r) {
+    console.log(`  watchdog fired after ${TARGET_WATCHDOG_MS / 60000} min — force-restarting Chrome`);
+    await closeBrowserHard(browser);
+    browser = await launchBrowser();
+    rootPid = await findBenchChromeRoot();
+    r = {
+      collection: target.name, expected: target.expected, pass: PASS,
+      synthetic: !!target.synthetic, error: 'watchdog timeout — run hung (browser unresponsive)',
+    };
+  }
+  runsByName.set(r.collection, r);
+  results.runs = [...runsByName.values()].sort((a, b) => (a.expected || 0) - (b.expected || 0));
   fs.writeFileSync(RESULTS_PATH, JSON.stringify(results, null, 2));
   if (r.error) console.log(`  ERROR: ${r.error}`);
   else if (!r.stats) console.log('  too few frames recorded');
   else {
+    const heap = r.memPostLoad || {};          // GC-forced → true live heap
     const m = r.memMidDrag || r.memPostDrag || {};
     console.log(
       `  load ${r.loadSeconds}s | rendered ${r.renderedPoints.toLocaleString()} | ` +
@@ -470,11 +592,12 @@ for (const target of targets) {
       `p95 ${r.stats.frameMsP95}ms`,
     );
     console.log(
-      `  heap ${m.heapUsedMB ?? '?'} MB | renderer ${m.rendererMB ?? '?'} MB | ` +
+      `  live heap ${heap.heapUsedMB ?? '?'} MB | renderer ${m.rendererMB ?? '?'} MB | ` +
       `gpu-proc ${m.gpuProcessMB ?? '?'} MB | sys free ${m.freeGB ?? '?'} GB / avail ${m.availableGB ?? '?'} GB`,
     );
   }
 }
 
-await browser.close();
+await closeBrowserHard(browser);
 console.log(`\nresults → ${RESULTS_PATH}`);
+process.exit(0);

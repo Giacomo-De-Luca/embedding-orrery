@@ -69,6 +69,9 @@ projection as the silhouette space, which for `cluster_on="cluster_umap"` extrac
 is a *proxy* (the ephemeral 5-D clustering UMAP is not persisted) — the
 `cluster_space` field in the result records this provenance.
 
+Full experiment (numbers, BERTopic head-to-head, dimensionality sweep, reproduction code):
+[`documentation/TOPIC_QUALITY_METRICS.md`](../../documentation/TOPIC_QUALITY_METRICS.md).
+
 ### Coherence uses no embedding model
 C_v / U_Mass are computed against the documents themselves via gensim, so no
 embedding model (potentially remote/API) is loaded. Keyword tokenization mirrors the

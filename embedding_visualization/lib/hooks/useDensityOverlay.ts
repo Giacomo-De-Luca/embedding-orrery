@@ -63,6 +63,9 @@ export function useDensityOverlay({
   const rendererRef = useRef<DensityRenderer | null>(null);
   const maxDensityRef = useRef(0);
   const rafPendingRef = useRef(false);
+  // Set when a render is requested while a frame is already queued; drives the
+  // trailing render below so the final settled layout is never dropped.
+  const rafDirtyRef = useRef(false);
 
   const colorMatrix = useMemo(
     () => buildColorMatrix(channelAssignment.channelColors, GAMMA),
@@ -126,10 +129,33 @@ export function useDensityOverlay({
   const renderFrameRef = useRef(renderFrame);
   renderFrameRef.current = renderFrame;
 
+  // Runs the latest renderFrame, then — if another render was requested while
+  // this frame was in flight (rafDirtyRef) — queues one more. This guarantees a
+  // trailing render on a frame strictly after the settling `plotly_relayout`,
+  // so the density never sticks on a stale frame when the last event of a
+  // pan/zoom gesture is coalesced away. (renderFrame clears rafPendingRef.)
+  const runScheduledFrame = useCallback(() => {
+    renderFrameRef.current();
+    if (rafDirtyRef.current) {
+      rafDirtyRef.current = false;
+      rafPendingRef.current = true;
+      requestAnimationFrame(runScheduledFrameRef.current);
+    }
+  }, []);
+  const runScheduledFrameRef = useRef(runScheduledFrame);
+  runScheduledFrameRef.current = runScheduledFrame;
+
   const scheduleRender = useCallback(() => {
-    if (rafPendingRef.current || !rendererRef.current) return;
+    if (!rendererRef.current) return;
+    // A frame is already queued: mark dirty so a trailing frame runs after it
+    // instead of dropping this request (which could strand a stale frame when
+    // the layout keeps changing after the queued frame reads it).
+    if (rafPendingRef.current) {
+      rafDirtyRef.current = true;
+      return;
+    }
     rafPendingRef.current = true;
-    requestAnimationFrame(() => renderFrameRef.current());
+    requestAnimationFrame(runScheduledFrameRef.current);
   }, []);
 
   // --- Renderer lifecycle ---
@@ -149,6 +175,7 @@ export function useDensityOverlay({
       renderer.dispose();
       rendererRef.current = null;
       rafPendingRef.current = false;
+      rafDirtyRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, supported]);
