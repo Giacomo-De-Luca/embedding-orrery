@@ -65,6 +65,7 @@ export function useAppSearch(
     try {
       const results = await findSimilarByQuery(query, 20, distanceMetric, effectivePromptName, allFilters);
       if (searchRequestIdRef.current !== requestId) return; // superseded by newer search
+      if (results === null) return; // aborted — leave current results untouched
       const transformed = transformSearchResults(results, colorByField);
       // Auto-select first result in the same batch as setSemanticSearchResults so
       // renderedSelectedPoint captures the correct point when highlightedIndices updates.
@@ -77,7 +78,6 @@ export function useAppSearch(
       setSearchType('text');
     } catch (error) {
       if (searchRequestIdRef.current !== requestId) return;
-      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Search error:', error);
     }
   }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters, resolvePoint]);
@@ -95,10 +95,10 @@ export function useAppSearch(
     try {
       const results = await findSimilarById(point.id, 20, distanceMetric, allFilters);
       if (searchRequestIdRef.current !== requestId) return; // superseded by newer click/search
+      if (results === null) return; // aborted — leave current results untouched
       setSemanticSearchResults(transformSearchResults(results, colorByField));
     } catch (error) {
       if (searchRequestIdRef.current !== requestId) return;
-      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Point click search error:', error);
     }
   }, [findSimilarById, colorByField, distanceMetric, allFilters]);

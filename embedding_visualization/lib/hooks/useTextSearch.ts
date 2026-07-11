@@ -5,6 +5,13 @@ import { useLazyQuery } from '@apollo/client/react';
 import { TEXT_SEARCH } from '../graphql/queries';
 import type { TextSearchConfig, TextSearchMatch } from '../types/types';
 
+/**
+ * Max matches that still get the glow overlay. Muting (the filter) always
+ * applies regardless of match count — this only stops broad queries from
+ * turning the whole plot into a glow blob.
+ */
+export const TEXT_SEARCH_GLOW_CAP = 1000;
+
 interface TextSearchData {
   textSearch: {
     matches: TextSearchMatch[];

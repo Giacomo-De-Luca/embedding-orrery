@@ -4,6 +4,7 @@ import strawberry
 
 from .mutations import Mutation
 from .queries import Query
+from .read_only import ReadOnlyExtension
 from .subscriptions import JobProgress, Subscription
 from .types import (
     # Scalars
@@ -84,8 +85,14 @@ from .types import (
     build_where_clause,
 )
 
-# Create the schema with subscription support
-schema = strawberry.Schema(query=Query, mutation=Mutation, subscription=Subscription)
+# Create the schema with subscription support. ReadOnlyExtension is always
+# installed; it only blocks mutations when ORRERY_READ_ONLY=1 (demo deploys).
+schema = strawberry.Schema(
+    query=Query,
+    mutation=Mutation,
+    subscription=Subscription,
+    extensions=[ReadOnlyExtension],
+)
 
 __all__ = [
     # Schema

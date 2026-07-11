@@ -209,10 +209,13 @@ export function InlineEditableField({
             <Spinner className="h-4 w-4" />
           ) : (
             <>
-              <span className={cn(
-                "font-medium flex-1",
-                !displayValue && "text-muted-foreground italic"
-              )}>
+              <span
+                className={cn(
+                  "font-medium flex-1 min-w-0 truncate",
+                  !displayValue && "text-muted-foreground italic"
+                )}
+                title={displayValue || undefined}
+              >
                 {displayValue || 'Not set'}
               </span>
               {!readOnly && (

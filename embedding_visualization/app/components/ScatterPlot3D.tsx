@@ -1357,13 +1357,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [overlayTraces, plotReady, startFlyTo]);
 
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+  const deliveredClickRef = useRef<{ press: object; idx: number } | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const handleMouseDown = (e: MouseEvent) => { mouseDownPosRef.current = { x: e.clientX, y: e.clientY }; };
-    container.addEventListener('mousedown', handleMouseDown);
-    return () => container.removeEventListener('mousedown', handleMouseDown);
+    // pointerdown covers mouse, touch, and pen — one fresh position object per
+    // press; the drag guard and per-press click dedup below both key off it.
+    const handlePointerDown = (e: PointerEvent) => { mouseDownPosRef.current = { x: e.clientX, y: e.clientY }; };
+    container.addEventListener('pointerdown', handlePointerDown);
+    return () => container.removeEventListener('pointerdown', handlePointerDown);
   }, []);
 
   const handleClick = useCallback((event: PlotMouseEvent) => {
@@ -1381,6 +1384,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (point.customdata == null) return;
 
     const idx = point.customdata as unknown as number;
+
+    // gl3d emits plotly_click from the per-frame pick pass, so one physical
+    // press held over a point fires the event once per GL frame. Deliver only
+    // the first per press (the mousedown position object identifies the press).
+    if (downPos) {
+      const last = deliveredClickRef.current;
+      if (last && last.press === downPos && last.idx === idx) return;
+      deliveredClickRef.current = { press: downPos, idx };
+    }
+
     const clickedPoint = pointsRef.current[idx];
     if (!clickedPoint) return;
     onPointClick(clickedPoint);

@@ -82,7 +82,8 @@ export function useTopicSearch(
       }
 
       const results = await findSimilarByQuery(semanticQuery, 100, distanceMetric, effectivePrompt);
-      if (!results?.length) {
+      if (results === null) return; // aborted (superseded) — leave current results untouched
+      if (results.length === 0) {
         setSemanticResults([]);
         return;
       }

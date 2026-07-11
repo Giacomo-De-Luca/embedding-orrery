@@ -22,6 +22,7 @@ import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 import { cn } from '@/lib/utils/utils';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
@@ -758,8 +759,8 @@ export function DashboardPanel({
         </div>
       )}
 
-      {/* 3c. LAYER: SAE Context Menu (Z-50) */}
-      {contextMenu && saeInfo && (
+      {/* 3c. LAYER: SAE Context Menu (Z-50) — links to /sae, which demo builds redirect away */}
+      {contextMenu && saeInfo && !IS_DEMO && (
         <div
           className="fixed z-50 min-w-40 rounded-md border bg-popover p-1 shadow-md"
           style={{ left: contextMenu.x, top: contextMenu.y }}

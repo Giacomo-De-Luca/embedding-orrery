@@ -49,6 +49,14 @@ interface ChatPanelProps {
   onSelectModel?: (modelId: string, saeId: string) => void;
 }
 
+/**
+ * TEMP (video recording): suppress auto-loading the steering presets so the
+ * chat opens with an empty steering config. Set back to `false` to restore the
+ * default preset bundle. The presets themselves are untouched in
+ * `lib/utils/steeringPresets.ts`.
+ */
+const DISABLE_STEERING_PRESETS = true;
+
 /** Baseline (no steering) config — stable identity so the baseline hook never auto-resets. */
 const EMPTY_CONFIG: SteeringConfig = { features: [] };
 
@@ -179,6 +187,7 @@ export function ChatPanel({
   const modelId = useModelIdentityStore((s) => s.modelId);
   const isQwen = isQwenModel(modelId);
   useEffect(() => {
+    if (DISABLE_STEERING_PRESETS) return;
     if (!modelId) return;
     const presets = STEERING_PRESETS[modelId];
     if (!presets) return;

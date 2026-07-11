@@ -6,6 +6,9 @@ import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import type { Point2D, Point3D } from '../../lib/types/types';
 import { HighlightedText } from '../utils/highlightedText';
 
+// Max result rows rendered — an uncapped list can mean thousands of DOM nodes
+const RESULTS_PREVIEW_LIMIT = 100;
+
 interface TextSearchResultsListProps {
   results: (Point2D | Point3D)[];
   selectedPointId?: string | null;
@@ -38,7 +41,7 @@ export function TextSearchResultsList({
         style={{ '--results-max-h': `${maxHeight}px` } as CSSProperties}
       >
         <div className="p-1">
-          {results.map((point) => (
+          {results.slice(0, RESULTS_PREVIEW_LIMIT).map((point) => (
             <button
               key={point.id}
               onClick={() => onResultClick?.(point)}
@@ -64,6 +67,11 @@ export function TextSearchResultsList({
               )}
             </button>
           ))}
+          {results.length > RESULTS_PREVIEW_LIMIT && (
+            <p className="px-3 py-1.5 text-xs text-muted-foreground">
+              Showing first {RESULTS_PREVIEW_LIMIT} of {results.length.toLocaleString()} matches
+            </p>
+          )}
         </div>
       </ScrollArea>
     </div>

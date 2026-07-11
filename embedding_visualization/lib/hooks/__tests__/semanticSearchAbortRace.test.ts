@@ -1,47 +1,58 @@
 /**
- * Repro for the "click selects a point but semantic search silently returns
- * nothing" bug: useSemanticSearch shares one AbortController across calls and
- * (pre-fix) executed queries through a single useLazyQuery ObservableQuery.
- * Clicking point B while point A's search is still in flight aborts A's fetch
- * on the shared observable; the AbortError can surface on B's freshly started
- * execution, which the hook swallows into `null` → empty results.
+ * Regression tests for the "click selects a point but semantic search
+ * silently returns nothing" bug.
  *
- * The harness below replicates Apollo Client 4's useLazyQuery execute
- * semantics (watchQuery with standby + reobserve on ONE ObservableQuery)
- * without React, against a mock link that honors context.fetchOptions.signal.
+ * Root cause chain (pre-fix):
+ * 1. gl3d emits plotly_click from its per-frame pick pass, so one physical
+ *    press over a point could fire several click events (one per GL frame).
+ * 2. Each search aborted the previous in-flight one via a shared
+ *    AbortController, and ran through one shared useLazyQuery ObservableQuery
+ *    with Apollo query deduplication ON: an identical query starting right
+ *    after the abort joined the in-flight operation it had just killed and
+ *    inherited its AbortError (real fetch rejects a microtask AFTER abort(),
+ *    so the doomed operation was still in the dedup map).
+ * 3. The AbortError was swallowed to `null`, which the caller turned into
+ *    empty results — point selected, search results silently blank.
+ *
+ * The fix (`createSemanticSearchClient`) uses one-shot client.query calls
+ * with per-request abort and queryDeduplication disabled, returns [] for
+ * genuinely-empty results, null only for aborts, and throws real errors.
+ *
+ * The mock link rejects asynchronously on abort — that microtask gap is
+ * load-bearing for reproducing the original dedup-join failure.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  ApolloClient,
-  ApolloLink,
-  InMemoryCache,
-  Observable,
-  gql,
-} from '@apollo/client';
+import { ApolloClient, ApolloLink, InMemoryCache, Observable } from '@apollo/client';
+import { createSemanticSearchClient, isAbortError } from '../../utils/semanticSearchClient';
 
-const QUERY = gql`
-  query Search($itemId: String!) {
-    search(itemId: $itemId) {
-      id
-    }
-  }
-`;
+interface MockBehavior {
+  delayMs: (itemId: string) => number;
+  respond?: (itemId: string) => unknown;
+}
 
-/** Link that resolves after `delayMs`, erroring with AbortError if the
- * context.fetchOptions.signal aborts first — like a real fetch. */
-function makeMockLink(delayMs: (itemId: string) => number) {
+/** Link that resolves after a delay, erroring with AbortError (asynchronously,
+ * like real fetch) if context.fetchOptions.signal aborts first. */
+function makeMockLink({ delayMs, respond }: MockBehavior) {
+  const defaultRespond = (itemId: string) => ({
+    data: {
+      semanticSearchById: [
+        { id: `similar-to-${itemId}`, document: 'doc', metadata: {}, similarity: 0.9, distance: 0.1 },
+      ],
+    },
+  });
   return new ApolloLink((operation) => {
-    const signal: AbortSignal | undefined =
-      operation.getContext().fetchOptions?.signal;
+    const signal: AbortSignal | undefined = operation.getContext().fetchOptions?.signal;
     const itemId = operation.variables.itemId as string;
     return new Observable((observer) => {
       const timer = setTimeout(() => {
-        observer.next({ data: { search: [{ id: `similar-to-${itemId}`, __typename: 'Result' }] } });
+        observer.next((respond ?? defaultRespond)(itemId) as any);
         observer.complete();
       }, delayMs(itemId));
       const onAbort = () => {
         clearTimeout(timer);
-        observer.error(new DOMException('The operation was aborted.', 'AbortError'));
+        queueMicrotask(() =>
+          observer.error(new DOMException('The operation was aborted.', 'AbortError')),
+        );
       };
       if (signal) {
         if (signal.aborted) onAbort();
@@ -55,93 +66,82 @@ function makeMockLink(delayMs: (itemId: string) => number) {
   });
 }
 
-/** Mimic @apollo/client v4 useLazyQuery: one shared ObservableQuery,
- * execute() = reobserve() with new variables/context. */
-function makeLazyExecutor(client: ApolloClient) {
-  const observable = client.watchQuery({
-    query: QUERY,
-    initialFetchPolicy: 'no-cache',
-    fetchPolicy: 'standby' as any,
-  } as any);
-  // useLazyQuery keeps a live subscription via useSyncExternalStore
-  observable.subscribe({ next: () => {}, error: () => {} });
-  return (variables: Record<string, unknown>, context: Record<string, unknown>) => {
-    let fetchPolicy = observable.options.fetchPolicy;
-    if (fetchPolicy === 'standby') fetchPolicy = (observable.options as any).initialFetchPolicy;
-    return observable.reobserve({ fetchPolicy, variables, context } as any);
-  };
-}
-
-/** The hook's findSimilarById logic, verbatim in shape. */
-function makeFindSimilarById(
-  execute: (vars: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<any>,
-) {
-  const abortControllerRef: { current: AbortController | null } = { current: null };
-  return async (itemId: string): Promise<unknown[] | null> => {
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    try {
-      const result = await execute(
-        { itemId },
-        { fetchOptions: { signal: controller.signal } },
-      );
-      if (result.data?.search) return result.data.search;
-      return null;
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return null;
-      throw err;
-    }
-  };
+function makeSearcher(behavior: MockBehavior) {
+  const client = new ApolloClient({ cache: new InMemoryCache(), link: makeMockLink(behavior) });
+  const searcher = createSemanticSearchClient(client);
+  return (itemId: string) =>
+    searcher.searchById({ collectionName: 'c', itemId, nResults: 20, similarityMeasure: 'COSINE' });
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const resultFor = (itemId: string) => [
+  { id: `similar-to-${itemId}`, document: 'doc', metadata: {}, similarity: 0.9, distance: 0.1 },
+];
 
 describe('semantic search abort race (click while previous search in flight)', () => {
-  it('second click still gets its results when it aborts the first search', async () => {
-    const client = new ApolloClient({
-      cache: new InMemoryCache(),
-      link: makeMockLink((itemId) => (itemId === 'A' ? 100 : 30)),
-    });
-    const findSimilarById = makeFindSimilarById(makeLazyExecutor(client));
+  it('clicking point B while A is in flight: B gets its results, A resolves null', async () => {
+    const searchById = makeSearcher({ delayMs: (id) => (id === 'A' ? 100 : 30) });
 
-    const first = findSimilarById('A'); // click point A — slow search
+    const first = searchById('A'); // click point A — slow search
     await sleep(10);
-    const second = findSimilarById('B'); // click point B before A resolves
+    const second = searchById('B'); // click point B before A resolves
 
     const [resultA, resultB] = await Promise.all([first, second]);
-
-    // A was superseded: null is fine (caller discards via requestId guard).
-    expect(resultA).toBeNull();
-    // B must get ITS results — pre-fix this is null because A's AbortError
-    // surfaces on the shared ObservableQuery and is swallowed.
-    expect(resultB).toEqual([{ id: 'similar-to-B', __typename: 'Result' }]);
+    expect(resultA).toBeNull(); // superseded — caller leaves results untouched
+    expect(resultB).toEqual(resultFor('B'));
   });
 
   it('re-clicking the SAME point while its search is in flight still gets results', async () => {
-    const client = new ApolloClient({
-      cache: new InMemoryCache(),
-      link: makeMockLink(() => 100),
-    });
-    const findSimilarById = makeFindSimilarById(makeLazyExecutor(client));
+    const searchById = makeSearcher({ delayMs: () => 100 });
 
-    const first = findSimilarById('A'); // click point A — slow search
+    const first = searchById('A'); // click point A — slow search
     await sleep(10);
-    const second = findSimilarById('A'); // impatient re-click on the same point
+    const second = searchById('A'); // duplicate click (gl3d frame re-emit or impatient user)
 
     const [resultA1, resultA2] = await Promise.all([first, second]);
-    expect(resultA1).toBeNull(); // superseded, discarded by requestId guard
-    // Pre-fix: query deduplication joins the re-click to the in-flight request
-    // that its own abort just killed → AbortError → swallowed to null.
-    expect(resultA2).toEqual([{ id: 'similar-to-A', __typename: 'Result' }]);
+    expect(resultA1).toBeNull(); // superseded
+    // Pre-fix: query deduplication joined this to the in-flight operation its
+    // own abort had just killed → AbortError → null → blank results.
+    expect(resultA2).toEqual(resultFor('A'));
   });
 
   it('a single click resolves normally', async () => {
+    const searchById = makeSearcher({ delayMs: () => 20 });
+    expect(await searchById('A')).toEqual(resultFor('A'));
+  });
+
+  it('a genuinely empty result is [] (distinct from aborted null)', async () => {
+    const searchById = makeSearcher({
+      delayMs: () => 10,
+      respond: () => ({ data: { semanticSearchById: [] } }),
+    });
+    expect(await searchById('A')).toEqual([]);
+  });
+
+  it('real errors are thrown, not swallowed to null', async () => {
     const client = new ApolloClient({
       cache: new InMemoryCache(),
-      link: makeMockLink(() => 20),
+      link: new ApolloLink(
+        () =>
+          new Observable((observer) => {
+            observer.error(new Error('backend exploded'));
+          }),
+      ),
     });
-    const findSimilarById = makeFindSimilarById(makeLazyExecutor(client));
-    expect(await findSimilarById('A')).toEqual([{ id: 'similar-to-A', __typename: 'Result' }]);
+    const searcher = createSemanticSearchClient(client);
+    await expect(
+      searcher.searchById({ collectionName: 'c', itemId: 'A', nResults: 20, similarityMeasure: 'COSINE' }),
+    ).rejects.toThrow(/backend exploded/);
+  });
+});
+
+describe('isAbortError', () => {
+  it('detects raw and wrapped abort errors, rejects others', () => {
+    const abort = new DOMException('aborted', 'AbortError');
+    expect(isAbortError(abort)).toBe(true);
+    expect(isAbortError(Object.assign(new Error('net'), { cause: abort }))).toBe(true);
+    expect(isAbortError(Object.assign(new Error('net'), { networkError: abort }))).toBe(true);
+    expect(isAbortError(new Error('other'))).toBe(false);
+    expect(isAbortError(null)).toBe(false);
   });
 });

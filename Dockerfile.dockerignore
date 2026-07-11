@@ -1,0 +1,57 @@
+# Per-Dockerfile ignore for the root `Dockerfile` (the HF Space image).
+# BuildKit prefers `<Dockerfile>.dockerignore` over `.dockerignore`, so local
+# `docker build .` bakes the demo seed while compose builds (Dockerfile.backend
+# / frontend) keep using the root .dockerignore, which excludes it.
+# deploy.py also uploads this file as the Space repo's `.dockerignore` so the
+# HF builder gets the same context even if it ignores per-Dockerfile files.
+# Identical to the root .dockerignore EXCEPT it un-ignores seed_demo —
+# keep the two in sync when editing either.
+.git
+.claude
+.codex
+.venv
+node_modules
+docs
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.DS_Store
+.env
+.env.*
+!.env.example
+
+embedding_visualization/node_modules
+embedding_visualization/.next
+embedding_visualization/out
+embedding_visualization/coverage
+embedding_visualization/*.log
+embedding_visualization/Users
+embedding_visualization/app/utils/density_clustering/target
+**/tsconfig.tsbuildinfo
+
+interpretability_backend/interpretability_experiments
+interpretability_backend/test
+interpretability_backend/benchmarks
+
+interpretability_backend/resources/main.duckdb
+interpretability_backend/resources/main.duckdb.*
+interpretability_backend/resources/vector_db
+interpretability_backend/resources/uploads
+interpretability_backend/resources/job_state.json
+interpretability_backend/resources/sae_labels
+interpretability_backend/resources/sae_vectors
+interpretability_backend/resources/refusal_direction
+interpretability_backend/resources/experiments
+interpretability_backend/resources/extracted_activations
+!interpretability_backend/resources/seed
+!interpretability_backend/resources/seed/**
+!interpretability_backend/resources/seed_demo
+!interpretability_backend/resources/seed_demo/**
+!interpretability_backend/resources/directions
+!interpretability_backend/resources/directions/**
+
+embedding-atlas
+tensorboard
+references

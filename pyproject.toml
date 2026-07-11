@@ -59,6 +59,18 @@ dev = [
     "ruff>=0.7.0",
 ]
 
+# On linux/x86_64 the default PyPI torch wheel bundles the full CUDA stack
+# (~900 MB wheel + multi-GB nvidia-*-cu12 deps). Every linux consumer today is
+# a GPU-less Docker image (compose demo, HF Space), so pin linux to the CPU
+# wheel index. macOS resolution is unaffected (marker doesn't match).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

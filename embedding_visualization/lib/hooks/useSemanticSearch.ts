@@ -1,30 +1,28 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
-import { useLazyQuery } from '@apollo/client/react';
-import { SEMANTIC_SEARCH, SEMANTIC_SEARCH_BY_ID } from '../graphql/queries';
+import { useCallback, useMemo, useState } from 'react';
+import { useApolloClient } from '@apollo/client/react';
+import { createSemanticSearchClient } from '../utils/semanticSearchClient';
 import type { SemanticSearchResult, DistanceMetric, FilterInput } from '../types/types';
 
-interface SemanticSearchData {
-  semanticSearch: SemanticSearchResult[];
-}
-
-interface SemanticSearchByIdData {
-  semanticSearchById: SemanticSearchResult[];
-}
-
 /**
- * Hook for performing semantic similarity search on embeddings
+ * Hook for performing semantic similarity search on embeddings.
+ *
+ * Backed by `createSemanticSearchClient` (one-shot client.query calls with
+ * abort-previous semantics — see that module for why lazy queries and query
+ * deduplication are deliberately avoided here).
+ *
+ * Return contract of findSimilarByQuery/findSimilarById:
+ * - `SemanticSearchResult[]` — search completed ([] = genuinely no matches)
+ * - `null` — superseded by a newer search (aborted); callers should leave
+ *   their current results untouched
+ * - throws — real network/GraphQL error
  */
 export function useSemanticSearch(collectionName: string | null) {
-  const [searchSimilar, { data: dataByQuery, loading: loadingByQuery, error: errorByQuery }] =
-    useLazyQuery<SemanticSearchData>(SEMANTIC_SEARCH, { fetchPolicy: 'no-cache' });
+  const client = useApolloClient();
+  const searchClient = useMemo(() => createSemanticSearchClient(client), [client]);
 
-  const [searchSimilarById, { data: dataById, loading: loadingById, error: errorById }] =
-    useLazyQuery<SemanticSearchByIdData>(SEMANTIC_SEARCH_BY_ID, { fetchPolicy: 'no-cache' });
-
-  // Shared abort controller: any new search (by-query or by-ID) cancels the previous in-flight request
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [inFlight, setInFlight] = useState(0);
 
   /**
    * Find items semantically similar to the query text (embeds the query)
@@ -42,39 +40,27 @@ export function useSemanticSearch(collectionName: string | null) {
         return null;
       }
 
-      abortControllerRef.current?.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
+      console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPrompt ? `, prompt: ${queryPrompt}` : ''}${filters?.length ? `, filters: ${filters.length}` : ''})`);
+      setInFlight((n) => n + 1);
       try {
-        console.log(`Searching for items similar to query: "${query}" (metric: ${similarityMeasure}${queryPrompt ? `, prompt: ${queryPrompt}` : ''}${filters?.length ? `, filters: ${filters.length}` : ''})`);
-
-        const result = await searchSimilar({
-          variables: {
-            collectionName,
-            query,
-            nResults,
-            similarityMeasure,
-            queryPrompt: queryPrompt || undefined,
-            filters: filters?.length ? filters : undefined,
-          },
-          context: { fetchOptions: { signal: controller.signal } },
+        const results = await searchClient.searchByQuery({
+          collectionName,
+          query,
+          nResults,
+          similarityMeasure,
+          queryPrompt,
+          filters,
         });
-
-        if (result.data?.semanticSearch) {
-          const results = result.data.semanticSearch;
-          console.log(`Found ${results.length} similar items to "${query}"`);
-          return results;
-        }
-
-        return null;
+        if (results) console.log(`Found ${results.length} similar items to "${query}"`);
+        return results;
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return null;
         console.error('Error finding similar items:', err);
         throw err;
+      } finally {
+        setInFlight((n) => n - 1);
       }
     },
-    [collectionName, searchSimilar]
+    [collectionName, searchClient]
   );
 
   /**
@@ -92,47 +78,31 @@ export function useSemanticSearch(collectionName: string | null) {
         return null;
       }
 
-      abortControllerRef.current?.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
+      console.log(`Searching for items similar to: "${itemId}" (by ID, metric: ${similarityMeasure}${filters?.length ? `, filters: ${filters.length}` : ''})`);
+      setInFlight((n) => n + 1);
       try {
-        console.log(`Searching for items similar to: "${itemId}" (by ID, metric: ${similarityMeasure}${filters?.length ? `, filters: ${filters.length}` : ''})`);
-
-        const result = await searchSimilarById({
-          variables: {
-            collectionName,
-            itemId,
-            nResults,
-            similarityMeasure,
-            filters: filters?.length ? filters : undefined,
-          },
-          context: { fetchOptions: { signal: controller.signal } },
+        const results = await searchClient.searchById({
+          collectionName,
+          itemId,
+          nResults,
+          similarityMeasure,
+          filters,
         });
-
-        if (result.data?.semanticSearchById) {
-          const results = result.data.semanticSearchById;
-          console.log(`Found ${results.length} similar items to "${itemId}"`);
-          return results;
-        }
-
-        return null;
+        if (results) console.log(`Found ${results.length} similar items to "${itemId}"`);
+        return results;
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return null;
         console.error('Error finding similar items by ID:', err);
         throw err;
+      } finally {
+        setInFlight((n) => n - 1);
       }
     },
-    [collectionName, searchSimilarById]
+    [collectionName, searchClient]
   );
 
   return {
     findSimilarByQuery,
     findSimilarById,
-    // Legacy support - defaults to query-based search
-    findSimilar: findSimilarByQuery,
-    results: dataByQuery?.semanticSearch ?? dataById?.semanticSearchById ?? null,
-    loading: loadingByQuery || loadingById,
-    error: errorByQuery || errorById || null,
+    loading: inFlight > 0,
   };
 }

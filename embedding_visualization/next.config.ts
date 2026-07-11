@@ -2,6 +2,7 @@ import path from "path";
 import type { NextConfig } from "next";
 
 const isDockerBuild = process.env.ORRERY_DOCKER_BUILD === "1";
+const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
 const nextConfig: NextConfig = {
   /* config options here */
@@ -19,6 +20,15 @@ const nextConfig: NextConfig = {
     return [
       { source: "/features", destination: "/sae", permanent: true },
       { source: "/test-embed", destination: "/collections", permanent: true },
+      // Read-only demo builds expose the Explore page only.
+      ...(isDemoMode
+        ? [
+            { source: "/collections/:path*", destination: "/", permanent: false },
+            { source: "/collections", destination: "/", permanent: false },
+            { source: "/sae/:path*", destination: "/", permanent: false },
+            { source: "/sae", destination: "/", permanent: false },
+          ]
+        : []),
     ];
   },
 

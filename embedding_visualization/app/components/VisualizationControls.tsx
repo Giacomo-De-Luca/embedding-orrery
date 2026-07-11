@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
@@ -284,7 +285,9 @@ export function VisualizationControls({
             </Select>
             {/* Scale selector (override of auto-detected type) + save-as-default, when a field is selected */}
             {colorByField && <ColorScaleSelector />}
-            {colorByField && <SaveColorDefaultButton collectionName={collectionName ?? null} />}
+            {colorByField && !IS_DEMO && (
+              <SaveColorDefaultButton collectionName={collectionName ?? null} />
+            )}
           </div>
 
           {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
@@ -331,7 +334,7 @@ export function VisualizationControls({
             <div className="space-y-3">
               <Label className={SECTION_HEADER}>Labels</Label>
 
-              {hasHighlights && (
+              
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="show-labels"
@@ -342,7 +345,7 @@ export function VisualizationControls({
                     Label search results
                   </Label>
                 </div>
-              )}
+              
 
               {colorByField && (
                 <div className="flex items-center space-x-2">

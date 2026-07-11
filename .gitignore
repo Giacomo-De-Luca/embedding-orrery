@@ -19,6 +19,9 @@ wheels/
 ## Random Test Files and notebooks
 test*.py
 test*.ipynb
+# ...but real unit tests are tracked (without this, new test files in
+# unit_tests/ are silently ignored and never make it into commits)
+!interpretability_backend/unit_tests/test*.py
 .env
 
 ## test datasets
@@ -66,6 +69,11 @@ vector_db/
 !interpretability_backend/resources/seed/main.duckdb
 !interpretability_backend/resources/seed/vector_db/
 !interpretability_backend/resources/seed/vector_db/**
+
+# HF Space demo seed (~313 MB, adds the EMNLP collection) — NEVER tracked:
+# its single HNSW file exceeds GitHub's 100 MB hard limit. Ships only in the
+# Space repo via deploy/hf-space/deploy.py (auto-LFS). See HF_SPACE_DEMO.md.
+interpretability_backend/resources/seed_demo/
 
 
 interpretability/resources

@@ -12,6 +12,7 @@ import { Separator } from '@/lib/ui-primitives/separator';
 import { CategoryBarList } from './charts/CategoryBarList';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { ProbeSection } from './ProbeSection';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
@@ -249,7 +250,8 @@ export function AnalyticsSidebar({
             </p>
           )}
 
-          {probes && (
+          {/* Probe training is a write op — hidden in read-only demo builds. */}
+          {probes && !IS_DEMO && (
             <>
               {(hasCategoricalData || showTemporalSection) && <Separator />}
               <ProbeSection probes={probes} colorFieldOptions={colorFieldOptions} />

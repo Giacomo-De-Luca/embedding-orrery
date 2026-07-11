@@ -19,6 +19,13 @@ embedding_visualization/.next
 embedding_visualization/out
 embedding_visualization/coverage
 embedding_visualization/*.log
+embedding_visualization/Users
+embedding_visualization/app/utils/density_clustering/target
+**/tsconfig.tsbuildinfo
+
+interpretability_backend/interpretability_experiments
+interpretability_backend/test
+interpretability_backend/benchmarks
 
 interpretability_backend/resources/main.duckdb
 interpretability_backend/resources/main.duckdb.*
@@ -29,6 +36,10 @@ interpretability_backend/resources/sae_labels
 interpretability_backend/resources/sae_vectors
 interpretability_backend/resources/refusal_direction
 interpretability_backend/resources/experiments
+interpretability_backend/resources/extracted_activations
+# The ~313 MB HF Space demo seed must not bloat the compose backend image;
+# builds of the root Dockerfile use Dockerfile.dockerignore, which includes it.
+interpretability_backend/resources/seed_demo
 !interpretability_backend/resources/seed
 !interpretability_backend/resources/seed/**
 !interpretability_backend/resources/directions

@@ -67,6 +67,7 @@ export const TEXT_SEARCH = gql`
     $mode: TextSearchMode
     $caseSensitive: Boolean
     $filters: [FilterInput!]
+    $limit: Int
   ) {
     textSearch(
       collectionName: $collectionName
@@ -75,6 +76,7 @@ export const TEXT_SEARCH = gql`
       mode: $mode
       caseSensitive: $caseSensitive
       filters: $filters
+      limit: $limit
     ) {
       matches {
         id

@@ -1,67 +1,46 @@
-% Shortened appendix for Section~\ref{sec:glasgow} — single-table version.
-% Requires \usepackage{booktabs}. Standard amsmath/bm for symbols.
-% (The long version with the full protocol is in appendix_probing.tex;
-% include only one of the two — both define \label{app:probes}.)
+% Shortened appendix for Section~\ref{sec:glasgow} — probe settings + one table.
+% The results table lives in probing_results_table.tex (same directory) and is
+% \input below. Requires \usepackage{booktabs,multirow,bm} — standard amsmath.
+% (The pre-k-fold long version is appendix_probing.tex; include only one — both
+% define \label{app:probes}.)
 
 \section{Probe Settings and Per-Dimension Results}
 \label{app:probes}
 
-\paragraph{Probe settings.}
-All probes share one $80/20$ split (seed $42$) on per-feature $z$-scored
-activations. \textsc{Ridge}: $\ell_2$ linear regression, $\alpha=1$.
-\textsc{SVR}: support-vector regression, RBF kernel, $C=1$. \textsc{MLP}: one
-hidden layer ($256$, ReLU, dropout $0.1$), Adam (lr $10^{-3}$, weight decay
-$10^{-4}$), MSE loss, batch size $64$, up to $100$ epochs with patience-$10$
-early stopping on validation loss. \textsc{Mass-mean}: the closed-form
-unit-normalised difference-of-means direction $\bm{\mu}_{+}-\bm{\mu}_{-}$ of
-\citet{marks2023geometry} on a median split, scored by projection (reported as
-Spearman $\rho$, an uncalibrated ranking). \textsc{Logistic}: $\ell_2$ logistic
-regression ($C=1$, up to $1000$ iterations) on a median split of the norm,
-reported as classification accuracy. Ridge/SVR/MLP report $R^2$. All figures are
-the \emph{last} hidden layer (MiniLM L6, EmbeddingGemma L24) --- i.e.\ the model
-output embedding. \textsc{Concreteness-40k} is the full Brysbaert set
-($39{,}954$ words) on the final pooled MiniLM embedding.
+\paragraph{Data and embeddings.}
+The official Glasgow norms ($5{,}553$ entries, including the $871$
+sense-disambiguated items such as \emph{apple (fruit)} / \emph{Apple (brand)},
+embedded as the full string) and the Brysbaert concreteness ratings
+($39{,}954$ words). Each word is embedded once per encoder with its standard
+output pipeline: MiniLM (\texttt{all-MiniLM-L6-v2}, $384$-d) and EmbeddingGemma
+(\texttt{embeddinggemma-300M}, $768$-d, \textsc{sts} prompt).
 
-\begin{table}[t]
-  \centering
-  \small
-  \setlength{\tabcolsep}{5pt}
-  \begin{tabular}{@{}lccccc@{}}
-    \toprule
-    \textbf{Norm} & \textbf{Ridge} & \textbf{SVR} & \textbf{MLP}
-      & \textbf{Mass-mean} & \textbf{Logistic} \\
-     & $R^2$ & $R^2$ & $R^2$ & $\rho$ & acc \\
-    \midrule
-    \multicolumn{6}{@{}l}{\emph{MiniLM-384}} \\
-    concreteness & 0.679 & 0.709 & \textbf{0.711} & 0.704 & 0.845 \\
-    imageability & 0.629 & 0.662 & \textbf{0.664} & 0.668 & 0.798 \\
-    valence      & 0.587 & \textbf{0.678} & 0.656 & 0.671 & 0.790 \\
-    aoa          & 0.557 & \textbf{0.595} & 0.578 & 0.569 & 0.775 \\
-    semsize      & 0.532 & \textbf{0.595} & 0.568 & 0.616 & 0.785 \\
-    gender       & 0.486 & \textbf{0.588} & 0.529 & 0.649 & 0.756 \\
-    familiarity  & \textbf{0.511} & 0.503 & 0.502 & 0.598 & 0.787 \\
-    arousal      & 0.434 & \textbf{0.511} & 0.462 & 0.540 & 0.741 \\
-    dominance    & 0.396 & \textbf{0.502} & 0.445 & 0.534 & 0.712 \\
-    \textsc{Concreteness-40k} & 0.697 & 0.724 & \textbf{0.744} & 0.802 & 0.842 \\
-    \midrule
-    \multicolumn{6}{@{}l}{\emph{EmbeddingGemma-768}} \\
-    concreteness & 0.668 & \textbf{0.707} & 0.605 & 0.801 & 0.814 \\
-    imageability & 0.619 & \textbf{0.636} & 0.547 & 0.758 & 0.798 \\
-    valence      & 0.597 & \textbf{0.680} & 0.566 & 0.774 & 0.801 \\
-    aoa          & \textbf{0.541} & 0.530 & 0.343 & 0.662 & 0.777 \\
-    semsize      & 0.568 & \textbf{0.613} & 0.484 & 0.707 & 0.776 \\
-    gender       & 0.494 & \textbf{0.612} & 0.347 & 0.651 & 0.749 \\
-    familiarity  & 0.418 & \textbf{0.490} & 0.135 & 0.654 & 0.750 \\
-    arousal      & 0.433 & \textbf{0.528} & 0.314 & 0.614 & 0.715 \\
-    dominance    & 0.449 & \textbf{0.516} & 0.322 & 0.629 & 0.710 \\
-    \bottomrule
-  \end{tabular}
-  \caption{Per-dimension recovery of the psycholinguistic norms at the last
-  hidden layer (output embedding), validation split. $R^2$ columns are
-  regression; \textsc{mass-mean} is Spearman $\rho$ (uncalibrated, not comparable
-  to $R^2$); \textsc{logistic} is median-split accuracy. The best regressor per
-  row is bold --- SVR for most norms, the MLP for the most concrete dimensions.
-  Every norm is recovered well above chance by a linear probe, ordered by
-  encodability.}
-  \label{tab:probes}
-\end{table}
+\paragraph{Evaluation protocol.}
+Five-fold cross-validation (shuffled, seed $42$): each fold trains on $80\%$ and
+validates on a disjoint $20\%$, so every word is scored exactly once; all probes
+share the same folds. Cells report mean $\pm$ standard deviation over folds.
+Activations are per-feature $z$-scored using each fold's training statistics.
+
+\paragraph{Probe settings.}
+\textsc{Ridge}: $\ell_2$ linear regression, $\alpha=1$. \textsc{SVR}:
+support-vector regression, RBF kernel, $C=1$. \textsc{MLP}: one hidden layer
+($256$, ReLU, dropout $0.1$), Adam (lr $10^{-3}$, weight decay $10^{-4}$), MSE
+loss, batch size $64$, a fixed $100$ epochs with no early stopping (avoiding
+best-checkpoint selection on the validation fold). \textsc{Mass-mean}: the
+closed-form unit-normalised difference-of-means direction
+$\bm{\mu}_{+}-\bm{\mu}_{-}$ of \citet{marks2023geometry} on a median split of
+the target, with no covariance correction; because the projection
+$s(\bm{x})=\hat{\bm{\theta}}^{\top}\tilde{\bm{x}}$ is uncalibrated, we fit a
+univariate readout $y \approx a\,s(\bm{x})+c$ on the fold's training split and
+report its held-out $R^2$, making the column directly comparable to the other
+regression probes. \textsc{Logistic}: $\ell_2$ logistic regression ($C=1$, up to
+$1000$ iterations) on a median split of the norm, reported as classification
+accuracy. Ridge, SVR and the MLP report $R^2$.
+
+\paragraph{Reading the table.}
+$\Delta=$ SVR$-$ridge mean $R^2$ measures how much a nonlinear probe adds over
+the best linear one: it is at most $0.10$ (median $0.05$) across all norms and
+both encoders, and a single calibrated mass-mean direction alone recovers
+$R^2$ $0.35$--$0.74$ --- the dimensions are largely linearly encoded.
+
+\input{probing_results_table}

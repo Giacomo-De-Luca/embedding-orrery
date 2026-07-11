@@ -746,6 +746,7 @@ class Query:
         mode: TextSearchMode = TextSearchMode.CONTAINS,
         case_sensitive: bool = False,
         filters: list[FilterInput] | None = None,
+        limit: int | None = None,
         info=None,
     ) -> TextSearchResponse:
         """Full-text search across document content and/or metadata fields.
@@ -758,6 +759,8 @@ class Query:
             mode: CONTAINS (substring) or EXACT (full value).
             case_sensitive: Whether matching is case-sensitive.
             filters: Optional metadata filters to restrict search scope.
+            limit: Maximum matches to return; totalMatches still reports the
+                full count so clients can detect overly broad queries.
 
         Returns:
             TextSearchResponse with matching items.
@@ -776,6 +779,7 @@ class Query:
             mode=mode.value,
             case_sensitive=case_sensitive,
             filters=filter_dicts,
+            limit=limit,
         )
 
         matches = [

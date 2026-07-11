@@ -1107,6 +1107,19 @@ class DuckDBClient:
         self._fts_dirty.discard(dataset_name)
         logger.info("Rebuilt FTS index for %s (%d rows)", dataset_name, count)
 
+    @staticmethod
+    def _text_match_condition(column_sql: str, mode: str, case_sensitive: bool) -> str:
+        """SQL condition matching `column_sql` against one `?` query placeholder."""
+        if mode == "exact":
+            if case_sensitive:
+                return f"{column_sql} = ?"
+            return f"LOWER({column_sql}) = LOWER(?)"
+        if case_sensitive:
+            return f"{column_sql} LIKE '%' || ? || '%'"
+        return f"{column_sql} ILIKE '%' || ? || '%'"
+
+    _METADATA_MATCH_COLUMN = "CAST(json_extract_string(metadata, ?) AS VARCHAR)"
+
     def text_search(
         self,
         dataset_name: str,
@@ -1115,81 +1128,98 @@ class DuckDBClient:
         mode: str = "contains",
         case_sensitive: bool = False,
         filters: list[dict] | None = None,
+        limit: int | None = None,
     ) -> dict[str, Any]:
         """Search documents and/or metadata fields within one dataset.
 
         When filters are provided, results are restricted to items matching
         the metadata filters (same operators as get_filtered_items).
+
+        `total_matches` is always the full deduplicated match count; when
+        `limit` is set, `matches` is truncated to at most that many rows so
+        broad queries don't ship the whole table over the wire.
         """
         ds = self.get_dataset(dataset_name)
         if not ds:
             return {"matches": [], "total_matches": 0}
         table = self._items_table(dataset_name)
 
-        # Pre-filter: compute allowed IDs from metadata filters
-        allowed_ids: set[str] | None = None
-        if filters:
-            where_sql, where_params = self._build_metadata_where(filters)
-            rows = self._exec(
-                f"SELECT id FROM {table} WHERE {where_sql}",
-                where_params,
-            ).fetchall()
-            allowed_ids = {r[0] for r in rows}
-            if not allowed_ids:
-                return {"matches": [], "total_matches": 0}
-
         if fields is None:
             fields = ["__document__"]
+        meta_fields = [f for f in fields if f != "__document__"]
+
+        filter_sql: str | None = None
+        filter_params: list = []
+        if filters:
+            filter_sql, filter_params = self._build_metadata_where(filters)
+
+        # True match count across all selected fields (rows deduplicated by OR).
+        conditions: list[str] = []
+        count_params: list = []
+        if "__document__" in fields:
+            conditions.append(self._text_match_condition("document", mode, case_sensitive))
+            count_params.append(query)
+        for field in meta_fields:
+            conditions.append(
+                self._text_match_condition(self._METADATA_MATCH_COLUMN, mode, case_sensitive)
+            )
+            count_params.extend([f"$.{field}", query])
+        if not conditions:
+            return {"matches": [], "total_matches": 0}
+        count_where = "(" + " OR ".join(conditions) + ")"
+        if filter_sql:
+            count_where += f" AND ({filter_sql})"
+            count_params.extend(filter_params)
+        total_matches = self._exec(
+            f"SELECT COUNT(*) FROM {table} WHERE {count_where}", count_params
+        ).fetchone()[0]
 
         matches = []
         seen_ids = set()
 
         if "__document__" in fields:
-            doc_matches = self._search_documents(table, query, mode, case_sensitive)
-            if allowed_ids is not None:
-                doc_matches = [m for m in doc_matches if m["id"] in allowed_ids]
+            doc_matches = self._search_documents(
+                table, query, mode, case_sensitive, filter_sql, filter_params, limit
+            )
             for m in doc_matches:
                 if m["id"] not in seen_ids:
                     matches.append(m)
                     seen_ids.add(m["id"])
 
-        meta_fields = [f for f in fields if f != "__document__"]
-        if meta_fields:
+        if meta_fields and (limit is None or len(matches) < limit):
             meta_matches = self._search_metadata_fields(
-                table, query, meta_fields, mode, case_sensitive
+                table, query, meta_fields, mode, case_sensitive, filter_sql, filter_params, limit
             )
-            if allowed_ids is not None:
-                meta_matches = [m for m in meta_matches if m["id"] in allowed_ids]
             for m in meta_matches:
                 if m["id"] not in seen_ids:
                     matches.append(m)
                     seen_ids.add(m["id"])
 
-        return {"matches": matches, "total_matches": len(matches)}
+        if limit is not None:
+            matches = matches[:limit]
+
+        return {"matches": matches, "total_matches": total_matches}
 
     def _search_documents(
-        self, table: str, query: str, mode: str, case_sensitive: bool
+        self,
+        table: str,
+        query: str,
+        mode: str,
+        case_sensitive: bool,
+        filter_sql: str | None = None,
+        filter_params: list | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         """Search the document column of a per-dataset items table."""
-        if mode == "exact":
-            if case_sensitive:
-                rows = self._exec(
-                    f"SELECT id, document FROM {table} WHERE document = ?", [query]
-                ).fetchall()
-            else:
-                rows = self._exec(
-                    f"SELECT id, document FROM {table} WHERE LOWER(document) = LOWER(?)", [query]
-                ).fetchall()
-        else:
-            if case_sensitive:
-                rows = self._exec(
-                    f"SELECT id, document FROM {table} WHERE document LIKE '%' || ? || '%'", [query]
-                ).fetchall()
-            else:
-                rows = self._exec(
-                    f"SELECT id, document FROM {table} WHERE document ILIKE '%' || ? || '%'",
-                    [query],
-                ).fetchall()
+        condition = self._text_match_condition("document", mode, case_sensitive)
+        sql = f"SELECT id, document FROM {table} WHERE {condition}"
+        params: list = [query]
+        if filter_sql:
+            sql += f" AND ({filter_sql})"
+            params.extend(filter_params or [])
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        rows = self._exec(sql, params).fetchall()
 
         matches = []
         query_lower = query.lower()
@@ -1209,34 +1239,28 @@ class DuckDBClient:
         return matches
 
     def _search_metadata_fields(
-        self, table: str, query: str, fields: list[str], mode: str, case_sensitive: bool
+        self,
+        table: str,
+        query: str,
+        fields: list[str],
+        mode: str,
+        case_sensitive: bool,
+        filter_sql: str | None = None,
+        filter_params: list | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         """Search metadata JSON fields in a per-dataset items table."""
+        condition = self._text_match_condition(self._METADATA_MATCH_COLUMN, mode, case_sensitive)
         matches = []
         for field in fields:
-            json_path = f"$.{field}"
-            if mode == "exact":
-                if case_sensitive:
-                    rows = self._exec(
-                        f"SELECT id FROM {table} WHERE json_extract_string(metadata, ?) = ?",
-                        [json_path, query],
-                    ).fetchall()
-                else:
-                    rows = self._exec(
-                        f"SELECT id FROM {table} WHERE LOWER(CAST(json_extract_string(metadata, ?) AS VARCHAR)) = LOWER(?)",
-                        [json_path, query],
-                    ).fetchall()
-            else:
-                if case_sensitive:
-                    rows = self._exec(
-                        f"SELECT id FROM {table} WHERE CAST(json_extract_string(metadata, ?) AS VARCHAR) LIKE '%' || ? || '%'",
-                        [json_path, query],
-                    ).fetchall()
-                else:
-                    rows = self._exec(
-                        f"SELECT id FROM {table} WHERE CAST(json_extract_string(metadata, ?) AS VARCHAR) ILIKE '%' || ? || '%'",
-                        [json_path, query],
-                    ).fetchall()
+            sql = f"SELECT id FROM {table} WHERE {condition}"
+            params: list = [f"$.{field}", query]
+            if filter_sql:
+                sql += f" AND ({filter_sql})"
+                params.extend(filter_params or [])
+            if limit is not None:
+                sql += f" LIMIT {int(limit)}"
+            rows = self._exec(sql, params).fetchall()
 
             for r in rows:
                 matches.append({"id": r[0], "matched_field": field, "snippet": None})

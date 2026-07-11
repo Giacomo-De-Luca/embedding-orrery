@@ -13,7 +13,7 @@ import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
 import { useProbes } from '../lib/hooks/useProbes';
-import { useTextSearch } from '../lib/hooks/useTextSearch';
+import { useTextSearch, TEXT_SEARCH_GLOW_CAP } from '../lib/hooks/useTextSearch';
 import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/usePromptHighlight';
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
@@ -284,11 +284,17 @@ function HomeContent() {
   // Combine semantic search highlights, topic highlights, and text search highlights.
   // Text search glow only activates when no semantic search is active — clicking a
   // text result triggers semantic search which naturally takes over the glow.
+  // Broad text searches (> TEXT_SEARCH_GLOW_CAP matches) skip the glow and act as
+  // a pure filter: muting still uses the full match set via textSearchHighlights.
   // Selected point is excluded — it has its own overlay traces in ScatterPlot3D.
+  const textSearchGlowIndices =
+    textSearchHighlightedIndices && textSearchHighlightedIndices.size <= TEXT_SEARCH_GLOW_CAP
+      ? textSearchHighlightedIndices
+      : null;
   const baseHighlightedIndices: HighlightMap | undefined = useHighlightedIndices(
     semanticSearchResults,
     data,
-    semanticSearchResults && semanticSearchResults.length > 0 ? null : textSearchHighlightedIndices,
+    semanticSearchResults && semanticSearchResults.length > 0 ? null : textSearchGlowIndices,
   );
   // Prompt highlight > feature search > semantic + text highlights
   const combinedHighlightedIndices = promptHighlight.highlightMap ?? featureSearch.highlightMap ?? baseHighlightedIndices;

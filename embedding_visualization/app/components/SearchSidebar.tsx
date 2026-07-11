@@ -251,7 +251,7 @@ export function SearchSidebar({
               placeholder="Type to search..."
               value={searchQuery}
               onChange={onSearchChange}
-              delay={300}
+              delay={600}
             />
             <p className="text-xs text-muted-foreground">
               Search will highlight matching words in the visualization

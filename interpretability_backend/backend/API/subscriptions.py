@@ -27,6 +27,7 @@ from ..services.token_emitter import (
     unregister_token_subscriber,
 )
 from .interpret_instance import get_interpret_service
+from .read_only import READ_ONLY_MESSAGE, is_read_only
 from .types import GenerateStreamInput, TokenChunk
 
 
@@ -104,6 +105,21 @@ class Subscription:
         duration, and yields TokenChunk events until the model produces
         an EOS/EOT token or reaches output_len.
         """
+        # Read-only demos block this before get_interpret_service(): the gate
+        # only stops mutations, and while generation is impossible anyway
+        # (loadModel is blocked), the lazy torch/interpret import alone would
+        # cost hundreds of MB of RSS on a public CPU deployment.
+        if is_read_only():
+            yield TokenChunk(
+                stream_id="",
+                token_index=0,
+                token_id=0,
+                text="",
+                done=True,
+                error=READ_ONLY_MESSAGE,
+            )
+            return
+
         service = get_interpret_service()
         stream_id = str(uuid.uuid4())
         queue: asyncio.Queue[TokenEvent] = asyncio.Queue(maxsize=500)

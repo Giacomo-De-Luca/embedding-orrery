@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { Button, buttonVariants } from '@/lib/ui-primitives/button';
+import { Badge } from '@/lib/ui-primitives/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Label } from '@/lib/ui-primitives/label';
@@ -18,7 +19,7 @@ import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { Popover, PopoverContent, PopoverTrigger } from '@/lib/ui-primitives/popover';
 import { Trash2, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult, GenerateLlmLabelsInput, GenerateLlmLabelsResult, ComputeDocumentActivationsResult } from '@/lib/graphql/mutations';
-import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
+import { GET_COLLECTION_PREVIEW, HAS_DOCUMENT_ACTIVATIONS } from '@/lib/graphql/queries';
 import { InlineEditableField, SelectOption } from '../InlineEditableField';
 import { AddFieldForm } from '../AddFieldForm';
 import { TopicExtractionCard } from '../TopicExtractionCard';
@@ -183,18 +184,17 @@ function ExpandableMetadataValue({
                   ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                   : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
               )}
-              <span className="font-medium text-sm truncate">
+              <span className="font-medium text-sm truncate min-w-0">
                 {firstLine}
                 {!expanded && isMultiline && '...'}
               </span>
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <ScrollArea className="max-h-48 overflow-hidden mt-1 rounded-md border bg-muted/30">
+            <ScrollArea className="mt-1 rounded-md border bg-muted/30" viewportClassName="max-h-48">
               <pre className="text-xs p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
                 {fullText}
               </pre>
-              <ScrollBar orientation="vertical" />
             </ScrollArea>
           </CollapsibleContent>
         </Collapsible>
@@ -281,6 +281,31 @@ export function CollectionDetailPane({
   });
 
   const previewItems: CollectionPreviewItem[] = previewData?.embeddings || [];
+
+  // Whether SAE document activations have already been computed (gates the
+  // "Already computed" badge on the optional final step). Skipped unless the
+  // card would render (SAE-linked + compute available), so `refetch` below is
+  // only ever invoked while the query is active. Refetched after a compute run.
+  const isSaeLinked = !!(metadata.sae_model_id && metadata.sae_id);
+  const { data: hasActivationsData, refetch: refetchHasActivations } = useQuery<{ hasDocumentActivations: boolean }>(
+    HAS_DOCUMENT_ACTIVATIONS,
+    {
+      variables: { collectionName },
+      skip: !isSaeLinked || !computeDocumentActivations,
+      fetchPolicy: 'network-only',
+    },
+  );
+  const hasDocumentActivations = hasActivationsData?.hasDocumentActivations ?? false;
+
+  const handleComputeActivations = useCallback(async () => {
+    if (!computeDocumentActivations) return;
+    const result = await computeDocumentActivations(collectionName);
+    if (result && !result.error) {
+      // Cosmetic badge/label refresh — a failed refetch shouldn't surface as an
+      // unhandled rejection from the onClick handler.
+      refetchHasActivations().catch(() => {});
+    }
+  }, [computeDocumentActivations, collectionName, refetchHasActivations]);
 
   // Reset state when the selected collection changes
   useEffect(() => {
@@ -604,44 +629,6 @@ export function CollectionDetailPane({
         onUpdate={async (meta) => { await updateCollectionMetadata(collectionName, meta); await refreshCollections(); }}
       />
 
-      {/* SAE Document Activations */}
-      {!!(metadata.sae_model_id && metadata.sae_id) && computeDocumentActivations && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">SAE Document Activations</CardTitle>
-            <CardDescription>
-              Run SAE inference on all documents to enable feature-based search
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Button
-              onClick={() => computeDocumentActivations(collectionName)}
-              disabled={docActivationsLoading}
-            >
-              {docActivationsLoading && <Spinner className="mr-2 h-4 w-4" />}
-              Compute Document Activations
-            </Button>
-            {lastDocActivationsResult && !lastDocActivationsResult.error && (
-              <p className="text-sm text-green-600 dark:text-green-400">
-                Processed {lastDocActivationsResult.itemsProcessed} / {lastDocActivationsResult.totalItems} items
-                in {lastDocActivationsResult.durationSeconds.toFixed(1)}s
-              </p>
-            )}
-            {lastDocActivationsResult?.error && (
-              <p className="text-sm text-destructive">{lastDocActivationsResult.error}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-      {docActivationsLoading && (
-        <ProgressModal
-          jobId={`${collectionName}_sae_activations`}
-          title="Computing SAE Document Activations"
-          subtitle="Running SAE inference on each document."
-          itemsLabel="documents"
-        />
-      )}
-
       {/* Topic Extraction */}
       {!!metadata.has_projections && (
         <TopicExtractionCard
@@ -663,6 +650,51 @@ export function CollectionDetailPane({
           hasSubtopics={!!metadata.topic_hierarchy}
           renameTopicLabel={renameTopicLabel}
           regenerateTopicLabel={regenerateTopicLabel}
+        />
+      )}
+
+      {/* SAE Document Activations — optional final step, after topic labeling */}
+      {isSaeLinked && computeDocumentActivations && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-lg">SAE Document Activations</CardTitle>
+              {hasDocumentActivations && (
+                <Badge variant="secondary" className="text-xs">Already computed</Badge>
+              )}
+            </div>
+            <CardDescription>
+              Optional. Run SAE inference over every document to enable feature-based
+              search on the Explore page. Best run last, once topics are labeled.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Button
+              onClick={handleComputeActivations}
+              disabled={docActivationsLoading}
+              variant={hasDocumentActivations ? 'outline' : 'default'}
+            >
+              {docActivationsLoading && <Spinner className="mr-2 h-4 w-4" />}
+              {hasDocumentActivations ? 'Recompute Document Activations' : 'Compute Document Activations'}
+            </Button>
+            {lastDocActivationsResult && !lastDocActivationsResult.error && (
+              <p className="text-sm text-green-600 dark:text-green-400">
+                Processed {lastDocActivationsResult.itemsProcessed} / {lastDocActivationsResult.totalItems} items
+                in {lastDocActivationsResult.durationSeconds.toFixed(1)}s
+              </p>
+            )}
+            {lastDocActivationsResult?.error && (
+              <p className="text-sm text-destructive">{lastDocActivationsResult.error}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {docActivationsLoading && (
+        <ProgressModal
+          jobId={`${collectionName}_sae_activations`}
+          title="Computing SAE Document Activations"
+          subtitle="Running SAE inference on each document."
+          itemsLabel="documents"
         />
       )}
     </div>

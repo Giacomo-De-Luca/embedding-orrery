@@ -14,6 +14,7 @@ from strawberry.fastapi import GraphQLRouter
 from strawberry.subscriptions import GRAPHQL_TRANSPORT_WS_PROTOCOL, GRAPHQL_WS_PROTOCOL
 
 from .API import schema
+from .API.read_only import is_read_only
 from .API.upload import router as upload_router
 from .utils.seed_bootstrap import ensure_seed_loaded
 
@@ -56,8 +57,9 @@ graphql_app = GraphQLRouter(
     ],
 )
 
-# Mount upload router
-app.include_router(upload_router)
+# Mount upload router (disabled in read-only demo deployments)
+if not is_read_only():
+    app.include_router(upload_router)
 
 # Mount GraphQL endpoint
 app.include_router(graphql_app, prefix="/graphql")
