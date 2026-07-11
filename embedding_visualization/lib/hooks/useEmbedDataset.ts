@@ -130,6 +130,8 @@ export interface UseEmbedDatasetReturn {
   computeDocumentActivations: (collectionName: string) => Promise<ComputeDocumentActivationsResult | null>;
   docActivationsLoading: boolean;
   lastDocActivationsResult: ComputeDocumentActivationsResult | null;
+  /** Collection whose activations compute is in flight (drives the page-global progress modal) */
+  activeDocActivationsCollection: string | null;
 
   // Job management
   cancelEmbeddingJob: (collectionName: string) => Promise<boolean>;
@@ -242,6 +244,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   >(COMPUTE_DOCUMENT_ACTIVATIONS);
 
   const [lastDocActivationsResult, setLastDocActivationsResult] = useState<ComputeDocumentActivationsResult | null>(null);
+  const [activeDocActivationsCollection, setActiveDocActivationsCollection] = useState<string | null>(null);
 
   const [getCollectionTopics] = useLazyQuery<
     { collectionTopics: ExtractTopicsResult | null }
@@ -853,6 +856,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   ): Promise<ComputeDocumentActivationsResult | null> => {
     setError(null);
     setLastDocActivationsResult(null);
+    setActiveDocActivationsCollection(collectionName);
 
     try {
       const { data, error } = await computeDocActMutation({
@@ -867,6 +871,10 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       const result = data?.computeDocumentActivations || null;
       if (result?.error) {
         setError(result.error);
+      } else if (result) {
+        toast.success(
+          `Computed SAE activations for ${result.itemsProcessed.toLocaleString()} documents in "${collectionName}"`
+        );
       }
 
       setLastDocActivationsResult(result);
@@ -875,6 +883,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       const message = err instanceof Error ? err.message : 'Failed to compute document activations';
       setError(message);
       return null;
+    } finally {
+      setActiveDocActivationsCollection(null);
     }
   }, [computeDocActMutation]);
 
@@ -942,6 +952,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     computeDocumentActivations,
     docActivationsLoading,
     lastDocActivationsResult,
+    activeDocActivationsCollection,
 
     // Job management
     cancelEmbeddingJob,

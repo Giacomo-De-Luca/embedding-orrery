@@ -5,6 +5,7 @@ import type { EmbeddingProvider, GeminiTaskType, EmbeddingModelInput, TopicConfi
 import type { TopicConfigState } from '../components/TopicConfigForm';
 import { DEFAULT_TOPIC_CONFIG, toTopicConfigInput } from '../components/TopicConfigForm';
 import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
+import type { SaePostEmbedParams } from './embeddingFormUtils';
 
 export interface EmbeddingModelState {
   // Model config
@@ -32,10 +33,17 @@ export interface EmbeddingModelState {
   topicConfig: TopicConfigState;
   setTopicConfig: (c: TopicConfigState) => void;
 
+  // Post-embed SAE step (link + compute document activations)
+  enableSaeActivations: boolean;
+  setEnableSaeActivations: (e: boolean) => void;
+  saeSelection: string | null;
+  setSaeSelection: (s: string | null) => void;
+
   // Derived helpers
   handleProviderChange: (provider: EmbeddingProvider) => void;
   buildEmbeddingModelInput: () => EmbeddingModelInput;
   getTopicParams: () => { extractTopics?: boolean; topicConfig?: TopicConfigInput };
+  getSaePostParams: () => SaePostEmbedParams;
 }
 
 export function useEmbeddingModelState(): EmbeddingModelState {
@@ -50,6 +58,9 @@ export function useEmbeddingModelState(): EmbeddingModelState {
 
   const [enableTopics, setEnableTopics] = useState(false);
   const [topicConfig, setTopicConfig] = useState<TopicConfigState>(DEFAULT_TOPIC_CONFIG);
+
+  const [enableSaeActivations, setEnableSaeActivations] = useState(false);
+  const [saeSelection, setSaeSelection] = useState<string | null>(null);
 
   const handleProviderChange = useCallback((provider: EmbeddingProvider) => {
     setEmbeddingProvider(provider);
@@ -71,6 +82,11 @@ export function useEmbeddingModelState(): EmbeddingModelState {
     extractTopics: enableTopics || undefined,
     topicConfig: enableTopics ? toTopicConfigInput(topicConfig) : undefined,
   }), [enableTopics, topicConfig]);
+
+  const getSaePostParams = useCallback((): SaePostEmbedParams => ({
+    enabled: enableSaeActivations,
+    selection: saeSelection,
+  }), [enableSaeActivations, saeSelection]);
 
   return {
     embeddingProvider,
@@ -95,8 +111,14 @@ export function useEmbeddingModelState(): EmbeddingModelState {
     topicConfig,
     setTopicConfig,
 
+    enableSaeActivations,
+    setEnableSaeActivations,
+    saeSelection,
+    setSaeSelection,
+
     handleProviderChange,
     buildEmbeddingModelInput,
     getTopicParams,
+    getSaePostParams,
   };
 }

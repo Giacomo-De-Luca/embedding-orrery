@@ -105,6 +105,7 @@ function CollectionsPageContent() {
     computeDocumentActivations,
     docActivationsLoading,
     lastDocActivationsResult,
+    activeDocActivationsCollection,
     cancelEmbeddingJob,
     cancelJobLoading,
     removeEmbeddingJob,
@@ -176,6 +177,8 @@ function CollectionsPageContent() {
             fetchHFDatasetPreview={fetchHFDatasetPreview}
             embedHFDataset={embedHFDataset}
             refreshCollections={handleRefreshCollections}
+            updateCollectionMetadata={updateCollectionMetadata}
+            computeDocumentActivations={computeDocumentActivations}
             datasetInfo={datasetInfo}
             datasetPreview={datasetPreview}
             infoLoading={infoLoading}
@@ -196,6 +199,8 @@ function CollectionsPageContent() {
             reEmbedDataset={reEmbedDataset}
             collections={collections}
             refreshCollections={handleRefreshCollections}
+            updateCollectionMetadata={updateCollectionMetadata}
+            computeDocumentActivations={computeDocumentActivations}
             localFileInfo={localFileInfo}
             localFilePreview={localFilePreview}
             infoLoading={infoLoading}
@@ -253,6 +258,7 @@ function CollectionsPageContent() {
             activeJobCollectionName,
             llmResumeJobId,
             llmLabelsLoading && managedCollection ? `${managedCollection}_llm_labeling` : null,
+            activeDocActivationsCollection ? `${activeDocActivationsCollection}_sae_activations` : null,
           ]}
         />
       </div>
@@ -271,6 +277,16 @@ function CollectionsPageContent() {
           title="Generating LLM Labels"
           subtitle="Each topic is labeled individually via LLM API calls."
           itemsLabel="topics"
+        />
+      )}
+      {/* Page-global so the modal shows regardless of which tab (embed flow
+          or manage pane) triggered the activations compute */}
+      {docActivationsLoading && activeDocActivationsCollection && (
+        <ProgressModal
+          jobId={`${activeDocActivationsCollection}_sae_activations`}
+          title="Computing SAE Document Activations"
+          subtitle="Running SAE inference on each document."
+          itemsLabel="documents"
         />
       )}
     </div>

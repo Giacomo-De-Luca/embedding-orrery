@@ -29,11 +29,12 @@ import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
+import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
 import { EmbedFooterBar } from './EmbedFooterBar';
 import { useEmbedFormState } from '../lib/useEmbedFormState';
-import { buildLocalEmbedInput, buildReEmbedInput } from '../lib/embeddingFormUtils';
+import { buildLocalEmbedInput, buildReEmbedInput, runPostEmbedSaeStep, type SaePostEmbedDeps } from '../lib/embeddingFormUtils';
 import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
 
 interface LocalFileTabProps {
@@ -43,6 +44,8 @@ interface LocalFileTabProps {
   reEmbedDataset: (input: ReEmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   collections: CollectionInfo[];
   refreshCollections: () => Promise<void>;
+  updateCollectionMetadata: SaePostEmbedDeps['updateCollectionMetadata'];
+  computeDocumentActivations: SaePostEmbedDeps['computeDocumentActivations'];
   localFileInfo: LocalFileInfo | null;
   localFilePreview: LocalFilePreview | null;
   infoLoading: boolean;
@@ -61,6 +64,8 @@ export function LocalFileTab({
   reEmbedDataset,
   collections,
   refreshCollections,
+  updateCollectionMetadata,
+  computeDocumentActivations,
   localFileInfo,
   localFilePreview,
   infoLoading,
@@ -186,13 +191,20 @@ export function LocalFileTab({
     // CTA is disabled while issues exist; guard anyway
     if (fileValidationIssues.length > 0) return;
 
-    await embedLocalFile(buildLocalEmbedInput(form.commonValues(), {
+    const result = await embedLocalFile(buildLocalEmbedInput(form.commonValues(), {
       filePath,
       dataType,
       portion: { strategy: portionStrategy, numRows, seed: randomSeed },
     }));
 
     await refreshCollections();
+
+    // Optional final step: link the SAE + compute document activations
+    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
+      updateCollectionMetadata,
+      computeDocumentActivations,
+    });
+    if (saeStepRan) await refreshCollections();
   };
 
   const handleSourceDatasetChange = (value: string | null) => {
@@ -216,12 +228,19 @@ export function LocalFileTab({
     // CTA is disabled while issues exist; guard anyway
     if (reEmbedValidationIssues.length > 0) return;
 
-    await reEmbedDataset(buildReEmbedInput(
+    const result = await reEmbedDataset(buildReEmbedInput(
       { ...form.commonValues(), embeddingModel: model.buildEmbeddingModelInput() },
       sourceDataset
     ));
 
     await refreshCollections();
+
+    // Optional final step: link the SAE + compute document activations
+    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
+      updateCollectionMetadata,
+      computeDocumentActivations,
+    });
+    if (saeStepRan) await refreshCollections();
   };
 
   const isLoading = infoLoading || previewLoading;
@@ -479,6 +498,9 @@ export function LocalFileTab({
         </Card>
       )}
 
+      {/* Optional post-embed SAE step (after the topics section above) */}
+      {isDataLoaded && <SaeActivationsSection model={model} idPrefix="local-" />}
+
       {/* Sticky CTA with config recap + inline validation */}
       {isDataLoaded && (
         <EmbedFooterBar
@@ -546,6 +568,9 @@ export function LocalFileTab({
               )}
             </CardContent>
           </Card>
+
+          {/* Optional post-embed SAE step (after the topics section above) */}
+          <SaeActivationsSection model={model} idPrefix="reembed-" />
 
           <EmbedFooterBar
             summary={reEmbedSummary}

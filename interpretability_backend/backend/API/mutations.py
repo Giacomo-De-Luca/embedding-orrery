@@ -709,6 +709,9 @@ class Mutation:
                         data_type=DataType.TEXT,
                         columns=["label"],
                         metadata_columns=["density", "index"],
+                        # Labels as item ids (IDDeduplicator suffixes collisions;
+                        # empty-label rows are skipped as empty documents).
+                        id_column="label",
                         embedding_model=emb_model_config,
                     )
 

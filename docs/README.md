@@ -13,9 +13,9 @@ npm run build   # static build + Pagefind search index
 ## Structure
 
 - `content/` — the pages. **Convention: committed pages are `.mdx`**
-  (`index.mdx`, `getting-started.mdx`, plus per-folder `_meta.js` for sidebar
-  titles + order); every `.md` file under `content/` is **generated at build
-  time** and gitignored wholesale (`content/**/*.md`).
+  (`index.mdx`, `getting-started.mdx`, `demo.mdx`, plus per-folder `_meta.js`
+  for sidebar titles + order); every `.md` file under `content/` is
+  **generated at build time** and gitignored wholesale (`content/**/*.md`).
 - `scripts/sync-content.mjs` — runs automatically before `dev`/`build` (npm
   `predev`/`prebuild` hooks). Copies `gallery/` → `public/gallery/` and the
   curated public subset of `documentation/*.md` → `content/`, rewriting

@@ -15,11 +15,12 @@ import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
+import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
 import { EmbedFooterBar } from './EmbedFooterBar';
 import { useEmbedFormState } from '../lib/useEmbedFormState';
-import { buildHFEmbedInput } from '../lib/embeddingFormUtils';
+import { buildHFEmbedInput, runPostEmbedSaeStep, type SaePostEmbedDeps } from '../lib/embeddingFormUtils';
 import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
 
 interface HuggingFaceTabProps {
@@ -32,6 +33,8 @@ interface HuggingFaceTabProps {
   ) => Promise<HFDatasetPreview | null>;
   embedHFDataset: (input: EmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
+  updateCollectionMetadata: SaePostEmbedDeps['updateCollectionMetadata'];
+  computeDocumentActivations: SaePostEmbedDeps['computeDocumentActivations'];
   datasetInfo: HFDatasetInfo | null;
   datasetPreview: HFDatasetPreview | null;
   infoLoading: boolean;
@@ -48,6 +51,8 @@ export function HuggingFaceTab({
   fetchHFDatasetPreview,
   embedHFDataset,
   refreshCollections,
+  updateCollectionMetadata,
+  computeDocumentActivations,
   datasetInfo,
   datasetPreview,
   infoLoading,
@@ -133,7 +138,7 @@ export function HuggingFaceTab({
     // CTA is disabled while issues exist; guard anyway
     if (validationIssues.length > 0) return;
 
-    await embedHFDataset(buildHFEmbedInput(form.commonValues(), {
+    const result = await embedHFDataset(buildHFEmbedInput(form.commonValues(), {
       datasetId,
       defaultConfig: datasetInfo?.defaultConfig,
       selectedSplit,
@@ -142,6 +147,13 @@ export function HuggingFaceTab({
     }));
 
     await refreshCollections();
+
+    // Optional final step: link the SAE + compute document activations
+    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
+      updateCollectionMetadata,
+      computeDocumentActivations,
+    });
+    if (saeStepRan) await refreshCollections();
   };
 
   const isLoading = infoLoading || previewLoading;
@@ -319,6 +331,9 @@ export function HuggingFaceTab({
           idPrefix="hf-"
         />
       )}
+
+      {/* Optional post-embed SAE step (after the topics section above) */}
+      {isDataLoaded && <SaeActivationsSection model={model} idPrefix="hf-" />}
 
       {lastEmbedResult && lastEmbedSource === 'hf' && <EmbedResultCard result={lastEmbedResult} />}
 

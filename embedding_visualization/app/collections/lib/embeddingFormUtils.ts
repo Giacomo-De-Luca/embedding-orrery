@@ -251,6 +251,68 @@ export function buildReEmbedInput(
   };
 }
 
+// ========== Post-embed SAE step (link + compute activations) ==========
+
+/**
+ * Parse the `modelId::saeId` composite used by the SAE selects (same format
+ * as the manage tab's SaeLinkSection) into the metadata payload for
+ * updateCollectionMetadata. Returns null for empty/malformed selections.
+ */
+export function parseSaeSelection(
+  selection: string | null | undefined
+): { sae_model_id: string; sae_id: string } | null {
+  if (!selection) return null;
+  const sep = selection.indexOf('::');
+  if (sep <= 0) return null;
+  const saeId = selection.slice(sep + 2);
+  if (!saeId) return null;
+  return { sae_model_id: selection.slice(0, sep), sae_id: saeId };
+}
+
+export interface SaePostEmbedParams {
+  enabled: boolean;
+  /** `modelId::saeId` composite, or null when nothing selected */
+  selection: string | null;
+}
+
+export interface SaePostEmbedDeps {
+  updateCollectionMetadata: (
+    collectionName: string,
+    metadata: Record<string, unknown>
+  ) => Promise<{ error?: string | null } | null>;
+  computeDocumentActivations: (
+    collectionName: string
+  ) => Promise<{ error?: string | null } | null>;
+}
+
+/**
+ * Optional final step of the embed flow: after a successful embed (+ topics,
+ * which run inside the embed job), link the collection to the chosen SAE and
+ * compute document activations. The backend reads the SAE to run from the
+ * collection's `sae_model_id`/`sae_id` metadata, so linking must come first.
+ *
+ * Returns whether the activations compute was reached. A compute-side error
+ * still counts as run — the embed itself succeeded and the deps surface the
+ * error (toast/error state); activations can be recomputed from the manage
+ * tab. A failed link skips the compute (it would run against no SAE).
+ */
+export async function runPostEmbedSaeStep(
+  embedResult: EmbedDatasetResult | null,
+  params: SaePostEmbedParams,
+  deps: SaePostEmbedDeps
+): Promise<boolean> {
+  if (!params.enabled) return false;
+  if (!embedResult || embedResult.error) return false;
+  const link = parseSaeSelection(params.selection);
+  if (!link) return false;
+
+  const linkResult = await deps.updateCollectionMetadata(embedResult.collectionName, link);
+  if (linkResult?.error) return false;
+
+  await deps.computeDocumentActivations(embedResult.collectionName);
+  return true;
+}
+
 /**
  * Resume any interrupted job, dispatching on its jobType. Unpacks the stored
  * backend config (snake_case) back into the matching embed mutation input

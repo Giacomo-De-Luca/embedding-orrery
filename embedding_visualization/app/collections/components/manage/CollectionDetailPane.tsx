@@ -24,7 +24,6 @@ import { InlineEditableField, SelectOption } from '../InlineEditableField';
 import { AddFieldForm } from '../AddFieldForm';
 import { TopicExtractionCard } from '../TopicExtractionCard';
 import { SaeLinkSection } from '../SaeLinkSection';
-import { ProgressModal } from '../EmbeddingProgressModal';
 import { DeleteCollectionDialog } from './DeleteCollectionDialog';
 import type { CollectionInfo } from '../CollectionManagerTab';
 
@@ -689,14 +688,8 @@ export function CollectionDetailPane({
           </CardContent>
         </Card>
       )}
-      {docActivationsLoading && (
-        <ProgressModal
-          jobId={`${collectionName}_sae_activations`}
-          title="Computing SAE Document Activations"
-          subtitle="Running SAE inference on each document."
-          itemsLabel="documents"
-        />
-      )}
+      {/* The activations ProgressModal is page-global (rendered in page.tsx)
+          so it also covers computes triggered from the embed tabs. */}
     </div>
   );
 }
