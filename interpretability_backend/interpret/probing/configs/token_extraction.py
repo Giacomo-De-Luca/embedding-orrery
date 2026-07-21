@@ -78,6 +78,11 @@ class TokenLevelExtractionConfig:
             )
         if self.family == "qwen" and self.checkpoint is None:
             self.checkpoint = DEFAULT_QWEN_CHECKPOINT
+        if self.family == "gemma" and self.device is not None:
+            raise ValueError(
+                "device is not configurable for family='gemma' — "
+                "GemmaPytorchInference auto-selects MPS/CUDA. Leave it unset.",
+            )
 
     def cache_filename(self) -> str:
         return self.name

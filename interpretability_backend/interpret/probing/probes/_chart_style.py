@@ -13,16 +13,20 @@ import seaborn as sns
 
 # Bar palette shared across the per-probe single-experiment chart and
 # the 3-panel leave-one-group-out chart.
-POS_COLOR = "#3a6e8f"        # muted teal
+POS_COLOR = "#3a6e8f"  # muted teal
 NEG_COLOR_GRAY = "#bdbdbd"
-NEG_COLOR_RED = "#d4928a"    # muted pastel red
+NEG_COLOR_RED = "#d4928a"  # muted pastel red
 
 # Feature-name parsing convention. Names look like
 # `c{ctx}_p{section}_{CATEGORY}` — the third field uses ``maxsplit=2``
 # so multi-token category labels (e.g. ``HARMFUL_PAYLOAD``) stay intact.
 CATEGORIES: tuple[str, ...] = (
-    "FIGURATIVE", "FUNCTION_WORD", "HARMFUL_PAYLOAD",
-    "PUNCTUATION", "SETUP", "TECHNICAL",
+    "FIGURATIVE",
+    "FUNCTION_WORD",
+    "HARMFUL_PAYLOAD",
+    "PUNCTUATION",
+    "SETUP",
+    "TECHNICAL",
 )
 CONTEXTS: tuple[str, ...] = ("c0", "c1", "c2", "c3")
 SECTIONS: tuple[str, ...] = ("p0", "p1", "p2")
@@ -31,19 +35,21 @@ SECTIONS: tuple[str, ...] = ("p0", "p1", "p2")
 def apply_theme() -> None:
     """Paper-style seaborn + matplotlib rc setup. Idempotent."""
     sns.set_theme(context="paper", style="ticks", font="serif")
-    plt.rcParams.update({
-        "font.size": 9,
-        "axes.titlesize": 10,
-        "axes.labelsize": 9,
-        "xtick.labelsize": 8,
-        "ytick.labelsize": 7,
-        "axes.linewidth": 0.6,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-        "mathtext.fontset": "stix",
-    })
+    plt.rcParams.update(
+        {
+            "font.size": 9,
+            "axes.titlesize": 10,
+            "axes.labelsize": 9,
+            "xtick.labelsize": 8,
+            "ytick.labelsize": 7,
+            "axes.linewidth": 0.6,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+            "mathtext.fontset": "stix",
+        }
+    )
 
 
 def humanize(label: str) -> str:

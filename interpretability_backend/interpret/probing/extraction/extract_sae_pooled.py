@@ -110,9 +110,14 @@ def extract_sae_pooled(
             # the module-level _SAE_CACHE never evicts on its own.
             clear_sae_cache()
 
-        alive = (pooled > 0).sum(dim=0) >= config.min_active_samples
-        if not config.drop_dead_features:
-            alive = torch.ones(pooled.shape[1], dtype=torch.bool)
+        if config.drop_dead_features:
+            alive = (pooled > 0).sum(dim=0) >= config.min_active_samples
+        else:
+            alive = torch.ones(
+                pooled.shape[1],
+                dtype=torch.bool,
+                device=pooled.device,
+            )
         kept = torch.nonzero(alive, as_tuple=True)[0]
         kept_by_layer[layer] = kept.tolist()
         activations[(layer, key_name)] = pooled[:, alive].cpu().float()
@@ -125,7 +130,15 @@ def extract_sae_pooled(
     metadata = {
         k: v
         for k, v in source.metadata.items()
-        if k not in ("token_offsets", "token_level", "n_tokens", "intermediates")
+        if k
+        not in (
+            "token_offsets",
+            "token_level",
+            "n_tokens",
+            "intermediates",
+            "storage_dtype",
+            "sites",
+        )
     }
     metadata.update(
         {

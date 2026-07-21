@@ -42,10 +42,7 @@ def _normalise(obj: Any) -> Any:
     if isinstance(obj, Path):
         return str(obj)
     if is_dataclass(obj) and not isinstance(obj, type):
-        return {
-            f.name: _normalise(getattr(obj, f.name))
-            for f in dataclasses.fields(obj)
-        }
+        return {f.name: _normalise(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
     if isinstance(obj, dict):
         return {k: _normalise(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -98,9 +95,7 @@ class StageCache:
         if saved != current:
             diffs = _diff_summary(saved, current)
             details = "\n  ".join(diffs[:10])
-            more = (
-                f"\n  ... (+{len(diffs) - 10} more)" if len(diffs) > 10 else ""
-            )
+            more = f"\n  ... (+{len(diffs) - 10} more)" if len(diffs) > 10 else ""
             raise CacheMismatchError(
                 f"Cache sidecar at {yaml_path} disagrees with the current "
                 f"config:\n  {details}{more}\n"
@@ -133,9 +128,7 @@ class StageCache:
             "config": _normalise(config),
             "meta": {
                 "torch_version": str(torch.__version__),
-                "python_version": (
-                    f"{sys.version_info.major}.{sys.version_info.minor}"
-                ),
+                "python_version": (f"{sys.version_info.major}.{sys.version_info.minor}"),
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
             },
         }

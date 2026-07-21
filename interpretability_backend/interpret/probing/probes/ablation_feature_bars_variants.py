@@ -55,9 +55,9 @@ from interpret.probing.probes.ablation_feature_bars import (
 # Pastel palette used by the ``p_pastel`` variant. Three perceptually
 # similar tints so no single p dominates by saturation; ordered p0→p2.
 P_PASTEL: dict[str, str] = {
-    "p0": "#F4B6C2",   # pastel pink
-    "p1": "#A8DADC",   # pastel teal
-    "p2": "#C9C9E8",   # pastel periwinkle
+    "p0": "#F4B6C2",  # pastel pink
+    "p1": "#A8DADC",  # pastel teal
+    "p2": "#C9C9E8",  # pastel periwinkle
 }
 
 # Gray shades used by the ``p_gray_bg`` variant. Faint enough to read as
@@ -81,7 +81,8 @@ C_GAP_SMALL = 0.3
 
 
 def _positions_with_c_gaps(
-    parsed: list[tuple[str, str, str]], gap: float,
+    parsed: list[tuple[str, str, str]],
+    gap: float,
 ) -> np.ndarray:
     """Return one x-position per parsed feature, with extra spacing across c-groups.
 
@@ -144,9 +145,13 @@ def _decorate_x_axis(
         j = boundaries[k + 1][0]
         mid = (positions[i] + positions[j - 1]) / 2
         ax.text(
-            mid, cat_band_y, humanize(cat),
+            mid,
+            cat_band_y,
+            humanize(cat),
             transform=ax.get_xaxis_transform(),
-            ha="center", va="bottom", fontsize=cat_band_size,
+            ha="center",
+            va="bottom",
+            fontsize=cat_band_size,
             color=cat_band_color,
         )
 
@@ -164,7 +169,9 @@ def _decorate_x_axis(
             [min(xs) - 0.35, max(xs) + 0.35],
             [ctx_underline_y, ctx_underline_y],
             transform=ax.get_xaxis_transform(),
-            color="0.7", lw=0.4, clip_on=False,
+            color="0.7",
+            lw=0.4,
+            clip_on=False,
         )
 
     ax.set_xticks(ctx_tick_positions)
@@ -174,9 +181,14 @@ def _decorate_x_axis(
     if not hide_section_labels:
         for i, (_ctx, sec, _cat) in enumerate(parsed):
             ax.text(
-                float(positions[i]), section_label_y, sec,
+                float(positions[i]),
+                section_label_y,
+                sec,
                 transform=ax.get_xaxis_transform(),
-                ha="center", va="top", fontsize=section_label_size, color="0.4",
+                ha="center",
+                va="top",
+                fontsize=section_label_size,
+                color="0.4",
             )
 
 
@@ -253,11 +265,7 @@ def render_variant(
     else:
         positions = np.arange(len(feature_order), dtype=float)
 
-    sub = (
-        df[df["experiment"] == primary]
-        .set_index("feature_name")
-        .reindex(feature_order)
-    )
+    sub = df[df["experiment"] == primary].set_index("feature_name").reindex(feature_order)
     values = sub[value_col].to_numpy()
     yerr = (
         sub[error_col].to_numpy()
@@ -289,7 +297,8 @@ def render_variant(
             ax.add_patch(
                 Rectangle(
                     (float(positions[i]) - bg_width / 2, 0),
-                    bg_width, 1.0,
+                    bg_width,
+                    1.0,
                     transform=trans,
                     facecolor=P_GRAY_BG[sec],
                     edgecolor="none",
@@ -299,10 +308,13 @@ def render_variant(
 
     bar_width = 0.8
     ax.bar(
-        positions, values,
-        width=bar_width, yerr=yerr,
+        positions,
+        values,
+        width=bar_width,
+        yerr=yerr,
         color=bar_colour,
-        edgecolor="0.4", linewidth=0.4,
+        edgecolor="0.4",
+        linewidth=0.4,
         error_kw={"ecolor": "0.35", "elinewidth": 0.6, "capsize": 1.5},
         zorder=2,
     )
@@ -320,7 +332,9 @@ def render_variant(
     ctx_tick_pad = 4.5
 
     _decorate_x_axis(
-        ax, feature_order, positions,
+        ax,
+        feature_order,
+        positions,
         cat_band_color=bold_text_color,
         hide_section_labels=hide_section_labels,
     )
@@ -330,26 +344,44 @@ def render_variant(
 
     ax.set_axisbelow(True)
     ax.yaxis.grid(
-        True, color="#D8D8D8", linewidth=0.7, linestyle="-",
-        which="major", zorder=0,
+        True,
+        color="#D8D8D8",
+        linewidth=0.7,
+        linestyle="-",
+        which="major",
+        zorder=0,
     )
     ax.xaxis.grid(False)
     if y_major_step is not None:
         ax.yaxis.set_major_locator(MultipleLocator(y_major_step))
         ax.yaxis.set_minor_locator(MultipleLocator(y_major_step / 2))
         ax.yaxis.grid(
-            True, color="#ECECEC", linewidth=0.5, linestyle="-",
-            which="minor", zorder=0,
+            True,
+            color="#ECECEC",
+            linewidth=0.5,
+            linestyle="-",
+            which="minor",
+            zorder=0,
         )
         ax.tick_params(
-            axis="y", which="minor", length=2.5, width=0.5, color=text_color,
+            axis="y",
+            which="minor",
+            length=2.5,
+            width=0.5,
+            color=text_color,
         )
 
     ax.tick_params(
-        axis="x", labelsize=11, labelcolor=text_color, pad=ctx_tick_pad,
+        axis="x",
+        labelsize=11,
+        labelcolor=text_color,
+        pad=ctx_tick_pad,
     )
     ax.tick_params(
-        axis="y", labelsize=tick_label_size, labelcolor=text_color, pad=ctx_tick_pad,
+        axis="y",
+        labelsize=tick_label_size,
+        labelcolor=text_color,
+        pad=ctx_tick_pad,
     )
 
     # Top headroom so the upper-right legend doesn't sit on the
@@ -363,7 +395,9 @@ def render_variant(
     if use_pastel:
         handles = [
             Patch(
-                facecolor=P_PASTEL[sec], edgecolor="0.4", linewidth=0.4,
+                facecolor=P_PASTEL[sec],
+                edgecolor="0.4",
+                linewidth=0.4,
                 label=sec,
             )
             for sec in ("p0", "p1", "p2")

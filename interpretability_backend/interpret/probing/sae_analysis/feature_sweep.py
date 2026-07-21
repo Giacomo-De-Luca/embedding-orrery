@@ -29,6 +29,7 @@ from interpret.probing.configs.sae_analysis import (
     FeatureSweepConfig,
 )
 from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
+from interpret.probing.sae_analysis.directions import load_direction_coef
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
@@ -51,7 +52,7 @@ def run_feature_sweep(
     and a single global ranking + sweep runs over the pool.
 
     Args:
-        sae_dataset: SAE-encoded dataset; expects `(layer, "sae_feat")` keys
+        sae_dataset: SAE-encoded dataset; expects `(layer, intermediate)` (any intermediate in `SAE_INTERMEDIATES`) keys
             and `metadata["kept_by_layer"]` mapping filtered column index ->
             original SAE feature index.
         target_values: Aligned target array of length N.
@@ -195,14 +196,19 @@ def _run_pooled(
         )
         if config.ranking == "lasso":
             assert directions_dir is not None
-            npz_path = directions_dir / f"L{layer}_{intermediate}_{config.source_probe}.npz"
-            if not npz_path.exists():
+            raw_coef = load_direction_coef(
+                directions_dir,
+                layer,
+                intermediate,
+                config.source_probe,
+            )
+            if raw_coef is None:
                 print(
                     f"  feature_sweep[pooled] layer {layer}: no lasso "
-                    f"directions at {npz_path}, skipping pooled sweep",
+                    f"directions, skipping pooled sweep",
                 )
                 return {}
-            coef = np.load(str(npz_path))["coef"].reshape(-1)
+            coef = raw_coef.reshape(-1)
             if coef.shape[0] != feat.shape[1]:
                 print(
                     f"  feature_sweep[pooled] layer {layer}: lasso coef "
@@ -344,10 +350,15 @@ def _compute_ranking(
         return _pearson_per_feature(feat, target_values)
     if ranking == "lasso":
         assert directions_dir is not None
-        npz_path = directions_dir / f"L{layer}_{intermediate}_{source_probe}.npz"
-        if not npz_path.exists():
+        raw_coef = load_direction_coef(
+            directions_dir,
+            layer,
+            intermediate,
+            source_probe,
+        )
+        if raw_coef is None:
             return None
-        coef = np.load(str(npz_path))["coef"].reshape(-1)
+        coef = raw_coef.reshape(-1)
         if coef.shape[0] != feat.shape[1]:
             print(
                 f"  feature_sweep layer {layer}: lasso coef shape "

@@ -67,11 +67,15 @@ def consolidate(config: ConsolidateConfig | None = None) -> dict[str, Path]:
     outputs: dict[str, Path] = {}
     outputs["long"] = _write_long(long_df, config)
     outputs["wide_primary"] = _write_wide(
-        long_df, config.primary_metric, config,
+        long_df,
+        config.primary_metric,
+        config,
     )
     if config.secondary_metric != config.primary_metric:
         outputs["wide_secondary"] = _write_wide(
-            long_df, config.secondary_metric, config,
+            long_df,
+            config.secondary_metric,
+            config,
         )
     outputs["best"] = _write_best(long_df, config)
 
@@ -80,11 +84,14 @@ def consolidate(config: ConsolidateConfig | None = None) -> dict[str, Path]:
         from interpret.probing.visualisations import (
             ConsolidatedVisualiser,
         )
+
         ConsolidatedVisualiser(
-            config.output_dir, primary_metric=config.primary_metric,
+            config.output_dir,
+            primary_metric=config.primary_metric,
         ).render()
     except Exception as exc:  # noqa: BLE001
         import traceback as _tb
+
         print(f"  [warn] consolidated visualisations failed: {exc}")
         _tb.print_exc()
 
@@ -139,7 +146,9 @@ def _collect(config: ConsolidateConfig) -> pd.DataFrame:
                 continue
             if (nested / "experiment.yaml").exists():
                 _ingest_experiment(
-                    nested, frames, prefix=f"{child.name}/{nested.name}",
+                    nested,
+                    frames,
+                    prefix=f"{child.name}/{nested.name}",
                 )
     if not frames:
         return pd.DataFrame()
@@ -158,7 +167,10 @@ def _is_walkable(path: Path, config: ConsolidateConfig) -> bool:
 
 
 def _ingest_experiment(
-    exp_dir: Path, frames: list[pd.DataFrame], *, prefix: str,
+    exp_dir: Path,
+    frames: list[pd.DataFrame],
+    *,
+    prefix: str,
 ) -> None:
     """Read one experiment's probe results into ``frames``."""
     meta = _load_experiment_meta(exp_dir)
@@ -196,22 +208,24 @@ def _write_long(df: pd.DataFrame, config: ConsolidateConfig) -> Path:
 
 
 def _write_wide(
-    df: pd.DataFrame, metric: str, config: ConsolidateConfig,
+    df: pd.DataFrame,
+    metric: str,
+    config: ConsolidateConfig,
 ) -> Path:
     if metric not in df.columns:
         raise ValueError(f"Metric {metric!r} not in consolidated columns.")
     pivot = df.pivot_table(
-        index=["experiment", "extraction", "manifest_source",
-               "target", "layer", "intermediate"],
+        index=["experiment", "extraction", "manifest_source", "target", "layer", "intermediate"],
         columns="probe_kind",
         values=metric,
         aggfunc="max",
         dropna=False,
     ).reset_index()
     probe_cols = [
-        c for c in pivot.columns
-        if c not in {"experiment", "extraction", "manifest_source",
-                     "target", "layer", "intermediate"}
+        c
+        for c in pivot.columns
+        if c
+        not in {"experiment", "extraction", "manifest_source", "target", "layer", "intermediate"}
     ]
     if probe_cols:
         pivot = pivot.dropna(subset=probe_cols, how="all")
@@ -237,8 +251,11 @@ def _write_best(df: pd.DataFrame, config: ConsolidateConfig) -> Path:
         return out
     higher = HIGHER_IS_BETTER.get(primary, True)
     group_cols = [
-        "experiment", "extraction", "manifest_source",
-        "target", "probe_kind",
+        "experiment",
+        "extraction",
+        "manifest_source",
+        "target",
+        "probe_kind",
     ]
     if higher:
         idx = valid.groupby(group_cols, dropna=False)[primary].idxmax()
@@ -268,8 +285,11 @@ def _write_markdown(df: pd.DataFrame, config: ConsolidateConfig) -> Path:
     valid = df[df[primary].notna()]
     higher = HIGHER_IS_BETTER.get(primary, True)
     group_cols = [
-        "experiment", "extraction", "manifest_source",
-        "target", "probe_kind",
+        "experiment",
+        "extraction",
+        "manifest_source",
+        "target",
+        "probe_kind",
     ]
 
     lines.append(

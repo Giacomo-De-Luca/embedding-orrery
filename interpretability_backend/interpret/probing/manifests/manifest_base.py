@@ -52,7 +52,9 @@ class ManifestBuilder(ABC):
 
     @abstractmethod
     def get_rated_samples(
-        self, source: str, column: str,
+        self,
+        source: str,
+        column: str,
     ) -> tuple[list[str], np.ndarray]:
         """Return samples + target values for a (source, column) pair.
 

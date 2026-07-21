@@ -83,8 +83,7 @@ def resolve_folds(
     if n_folds:
         if groups is not None:
             raise NotImplementedError(
-                "`n_folds` together with `groups` is not supported. "
-                "Drop one or the other.",
+                "`n_folds` together with `groups` is not supported. Drop one or the other.",
             )
         if is_classification:
             if stratify_y is None:
@@ -92,12 +91,16 @@ def resolve_folds(
                     "`stratify_y` required for classification k-fold.",
                 )
             splitter = StratifiedKFold(
-                n_splits=n_folds, shuffle=True, random_state=seed,
+                n_splits=n_folds,
+                shuffle=True,
+                random_state=seed,
             )
             iter_splits = splitter.split(np.zeros(n), np.asarray(stratify_y))
         else:
             splitter = KFold(
-                n_splits=n_folds, shuffle=True, random_state=seed,
+                n_splits=n_folds,
+                shuffle=True,
+                random_state=seed,
             )
             iter_splits = splitter.split(np.zeros(n))
         return [
@@ -107,8 +110,7 @@ def resolve_folds(
 
     if train_split is None:
         raise ValueError(
-            "`train_split` required when `n_folds` and "
-            "`indices_override` are both unset.",
+            "`train_split` required when `n_folds` and `indices_override` are both unset.",
         )
 
     if groups is None:
@@ -124,11 +126,12 @@ def resolve_folds(
     n_unique = len(np.unique(groups))
     if n_unique < 2:
         raise ValueError(
-            f"Group split needs at least 2 unique groups; got "
-            f"{n_unique}.",
+            f"Group split needs at least 2 unique groups; got {n_unique}.",
         )
     splitter = GroupShuffleSplit(
-        n_splits=1, train_size=train_split, random_state=seed,
+        n_splits=1,
+        train_size=train_split,
+        random_state=seed,
     )
     train_idx, val_idx = next(splitter.split(np.zeros(n), groups=groups))
     return [("fold_0", np.asarray(train_idx), np.asarray(val_idx))]

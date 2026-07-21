@@ -66,12 +66,16 @@ class GlasgowManifestBuilder(ManifestBuilder):
         cfg = paths if paths is not None else GlasgowPaths()
 
         self._concreteness_df = self._load_source(
-            cfg.concreteness, source_name="concreteness",
-            word_column="Word", sep="\t",
+            cfg.concreteness,
+            source_name="concreteness",
+            word_column="Word",
+            sep="\t",
         )
         self._glasgow_df = self._load_source(
-            cfg.glasgow, source_name="glasgow",
-            word_column="word", sep=",",
+            cfg.glasgow,
+            source_name="glasgow",
+            word_column="word",
+            sep=",",
         )
 
         conc_words = set(self._concreteness_df["word_lower"])
@@ -81,9 +85,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
         else:
             self._samples = sorted(conc_words | glas_words)
 
-        self._default_targets = (
-            list(default_targets) if default_targets else ["concreteness"]
-        )
+        self._default_targets = list(default_targets) if default_targets else ["concreteness"]
         self._glasgow_only = glasgow_only
 
         overlap = conc_words & glas_words
@@ -121,9 +123,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
             words, ratings = self.get_rated_samples(source, col)
             rated_sets[col] = dict(zip(words, ratings))
 
-        common_words = sorted(
-            set.intersection(*(set(d.keys()) for d in rated_sets.values()))
-        )
+        common_words = sorted(set.intersection(*(set(d.keys()) for d in rated_sets.values())))
 
         rows = [
             {
@@ -135,7 +135,9 @@ class GlasgowManifestBuilder(ManifestBuilder):
         return pd.DataFrame(rows)
 
     def get_rated_samples(
-        self, source: str, column: str,
+        self,
+        source: str,
+        column: str,
     ) -> tuple[list[str], np.ndarray]:
         """Return words + ratings for `(source, column)`.
 
@@ -152,11 +154,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
                 f"Unknown source {source!r}. Valid: {valid}",
             ) from e
 
-        df = (
-            self._concreteness_df
-            if src_enum is RatingSource.CONCRETENESS
-            else self._glasgow_df
-        )
+        df = self._concreteness_df if src_enum is RatingSource.CONCRETENESS else self._glasgow_df
         if column not in df.columns:
             raise ValueError(
                 f"Column {column!r} not in {src_enum.value} dataset. "
@@ -166,7 +164,8 @@ class GlasgowManifestBuilder(ManifestBuilder):
 
     @staticmethod
     def _filter_rated(
-        df: pd.DataFrame, column: str,
+        df: pd.DataFrame,
+        column: str,
     ) -> tuple[list[str], np.ndarray]:
         """Drop nulls, return aligned words + values.
 
@@ -206,9 +205,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
         """
         df = pd.read_csv(path, sep=sep)
         df = df.dropna(subset=[word_column]).copy()
-        df["word_lower"] = (
-            df[word_column].astype(str).str.lower().str.strip()
-        )
+        df["word_lower"] = df[word_column].astype(str).str.lower().str.strip()
         df = df[df["word_lower"].str.len() > 0]
 
         dups = df["word_lower"].value_counts()
@@ -229,9 +226,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
         in both sources) — callers must specify explicitly via
         `get_rated_samples(source, column)`.
         """
-        in_conc = (
-            column in self._concreteness_df.columns and column != "word_lower"
-        )
+        in_conc = column in self._concreteness_df.columns and column != "word_lower"
         in_glas = column in self._glasgow_df.columns and column != "word_lower"
         if in_conc and in_glas:
             raise ValueError(

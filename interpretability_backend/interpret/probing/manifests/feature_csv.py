@@ -106,25 +106,17 @@ class FeatureCSVManifestBuilder(ManifestBuilder):
             for col, value in self._filters.items():
                 if col not in df.columns:
                     raise ValueError(
-                        f"Filter column {col!r} not in CSV. "
-                        f"Available: {df.columns.tolist()}",
+                        f"Filter column {col!r} not in CSV. Available: {df.columns.tolist()}",
                     )
                 df = df[df[col] == value]
             df = df.reset_index(drop=True)
             if df.empty:
                 raise ValueError(
-                    f"Filters {self._filters} produced an empty manifest "
-                    f"from {self._path}.",
+                    f"Filters {self._filters} produced an empty manifest from {self._path}.",
                 )
 
-        self._drop_csv_path = (
-            Path(drop_sample_ids_csv)
-            if drop_sample_ids_csv is not None else None
-        )
-        self._drop_reasons = (
-            list(drop_sample_ids_reasons)
-            if drop_sample_ids_reasons else None
-        )
+        self._drop_csv_path = Path(drop_sample_ids_csv) if drop_sample_ids_csv is not None else None
+        self._drop_reasons = list(drop_sample_ids_reasons) if drop_sample_ids_reasons else None
         self._n_dropped = 0
         if self._drop_csv_path is not None:
             if not self._drop_csv_path.exists():
@@ -168,8 +160,7 @@ class FeatureCSVManifestBuilder(ManifestBuilder):
             counts_before = df[balance_classes_on].value_counts()
             if counts_before.empty:
                 raise ValueError(
-                    f"Column {balance_classes_on!r} has no non-null "
-                    f"values; cannot balance.",
+                    f"Column {balance_classes_on!r} has no non-null values; cannot balance.",
                 )
             min_count = int(counts_before.min())
             rng = np.random.default_rng(balance_seed)
@@ -206,10 +197,7 @@ class FeatureCSVManifestBuilder(ManifestBuilder):
         if self._filters:
             bits.append(f"filters={self._filters}")
         if self._n_dropped:
-            reason_str = (
-                f"reasons={self._drop_reasons}"
-                if self._drop_reasons else "all reasons"
-            )
+            reason_str = f"reasons={self._drop_reasons}" if self._drop_reasons else "all reasons"
             bits.append(f"dropped {self._n_dropped} rows ({reason_str})")
         if self._n_balanced_dropped:
             bits.append(
@@ -248,7 +236,9 @@ class FeatureCSVManifestBuilder(ManifestBuilder):
         return self._df.copy()
 
     def get_rated_samples(
-        self, source: str, column: str,
+        self,
+        source: str,
+        column: str,
     ) -> tuple[list[str], np.ndarray]:
         if source != SOURCE_NAME:
             raise ValueError(
@@ -256,8 +246,7 @@ class FeatureCSVManifestBuilder(ManifestBuilder):
             )
         if column not in self._target_columns:
             raise ValueError(
-                f"Column {column!r} not in target_columns "
-                f"{self._target_columns}.",
+                f"Column {column!r} not in target_columns {self._target_columns}.",
             )
         valid = self._df[self._df[column].notna()]
         if valid.empty:

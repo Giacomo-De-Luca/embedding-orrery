@@ -120,19 +120,15 @@ class ProbeAblationRunner:
         ablation_root.mkdir(parents=True, exist_ok=True)
 
         csv_extractions = [
-            e for e in self.config.extractions
-            if isinstance(e, CSVFeaturesExtractionConfig)
+            e for e in self.config.extractions if isinstance(e, CSVFeaturesExtractionConfig)
         ]
         if not csv_extractions:
             print(
-                "ProbeAblationRunner: no csv_features extractions in config — "
-                "nothing to ablate.",
+                "ProbeAblationRunner: no csv_features extractions in config — nothing to ablate.",
             )
             return ablation_root
 
-        ablation_specs = [
-            s for s in self.config.probes if self._is_ablatable(s)
-        ]
+        ablation_specs = [s for s in self.config.probes if self._is_ablatable(s)]
         if not ablation_specs:
             print(
                 "ProbeAblationRunner: no MLP or sklearn-classification "
@@ -149,8 +145,7 @@ class ProbeAblationRunner:
                 target_values = self._resolve_targets(target)
                 for spec in ablation_specs:
                     out_dir = (
-                        ablation_root / extraction.name
-                        / (target.name or target.column) / spec.name
+                        ablation_root / extraction.name / (target.name or target.column) / spec.name
                     )
                     out_dir.mkdir(parents=True, exist_ok=True)
                     ctx = _AblationContext(
@@ -180,7 +175,8 @@ class ProbeAblationRunner:
     # ── Loading helpers ─────────────────────────────────────────────────────
 
     def _load_dataset(
-        self, extraction: CSVFeaturesExtractionConfig,
+        self,
+        extraction: CSVFeaturesExtractionConfig,
     ) -> ActivationDataset:
         cache_path = self.cache_dir / f"{extraction.cache_filename()}.pt"
         if not cache_path.exists():
@@ -224,7 +220,8 @@ class ProbeAblationRunner:
             cls = self.config.manifest.resolve()
             self._manifest = cls(**self.config.manifest.kwargs)
         rated, values = self._manifest.get_rated_samples(
-            target.source, target.column,
+            target.source,
+            target.column,
         )
         # The cached extraction was saved over `manifest.samples` in order;
         # for csv_features the rated set IS the full sample list with the
@@ -246,7 +243,8 @@ class ProbeAblationRunner:
     # ── Ablation loop ──────────────────────────────────────────────────────
 
     def _resolve_splits(
-        self, ctx: _AblationContext,
+        self,
+        ctx: _AblationContext,
     ) -> list[tuple[str, int, tuple[np.ndarray, np.ndarray] | None]]:
         """Return (label, seed, indices_override) for every split to run.
 
@@ -272,14 +270,9 @@ class ProbeAblationRunner:
                 n_folds=spec.n_folds,
                 seed=spec.seed,
                 is_classification=is_classification,
-                stratify_y=(
-                    np.asarray(ctx.targets) if is_classification else None
-                ),
+                stratify_y=(np.asarray(ctx.targets) if is_classification else None),
             )
-            return [
-                (label, spec.seed, (train, val))
-                for label, train, val in folds
-            ]
+            return [(label, spec.seed, (train, val)) for label, train, val in folds]
 
         seeds = self.config.ablation_seeds or [spec.seed]
         return [(f"seed_{s}", s, None) for s in seeds]
@@ -308,33 +301,35 @@ class ProbeAblationRunner:
 
         for split_label, seed, indices_override in splits:
             baseline_metrics = self._train_variant(
-                ctx, X=full_X, label=f"baseline_{split_label}",
-                seed=seed, indices_override=indices_override,
+                ctx,
+                X=full_X,
+                label=f"baseline_{split_label}",
+                seed=seed,
+                indices_override=indices_override,
             )
             baseline_acc = baseline_metrics.get("val_accuracy")
             baseline_loss = baseline_metrics.get("val_loss")
             # sklearn classification writes val_loss as NaN; format
             # defensively so the print never crashes the run.
-            acc_str = (
-                f"{baseline_acc:.4f}" if baseline_acc is not None else "nan"
-            )
-            loss_str = (
-                f"{baseline_loss:.4f}" if baseline_loss is not None else "nan"
-            )
+            acc_str = f"{baseline_acc:.4f}" if baseline_acc is not None else "nan"
+            loss_str = f"{baseline_loss:.4f}" if baseline_loss is not None else "nan"
             print(
-                f"  {split_label} baseline val_accuracy={acc_str} "
-                f"val_loss={loss_str}",
+                f"  {split_label} baseline val_accuracy={acc_str} val_loss={loss_str}",
             )
 
             for i in tqdm(
-                range(n_features), desc=f"{split_label} per-feature",
+                range(n_features),
+                desc=f"{split_label} per-feature",
             ):
                 mask = torch.ones(n_features, dtype=torch.bool)
                 mask[i] = False
                 X_dropped = full_X[:, mask]
                 metrics = self._train_variant(
-                    ctx, X=X_dropped, label=f"ablate_{i}_{split_label}",
-                    seed=seed, indices_override=indices_override,
+                    ctx,
+                    X=X_dropped,
+                    label=f"ablate_{i}_{split_label}",
+                    seed=seed,
+                    indices_override=indices_override,
                 )
                 ablated_acc = metrics.get("val_accuracy")
                 ablated_loss = metrics.get("val_loss")
@@ -346,7 +341,8 @@ class ProbeAblationRunner:
                         "baseline_val_accuracy": baseline_acc,
                         "ablated_val_accuracy": ablated_acc,
                         "accuracy_drop": (
-                            None if baseline_acc is None or ablated_acc is None
+                            None
+                            if baseline_acc is None or ablated_acc is None
                             else baseline_acc - ablated_acc
                         ),
                         "baseline_val_loss": baseline_loss,
@@ -372,7 +368,8 @@ class ProbeAblationRunner:
         feat_long_path = ctx.output_dir / "feature_importance.csv"
         feat_df.to_csv(feat_long_path, index=False)
         feat_summary = self._summarise(
-            feat_df, group_cols=["feature_index", "feature_name"],
+            feat_df,
+            group_cols=["feature_index", "feature_name"],
         )
         feat_summary_path = ctx.output_dir / "feature_importance_summary.csv"
         feat_summary.to_csv(feat_summary_path, index=False)
@@ -440,13 +437,12 @@ class ProbeAblationRunner:
                     "group": group_name,
                     "n_features_dropped": len(indices),
                     "feature_indices": ",".join(str(i) for i in indices),
-                    "feature_names": ",".join(
-                        ctx.feature_columns[i] for i in indices
-                    ),
+                    "feature_names": ",".join(ctx.feature_columns[i] for i in indices),
                     "baseline_val_accuracy": baseline_acc,
                     "ablated_val_accuracy": ablated_acc,
                     "accuracy_drop": (
-                        None if baseline_acc is None or ablated_acc is None
+                        None
+                        if baseline_acc is None or ablated_acc is None
                         else baseline_acc - ablated_acc
                     ),
                     "baseline_val_loss": baseline_loss,
@@ -469,9 +465,7 @@ class ProbeAblationRunner:
         df.to_csv(long_path, index=False)
         summary = self._summarise(df, group_cols=["axis", "group"])
         # `n_features_dropped` is constant per (axis, group); join it in.
-        sizes = df.drop_duplicates(["axis", "group"])[
-            ["axis", "group", "n_features_dropped"]
-        ]
+        sizes = df.drop_duplicates(["axis", "group"])[["axis", "group", "n_features_dropped"]]
         summary = summary.merge(sizes, on=["axis", "group"], how="left")
         summary_path = ctx.output_dir / f"group_{axis}_importance_summary.csv"
         summary.to_csv(summary_path, index=False)
@@ -480,7 +474,8 @@ class ProbeAblationRunner:
 
     @staticmethod
     def _summarise(
-        df: pd.DataFrame, group_cols: list[str],
+        df: pd.DataFrame,
+        group_cols: list[str],
     ) -> pd.DataFrame:
         """Aggregate per-split accuracy_drops to mean / std / min / max / count.
 
@@ -492,23 +487,27 @@ class ProbeAblationRunner:
         working unchanged when fed the summary instead of a long-form df.
         """
         agg = (
-            df.groupby(group_cols, sort=False)["accuracy_drop"].agg(
+            df.groupby(group_cols, sort=False)["accuracy_drop"]
+            .agg(
                 accuracy_drop="mean",
                 std_accuracy_drop="std",
                 min_accuracy_drop="min",
                 max_accuracy_drop="max",
                 n_splits="count",
-            ).reset_index()
+            )
+            .reset_index()
         )
         means = (
-            df.groupby(group_cols, sort=False)[
-                ["baseline_val_accuracy", "ablated_val_accuracy"]
-            ].mean().reset_index()
+            df.groupby(group_cols, sort=False)[["baseline_val_accuracy", "ablated_val_accuracy"]]
+            .mean()
+            .reset_index()
         )
         return agg.merge(means, on=group_cols, how="left")
 
     def _aggregate_per_feature(
-        self, df: pd.DataFrame, ctx: _AblationContext,
+        self,
+        df: pd.DataFrame,
+        ctx: _AblationContext,
     ) -> None:
         """Aggregate per-feature drops by axis without retraining.
 
@@ -562,7 +561,9 @@ class ProbeAblationRunner:
 
     @classmethod
     def _group_feature_indices(
-        cls, feature_columns: list[str], axis: str,
+        cls,
+        feature_columns: list[str],
+        axis: str,
     ) -> dict[str, list[int]]:
         if axis not in _AXIS_INDEX:
             raise ValueError(
@@ -594,18 +595,21 @@ class ProbeAblationRunner:
         (train_idx, val_idx) — used by the k-fold path so every fold
         sees the same prescribed split partition.
         """
-        spec = (
-            ctx.spec if seed is None
-            else dataclasses.replace(ctx.spec, seed=seed)
-        )
+        spec = ctx.spec if seed is None else dataclasses.replace(ctx.spec, seed=seed)
         if isinstance(spec, MLPProbeSpec):
             return self._train_mlp_variant(
-                ctx, X=X, label=label, spec=spec,
+                ctx,
+                X=X,
+                label=label,
+                spec=spec,
                 indices_override=indices_override,
             )
         if isinstance(spec, SklearnProbeSpec):
             return self._train_sklearn_variant(
-                ctx, X=X, label=label, spec=spec,
+                ctx,
+                X=X,
+                label=label,
+                spec=spec,
                 indices_override=indices_override,
             )
         raise TypeError(f"Unsupported probe spec for ablation: {type(spec)}")
@@ -690,7 +694,10 @@ class ProbeAblationRunner:
 
     @staticmethod
     def _build_variant_dataset(
-        ctx: _AblationContext, *, X: torch.Tensor, label: str,
+        ctx: _AblationContext,
+        *,
+        X: torch.Tensor,
+        label: str,
     ) -> ActivationDataset:
         layer, intermediate = ctx.layer_key
         return ActivationDataset(
@@ -702,6 +709,7 @@ class ProbeAblationRunner:
                 "n_features_used": int(X.shape[1]),
             },
         )
+
 
 #: Backward-compat alias for the old class name. The runner now ablates
 #: any classification probe, not just MLP — but downstream callers may
@@ -718,8 +726,7 @@ def run_from_yaml(yaml_path: Path | str) -> Path:
 def main() -> None:
     if len(sys.argv) != 2:
         print(
-            "Usage: python -m interpret.probing.probes."
-            "mlp_ablation <path/to/experiment.yaml>",
+            "Usage: python -m interpret.probing.probes.mlp_ablation <path/to/experiment.yaml>",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -107,6 +107,17 @@ class TestValidation:
         with pytest.raises(ValueError, match="layers"):
             TokenLevelExtractionConfig(name="t", family="gemma", layers=[])
 
+    def test_gemma_device_knob_rejected(self):
+        """GemmaPytorchInference has no device parameter — fail loud
+        instead of silently ignoring the config field."""
+        with pytest.raises(ValueError, match="device"):
+            TokenLevelExtractionConfig(
+                name="t",
+                family="gemma",
+                layers=[0],
+                device="cuda",
+            )
+
     def test_unknown_site_raises(self):
         with pytest.raises(ValueError, match="Unknown site"):
             SAEPooledExtractionConfig(

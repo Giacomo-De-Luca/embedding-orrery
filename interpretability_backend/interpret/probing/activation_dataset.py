@@ -78,8 +78,7 @@ class ActivationDataset:
         if key not in self.activations:
             available = list(self.activations.keys())
             raise KeyError(
-                f"No activations for layer {layer}/{intermediate}. "
-                f"Available: {available}"
+                f"No activations for layer {layer}/{intermediate}. Available: {available}"
             )
         return self.activations[key], self.targets
 
@@ -102,16 +101,14 @@ class ActivationDataset:
         missing = [s for s in sample_ids if s not in id_to_idx]
         if missing:
             raise KeyError(
-                f"{len(missing)} sample_ids not in dataset. "
-                f"First 5: {missing[:5]}",
+                f"{len(missing)} sample_ids not in dataset. First 5: {missing[:5]}",
             )
         indices = torch.tensor(
-            [id_to_idx[s] for s in sample_ids], dtype=torch.long,
+            [id_to_idx[s] for s in sample_ids],
+            dtype=torch.long,
         )
         new_acts = {key: tensor[indices] for key, tensor in self.activations.items()}
-        new_targets = (
-            self.targets[indices] if self.targets.numel() > 0 else self.targets
-        )
+        new_targets = self.targets[indices] if self.targets.numel() > 0 else self.targets
         new_metadata = dict(self.metadata)
         new_metadata["subset_n"] = len(sample_ids)
         return ActivationDataset(

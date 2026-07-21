@@ -48,7 +48,7 @@ def run_lasso_alpha_sweep(
     """Sweep Lasso alpha per SAE layer, save curves + per-alpha directions.
 
     Args:
-        sae_dataset: SAE-encoded dataset with `(layer, "sae_feat")` keys.
+        sae_dataset: SAE-encoded dataset with `(layer, intermediate)` (any intermediate in `SAE_INTERMEDIATES`) keys.
         target_values: Aligned target array of length N.
         config: alphas, n_splits.
         output_dir: Where `lasso_alpha_sweep.json`, plots, and the

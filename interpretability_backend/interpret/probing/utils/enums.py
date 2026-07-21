@@ -13,10 +13,10 @@ class TokenPosition(Enum):
     + downstream pooling for per-experiment strategy comparison.
     """
 
-    LAST = "last"            # activation[:, -1, :]
-    FIRST = "first"          # activation[:, 0, :]
-    MEAN = "mean"            # activation.mean(dim=1)
-    MAX = "max"              # activation.max(dim=1).values — per-feature max across tokens
+    LAST = "last"  # activation[:, -1, :]
+    FIRST = "first"  # activation[:, 0, :]
+    MEAN = "mean"  # activation.mean(dim=1)
+    MAX = "max"  # activation.max(dim=1).values — per-feature max across tokens
     WORD_LAST = "word_last"  # last token of the target word within the prompt
 
 

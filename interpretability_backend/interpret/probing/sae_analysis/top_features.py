@@ -21,6 +21,7 @@ from interpret.probing.configs.sae_analysis import (
     TopFeaturesConfig,
 )
 from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
+from interpret.probing.sae_analysis.directions import load_direction_coef
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
@@ -60,7 +61,7 @@ def run_top_features(
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
         if intermediate not in SAE_INTERMEDIATES:
             continue
-        raw_coef = _load_direction_coef(
+        raw_coef = load_direction_coef(
             directions_dir,
             layer,
             intermediate,
@@ -110,40 +111,6 @@ def run_top_features(
 
     _print_summary(result)
     return result
-
-
-def _load_direction_coef(
-    directions_dir: Path,
-    layer: int,
-    intermediate: str,
-    source_probe: str,
-) -> np.ndarray | None:
-    """Load a probe's coef for one (layer, intermediate).
-
-    Single-split runs write `L{layer}_{intermediate}_{kind}.npz`; k-fold
-    runs write `..._fold_{i}.npz` instead. When only fold files exist,
-    the per-fold coefs are averaged (signed mean — folds share the class
-    ordering, so the mean keeps meaningful magnitude AND sign).
-    """
-    stem = f"L{layer}_{intermediate}_{source_probe}"
-    npz_path = directions_dir / f"{stem}.npz"
-    if npz_path.exists():
-        return np.asarray(np.load(str(npz_path))["coef"])
-
-    fold_paths = sorted(directions_dir.glob(f"{stem}_fold_*.npz"))
-    if not fold_paths:
-        print(
-            f"  layer {layer}: no directions at {npz_path} (nor {stem}_fold_*.npz), skipping",
-        )
-        return None
-    coefs = [np.asarray(np.load(str(p))["coef"]) for p in fold_paths]
-    shapes = {c.shape for c in coefs}
-    if len(shapes) != 1:
-        print(
-            f"  layer {layer}: fold coef shapes differ ({shapes}), skipping",
-        )
-        return None
-    return np.mean(np.stack(coefs, axis=0), axis=0)
 
 
 def _print_summary(result: dict[int, list[dict]]) -> None:

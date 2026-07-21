@@ -66,8 +66,7 @@ def _ordered_features(df: pd.DataFrame) -> list[str]:
     cat_rank = {c: i for i, c in enumerate(CATEGORIES)}
     return (
         df.assign(_cat_rank=df["cat"].map(cat_rank).fillna(len(CATEGORIES)))
-        .sort_values(["_cat_rank", "ctx", "sec"])
-        ["feature_name"]
+        .sort_values(["_cat_rank", "ctx", "sec"])["feature_name"]
         .drop_duplicates()
         .tolist()
     )
@@ -108,9 +107,13 @@ def _decorate_x_axis(
         i, cat = boundaries[k]
         j = boundaries[k + 1][0]
         ax.text(
-            (i + j - 1) / 2, cat_band_y, humanize(cat),
+            (i + j - 1) / 2,
+            cat_band_y,
+            humanize(cat),
             transform=ax.get_xaxis_transform(),
-            ha="center", va="bottom", fontsize=cat_band_size,
+            ha="center",
+            va="bottom",
+            fontsize=cat_band_size,
             color=cat_band_color,
         )
 
@@ -133,7 +136,9 @@ def _decorate_x_axis(
             [min(idxs) - 0.35, max(idxs) + 0.35],
             [ctx_underline_y, ctx_underline_y],
             transform=ax.get_xaxis_transform(),
-            color="0.7", lw=0.4, clip_on=False,
+            color="0.7",
+            lw=0.4,
+            clip_on=False,
         )
 
     # Faint vertical gridlines between within-category context groups.
@@ -143,7 +148,10 @@ def _decorate_x_axis(
             curr_ctx, _, curr_cat = parsed[i]
             if prev_ctx != curr_ctx and prev_cat == curr_cat:
                 ax.axvline(
-                    i - 0.5, color="#E5E5E5", lw=0.5, zorder=0,
+                    i - 0.5,
+                    color="#E5E5E5",
+                    lw=0.5,
+                    zorder=0,
                 )
 
     ax.set_xticks(ctx_tick_positions)
@@ -152,9 +160,14 @@ def _decorate_x_axis(
 
     for i, (_ctx, sec, _cat) in enumerate(parsed):
         ax.text(
-            i, section_label_y, sec,
+            i,
+            section_label_y,
+            sec,
             transform=ax.get_xaxis_transform(),
-            ha="center", va="top", fontsize=section_label_size, color="0.4",
+            ha="center",
+            va="top",
+            fontsize=section_label_size,
+            color="0.4",
         )
 
 
@@ -193,9 +206,7 @@ def render_single_experiment(
     apply_theme()
     df = _attach_axes(pd.read_csv(summary_csv))
     feature_order = _ordered_features(df)
-    sub = (
-        df.set_index("feature_name").reindex(feature_order).reset_index()
-    )
+    sub = df.set_index("feature_name").reindex(feature_order).reset_index()
     means = sub["accuracy_drop"].to_numpy()
     if show_errorbars and "std_accuracy_drop" in sub.columns:
         yerr = sub["std_accuracy_drop"].to_numpy()
@@ -207,8 +218,12 @@ def render_single_experiment(
 
     fig, ax = plt.subplots(figsize=(14.0, 4.6), constrained_layout=True)
     ax.bar(
-        x, means, yerr=yerr, color=colors,
-        edgecolor="0.4", linewidth=0.4,
+        x,
+        means,
+        yerr=yerr,
+        color=colors,
+        edgecolor="0.4",
+        linewidth=0.4,
         error_kw={"ecolor": "0.35", "elinewidth": 0.6, "capsize": 1.5},
     )
     ax.axhline(0, color="0.3", lw=0.6, zorder=2)
@@ -216,7 +231,8 @@ def render_single_experiment(
     _decorate_x_axis(ax, feature_order)
     ax.set_xlabel("")
     ax.set_ylabel(
-        r"$\Delta$ val. accuracy (baseline $-$ ablated)", fontsize=9,
+        r"$\Delta$ val. accuracy (baseline $-$ ablated)",
+        fontsize=9,
     )
     if title:
         # Above the cat-band labels (which sit at y≈1.04 in axes
@@ -241,12 +257,16 @@ def render_single_experiment_pair(
     Returns ``(clean_path, errorbars_path)``.
     """
     clean = render_single_experiment(
-        summary_csv, out_dir / f"{out_stem}.png",
-        show_errorbars=False, title=title,
+        summary_csv,
+        out_dir / f"{out_stem}.png",
+        show_errorbars=False,
+        title=title,
     )
     errorbars = render_single_experiment(
-        summary_csv, out_dir / f"{out_stem}_errorbars.png",
-        show_errorbars=True, title=title,
+        summary_csv,
+        out_dir / f"{out_stem}_errorbars.png",
+        show_errorbars=True,
+        title=title,
     )
     return clean, errorbars
 
@@ -358,18 +378,10 @@ def render_multi_experiment(
 
     fig, ax = plt.subplots(figsize=(14.0, 4.6), constrained_layout=True)
     for i, exp in enumerate(experiments):
-        sub = (
-            df[df["experiment"] == exp]
-            .set_index("feature_name")
-            .reindex(feature_order)
-        )
+        sub = df[df["experiment"] == exp].set_index("feature_name").reindex(feature_order)
         offsets = centers + (i - (n_exp - 1) / 2) * bar_width
         values = sub[value_col].to_numpy()
-        if (
-            show_errorbars
-            and error_col is not None
-            and error_col in sub.columns
-        ):
+        if show_errorbars and error_col is not None and error_col in sub.columns:
             yerr = sub[error_col].to_numpy()
         else:
             yerr = None
@@ -380,11 +392,14 @@ def render_multi_experiment(
         else:
             bar_color = palette[i]
         ax.bar(
-            offsets, values,
-            width=bar_width, yerr=yerr,
+            offsets,
+            values,
+            width=bar_width,
+            yerr=yerr,
             color=bar_color,
             label=(experiment_labels or {}).get(exp, exp),
-            edgecolor="0.4", linewidth=0.4,
+            edgecolor="0.4",
+            linewidth=0.4,
             error_kw={"ecolor": "0.35", "elinewidth": 0.6, "capsize": 1.5},
         )
 
@@ -403,21 +418,21 @@ def render_multi_experiment(
     # p. Padding gets a small bump too so the bigger glyphs don't
     # crowd the chart.
     if enhanced_text:
-        text_color = "#1a1a1a"        # c / p / ticks / legend
-        bold_text_color = "#000000"   # y-axis label + feature-name band
-        label_size = 15               # y-axis label (default 9, +6)
-        tick_label_size = 10          # y tick labels
-        section_label_size = 9.5      # p0/p1/p2 (default 4.5, +5)
-        section_label_y = -0.075      # axes-y for top of p text
-        ctx_label_size = 11           # c0..c3 (default 6, +5)
-        ctx_tick_pad = 4.5            # ~1px more than default 3.5
+        text_color = "#1a1a1a"  # c / p / ticks / legend
+        bold_text_color = "#000000"  # y-axis label + feature-name band
+        label_size = 15  # y-axis label (default 9, +6)
+        tick_label_size = 10  # y tick labels
+        section_label_size = 9.5  # p0/p1/p2 (default 4.5, +5)
+        section_label_y = -0.075  # axes-y for top of p text
+        ctx_label_size = 11  # c0..c3 (default 6, +5)
+        ctx_tick_pad = 4.5  # ~1px more than default 3.5
         # Bigger c labels span further below the x-axis, so push the
         # underline ("horizontal bar" between c and p) further down to
         # restore breathing room above it AND tighten the gap below it
         # to p.
-        ctx_underline_y = -0.065      # default -0.045
-        cat_band_size = 16            # feature-name bands (default 10, +6)
-        legend_size = 12              # legend (default 10, +2)
+        ctx_underline_y = -0.065  # default -0.045
+        cat_band_size = 16  # feature-name bands (default 10, +6)
+        legend_size = 12  # legend (default 10, +2)
         legend_pad_bump = {"borderpad": 0.7, "labelspacing": 0.7}
     else:
         text_color = None  # leave seaborn default
@@ -434,7 +449,8 @@ def render_multi_experiment(
         legend_pad_bump = {}
 
     _decorate_x_axis(
-        ax, feature_order,
+        ax,
+        feature_order,
         section_label_size=section_label_size,
         section_label_y=section_label_y,
         ctx_label_size=ctx_label_size,
@@ -450,10 +466,15 @@ def render_multi_experiment(
     ax.set_ylabel(y_label, **ylabel_kwargs)
     if gridlines:
         from matplotlib.ticker import MultipleLocator
+
         ax.set_axisbelow(True)
         ax.yaxis.grid(
-            True, color="#D8D8D8", linewidth=0.7, linestyle="-",
-            which="major", zorder=0,
+            True,
+            color="#D8D8D8",
+            linewidth=0.7,
+            linestyle="-",
+            which="major",
+            zorder=0,
         )
         ax.xaxis.grid(False)
         if y_major_step is not None:
@@ -462,12 +483,19 @@ def render_multi_experiment(
             minor_step = (y_major_step or 2.0) / 2.0
             ax.yaxis.set_minor_locator(MultipleLocator(minor_step))
             ax.yaxis.grid(
-                True, color="#ECECEC", linewidth=0.5, linestyle="-",
-                which="minor", zorder=0,
+                True,
+                color="#ECECEC",
+                linewidth=0.5,
+                linestyle="-",
+                which="minor",
+                zorder=0,
             )
             # Make minor tick marks visible to match the finer grid.
             ax.tick_params(
-                axis="y", which="minor", length=2.5, width=0.5,
+                axis="y",
+                which="minor",
+                length=2.5,
+                width=0.5,
                 color=text_color or "0.4",
             )
     # ``enhanced_text`` mode lets the legend swatches name the classes,
@@ -481,11 +509,15 @@ def render_multi_experiment(
         # Reapply size/colour here in case a tick_params elsewhere clobbered
         # them, plus extra `pad` for the tick → label gap.
         ax.tick_params(
-            axis="x", labelsize=ctx_label_size, labelcolor=text_color,
+            axis="x",
+            labelsize=ctx_label_size,
+            labelcolor=text_color,
             pad=ctx_tick_pad,
         )
         ax.tick_params(
-            axis="y", labelsize=tick_label_size, labelcolor=text_color,
+            axis="y",
+            labelsize=tick_label_size,
+            labelcolor=text_color,
             pad=ctx_tick_pad,
         )
     if show_legend:
@@ -511,7 +543,8 @@ def render_multi_experiment(
             ax.legend(handles=legend_handles, **kwargs)
         else:
             ax.legend(
-                title="Experiment", loc="upper right",
+                title="Experiment",
+                loc="upper right",
                 fontsize=legend_size or 10,
                 title_fontsize=legend_size or 10,
             )
@@ -576,8 +609,12 @@ def render_heatmap(
 
     n_axes = len(experiments)
     fig, axes = plt.subplots(
-        n_axes, 1, figsize=(8.0, 1.9 * n_axes), constrained_layout=True,
-        sharex=True, gridspec_kw={"hspace": 0.10},
+        n_axes,
+        1,
+        figsize=(8.0, 1.9 * n_axes),
+        constrained_layout=True,
+        sharex=True,
+        gridspec_kw={"hspace": 0.10},
     )
     if n_axes == 1:
         axes = np.array([axes])
@@ -586,21 +623,21 @@ def render_heatmap(
     for i, (ax, exp) in enumerate(zip(axes, experiments)):
         sub = df[df["experiment"] == exp].copy()
         sub["col"] = sub["ctx"] + "_" + sub["sec"]
-        pivot = (
-            sub.pivot(index="cat", columns="col", values=value_col)
-            .reindex(index=list(CATEGORIES), columns=list(_CONTEXT_SECTION))
+        pivot = sub.pivot(index="cat", columns="col", values=value_col).reindex(
+            index=list(CATEGORIES), columns=list(_CONTEXT_SECTION)
         )
         last_mesh = ax.pcolormesh(
-            pivot.values, cmap=cmap, norm=norm,
-            edgecolors="white", linewidth=0.5,
+            pivot.values,
+            cmap=cmap,
+            norm=norm,
+            edgecolors="white",
+            linewidth=0.5,
         )
         ax.set_aspect("equal")
         ax.set_yticks(np.arange(len(CATEGORIES)) + 0.5)
         ax.set_yticklabels([humanize(c) for c in CATEGORIES])
         n_per_ctx = len(SECTIONS)
-        ax.set_xticks(
-            [j * n_per_ctx + (n_per_ctx - 1) / 2 + 0.5 for j in range(len(CONTEXTS))]
-        )
+        ax.set_xticks([j * n_per_ctx + (n_per_ctx - 1) / 2 + 0.5 for j in range(len(CONTEXTS))])
         if i == n_axes - 1:
             ax.set_xticklabels(list(CONTEXTS), fontsize=8)
             for ctx_idx in range(len(CONTEXTS)):
@@ -609,13 +646,20 @@ def render_heatmap(
                     [base + 0.15, base + n_per_ctx - 0.15],
                     [-0.14, -0.14],
                     transform=ax.get_xaxis_transform(),
-                    color="0.7", lw=0.4, clip_on=False,
+                    color="0.7",
+                    lw=0.4,
+                    clip_on=False,
                 )
             for j in range(len(_CONTEXT_SECTION)):
                 ax.text(
-                    j + 0.5, -0.18, SECTIONS[j % n_per_ctx],
+                    j + 0.5,
+                    -0.18,
+                    SECTIONS[j % n_per_ctx],
                     transform=ax.get_xaxis_transform(),
-                    ha="center", va="top", fontsize=6, color="0.35",
+                    ha="center",
+                    va="top",
+                    fontsize=6,
+                    color="0.35",
                 )
         else:
             ax.set_xticklabels([])
@@ -623,8 +667,11 @@ def render_heatmap(
         label = (experiment_labels or {}).get(exp, exp)
         ax.set_ylabel(
             label.replace(": ", ":\n"),
-            rotation=0, ha="right", va="center",
-            fontsize=9, labelpad=12,
+            rotation=0,
+            ha="right",
+            va="center",
+            fontsize=9,
+            labelpad=12,
         )
         ax.tick_params(length=0)
         ax.invert_yaxis()
@@ -635,8 +682,12 @@ def render_heatmap(
 
     assert last_mesh is not None
     cbar = fig.colorbar(
-        last_mesh, ax=list(axes), orientation="vertical",
-        shrink=0.7, pad=0.02, fraction=0.025,
+        last_mesh,
+        ax=list(axes),
+        orientation="vertical",
+        shrink=0.7,
+        pad=0.02,
+        fraction=0.025,
     )
     cbar.set_label(cbar_label, fontsize=8)
     cbar.ax.tick_params(labelsize=7)

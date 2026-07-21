@@ -71,7 +71,15 @@ def extract_residual_pooled(
     metadata = {
         k: v
         for k, v in source.metadata.items()
-        if k not in ("token_offsets", "token_level", "n_tokens", "intermediates")
+        if k
+        not in (
+            "token_offsets",
+            "token_level",
+            "n_tokens",
+            "intermediates",
+            "storage_dtype",
+            "sites",
+        )
     }
     metadata.update(
         {

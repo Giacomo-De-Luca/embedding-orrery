@@ -21,7 +21,7 @@ Differences vs the old `run_sklearn_probes._train_probes_on_layers`:
    probe trains once per fold (StratifiedKFold for classification,
    KFold otherwise), writes one CSV row per (layer, intermediate, fold),
    and aggregates mean/std into `summary.json`. Per-fold directions are
-   saved as `directions/L{layer}_{intermediate}_{kind}_fold{i}.npz`.
+   saved as `directions/L{layer}_{intermediate}_{name}_fold_{i}.npz`.
 6. Standardised |β| feature-importance: when k-fold is run on a logreg
    probe with `save_directions=True`, a `feature_importance.csv` is
    written next to `directions/` with mean/std of standardised
@@ -620,9 +620,14 @@ def _save_probe_direction(
     scaler_scale: np.ndarray | None,
     fold_label: str | None = None,
 ) -> None:
-    """Save coef + intercept + scaler params as .npz for downstream analysis."""
+    """Save coef + intercept + scaler params as .npz for downstream analysis.
+
+    Filenames key on the probe's NAME (the folder identity analyses resolve
+    via `source_probe`), not its kind — they only differ for custom-named
+    probes (e.g. name=logreg_cv, kind=logreg).
+    """
     suffix = f"_{fold_label}" if fold_label else ""
-    path = directions_dir / f"L{layer}_{intermediate}_{kind}{suffix}.npz"
+    path = directions_dir / f"L{layer}_{intermediate}_{probe_name}{suffix}.npz"
     arrays = {
         "coef": coef,
         "intercept": np.atleast_1d(intercept),

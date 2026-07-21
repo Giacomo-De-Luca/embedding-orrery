@@ -44,7 +44,7 @@ def run_correlation_map(
     """Compute per-feature correlations across all SAE-encoded layers.
 
     Args:
-        sae_dataset: SAE-encoded activations with `(layer, "sae_feat")`
+        sae_dataset: SAE-encoded activations with `(layer, intermediate)` (any intermediate in `SAE_INTERMEDIATES`)
             keys. `metadata["kept_by_layer"]` is required for label
             enrichment (maps filtered column index -> original SAE feature
             index).

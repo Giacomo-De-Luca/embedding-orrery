@@ -117,8 +117,7 @@ class ExperimentVisualiser:
             written += self._render_extraction_comparison(long_df, extractions, targets)
 
         print(
-            f"[visualisations] Wrote {len(written)} figure(s) to "
-            f"{self.figures_dir}",
+            f"[visualisations] Wrote {len(written)} figure(s) to {self.figures_dir}",
         )
         return written
 
@@ -182,11 +181,7 @@ class ExperimentVisualiser:
             return sub
         higher = HIGHER_IS_BETTER.get(metric, True)
         agg = "max" if higher else "min"
-        return (
-            sub.groupby(group_cols, dropna=False)[metric]
-            .agg(agg)
-            .reset_index()
-        )
+        return sub.groupby(group_cols, dropna=False)[metric].agg(agg).reset_index()
 
     # ── plot 1: layer curves (regressors + classifiers stacked) ─────────────
 
@@ -213,7 +208,8 @@ class ExperimentVisualiser:
         n_metrics = len(panels)
 
         fig, axes = plt.subplots(
-            n_metrics * nrows_per_metric, ncols,
+            n_metrics * nrows_per_metric,
+            ncols,
             figsize=(
                 self.layout.base_width * ncols,
                 self.layout.base_height * n_metrics * nrows_per_metric,
@@ -224,7 +220,9 @@ class ExperimentVisualiser:
 
         for m_idx, (metric, sub) in enumerate(panels):
             best_layers = self._best_per_layer(
-                sub, metric, group_cols=["target", "probe_kind"],
+                sub,
+                metric,
+                group_cols=["target", "probe_kind"],
             )
             for t_idx, target in enumerate(targets):
                 row = m_idx * nrows_per_metric + (t_idx // ncols)
@@ -236,7 +234,8 @@ class ExperimentVisualiser:
                     continue
                 sns.lineplot(
                     data=target_df,
-                    x="layer", y=metric,
+                    x="layer",
+                    y=metric,
                     hue="probe_kind",
                     marker="o",
                     ax=ax,
@@ -259,7 +258,8 @@ class ExperimentVisualiser:
 
         fig.suptitle(
             f"{self.experiment_dir.name} · extraction={extraction} · layer curves",
-            fontsize=12, y=1.02,
+            fontsize=12,
+            y=1.02,
         )
         fig.tight_layout()
         out = self.figures_dir / f"layer_curves__{extraction}.png"
@@ -277,7 +277,9 @@ class ExperimentVisualiser:
         if metric is None:
             return []
         agg = self._aggregate_best(
-            ext_df, metric, group_cols=["probe_kind", "target"],
+            ext_df,
+            metric,
+            group_cols=["probe_kind", "target"],
         )
         if agg.empty:
             return []
@@ -289,8 +291,12 @@ class ExperimentVisualiser:
         width = max(4.0, 0.8 * len(pivot.columns) + 2)
         fig, ax = plt.subplots(figsize=(width, height))
         sns.heatmap(
-            pivot, annot=True, fmt=".3f",
-            cmap=cmap, ax=ax, cbar_kws={"label": metric},
+            pivot,
+            annot=True,
+            fmt=".3f",
+            cmap=cmap,
+            ax=ax,
+            cbar_kws={"label": metric},
         )
         ax.set_title(
             f"{self.experiment_dir.name} · extraction={extraction} · "
@@ -314,7 +320,9 @@ class ExperimentVisualiser:
         if metric is None:
             return []
         agg = self._aggregate_best(
-            ext_df, metric, group_cols=["target", "probe_kind"],
+            ext_df,
+            metric,
+            group_cols=["target", "probe_kind"],
         )
         if agg.empty:
             return []
@@ -324,12 +332,14 @@ class ExperimentVisualiser:
         fig, ax = plt.subplots(figsize=(width, 4.0))
         sns.barplot(
             data=agg,
-            x="target", y=metric, hue="probe_kind",
-            order=target_order, ax=ax,
+            x="target",
+            y=metric,
+            hue="probe_kind",
+            order=target_order,
+            ax=ax,
         )
         ax.set_title(
-            f"{self.experiment_dir.name} · extraction={extraction} · "
-            f"best {metric} per probe",
+            f"{self.experiment_dir.name} · extraction={extraction} · best {metric} per probe",
         )
         ax.set_xlabel("target")
         ax.set_ylabel(metric)
@@ -352,7 +362,9 @@ class ExperimentVisualiser:
         if metric is None:
             return []
         best_layers = self._best_per_layer(
-            long_df, metric, group_cols=["extraction", "target"],
+            long_df,
+            metric,
+            group_cols=["extraction", "target"],
         )
         if best_layers.empty:
             return []
@@ -360,7 +372,8 @@ class ExperimentVisualiser:
         ncols = min(self.layout.max_facets_per_row, max(1, n_targets))
         nrows = (n_targets + ncols - 1) // ncols
         fig, axes = plt.subplots(
-            nrows, ncols,
+            nrows,
+            ncols,
             figsize=(
                 self.layout.base_width * ncols,
                 self.layout.base_height * nrows,
@@ -378,8 +391,11 @@ class ExperimentVisualiser:
                 continue
             sns.lineplot(
                 data=target_df,
-                x="layer", y=metric, hue="extraction",
-                marker="o", ax=ax,
+                x="layer",
+                y=metric,
+                hue="extraction",
+                marker="o",
+                ax=ax,
             )
             ax.set_title(target, fontsize=10)
             ax.set_xlabel("layer")
@@ -392,7 +408,8 @@ class ExperimentVisualiser:
             axes[slot // ncols, slot % ncols].set_visible(False)
         fig.suptitle(
             f"{self.experiment_dir.name} · extraction comparison · {metric}",
-            fontsize=12, y=1.02,
+            fontsize=12,
+            y=1.02,
         )
         fig.tight_layout()
         out = self.figures_dir / "extraction_comparison.png"
@@ -417,20 +434,27 @@ class ExperimentVisualiser:
                 return written
             sub = ext_df[ext_df["target"].isin(channels)]
             best_layers = self._best_per_layer(
-                sub, metric, group_cols=["target"],
+                sub,
+                metric,
+                group_cols=["target"],
             )
             if best_layers.empty:
                 continue
             best_layers = best_layers.assign(
                 target=pd.Categorical(
-                    best_layers["target"], categories=list(channels), ordered=True,
+                    best_layers["target"],
+                    categories=list(channels),
+                    ordered=True,
                 ),
             )
             fig, ax = plt.subplots(figsize=(6.0, 4.0))
             sns.lineplot(
                 data=best_layers,
-                x="layer", y=metric, hue="target",
-                marker="o", ax=ax,
+                x="layer",
+                y=metric,
+                hue="target",
+                marker="o",
+                ax=ax,
             )
             ax.set_title(
                 f"{self.experiment_dir.name} · extraction={extraction} · "
@@ -440,10 +464,7 @@ class ExperimentVisualiser:
             ax.set_ylabel(metric)
             ax.legend(title="channel")
             fig.tight_layout()
-            out = (
-                self.figures_dir
-                / f"colour_channels_{label}__{extraction}.png"
-            )
+            out = self.figures_dir / f"colour_channels_{label}__{extraction}.png"
             _save_fig(fig, out)
             written.append(out)
         return written
@@ -516,8 +537,12 @@ class ConsolidatedVisualiser:
         fig, ax = plt.subplots(figsize=(width, height))
         cmap = "viridis" if HIGHER_IS_BETTER.get(metric, True) else "viridis_r"
         sns.heatmap(
-            pivot, annot=True, fmt=".3f",
-            cmap=cmap, ax=ax, cbar_kws={"label": f"best {metric}"},
+            pivot,
+            annot=True,
+            fmt=".3f",
+            cmap=cmap,
+            ax=ax,
+            cbar_kws={"label": f"best {metric}"},
         )
         ax.set_title(
             f"Cross-experiment: best {metric} per (experiment·target, probe)",
@@ -534,7 +559,9 @@ class ConsolidatedVisualiser:
         if metric not in df.columns or "layer" not in df.columns:
             return []
         idx = best_indices(
-            df, metric, ["experiment", "target", "extraction", "layer"],
+            df,
+            metric,
+            ["experiment", "target", "extraction", "layer"],
         )
         if idx.empty:
             return []
@@ -548,17 +575,24 @@ class ConsolidatedVisualiser:
         col_wrap = min(4, max(1, len(facet_order)))
         g = sns.relplot(
             data=best,
-            x="layer", y=metric,
-            hue="extraction", style="extraction",
-            col="facet", col_wrap=col_wrap, col_order=facet_order,
-            kind="line", marker="o",
+            x="layer",
+            y=metric,
+            hue="extraction",
+            style="extraction",
+            col="facet",
+            col_wrap=col_wrap,
+            col_order=facet_order,
+            kind="line",
+            marker="o",
             facet_kws={"sharey": False, "sharex": False},
-            height=2.8, aspect=1.2,
+            height=2.8,
+            aspect=1.2,
         )
         g.set_titles("{col_name}")
         g.figure.suptitle(
             f"Cross-experiment best-probe {metric} over layers",
-            fontsize=13, y=1.02,
+            fontsize=13,
+            y=1.02,
         )
         out = self.figures_dir / f"cross_experiment_layer_curves_{metric}.png"
         _save_fig(g.figure, out)
@@ -599,6 +633,7 @@ def main() -> None:
         # Refresh consolidated summary.md so it picks up the new figures.
         try:
             from interpret.probing import consolidate as _consolidate
+
             _consolidate.refresh_summary(target)
         except Exception as exc:  # noqa: BLE001
             print(f"  [warn] could not refresh consolidated summary: {exc}")

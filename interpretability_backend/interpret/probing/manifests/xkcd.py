@@ -54,8 +54,7 @@ class XKCDColourManifestBuilder(ManifestBuilder):
         dups = dups[dups > 1]
         if not dups.empty:
             raise ValueError(
-                f"XKCD: duplicate colour names: "
-                f"{dups.head(5).to_dict()}",
+                f"XKCD: duplicate colour names: {dups.head(5).to_dict()}",
             )
 
         self._df = df[["colour_name", *_RGB_COLS, *_LAB_COLS]].copy()
@@ -80,17 +79,17 @@ class XKCDColourManifestBuilder(ManifestBuilder):
         return self._df.copy()
 
     def get_rated_samples(
-        self, source: str, column: str,
+        self,
+        source: str,
+        column: str,
     ) -> tuple[list[str], np.ndarray]:
         if source != self.SOURCE:
             raise ValueError(
-                f"XKCD manifest only knows source {self.SOURCE!r}, "
-                f"got {source!r}",
+                f"XKCD manifest only knows source {self.SOURCE!r}, got {source!r}",
             )
         if column not in self._df.columns:
             raise ValueError(
-                f"Unknown column {column!r}. "
-                f"Valid: {self.target_columns}",
+                f"Unknown column {column!r}. Valid: {self.target_columns}",
             )
         return (
             self._df["colour_name"].tolist(),

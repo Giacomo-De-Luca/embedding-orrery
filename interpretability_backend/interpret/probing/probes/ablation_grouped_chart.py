@@ -34,8 +34,8 @@ from interpret.probing.probes._chart_style import (
 # Axis configuration: (panel name, source CSV, panel title).
 AXES: tuple[tuple[str, str, str], ...] = (
     ("category", "group_category_importance_summary.csv", "Category"),
-    ("context",  "group_context_importance_summary.csv",  "Context"),
-    ("section",  "group_section_importance_summary.csv",  "Section"),
+    ("context", "group_context_importance_summary.csv", "Context"),
+    ("section", "group_section_importance_summary.csv", "Section"),
 )
 
 
@@ -122,11 +122,17 @@ def _render(
         y = np.arange(len(groups))
 
         xlim = _auto_xlim(
-            means, label_pad_frac=label_pad_frac,
-            extra_right=max_std, extra_left=max_std,
+            means,
+            label_pad_frac=label_pad_frac,
+            extra_right=max_std,
+            extra_left=max_std,
         )
         ax.barh(
-            y, means, xerr=xerr_arg, color=colors, edgecolor="none",
+            y,
+            means,
+            xerr=xerr_arg,
+            color=colors,
+            edgecolor="none",
             error_kw={"ecolor": "0.35", "elinewidth": 0.7, "capsize": 2.0},
         )
 
@@ -137,8 +143,13 @@ def _render(
                 # positive side so std bars don't overlap the text.
                 rightmost = max(m, 0.0) + (s if np.isfinite(s) else 0.0)
                 ax.text(
-                    rightmost + text_pad, yi, f"{m:.3f}",
-                    ha="left", va="center", fontsize=6, color="0.25",
+                    rightmost + text_pad,
+                    yi,
+                    f"{m:.3f}",
+                    ha="left",
+                    va="center",
+                    fontsize=6,
+                    color="0.25",
                     clip_on=False,
                 )
 
@@ -190,17 +201,20 @@ def render_probe_dir(probe_dir: Path, *, out_dir: Path | None = None) -> Path:
 
     # (show_labels, errorbar_kind, out_stem)
     variants: tuple[tuple[bool, str, str], ...] = (
-        (False, "none",   "ablation_red_clean"),
-        (True,  "none",   "ablation_red_labeled"),
+        (False, "none", "ablation_red_clean"),
+        (True, "none", "ablation_red_labeled"),
         (False, "stddev", "ablation_red_clean_errorbars"),
-        (True,  "stddev", "ablation_red_labeled_errorbars"),
-        (True,  "sem",    "ablation_red_labeled_sem"),
+        (True, "stddev", "ablation_red_labeled_errorbars"),
+        (True, "sem", "ablation_red_labeled_sem"),
     )
     for labels, kind, stem in variants:
         _render(
-            probe_dir=probe_dir, out_dir=out_dir,
-            neg_color=NEG_COLOR_RED, show_labels=labels,
-            errorbar_kind=kind, out_stem=stem,
+            probe_dir=probe_dir,
+            out_dir=out_dir,
+            neg_color=NEG_COLOR_RED,
+            show_labels=labels,
+            errorbar_kind=kind,
+            out_stem=stem,
         )
     return out_dir
 
@@ -208,14 +222,17 @@ def render_probe_dir(probe_dir: Path, *, out_dir: Path | None = None) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "probe_dir", type=Path,
+        "probe_dir",
+        type=Path,
         help=(
             "Path to one ablation probe folder, e.g. "
             "resources/experiments/<exp>/ablation/csv_features/<target>/<probe>/"
         ),
     )
     parser.add_argument(
-        "--out-dir", type=Path, default=None,
+        "--out-dir",
+        type=Path,
+        default=None,
         help="Override output directory (default: <probe_dir>/figures)",
     )
     args = parser.parse_args()
