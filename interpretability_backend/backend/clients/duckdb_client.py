@@ -834,10 +834,13 @@ class DuckDBClient:
         where_sql, params = self._build_metadata_where(filters)
         params.extend([limit, offset])
 
-        rows = self._exec(
-            f"SELECT id, document, metadata, row_index FROM {table} WHERE {where_sql} ORDER BY row_index LIMIT ? OFFSET ?",
-            params,
-        ).fetchall()
+        try:
+            rows = self._exec(
+                f"SELECT id, document, metadata, row_index FROM {table} WHERE {where_sql} ORDER BY row_index LIMIT ? OFFSET ?",
+                params,
+            ).fetchall()
+        except duckdb.CatalogException:
+            return []
         result = []
         for r in rows:
             item = {"id": r[0], "document": r[1], "row_index": r[3]}

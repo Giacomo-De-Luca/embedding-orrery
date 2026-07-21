@@ -18,7 +18,7 @@ def seed_env(tmp_path, monkeypatch):
     seed_vector_db = seed_dir / "vector_db"
 
     monkeypatch.setattr(seed_bootstrap, "DUCKDB_PATH", live_duckdb)
-    monkeypatch.setattr(seed_bootstrap, "DB_PATH", live_vector_db)
+    monkeypatch.setattr(seed_bootstrap, "CHROMA_DB_PATH", live_vector_db)
     monkeypatch.setattr(seed_bootstrap, "SEED_DIR", seed_dir)
     monkeypatch.setattr(seed_bootstrap, "SEED_DUCKDB_PATH", seed_duckdb)
     monkeypatch.setattr(seed_bootstrap, "SEED_VECTOR_DB", seed_vector_db)

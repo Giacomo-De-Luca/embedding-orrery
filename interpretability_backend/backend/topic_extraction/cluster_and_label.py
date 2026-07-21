@@ -66,7 +66,9 @@ class ClassTfidfTransformer(TfidfTransformer):
             _, n_features = X.shape
 
             # Calculate the frequency of words across all classes
-            df = np.squeeze(np.asarray(X.sum(axis=0)))
+            # (.ravel() keeps df 1-D even for a single-word vocabulary, where
+            # np.squeeze would collapse it to a 0-d scalar that sp.diags rejects)
+            df = np.asarray(X.sum(axis=0)).ravel()
 
             # Calculate the average number of samples as regularization
             avg_nr_samples = int(X.sum(axis=1).mean())
