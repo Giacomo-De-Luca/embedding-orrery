@@ -126,6 +126,46 @@ class TestValidation:
                 site="post_attn",
             )
 
+    def test_skip_extractions_unknown_name_raises(self):
+        with pytest.raises(ValueError, match="skip_extractions"):
+            ExperimentConfig.from_dict(
+                {
+                    "name": "x",
+                    "output_dir": "/tmp/x",
+                    "manifest": {
+                        "path": (
+                            "interpret.probing.manifests.labeled_text:LabeledTextManifestBuilder"
+                        ),
+                    },
+                    "extractions": [
+                        {
+                            "name": "t",
+                            "type": "token_residuals",
+                            "family": "qwen",
+                            "layers": [0],
+                        },
+                    ],
+                    "probes": [
+                        {
+                            "type": "sklearn",
+                            "kind": "svc",
+                            "skip_extractions": ["typo"],
+                        },
+                    ],
+                },
+            )
+
+    def test_full_yamls_skip_rbf_svc_on_concat(self):
+        for yaml_name, concat in (
+            ("trec_gemma.yaml", "gemma_sae_concat"),
+            ("trec_qwen.yaml", "qwen_sae_concat"),
+        ):
+            config = ExperimentConfig.from_yaml(EXPERIMENT_DIR / yaml_name)
+            by_kind = {p.name: p for p in config.probes}
+            assert by_kind["svc"].skip_extractions == [concat]
+            assert by_kind["linear_svc"].skip_extractions is None
+            assert by_kind["linear_svc"].save_directions is True
+
     def test_concat_requires_sources(self):
         with pytest.raises(ValueError, match="source_extractions"):
             ConcatExtractionConfig(name="c", source_extractions=[])

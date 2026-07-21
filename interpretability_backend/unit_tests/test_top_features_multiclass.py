@@ -3,6 +3,7 @@ multiclass logreg feature-importance path in train_sklearn_probe."""
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from interpret.probing.activation_dataset import ActivationDataset
@@ -115,7 +116,8 @@ class TestTopFeatures:
 
 
 class TestMulticlassFeatureImportance:
-    def test_kfold_multiclass_logreg_writes_importance(self, tmp_path):
+    @pytest.mark.parametrize("kind", ["logreg", "linear_svc"])
+    def test_kfold_multiclass_linear_kinds_write_importance(self, tmp_path, kind):
         rng = np.random.default_rng(0)
         n, d, classes = 90, 6, 3
         y = np.repeat(np.arange(classes), n // classes).astype(np.int64)
@@ -128,7 +130,7 @@ class TestMulticlassFeatureImportance:
             sample_ids=[f"s{i}" for i in range(n)],
         )
         spec = SklearnProbeSpec(
-            kind="logreg",
+            kind=kind,
             class_weight="balanced",
             n_folds=2,
             save_directions=True,
@@ -151,6 +153,6 @@ class TestMulticlassFeatureImportance:
         assert top["feature_name"] == "L0_resid_post_f0"
 
         # Per-fold multiclass directions exist for top_features to glob.
-        folds = sorted((out / "directions").glob("L0_sae_max_logreg_fold_*.npz"))
+        folds = sorted((out / "directions").glob(f"L0_sae_max_{kind}_fold_*.npz"))
         assert len(folds) == 2
         assert np.load(str(folds[0]))["coef"].shape == (classes, d)

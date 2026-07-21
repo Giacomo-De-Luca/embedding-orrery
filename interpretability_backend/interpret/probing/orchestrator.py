@@ -486,6 +486,9 @@ def _run_target_probes(
         f"n={len(rated_words)}) ---",
     )
     for spec in config.probes:
+        if extraction_name in (getattr(spec, "skip_extractions", None) or ()):
+            print(f"  probe {spec.name}: skipping extraction '{extraction_name}'")
+            continue
         if isinstance(spec, MLPProbeSpec):
             probe_dir = target_dir / spec.name
             ratings_arr = np.asarray(ratings)

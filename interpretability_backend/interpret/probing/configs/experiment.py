@@ -217,6 +217,16 @@ class ExperimentConfig:
                         f"in extractions: {ext_names}",
                     )
 
+        # Probe skip-lists must reference real extraction names —
+        # a typo would silently skip nothing.
+        for probe in self.probes:
+            for skip in getattr(probe, "skip_extractions", None) or ():
+                if skip not in ext_names:
+                    raise ValueError(
+                        f"Probe {probe.name!r}: skip_extractions entry "
+                        f"{skip!r} not in extractions: {ext_names}",
+                    )
+
         # Per-target name uniqueness — folder collisions overwrite results.
         # Case-insensitive: macOS APFS / Windows NTFS treat "B" and "b" as
         # the same path, so we must reject those even though they're distinct

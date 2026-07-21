@@ -58,6 +58,8 @@ probes:
      save_directions: true, logreg_max_iter: 2000}
   - {type: sklearn, kind: logreg, name: logreg_cv, C: 1.0, class_weight: balanced,
      n_folds: 5, save_directions: true, logreg_max_iter: 2000}
+  - {type: sklearn, kind: linear_svc, C: 1.0, class_weight: balanced,
+     save_directions: true, logreg_max_iter: 2000}
 
 sae_analysis:
   - {type: top_features, source_probe: logreg, top_k: 15}

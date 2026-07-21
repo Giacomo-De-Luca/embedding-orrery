@@ -66,6 +66,10 @@ class MLPProbeSpec:
     # accuracy reads the single-seed split.
     n_folds: int | None = None
 
+    # Extraction names this probe should NOT run against (see
+    # SklearnProbeSpec.skip_extractions).
+    skip_extractions: list[str] | None = None
+
     def __post_init__(self) -> None:
         if self.type != "mlp":
             raise ValueError(f"MLPProbeSpec.type must be 'mlp', got {self.type!r}")
@@ -84,7 +88,9 @@ class MLPProbeSpec:
             )
 
 
-SklearnKind = Literal["ridge", "lasso", "svr", "svc", "logreg", "massmean", "massmean_cov"]
+SklearnKind = Literal[
+    "ridge", "lasso", "svr", "svc", "linear_svc", "logreg", "massmean", "massmean_cov"
+]
 
 
 @dataclass
@@ -141,6 +147,12 @@ class SklearnProbeSpec:
     # this probe once per fold instead of once per `ablation_seeds`
     # entry. See MLPProbeSpec.n_folds for the same field.
     n_folds: int | None = None
+
+    # Extraction names this probe should NOT run against. Lets an
+    # expensive probe (e.g. RBF svc, O(n^2*d)) skip a pathological
+    # dataset (e.g. a 300k-wide concat matrix) while still covering the
+    # rest. Names are validated against the experiment's extractions.
+    skip_extractions: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.type != "sklearn":

@@ -52,7 +52,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC, SVR
+from sklearn.svm import SVC, SVR, LinearSVC
 
 from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.probe import SklearnProbeSpec
@@ -60,10 +60,10 @@ from interpret.probing.utils.cross_validation import resolve_folds
 from interpret.utils.distances import resolve_distance
 
 # Probes whose `coef_` is meaningful for downstream feature ranking.
-_LINEAR_PROBE_KINDS = {"ridge", "lasso", "logreg"}
+_LINEAR_PROBE_KINDS = {"ridge", "lasso", "logreg", "linear_svc"}
 
 # Probe kinds that take integer class labels rather than continuous targets.
-_CLASSIFICATION_KINDS = {"logreg", "svc"}
+_CLASSIFICATION_KINDS = {"logreg", "svc", "linear_svc"}
 
 # Closed-form difference-of-means probes (no fit() call).
 _MASSMEAN_KINDS = {"massmean", "massmean_cov"}
@@ -179,7 +179,7 @@ def train_sklearn_probe(
                     fold_label=fold_label if len(folds) > 1 else None,
                 )
                 row.update(metrics)
-                if fold_coef is not None and spec.kind == "logreg":
+                if fold_coef is not None and spec.kind in ("logreg", "linear_svc"):
                     coef_buckets.setdefault(
                         (layer, intermediate),
                         [],
@@ -325,6 +325,16 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
             kernel=spec.kernel,
             class_weight=spec.class_weight,
         ), True
+    if kind == "linear_svc":
+        # One-vs-rest linear max-margin classifier: coef_ is [C, d] like
+        # logreg (kernel-SVC's one-vs-one shape fits nothing downstream),
+        # and liblinear is O(n*d) — usable on very wide concat matrices.
+        return LinearSVC(
+            C=spec.C,
+            class_weight=spec.class_weight,
+            max_iter=spec.logreg_max_iter,
+            dual="auto",
+        ), True
     if kind == "logreg":
         return LogisticRegression(
             C=spec.C,
@@ -463,7 +473,7 @@ def _fit_one(
             # the sign is class-relative there, so only the magnitude
             # aggregates meaningfully across folds.
             coef_arr = np.asarray(coef)
-            if spec.kind == "logreg":
+            if spec.kind in ("logreg", "linear_svc"):
                 if coef_arr.ndim == 2 and coef_arr.shape[0] > 1:
                     coef_for_aggregation = np.abs(coef_arr).max(axis=0)
                 else:
@@ -653,7 +663,12 @@ def _maybe_write_feature_importance(
     ran. With a single fold there's nothing to aggregate; the .npz in
     `directions/` already exposes the same coefficients.
     """
-    if spec.kind != "logreg" or not spec.save_directions or not multi_fold or not coef_buckets:
+    if (
+        spec.kind not in ("logreg", "linear_svc")
+        or not spec.save_directions
+        or not multi_fold
+        or not coef_buckets
+    ):
         return
 
     rows: list[dict] = []

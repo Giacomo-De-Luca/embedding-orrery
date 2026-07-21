@@ -87,7 +87,17 @@ targets:
 probes:
   - {type: sklearn, kind: logreg, C: 1.0, class_weight: balanced, n_folds: 5,
      save_directions: true, logreg_max_iter: 2000}
-  - {type: sklearn, kind: svc, C: 1.0, class_weight: balanced, n_folds: 5}
+  # Linear max-margin twin of logreg: same [C, d] coef surface, so
+  # feature_importance / top_features work for it too — an independent
+  # hinge-loss ranking of task-relevant features. O(n*d): fine on concat.
+  - {type: sklearn, kind: linear_svc, C: 1.0, class_weight: balanced, n_folds: 5,
+     save_directions: true, logreg_max_iter: 2000}
+  # RBF accuracy ceiling. Skips the concat matrix: an n x n Gram over
+  # ~300k dims is days of single-threaded compute, and RBF yields no
+  # feature ranking there anyway. (Add gemma_sae_concat_all here too
+  # if the mega-concat is enabled.)
+  - {type: sklearn, kind: svc, C: 1.0, class_weight: balanced, n_folds: 5,
+     skip_extractions: [gemma_sae_concat]}
 
 sae_analysis:
   - {type: top_features, source_probe: logreg, top_k: 30}
