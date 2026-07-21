@@ -468,7 +468,6 @@ extractions:
     l0_size: medium             # gemma-only; qwen uses model_size + k
     model_size: 4b
     min_active_samples: 10      # dead-feature filter threshold
-    device: cuda
   - name: res_last              # raw-residual baseline, same forward pass
     type: residual_pooled
     source_extraction: gemma_tokens

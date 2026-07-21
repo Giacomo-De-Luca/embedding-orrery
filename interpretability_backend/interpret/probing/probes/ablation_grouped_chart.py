@@ -97,7 +97,7 @@ def _render(
 
     label_pad_frac = 0.20 if show_labels else 0.05
 
-    for ax, (_axis_name, csv_name, title) in zip(axes, AXES):
+    for ax, (_axis_name, csv_name, title) in zip(axes, AXES, strict=True):
         csv_path = probe_dir / csv_name
         if not csv_path.exists():
             ax.set_axis_off()
@@ -138,7 +138,7 @@ def _render(
 
         if show_labels:
             text_pad = 0.012 * (xlim[1] - xlim[0])
-            for yi, m, s in zip(y, means, stds):
+            for yi, m, s in zip(y, means, stds, strict=True):
                 # Place the label past the error-bar tip on the
                 # positive side so std bars don't overlap the text.
                 rightmost = max(m, 0.0) + (s if np.isfinite(s) else 0.0)

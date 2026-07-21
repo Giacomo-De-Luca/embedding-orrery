@@ -123,7 +123,7 @@ class NeuronpediaExplorer:
 
     def __init__(
         self,
-        layers: int | list[int] = [9, 17, 22, 29],
+        layers: int | list[int] | tuple[int, ...] = (9, 17, 22, 29),
         width: int = 16_384,
         model_id: str = "gemma-3-4b-it",
         labels_dir: Path = LABELS_DIR,
@@ -227,12 +227,13 @@ class NeuronpediaExplorer:
         Returns:
             Dict mapping layer index to its list of matches.
         """
-        if regex:
-            rx = re.compile(pattern, re.IGNORECASE)
-            predicate = lambda text: rx.search(text) is not None
-        else:
-            needle = pattern.lower()
-            predicate = lambda text: needle in text.lower()
+        needle = pattern.lower()
+        rx = re.compile(pattern, re.IGNORECASE) if regex else None
+
+        def predicate(text: str) -> bool:
+            if rx is not None:
+                return rx.search(text) is not None
+            return needle in text.lower()
 
         result: dict[int, list[FeatureMatch]] = {}
         for layer in self._resolve_layers(layers):

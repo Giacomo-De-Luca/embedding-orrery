@@ -89,6 +89,7 @@ class TestSAEPooledMax:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="max",
             layers=[0],
         )
@@ -109,6 +110,7 @@ class TestSAEPooledMax:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="max",
             layers=[0],
             drop_dead_features=False,
@@ -124,6 +126,7 @@ class TestSAEPooledMax:
             SAEPooledExtractionConfig(
                 name="a",
                 source_extraction="t",
+                device="cpu",
                 pooling="max",
                 layers=[0],
                 drop_dead_features=False,
@@ -134,6 +137,7 @@ class TestSAEPooledMax:
             SAEPooledExtractionConfig(
                 name="b",
                 source_extraction="t",
+                device="cpu",
                 pooling="max",
                 layers=[0],
                 drop_dead_features=False,
@@ -151,6 +155,7 @@ class TestSAEPooledMax:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="max",
             layers=[0],
             drop_dead_features=False,
@@ -171,6 +176,7 @@ class TestSAEPooledLastAndFiltering:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="last",
             layers=[0],
             drop_dead_features=False,
@@ -186,6 +192,7 @@ class TestSAEPooledLastAndFiltering:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="max",
             layers=[0],
             min_active_samples=2,
@@ -199,6 +206,7 @@ class TestSAEPooledLastAndFiltering:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             pooling="max",
         )
         ds = extract_sae_pooled(_token_source(), config)
@@ -210,6 +218,7 @@ class TestSAEPooledLastAndFiltering:
         config = SAEPooledExtractionConfig(
             name="p",
             source_extraction="t",
+            device="cpu",
             site="mlp_out",
             pooling="max",
         )

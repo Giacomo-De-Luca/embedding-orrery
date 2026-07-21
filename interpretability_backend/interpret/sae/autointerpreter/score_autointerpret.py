@@ -137,14 +137,14 @@ class AutoInterpretScorer:
         if not path.exists():
             return {}
         df = pq.read_table(path).to_pandas()
-        return dict(zip(df["feature_idx"].astype(int), df["zero_hint_shown"].astype(bool)))
+        return dict(zip(df["feature_idx"].astype(int), df["zero_hint_shown"].astype(bool), strict=True))
 
     @staticmethod
     def _align(eval_data: dict, linspace: dict) -> tuple[np.ndarray, np.ndarray]:
         """Pair predictions and ground-truth by ``sample_id``."""
         truth_by_id = {
             s["sample_id"]: t
-            for s, t in zip(linspace["samples"], linspace["_true_activations"])
+            for s, t in zip(linspace["samples"], linspace["_true_activations"], strict=True)
         }
         predicted = []
         truth = []

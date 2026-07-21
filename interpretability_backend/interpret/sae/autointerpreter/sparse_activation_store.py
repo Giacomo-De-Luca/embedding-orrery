@@ -158,7 +158,7 @@ class SparseActivationStore(ActivationStore):
         out_indptr[0] = 0
         row_offset = 0
         nnz_offset = 0
-        for p, (nr, nz) in zip(paths, shard_info):
+        for p, (nr, nz) in zip(paths, shard_info, strict=True):
             m = sparse.load_npz(p)
             if nz:
                 out_data[nnz_offset:nnz_offset + nz] = m.data

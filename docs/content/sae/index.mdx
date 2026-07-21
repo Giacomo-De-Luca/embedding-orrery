@@ -1,0 +1,27 @@
+# SAE & Interpretability
+
+Orrery treats Sparse Autoencoders as ordinary vector collections. Each SAE
+feature is a row of the decoder matrix — a vector in the model's space — so a
+feature set can be downloaded, projected, clustered, and labelled by the same
+pipeline as any dataset, then explored as a galaxy where entering a prompt
+highlights the features it activates.
+
+![A Gemma Scope 2 SAE feature space, projected and labelled by the collection pipeline](/gallery/sae_feature_map.png)
+
+Two model families are supported for live inference: **Gemma 3** (Gemma Scope 2
+SAEs, with labels and activation examples from Neuronpedia) and **Qwen**
+(Qwen-Scope, label-free), with from-scratch JumpReLU/TopK implementations in
+plain PyTorch. Any feature can be inspected in a dashboard — top/bottom logits,
+activation histograms, similar features, activating examples — and injected
+into the model with additive steering (ActAdd) in a chat interface.
+
+![Steered chat: with the "poetry" feature injected, Gemma-3-4b-it answers "How do you feel?" in a poetic register](/gallery/steered_chat.png)
+
+## In this section
+
+- [SAE Storage & API](/sae/architecture) — DuckDB schema, ingestion, GraphQL API
+- [Data Pipeline](/sae/pipeline) — SAE download-to-ingestion, Neuronpedia labels
+- [Live Inference API](/sae/interpret-api) — prompt activations, steering, streaming chat
+
+See also the [case studies](/case-studies), where the steering backend is
+validated against a published refusal-direction result.

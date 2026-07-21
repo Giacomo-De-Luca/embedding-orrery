@@ -79,7 +79,7 @@ def embed_wordnet_word_level(
             if not examples:
                 continue
 
-            for i, example in enumerate(examples[:2]):  # Max 2 examples per sense
+            for _i, example in enumerate(examples[:2]):  # Max 2 examples per sense
                 # Check if word appears in example
                 if word.lower() not in example.lower():
                     continue

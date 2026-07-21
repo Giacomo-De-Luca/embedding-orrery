@@ -229,7 +229,7 @@ class QwenDirectionModel(_BaseDirectionModel):
             self.format_chat("zebra orange table lamp"), add_special_tokens=True
         )
         suffix: list[int] = []
-        for a, b in zip(reversed(ids_a), reversed(ids_b)):
+        for a, b in zip(reversed(ids_a), reversed(ids_b), strict=False):
             if a != b:
                 break
             suffix.append(a)

@@ -35,7 +35,7 @@ class TestSyntheticData:
         assert builder.samples == ["alpha", "beta", "gamma", "delta", "epsilon"]
         samples, values = builder.get_rated_samples("labeled_text", "coarse_label")
         # "alpha" keeps its FIRST row's label (0, not the duplicate's 2).
-        assert dict(zip(samples, values.tolist()))["alpha"] == 0
+        assert dict(zip(samples, values.tolist(), strict=True))["alpha"] == 0
 
     def test_no_dedupe(self, tsv_path):
         builder = LabeledTextManifestBuilder(
@@ -91,7 +91,7 @@ class TestSyntheticData:
         }
         samples, values = builder.get_rated_samples("labeled_text", "cat_label")
         assert values.dtype == np.int64
-        assert dict(zip(samples, values.tolist()))["delta"] == 0
+        assert dict(zip(samples, values.tolist(), strict=True))["delta"] == 0
 
     def test_min_class_count_filters_only_that_target(self, tsv_path):
         builder = LabeledTextManifestBuilder(

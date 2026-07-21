@@ -159,6 +159,6 @@ class TestCTFIDFIntegration:
 
         # Should have keywords for each cluster
         assert len(topics_data) >= 1
-        for topic_id, keywords in topics_data.items():
+        for _topic_id, keywords in topics_data.items():
             assert len(keywords) > 0
             assert all(isinstance(w, str) and isinstance(s, float) for w, s in keywords)

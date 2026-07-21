@@ -6,8 +6,15 @@ across layers via a concatenated feature matrix — for two model families:
 
 | Config | Model | SAEs | Layers × sites |
 |---|---|---|---|
-| `trec_gemma.yaml` | Gemma-3-4b-it | gemma-scope-2 JumpReLU 16k | 34 × {resid_post, mlp_out, attn_out} |
-| `trec_qwen.yaml` | Qwen3-1.7B | qwen-scope TopK 32k (k=50) | 28 × resid_post |
+| `trec_gemma.yaml` | Gemma-3-4b-it | gemma-scope-2 JumpReLU 16k | 34 × resid_post (pass 1); mlp_out + attn_out as commented pass 2 |
+| `trec_qwen.yaml` | Qwen3-1.7B-Base | qwen-scope TopK 32k (k=50) | 28 × resid_post |
+
+Gemma runs as a **two-pass workflow**: pass 1 (as shipped) extracts only the
+residual stream (~14 GB token cache) and runs the primary, label-bearing
+analysis; uncommenting the `*_raw` blocks and re-running the same command
+adds the mlp_out/attn_out sites as a separate extraction (~29 GB) while
+everything from pass 1 cache-hits. Qwen uses the **Base** checkpoint —
+qwen-scope SAEs are trained on the Base models.
 
 Both use the token-level two-stage pipeline (see `interpret/probing/README.md`):
 one forward pass caches every token's residuals; SAE encoding + pooling
@@ -30,13 +37,13 @@ uv run python -m interpret.probing.orchestrator experiments/trec_classification/
 
 Prerequisites: `resources/datasets/SAE/trec.tsv`; `google/gemma-3-4b-it` in
 the HF cache (`huggingface-cli download google/gemma-3-4b-it`); SAE weights
-auto-download per layer on first use. On the A100 keep `device: cuda` in the
-`sae_pooled` blocks; locally switch to `mps`.
+auto-download per layer on first use. Devices auto-detect (MPS locally,
+CUDA on the A100); set `device:` on a `sae_pooled` block only to override.
 
-Budget (full runs): qwen token cache ≈ 9.5 GB, < 1 h end-to-end. Gemma token
-cache ≈ 43 GB bf16 (needs ~50 GB free disk + RAM headroom); extraction
-~20–40 min, the 5-fold logreg/SVC probes over 102 (layer, site) keys are the
-long pole (hours).
+Budget (full runs): qwen token cache ≈ 9.5 GB, < 1 h end-to-end. Gemma pass 1
+token cache ≈ 14 GB bf16 (pass 2 adds ~29 GB); extraction ~20–40 min per
+pass, the 5-fold logreg/SVC probes are the long pole (hours for the full
+layer × site grid).
 
 ## Results tree
 

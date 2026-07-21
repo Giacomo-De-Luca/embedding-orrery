@@ -13,12 +13,13 @@ import asyncio
 import logging
 import sys
 
-logging.basicConfig(level=logging.INFO, format="%(name)s - %(message)s")
 from interpretability_backend.backend.clients.chromadb_client import ChromaDBClient
 from interpretability_backend.backend.services.topic_extraction_service import (
     TopicExtractionConfig,
     extract_topics,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(name)s - %(message)s")
 
 
 def print_topics_result(result):

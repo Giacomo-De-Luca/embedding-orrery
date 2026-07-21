@@ -253,7 +253,7 @@ class SteeringInterpretConfig:
                     "source": "neuronpedia",
                 },
             }
-            for idx, label in zip(rows["index"].to_numpy(), rows["label"].to_numpy())
+            for idx, label in zip(rows["index"].to_numpy(), rows["label"].to_numpy(), strict=True)
         ]
 
 

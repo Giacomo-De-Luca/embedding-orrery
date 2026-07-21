@@ -121,7 +121,7 @@ class GlasgowManifestBuilder(ManifestBuilder):
         for col in self._default_targets:
             source = self._infer_source(col)
             words, ratings = self.get_rated_samples(source, col)
-            rated_sets[col] = dict(zip(words, ratings))
+            rated_sets[col] = dict(zip(words, ratings, strict=True))
 
         common_words = sorted(set.intersection(*(set(d.keys()) for d in rated_sets.values())))
 

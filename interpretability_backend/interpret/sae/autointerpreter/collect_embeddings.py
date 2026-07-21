@@ -152,7 +152,7 @@ class EmbeddingCollector:
             if not samples:
                 return
             vecs = self.embedder([s["prompt"] for s in samples])
-            for sample, vec in zip(samples, vecs):
+            for sample, vec in zip(samples, vecs, strict=True):
                 self.store.append(np.asarray(vec, dtype=self.dtype), self._meta(sample))
                 rows_since_flush += 1
             pbar.update(len(samples))

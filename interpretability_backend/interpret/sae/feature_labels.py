@@ -569,7 +569,7 @@ class FeatureLabelStore:
 
         return [
             (idx, sim, labels_map.get(idx, "(unlabelled)"))
-            for idx, sim in zip(top_indices, topk.values.tolist())
+            for idx, sim in zip(top_indices, topk.values.tolist(), strict=True)
         ]
 
     # --- Write custom labels ---
@@ -631,7 +631,7 @@ class FeatureLabelStore:
 
         indices = []
         values = []
-        for val, idx in zip(topk.values, topk.indices):
+        for val, idx in zip(topk.values, topk.indices, strict=True):
             if val.item() == float("-inf"):
                 break
             indices.append(idx.item())
@@ -640,7 +640,7 @@ class FeatureLabelStore:
         labels_map = self.get_labels(indices, model_id, layer, hook, width, method)
 
         return [
-            (idx, val, labels_map.get(idx, "(unlabelled)")) for idx, val in zip(indices, values)
+            (idx, val, labels_map.get(idx, "(unlabelled)")) for idx, val in zip(indices, values, strict=True)
         ]
 
     def label_top_k_per_token(

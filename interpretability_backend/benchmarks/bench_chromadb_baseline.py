@@ -53,8 +53,8 @@ def bench_projection_load(client, collection_name: str, n_runs: int = TIMED_RUNS
         t0 = time.perf_counter()
         results = collection.get(include=["metadatas", "documents"])
         # Simulate the JSON parsing that get_projection_data() does
-        ids = results["ids"]
-        documents = results["documents"] or []
+        _ids = results["ids"]
+        _documents = results["documents"] or []
         metadatas = results["metadatas"] or []
         projections = {"pca_2d": [], "umap_2d": []}
         for meta in metadatas:
@@ -163,8 +163,8 @@ def bench_memory_projection_load(client, collection_name: str):
     snapshot_before = tracemalloc.take_snapshot()
 
     results = collection.get(include=["metadatas", "documents"])
-    ids = results["ids"]
-    documents = results["documents"] or []
+    _ids = results["ids"]
+    _documents = results["documents"] or []
     metadatas = results["metadatas"] or []
     projections = {"pca_2d": [], "umap_2d": []}
     for meta in metadatas:

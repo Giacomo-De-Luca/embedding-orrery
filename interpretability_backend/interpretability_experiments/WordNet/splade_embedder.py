@@ -31,7 +31,7 @@ class SparseEmbedding:
 
     def top_k(self, k: int = 50) -> list[tuple[int, float]]:
         """Return top k (index, value) pairs sorted by value."""
-        pairs = list(zip(self.indices, self.values))
+        pairs = list(zip(self.indices, self.values, strict=True))
         return sorted(pairs, key=lambda x: x[1], reverse=True)[:k]
 
 

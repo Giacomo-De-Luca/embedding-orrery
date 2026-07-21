@@ -77,7 +77,7 @@ target-version = "py312"
 line-length = 100
 src = ["interpretability_backend"]
 extend-exclude = [
-    "interpretability_backend/sae_inference/gemma_pytorch",
+    "interpretability_backend/interpret/forked/gemma_pytorch",
     "interpretability_backend/interpretability_experiments/WordNet/wordnet_data",
     "embedding-atlas",
     "tensorboard",

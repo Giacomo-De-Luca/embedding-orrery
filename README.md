@@ -6,9 +6,9 @@
 
 **[Try the live demo on Hugging Face Spaces](https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo)** — read-only, with a guided tour and preset views. No install needed.
 
-> **Beta.** The platform is functional and under active development, and accompanies our EMNLP 2026 system-demonstration submission. If you try it or find bugs, please get in touch, early feedback is very welcome.
+> **Beta.** The platform is functional and under active development. If you try it or find bugs, please get in touch, early feedback is very welcome.
 
-![Orrery displaying nebula mode on the WordNet dataset (212k senses), with semantic search results for "geometry" highlighted in the plot and listed in the Similar Items table](gallery/dimensionality.png)
+![Orrery displaying nebula mode on the WordNet dataset (212k senses), with semantic-search results for "geometry" highlighted among labelled topic clusters](gallery/dimensionality.png)
 
 *WordNet (212k senses) in nebula mode: points are glosses, colours are topics, semantic-search results for "geometry" are highlighted.*
 
@@ -44,13 +44,6 @@ The app ships with two small demo collections (an `emotion` sample and Gemini-em
 docker compose up --build   # frontend :3000, GraphQL :8000
 ```
 
-Published backend/frontend images can be run with the image-only override:
-
-```bash
-ORRERY_IMAGE_NAMESPACE=<dockerhub-user-or-org> \
-docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d
-```
-
 See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
@@ -65,20 +58,14 @@ See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-
 
 **Four Search Modes** — (i) *semantic* search over the original embedding space, also triggered by clicking any point; (ii) *text* search (exact, partial, or BM25, with column selection); (iii) *SAE feature search*: type "poetry" and Orrery matches SAE features by label and ranks documents by activation strength — search grounded in the model's internal representations rather than lexical or vector similarity; (iv) *prompt highlighting* on SAE collections: run a prompt through the model and every activated feature lights up, ranked and coloured by activation strength. Results render as a highlighted constellation centred on the first match.
 
-**SAE Feature Analysis** — Live inference on two model families: Gemma 3 (Gemma Scope 2, with Neuronpedia labels) and Qwen (Qwen-Scope, label-free), with from-scratch JumpReLU/TopK SAE implementations in plain PyTorch. Capture per-token activations, apply additive steering (ActAdd), and chat with the steered model side-by-side against the baseline. Visualise the SAE feature space itself as a galaxy — right-click any feature to inspect and steer.
+**SAE Feature Analysis** — Live inference on two model families: Gemma 3 (Gemma Scope 2, with Neuronpedia labels) and Qwen (Qwen-Scope, label-free), with JumpReLU/TopK SAE implementations in plain PyTorch. Capture per-token activations, apply additive steering (ActAdd), and chat with the steered model side-by-side against the baseline. Visualise the SAE feature space itself as a galaxy — right-click any feature to inspect and steer.
 
 **Probing** — Train probes directly in the interface on the stored embeddings: any metadata field serves as target, fitted with mass-mean, ridge, logistic regression, SVR, or a small MLP. Linear probes double as directions — the learned vector is stored with the collection, and points can be coloured by their projection onto it.
 
 **Density & Analytics** — 2D density contours coloured by category (ported from Embedding Atlas), an analytics panel with topic distribution and category filtering, and a draggable temporal histogram for diachronic analysis.
 
-**Analytical Colouring** — Colour by any metadata field with categorical, sequential, diverging, and monochrome scales, including 60+ Crameri perceptually-uniform scientific colormaps. Numeric legends are interactive histograms with draggable handles, so a scale skewed by outliers is re-anchored in seconds.
+**Analytical Colouring** — Colour by any metadata field with categorical, sequential, diverging, and monochrome scales, including Crameri perceptually-uniform scientific colormaps. Numeric legends are interactive histograms with draggable handles, to re-anchor scale skewed by outliers.
 
-## Case Studies
-
-Two replication studies validate the platform end-to-end (see the paper for full protocols):
-
-- **Psycholinguistic norms are linear directions** — Concreteness (40k words) and the nine Glasgow norms are visually separable in projection and linearly recoverable by probes trained in the interface (ridge R² up to 0.85 on EmbeddingGemma). Details in [`documentation/GLASGOW_PSYCHOLINGUISTIC_PROBING.md`](documentation/GLASGOW_PSYCHOLINGUISTIC_PROBING.md).
-- **Refusal is a single vector away** — Replicating Arditi et al. (2024) on Gemma-3-4b-it with the steering backend: a single difference-in-means vector at one layer suppresses refusal (ASR 0.11 → 0.83 on JailbreakBench) or induces it on 100/100 benign prompts.
 
 ## Architecture
 

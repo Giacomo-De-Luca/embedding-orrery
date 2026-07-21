@@ -30,13 +30,13 @@ def _ablation_ops_subset(
 ) -> list[SteeringOp]:
     return [
         SteeringOp(
-            layer_index=l,
+            layer_index=layer,
             mode=SteeringMode.ABLATION,
             vector=direction.detach().clone(),
             strength=0.0,
             hook_type=ht,
         )
-        for l in layers
+        for layer in layers
         for ht in hook_types
     ]
 
@@ -86,7 +86,7 @@ def main() -> None:
         manager = _make_manager(ops)
         with manager.session(wrapper.model.model.layers):
             kls = []
-            for p, base in zip(harmless, baseline_logits):
+            for p, base in zip(harmless, baseline_logits, strict=True):
                 ablated = _last_position_logits(wrapper, p)
                 kls.append(_kl_div(base, ablated))
         kls_t = torch.tensor(kls)
@@ -105,7 +105,7 @@ def main() -> None:
     manager = _make_manager(ops)
     with manager.session(wrapper.model.model.layers):
         kls = []
-        for p, base in zip(harmless, baseline_logits):
+        for p, base in zip(harmless, baseline_logits, strict=True):
             ablated = _last_position_logits(wrapper, p)
             kls.append(_kl_div(base, ablated))
     kls_t = torch.tensor(kls)

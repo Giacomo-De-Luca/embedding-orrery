@@ -240,7 +240,7 @@ class ResidualCollector:
                 captured = self._capture_vectors(sample["prompt"])
                 key = (sample["word"], sample["synset_id"])
                 for site, store, seen, (vec, seq_len) in zip(
-                    self.sites, self.stores, self._per_store_seen, captured,
+                    self.sites, self.stores, self._per_store_seen, captured, strict=True,
                 ):
                     if key in seen:
                         continue

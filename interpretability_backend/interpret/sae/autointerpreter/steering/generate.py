@@ -191,7 +191,7 @@ class SteeringGenerator:
         df = pd.read_parquet(path)
         need = set(indices)
         out: dict[int, np.ndarray] = {}
-        for i, v in zip(df["index"].to_numpy(), df["vector"].to_numpy()):
+        for i, v in zip(df["index"].to_numpy(), df["vector"].to_numpy(), strict=True):
             ii = int(i)
             if ii in need:
                 out[ii] = np.asarray(v, dtype=np.float32)
@@ -261,7 +261,7 @@ def _is_degenerate(tokens: list[int]) -> bool:
         return True
     unique_ratio = len(set(tokens)) / len(tokens)
     max_run = run = 1
-    for prev, cur in zip(tokens, tokens[1:]):
+    for prev, cur in zip(tokens, tokens[1:], strict=False):
         run = run + 1 if cur == prev else 1
         max_run = max(max_run, run)
     return unique_ratio < _MIN_UNIQUE_TOKEN_RATIO or max_run >= _MAX_REPEAT_RUN

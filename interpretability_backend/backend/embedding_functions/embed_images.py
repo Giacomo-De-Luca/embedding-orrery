@@ -177,7 +177,7 @@ def embed_images(
         documents = []
         metadatas = []
 
-        for idx, emb in zip(valid_indices, embeddings_batch):
+        for idx, emb in zip(valid_indices, embeddings_batch, strict=True):
             row = batch[idx]
             row_idx = batch_start + idx
 

@@ -560,7 +560,7 @@ class Query:
             collection = client.get_collection(collection_name, load_embedding_function=False)
             batch_ids = [r["id"] for r in rows_data]
             emb_result = collection.get(ids=batch_ids, include=["embeddings"])
-            for eid, evec in zip(emb_result["ids"], emb_result["embeddings"]):
+            for eid, evec in zip(emb_result["ids"], emb_result["embeddings"], strict=True):
                 embedding_map[eid] = evec
 
         items = []

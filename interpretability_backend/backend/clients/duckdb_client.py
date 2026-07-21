@@ -453,14 +453,14 @@ class DuckDBClient:
         columns = [desc[0] for desc in ds_cur.description]
         datasets_by_name: dict[str, dict[str, Any]] = {}
         for row in rows:
-            d = _sanitize_for_json(dict(zip(columns, row)))
+            d = _sanitize_for_json(dict(zip(columns, row, strict=True)))
             datasets_by_name[d["name"]] = d
 
         # Get all vector_collections
         vc_cur = self._exec("SELECT * FROM vector_collections ORDER BY created_at DESC")
         vc_rows = vc_cur.fetchall()
         vc_columns = [desc[0] for desc in vc_cur.description]
-        all_vcs = [dict(zip(vc_columns, vr)) for vr in vc_rows]
+        all_vcs = [dict(zip(vc_columns, vr, strict=True)) for vr in vc_rows]
 
         # Build lookup of active topic extractions keyed by collection_name
         te_rows = self._exec(
@@ -540,7 +540,7 @@ class DuckDBClient:
         if not rows:
             return None
         columns = [desc[0] for desc in cur.description]
-        d = dict(zip(columns, rows[0]))
+        d = dict(zip(columns, rows[0], strict=True))
         d["count"] = d.get("item_count", 0)
         return d
 
@@ -726,7 +726,7 @@ class DuckDBClient:
                 else:
                     col_row_indices.append(value)
 
-            df = pd.DataFrame(
+            df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
                 {
                     "id": ids,
                     "document": documents,
@@ -899,7 +899,7 @@ class DuckDBClient:
         )
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, r)) for r in rows]
+        return [dict(zip(columns, r, strict=True)) for r in rows]
 
     def get_vector_collection(self, collection_name: str) -> dict[str, Any] | None:
         """Get a vector collection by its collection_name (PK)."""
@@ -911,7 +911,7 @@ class DuckDBClient:
         if not rows:
             return None
         columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, rows[0]))
+        return dict(zip(columns, rows[0], strict=True))
 
     def get_dataset_name_for_collection(self, collection_name: str) -> str | None:
         """Return the dataset_name for a vector collection, or None."""
@@ -993,7 +993,7 @@ class DuckDBClient:
         if not item_ids:
             return 0
 
-        df = pd.DataFrame(
+        df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
             {
                 "collection_name": collection_name,
                 "item_id": item_ids,
@@ -1451,7 +1451,7 @@ class DuckDBClient:
         if not assignments:
             return 0
 
-        df = pd.DataFrame(
+        df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
             {
                 "extraction_id": extraction_id,
                 "item_id": [a["item_id"] for a in assignments],
@@ -1485,7 +1485,7 @@ class DuckDBClient:
             return None
 
         columns = [desc[0] for desc in ext_cur.description]
-        extraction = dict(zip(columns, rows[0]))
+        extraction = dict(zip(columns, rows[0], strict=True))
         if isinstance(extraction.get("quality_metrics"), str):
             extraction["quality_metrics"] = json.loads(extraction["quality_metrics"])
 
@@ -1499,7 +1499,7 @@ class DuckDBClient:
         ti_columns = [desc[0] for desc in ti_cur.description]
         topics = []
         for r in ti_rows:
-            t = dict(zip(ti_columns, r))
+            t = dict(zip(ti_columns, r, strict=True))
             if isinstance(t.get("keywords"), str):
                 t["keywords"] = json.loads(t["keywords"])
             if isinstance(t.get("subtopics"), str):
@@ -1636,7 +1636,7 @@ class DuckDBClient:
         Expected DataFrame columns: feature_index, density, label,
         top_logits (JSON str), bottom_logits (JSON str).
         """
-        insert_df = pd.DataFrame(
+        insert_df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
             {
                 "model_id": model_id,
                 "sae_id": sae_id,
@@ -1952,7 +1952,7 @@ class DuckDBClient:
         """
         if not activations:
             return 0
-        df = pd.DataFrame(
+        df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
             {
                 "collection_name": collection_name,
                 "item_id": item_id,
@@ -2112,7 +2112,7 @@ class DuckDBClient:
         )
         # Nullable Float64 keeps None as SQL NULL (plain float64 would coerce
         # None to NaN, which DuckDB stores as NaN, not NULL).
-        insert_df = pd.DataFrame(
+        insert_df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
             {
                 "collection_name": [collection_name] * n,
                 "target_field": [target_field] * n,
@@ -2521,7 +2521,7 @@ class DuckDBClient:
         cur = self._exec("SELECT * FROM chat_sessions WHERE id = ?", [session_id])
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
-        return _sanitize_for_json(dict(zip(cols, row)), json_columns=("config",))
+        return _sanitize_for_json(dict(zip(cols, row, strict=True)), json_columns=("config",))
 
     def list_chat_sessions(self, limit: int = 50) -> list[dict]:
         """List chat sessions ordered by most recently updated."""
@@ -2536,7 +2536,7 @@ class DuckDBClient:
         )
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
-        return [_sanitize_for_json(dict(zip(cols, r)), json_columns=("config",)) for r in rows]
+        return [_sanitize_for_json(dict(zip(cols, r, strict=True)), json_columns=("config",)) for r in rows]
 
     def get_chat_session_with_messages(self, session_id: str) -> dict | None:
         """Get a session with all its messages."""
@@ -2545,7 +2545,7 @@ class DuckDBClient:
         if not row:
             return None
         cols = [d[0] for d in cur.description]
-        session = _sanitize_for_json(dict(zip(cols, row)), json_columns=("config",))
+        session = _sanitize_for_json(dict(zip(cols, row, strict=True)), json_columns=("config",))
 
         msg_cur = self._exec(
             """
@@ -2560,7 +2560,7 @@ class DuckDBClient:
         msg_cols = [d[0] for d in msg_cur.description]
         session["messages"] = [
             _sanitize_for_json(
-                dict(zip(msg_cols, m)),
+                dict(zip(msg_cols, m, strict=True)),
                 json_columns=("parts", "steering_snapshot"),
             )
             for m in msg_rows
@@ -2592,7 +2592,7 @@ class DuckDBClient:
         row = cur.fetchone()
         cols = [d[0] for d in cur.description]
         return _sanitize_for_json(
-            dict(zip(cols, row)),
+            dict(zip(cols, row, strict=True)),
             json_columns=("parts", "steering_snapshot"),
         )
 

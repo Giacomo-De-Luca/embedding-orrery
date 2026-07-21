@@ -8,6 +8,7 @@ keyword extraction. Optionally generates human-readable labels via LLM
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -277,7 +278,6 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         ids = projection_data["ids"]
         documents = projection_data["documents"] or [""] * len(ids)
-        raw_metadatas = projection_data["item_metadata"] or [{}] * len(ids)
         coords = projection_data["coordinates"]
 
         total_items = len(ids)
@@ -288,7 +288,6 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         client = chromadb.PersistentClient(
             path=db_path, settings=Settings(anonymized_telemetry=False)
         )
-        collection = client.get_collection(name=config.collection_name, embedding_function=None)
 
         reduced_embeddings = np.array(coords, dtype=np.float64)
 
@@ -705,7 +704,6 @@ def reduce_existing_topics(
         client = chromadb.PersistentClient(
             path=db_path, settings=Settings(anonymized_telemetry=False)
         )
-        collection = client.get_collection(name=collection_name, embedding_function=None)
 
         # Validate has_topics via DuckDB
         active_topics = duckdb.get_active_topics(collection_name)
@@ -743,7 +741,7 @@ def reduce_existing_topics(
         doc_texts = []
         doc_topics = []
 
-        for idx, (item_id, doc) in enumerate(zip(ids, documents)):
+        for idx, (item_id, doc) in enumerate(zip(ids, documents, strict=True)):
             doc_ids.append(idx)
             doc_texts.append(doc)
             topic_id = assign_map.get(item_id, -1)
@@ -989,8 +987,6 @@ def reduce_existing_topics(
 
 # ========== Standalone LLM Label Generation ==========
 
-import re
-
 
 @dataclass
 class LlmLabelingResult:
@@ -1115,7 +1111,7 @@ def generate_llm_labels_for_collection(
         # Build documents grouped by topic for sample retrieval
         topic_docs: dict[int, list[str]] = {}
         subtopic_docs: dict[int, list[str]] = {}
-        for item_id, doc in zip(all_ids, all_documents):
+        for item_id, doc in zip(all_ids, all_documents, strict=True):
             a = assign_map.get(item_id, {})
             tid = a.get("topic_id", -1)
             if tid not in topic_docs:
@@ -1154,7 +1150,7 @@ def generate_llm_labels_for_collection(
                 sub_doc_ids = []
                 sub_doc_texts = []
                 sub_doc_topics = []
-                for idx, (item_id, doc) in enumerate(zip(all_ids, all_documents)):
+                for idx, (item_id, doc) in enumerate(zip(all_ids, all_documents, strict=True)):
                     a = assign_map.get(item_id, {})
                     stid_raw = a.get("subtopic_id")
                     if stid_raw is not None:

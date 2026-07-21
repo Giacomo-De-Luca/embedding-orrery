@@ -53,7 +53,7 @@ def _ensure_hf_login():
 
 try:
     _ensure_hf_login()
-except:
+except Exception:
     print("Internet not accessible or HF token not in env.")
 
 

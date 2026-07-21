@@ -235,7 +235,7 @@ def _run_sweep(
                 )
                 kl_vals = [
                     _kl_div(b, a)
-                    for b, a in zip(baseline_harmless_logits, ablated_harmless_logits)
+                    for b, a in zip(baseline_harmless_logits, ablated_harmless_logits, strict=True)
                 ]
                 kl_scores[source_pos, source_layer] = float(
                     sum(kl_vals) / max(len(kl_vals), 1)

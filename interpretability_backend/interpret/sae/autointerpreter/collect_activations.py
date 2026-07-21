@@ -284,7 +284,7 @@ class ActivationCollector:
             self.wrapper.generate_from_template(prompt, output_len=1)
 
         out: list[tuple[np.ndarray, int]] = []
-        for spec, sae_cfg in zip(self.specs, self.sae_configs):
+        for spec, sae_cfg in zip(self.specs, self.sae_configs, strict=True):
             # HookManager writes records under sae_id="" when only one
             # SAE is at a site, and under config.identity() when more
             # than one. Use the per-site count so configs that mix
@@ -358,7 +358,7 @@ class ActivationCollector:
                     self.unit_layout,
                     self.stores,
                     self._per_store_seen,
-                    captured,
+                    captured, strict=True,
                 ):
                     if key in seen:
                         continue
@@ -383,7 +383,7 @@ class ActivationCollector:
                         self.residual_layout,
                         self.residual_stores,
                         self._residual_seen,
-                        resid_captured,
+                        resid_captured, strict=True,
                     ):
                         if key in seen:
                             continue

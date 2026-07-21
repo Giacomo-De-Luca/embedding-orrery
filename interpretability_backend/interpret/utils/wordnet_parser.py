@@ -196,7 +196,7 @@ class WordNetParser:
     def _load_from_pickle(self) -> bool:
         """
         Try to load parsed data from pickle cache.
-        
+
         Returns:
             True if successfully loaded from cache, False otherwise.
         """

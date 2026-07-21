@@ -34,10 +34,10 @@ extractions:
 
   - {name: gemma_sae_resid_max, type: sae_pooled, source_extraction: gemma_tokens,
      site: resid_post, pooling: max, width: 16k, l0_size: medium, variant: it,
-     model_size: 4b, min_active_samples: 2, device: mps}
+     model_size: 4b, min_active_samples: 2}
   - {name: gemma_sae_attn_max, type: sae_pooled, source_extraction: gemma_tokens,
      site: attn_out, pooling: max, width: 16k, l0_size: medium, variant: it,
-     model_size: 4b, min_active_samples: 2, device: mps}
+     model_size: 4b, min_active_samples: 2}
 
   - name: gemma_sae_concat
     type: concat

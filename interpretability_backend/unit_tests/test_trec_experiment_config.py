@@ -51,9 +51,9 @@ class TestYamlParsing:
     def test_gemma_yaml_types(self):
         config = ExperimentConfig.from_yaml(EXPERIMENT_DIR / "trec_gemma.yaml")
         by_name = {e.name: e for e in config.extractions}
-        tokens = by_name["gemma_tokens"]
+        tokens = by_name["gemma_tokens_resid"]
         assert isinstance(tokens, TokenLevelExtractionConfig)
-        assert tokens.sites == ["resid_post", "mlp_out", "attn_out"]
+        assert tokens.sites == ["resid_post"]
         assert len(tokens.layers) == 34
         assert isinstance(by_name["gemma_sae_resid_max"], SAEPooledExtractionConfig)
         assert by_name["gemma_sae_resid_max"].intermediate_key == "sae_max"

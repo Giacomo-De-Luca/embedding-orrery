@@ -79,7 +79,7 @@ def populate_duckdb_from_chromadb(db: DuckDBClient, chroma_client, collection_na
         all_ids.extend(ids)
         all_docs.extend(documents)
 
-        for item_id, meta in zip(ids, metadatas):
+        for item_id, meta in zip(ids, metadatas, strict=True):
             for ptype in ("pca_2d", "pca_3d", "umap_2d", "umap_3d"):
                 if ptype in meta:
                     try:
@@ -113,7 +113,7 @@ def bench_projection_load_duckdb(
     times = []
     for _ in range(n_runs):
         t0 = time.perf_counter()
-        data = db.get_projection_data(collection_name, "umap_2d")
+        _data = db.get_projection_data(collection_name, "umap_2d")
         t1 = time.perf_counter()
         times.append(t1 - t0)
 
@@ -240,7 +240,7 @@ def bench_memory_projection_load_duckdb(db: DuckDBClient, collection_name: str, 
     tracemalloc.start()
     snapshot_before = tracemalloc.take_snapshot()
 
-    data = db.get_projection_data(collection_name, "umap_2d")
+    _data = db.get_projection_data(collection_name, "umap_2d")
 
     snapshot_after = tracemalloc.take_snapshot()
     tracemalloc.stop()

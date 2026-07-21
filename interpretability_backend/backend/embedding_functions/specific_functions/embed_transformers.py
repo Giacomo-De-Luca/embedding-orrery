@@ -23,7 +23,7 @@ class TransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             raise ValueError(
                 "The transformers and/or pytorch python package is not installed. Please install it with "
                 "`pip install transformers` or `pip install torch`"
-            )
+            ) from None
 
     @staticmethod
     def _normalize(vector: npt.NDArray) -> npt.NDArray:

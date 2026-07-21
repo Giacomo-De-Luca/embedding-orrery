@@ -219,7 +219,7 @@ class TopicReducer:
 
         # Create topic mappings (preserve -1 as separate)
         mapped_topics = {}
-        for old_topic, new_cluster in zip(non_noise_topics, cluster.labels_):
+        for old_topic, new_cluster in zip(non_noise_topics, cluster.labels_, strict=True):
             mapped_topics[old_topic] = int(new_cluster)
 
         if has_outliers:
@@ -312,7 +312,7 @@ class TopicReducer:
 
         # Map clusters to their lowest topic_id
         cluster_to_lowest = {}
-        for cluster, topic_id in zip(predictions, non_noise_topics):
+        for cluster, topic_id in zip(predictions, non_noise_topics, strict=True):
             if cluster != -1:  # Ignore unclustered items
                 if cluster not in cluster_to_lowest:
                     cluster_to_lowest[cluster] = topic_id
@@ -321,7 +321,7 @@ class TopicReducer:
 
         # Map each topic_id to the lowest topic_id in its cluster
         mapped_topics = {}
-        for cluster, topic_id in zip(predictions, non_noise_topics):
+        for cluster, topic_id in zip(predictions, non_noise_topics, strict=True):
             if cluster == -1:
                 mapped_topics[topic_id] = topic_id  # No clustering, stays the same
             else:

@@ -128,7 +128,7 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
                 license_info = getattr(hub_info.card_data, "license", None)
                 # Handle case where license is a list
                 if isinstance(license_info, list):
-                    license_info = ", ".join(str(l) for l in license_info) if license_info else None
+                    license_info = ", ".join(str(lic) for lic in license_info) if license_info else None
             if hub_info.description:
                 description = hub_info.description[:500]
         except Exception:

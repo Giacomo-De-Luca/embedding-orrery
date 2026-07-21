@@ -77,7 +77,7 @@ class EmbedTextQWEN(EmbeddingFunction[Documents]):
                 outputs.last_hidden_state, batch_dict["attention_mask"]
             )
 
-            if self.normalize == True:
+            if self.normalize:
                 ## I'm not sure if we need to normalize here or not
                 ## since the visualiser may be more interesting in non normalised embedding space
                 ## I leave the normalisation as an option

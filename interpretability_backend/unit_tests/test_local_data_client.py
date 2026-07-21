@@ -161,7 +161,7 @@ class TestDataFrameRowConversion:
         assert rows[0]["str_col"] == "hello"
         assert rows[0]["int_col"] == 1
         assert rows[0]["float_col"] == 1.5
-        assert rows[0]["bool_col"] == True
+        assert rows[0]["bool_col"] is True
 
     def test_handle_null_values(self):
         """Should convert NaN/None to None."""

@@ -188,9 +188,9 @@ def merge_feature_record(
     top_logits = None
     bottom_logits = None
     if feat.get("pos_str"):
-        top_logits = list(zip(feat["pos_str"], feat.get("pos_values", [])))
+        top_logits = list(zip(feat["pos_str"], feat.get("pos_values", []), strict=False))
     if feat.get("neg_str"):
-        bottom_logits = list(zip(feat["neg_str"], feat.get("neg_values", [])))
+        bottom_logits = list(zip(feat["neg_str"], feat.get("neg_values", []), strict=False))
 
     return {
         "model_id": feat.get("modelId", expl.get("modelId", model_id)),

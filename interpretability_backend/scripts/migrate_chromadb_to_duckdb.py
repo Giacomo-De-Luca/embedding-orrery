@@ -146,7 +146,7 @@ def migrate_collection(db: DuckDBClient, chroma_client, collection_name: str) ->
         all_ids.extend(batch_ids)
         all_docs.extend(batch_docs)
 
-        for item_id, item_meta in zip(batch_ids, batch_metas):
+        for item_id, item_meta in zip(batch_ids, batch_metas, strict=True):
             if item_meta is None:
                 item_meta = {}
             # Extract projections (JSON strings -> float lists)

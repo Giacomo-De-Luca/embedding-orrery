@@ -620,7 +620,7 @@ def render_heatmap(
         axes = np.array([axes])
 
     last_mesh = None
-    for i, (ax, exp) in enumerate(zip(axes, experiments)):
+    for i, (ax, exp) in enumerate(zip(axes, experiments, strict=True)):
         sub = df[df["experiment"] == exp].copy()
         sub["col"] = sub["ctx"] + "_" + sub["sec"]
         pivot = sub.pivot(index="cat", columns="col", values=value_col).reindex(

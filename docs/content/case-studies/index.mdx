@@ -1,0 +1,32 @@
+# Case Studies
+
+Two replication studies validate the platform end-to-end, each exercising a
+different subsystem: finding and confirming linear directions with probe
+training in the collection workflow, and activation caching plus steering in
+the interpretability backend. Both are described in full in the EMNLP 2026
+system-demonstration paper.
+
+## Psycholinguistic norms are linear directions
+
+Concreteness ratings (~40k words) and the nine Glasgow norms are visually
+separable in projection and linearly recoverable by probes trained in the
+interface: ridge regression reaches R² = 0.85 for concreteness on
+EmbeddingGemma, and all nine Glasgow dimensions are linearly encoded
+(R² 0.59–0.85). Nonlinear probes add little (SVR − ridge ≤ 0.1), supporting
+the linear-representation picture in sentence-embedding spaces.
+
+![The Brysbaert concreteness norms on MiniLM: the concrete/abstract direction is visible as a spatial gradient](/gallery/concreteness_white.png)
+
+The full protocol, per-dimension results, and model comparison are in
+[Glasgow Probing](/case-studies/glasgow-probing).
+
+## Refusal is a single vector away
+
+Replicating Arditi et al. (2024) on Gemma-3-4b-it with the steering backend: a
+refusal direction extracted by difference-in-means and injected with ActAdd at
+a single layer suppresses refusal — attack success rises from 0.11 to 0.83 on
+JailbreakBench and from 0.21 to 0.86 on HarmBench-test (judged by
+Llama-Guard-4-12B) — or induces refusal on 100/100 entirely benign prompts.
+
+The released code contains the extraction and evaluation pipeline only; no
+harmful completions or refusal vectors are distributed.

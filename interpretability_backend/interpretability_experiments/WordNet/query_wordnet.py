@@ -28,8 +28,8 @@ def query_wordnet(collection, query_text, n_results=10, show_examples=False):
     print(f"Top {n_results} results:")
     print("=" * 70)
 
-    for i, (doc_id, doc, distance) in enumerate(
-        zip(results["ids"][0], results["documents"][0], results["distances"][0]), 1
+    for i, (_doc_id, _doc, distance) in enumerate(
+        zip(results["ids"][0], results["documents"][0], results["distances"][0], strict=True), 1
     ):
         meta = results["metadatas"][0][i - 1]
 

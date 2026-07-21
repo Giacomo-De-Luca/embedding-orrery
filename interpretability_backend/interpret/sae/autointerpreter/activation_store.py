@@ -131,7 +131,7 @@ class ActivationStore(ABC):
         tbl = pq.read_table(
             self.index_path, columns=["word", "synset_id"],
         ).to_pandas()
-        return set(zip(tbl["word"].tolist(), tbl["synset_id"].tolist()))
+        return set(zip(tbl["word"].tolist(), tbl["synset_id"].tolist(), strict=True))
 
     # ── Loaders (used by Stage 2 onward) ────────────────────────────────
 

@@ -33,7 +33,10 @@ extractions:
   - name: qwen_tokens
     type: token_residuals
     family: qwen
-    checkpoint: Qwen/Qwen3-1.7B
+    # Base checkpoint: qwen-scope SAEs are trained on the Base models
+    # (repo names carry '-Base'); switch to Qwen/Qwen3-1.7B to probe
+    # the instruct model instead (rename extractions for a fresh cache).
+    checkpoint: Qwen/Qwen3-1.7B-Base
     layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
              18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
     sites: [resid_post]
@@ -55,7 +58,6 @@ extractions:
     k: 50
     width: 32k          # explicit: sae_analysis label lookup reads this
     min_active_samples: 10
-    device: cuda        # mps for local runs
 
   - name: qwen_sae_last
     type: sae_pooled
@@ -66,7 +68,6 @@ extractions:
     k: 50
     width: 32k
     min_active_samples: 10
-    device: cuda
 
   # All layers' max-pooled SAE features as one wide matrix; per-column
   # names L{layer}_resid_post_f{true_idx} flow into feature_importance.csv.

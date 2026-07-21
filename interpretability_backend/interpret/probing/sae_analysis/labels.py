@@ -48,7 +48,7 @@ def load_feature_labels(
     for path in candidates:
         if path.exists():
             df = pd.read_parquet(path, columns=["index", "label"])
-            return dict(zip(df["index"], df["label"].fillna("")))
+            return dict(zip(df["index"], df["label"].fillna(""), strict=True))
     return {}
 
 

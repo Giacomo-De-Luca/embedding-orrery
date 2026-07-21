@@ -66,6 +66,18 @@ aware, multiclass-aware with per-feature `top_class`) and
   alphabetical categorical encoding, per-target `min_class_count`
   (StratifiedKFold(k) needs ≥ k members per class; TREC `fine_label`'s
   smallest class has 4).
+- **Post-review fixes**: Gemma token extraction uses `generate_from_template`
+  (raw BOS + text) — `generate()` would wrap prompts in the chat template,
+  whose constant tokens pollute max pooling; direction `.npz` files are now
+  keyed by the probe's **name**, not kind (custom-named probes like
+  `logreg_cv` previously made `top_features` silently skip every layer);
+  the fold-aware coef loader is shared via `sae_analysis/directions.py`
+  (feature_sweep's lasso ranking included); `device:` on a gemma
+  `token_residuals` config raises instead of being silently ignored;
+  dead-filter mask created on the pooled tensor's device (CPU mask on a
+  CUDA tensor raises). Deferred follow-ups: shared token-source validation
+  helper, evicting `skip_probes` datasets after their last dependent
+  (relevant below ~128 GB RAM), cache-exempting execution-only knobs.
 
 ## Memory budget (TREC, ~5.9k deduped questions, ~83k tokens)
 

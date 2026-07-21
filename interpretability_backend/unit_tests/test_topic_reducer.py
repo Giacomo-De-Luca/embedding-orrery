@@ -136,7 +136,7 @@ class TestReduceToNTopics:
         result = reducer.reduce_to_n_topics(n_topics=5, use_ctfidf=True)
 
         # Check that all topics have keywords
-        for topic_id, keywords in result.topics_data.items():
+        for _topic_id, keywords in result.topics_data.items():
             assert len(keywords) > 0
             # Each keyword is a (word, score) tuple
             for word, score in keywords:
@@ -289,7 +289,7 @@ class TestKeywordReextraction:
         result = reducer.reduce_to_n_topics(n_topics=5, use_ctfidf=True)
 
         # All topics should have keywords
-        for topic_id, keywords in result.topics_data.items():
+        for _topic_id, keywords in result.topics_data.items():
             assert len(keywords) > 0
             # Keywords should be different from originals (merged content)
             # Just verify structure
@@ -301,7 +301,7 @@ class TestKeywordReextraction:
         """Test that keywords are sorted by score (descending)."""
         result = reducer.reduce_to_n_topics(n_topics=5, use_ctfidf=True)
 
-        for topic_id, keywords in result.topics_data.items():
+        for _topic_id, keywords in result.topics_data.items():
             scores = [score for _, score in keywords]
             # Check descending order
             assert scores == sorted(scores, reverse=True)

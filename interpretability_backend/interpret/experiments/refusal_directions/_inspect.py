@@ -150,7 +150,7 @@ def main() -> None:
         ),
         MAX_NEW_TOKENS,
     )
-    for prompt, b, a, x in zip(HARMFUL_PROMPTS, baseline_h, ablation_h, actadd_h):
+    for prompt, b, a, x in zip(HARMFUL_PROMPTS, baseline_h, ablation_h, actadd_h, strict=True):
         _print_block(
             prompt,
             {
@@ -172,7 +172,7 @@ def main() -> None:
         ),
         MAX_NEW_TOKENS,
     )
-    for prompt, b, x in zip(HARMLESS_PROMPTS, baseline_b, actadd_b):
+    for prompt, b, x in zip(HARMLESS_PROMPTS, baseline_b, actadd_b, strict=True):
         _print_block(
             prompt,
             {

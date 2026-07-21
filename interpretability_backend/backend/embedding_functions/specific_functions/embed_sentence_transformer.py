@@ -65,7 +65,7 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             raise ValueError(
                 "The sentence_transformers python package is not installed. "
                 "Please install it with `pip install sentence_transformers`"
-            )
+            ) from None
 
         self.model_name = model_name
         self.device = device
@@ -161,7 +161,7 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         kwargs = config.get("kwargs", {})
 
         if model_name is None or device is None or normalize_embeddings is None:
-            assert False, "This code should not be reached"
+            raise AssertionError("This code should not be reached")
 
         return SentenceTransformerEmbeddingFunction(
             model_name=model_name,

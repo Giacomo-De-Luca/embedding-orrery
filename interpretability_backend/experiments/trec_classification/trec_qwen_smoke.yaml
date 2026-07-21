@@ -20,7 +20,10 @@ extractions:
   - name: qwen_tokens
     type: token_residuals
     family: qwen
-    checkpoint: Qwen/Qwen3-1.7B
+    # Base checkpoint: qwen-scope SAEs are trained on the Base models
+    # (repo names carry '-Base'); switch to Qwen/Qwen3-1.7B to probe
+    # the instruct model instead (rename extractions for a fresh cache).
+    checkpoint: Qwen/Qwen3-1.7B-Base
     layers: [0, 7, 14, 21, 27]
     sites: [resid_post]
     storage_dtype: bfloat16
@@ -40,7 +43,6 @@ extractions:
     k: 50
     width: 32k
     min_active_samples: 2
-    device: mps
 
   - name: qwen_sae_concat
     type: concat

@@ -126,7 +126,7 @@ def run_alignment_check(
         f"at position {our_pos} (rank {target_rank + 1} of {d_sae} at that token)"
     )
     print(f"  Top-5 features at position {our_pos}:")
-    for val, idx in zip(topk_at_pos.values.tolist(), topk_at_pos.indices.tolist()):
+    for val, idx in zip(topk_at_pos.values.tolist(), topk_at_pos.indices.tolist(), strict=True):
         marker = " <-- target" if idx == case.feature else ""
         print(f"    feat {idx:6d}  act={val:8.1f}{marker}")
 
