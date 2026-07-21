@@ -16,10 +16,12 @@ import {
 describe('probeParamFields', () => {
   it('returns the relevant controls per kind', () => {
     expect(probeParamFields('ridge')).toEqual(['alpha']);
+    expect(probeParamFields('lasso')).toEqual(['alpha']);
     expect(probeParamFields('svr')).toEqual(['c', 'kernel']);
     expect(probeParamFields('logreg')).toEqual(['c', 'classWeight']);
-    expect(probeParamFields('mlp')).toEqual(['hiddenSize', 'epochs']);
+    expect(probeParamFields('mlp')).toEqual(['hiddenSize', 'epochs', 'patience']);
     expect(probeParamFields('massmean')).toEqual([]);
+    expect(probeParamFields('massmean_cov')).toEqual([]);
   });
 });
 
@@ -77,8 +79,46 @@ describe('buildTrainProbeInput', () => {
   });
 
   it('sends shared seed/split when non-default', () => {
-    const v = buildTrainProbeInput('col', 'f', 'ridge', { ...base, seed: 7, trainSplit: 0.7 });
-    expect(v.seed).toBe(7);
+    const v = buildTrainProbeInput('col', 'f', 'ridge', { ...base, seed: 9, trainSplit: 0.7 });
+    expect(v.seed).toBe(9);
     expect(v.trainSplit).toBe(0.7);
+  });
+
+  it('default seed matches the backend default and is omitted', () => {
+    // The popover shows the backend's own default (42); sending nothing must
+    // therefore train with exactly the displayed value.
+    expect(DEFAULT_PROBE_PARAMS.seed).toBe(42);
+    expect(buildTrainProbeInput('col', 'f', 'ridge', base).seed).toBeUndefined();
+  });
+
+  it('closed-form massmean_cov sends kind only at defaults', () => {
+    expect(buildTrainProbeInput('col', 'f', 'massmean_cov', base)).toEqual({
+      collectionName: 'col',
+      targetField: 'f',
+      kind: 'massmean_cov',
+    });
+  });
+
+  it('lasso sends a changed alpha', () => {
+    expect(buildTrainProbeInput('col', 'f', 'lasso', { ...base, alpha: 0.01 }).alpha).toBe(0.01);
+  });
+
+  it('sends mlp patience only when changed, and only for mlp', () => {
+    expect(buildTrainProbeInput('col', 'f', 'mlp', base).patience).toBeUndefined();
+    expect(
+      buildTrainProbeInput('col', 'f', 'mlp', { ...base, patience: 5 }).patience,
+    ).toBe(5);
+    // Patience is an mlp knob; other kinds never send it.
+    expect(
+      buildTrainProbeInput('col', 'f', 'ridge', { ...base, patience: 5 }).patience,
+    ).toBeUndefined();
+  });
+
+  it('sends shared maxTrainSamples when non-default, for any kind', () => {
+    expect(buildTrainProbeInput('col', 'f', 'ridge', base).maxTrainSamples).toBeUndefined();
+    expect(
+      buildTrainProbeInput('col', 'f', 'massmean', { ...base, maxTrainSamples: 10000 })
+        .maxTrainSamples,
+    ).toBe(10000);
   });
 });

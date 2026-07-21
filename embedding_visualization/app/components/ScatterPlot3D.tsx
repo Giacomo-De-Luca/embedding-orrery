@@ -21,6 +21,7 @@ import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
 import { capture3DPlot } from '../../lib/utils/plotCapture';
+import { PointTraceColumns3D } from '../../lib/utils/pointTraceColumns3D';
 import { toast } from 'sonner';
 
 type PlotlyData = Partial<PlotData>;
@@ -36,10 +37,11 @@ function buildScatter3dTrace(
     colorscaleOpts?: { colorscale: any; cmin: number; cmax: number };
   },
 ): PlotlyData {
+  const columns = PointTraceColumns3D.fromPoints(pts);
   const trace: PlotlyData = {
-    x: pts.map(p => p.x),
-    y: pts.map(p => p.y),
-    z: pts.map(p => p.z),
+    x: columns.x,
+    y: columns.y,
+    z: columns.z,
     mode: 'markers',
     type: 'scatter3d',
     name: opts.name,
@@ -56,7 +58,7 @@ function buildScatter3dTrace(
       }),
     },
     hoverinfo: 'none',
-    customdata: pts.map(p => p.index) as any,
+    customdata: columns.pointIndices as any,
     showlegend: false,
   };
   return trace;
@@ -66,7 +68,7 @@ function buildScatter3dTrace(
 function buildIndexedScatter3dTrace(
   allX: ArrayLike<number>, allY: ArrayLike<number>, allZ: ArrayLike<number>,
   indices: number[],
-  pointIndices: number[],
+  pointIndices: ArrayLike<number>,
   opts: {
     name: string;
     size: number;
@@ -75,10 +77,17 @@ function buildIndexedScatter3dTrace(
     colorscaleOpts?: { colorscale: any; cmin: number; cmax: number };
   },
 ): PlotlyData {
+  const columns = PointTraceColumns3D.fromIndexedColumns(
+    allX,
+    allY,
+    allZ,
+    indices,
+    pointIndices,
+  );
   const trace: PlotlyData = {
-    x: indices.map(i => allX[i]),
-    y: indices.map(i => allY[i]),
-    z: indices.map(i => allZ[i]),
+    x: columns.x,
+    y: columns.y,
+    z: columns.z,
     mode: 'markers',
     type: 'scatter3d',
     name: opts.name,
@@ -95,7 +104,7 @@ function buildIndexedScatter3dTrace(
       }),
     },
     hoverinfo: 'none',
-    customdata: indices.map(i => pointIndices[i]) as any,
+    customdata: columns.pointIndices as any,
     showlegend: false,
   };
   return trace;
@@ -506,10 +515,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       // --- MODE: NATIVE COLORSCALE (GPU ACCELERATED) ---
       const csOpts = { colorscale: plotlyColorScale as any, cmin: effectiveRange!.min, cmax: effectiveRange!.max };
       const n = displayPoints.length;
-      const allX = new Float64Array(n);
-      const allY = new Float64Array(n);
-      const allZ = new Float64Array(n);
-      const pointIndices = new Array<number>(n);
+      const allX = new Float32Array(n);
+      const allY = new Float32Array(n);
+      const allZ = new Float32Array(n);
+      const pointIndices = new Uint32Array(n);
       for (let i = 0; i < n; i++) {
         const p = displayPoints[i];
         allX[i] = p.x;

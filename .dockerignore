@@ -37,8 +37,7 @@ interpretability_backend/resources/sae_vectors
 interpretability_backend/resources/refusal_direction
 interpretability_backend/resources/experiments
 interpretability_backend/resources/extracted_activations
-# The ~313 MB HF Space demo seed must not bloat the compose backend image;
-# builds of the root Dockerfile use Dockerfile.dockerignore, which includes it.
+# The large demo seed is downloaded from a locked private HF Dataset revision.
 interpretability_backend/resources/seed_demo
 !interpretability_backend/resources/seed
 !interpretability_backend/resources/seed/**

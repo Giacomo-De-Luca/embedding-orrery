@@ -18,11 +18,66 @@ import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/us
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
-import type { HighlightMap, ColorScale } from '../lib/types/types';
+import type { HighlightMap, ColorScale, ColorScaleType } from '../lib/types/types';
 import { getSaeInfo, getSaeInfoFromMetadata, isSaeFeatureCollection } from '../lib/utils/saeCollections';
 import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
+import { mergeViewSearch, shouldDropPreset, type OwnedViewParams } from '../lib/utils/urlViewParams';
+import { useHfSpaceUrlSync } from '../lib/hooks/useHfSpaceUrlSync';
+import {
+  getPreset,
+  seedInitialColorState,
+  resolveInitialCollection,
+  presetStoreOps,
+  type PresetDefinition,
+} from '../lib/utils/tourPresets';
+import {
+  getOnboardingAction,
+  readIntroSeen,
+  markIntro,
+  type OnboardingAction,
+} from '../lib/utils/demoOnboarding';
+import { IS_DEMO } from '../lib/utils/demoMode';
+import { DemoIntro } from './components/DemoIntro';
+import type { TourRuntime } from '../lib/utils/tourSteps';
+import dynamic from 'next/dynamic';
+
+// Loaded on demand so regular visits never pay for the tour library.
+const TourController = dynamic(
+  () => import('./components/TourController'),
+  { ssr: false },
+);
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
+
+/** Execute a preset's store mutations (method/mode/flags) imperatively. */
+function runPresetStoreOps(preset: PresetDefinition) {
+  const state = useVisualizationStore.getState();
+  for (const op of presetStoreOps(preset)) {
+    if (op.kind === 'method') state.setMethod(op.value);
+    else if (op.kind === 'mode') state.setMode(op.value);
+    else state.setFlag(op.flag, op.value);
+  }
+}
+
+/**
+ * Apply a colour scheme to the store. A recommended scale is only resolved
+ * when no explicit scale was provided (e.g. a shared link or preset carrying
+ * only a field); otherwise the scale is applied as-is.
+ */
+function applyColorScheme(
+  field: string,
+  scale: ColorScale | null,
+  palette: string | null,
+  colorFieldOptions: ReadonlyArray<{ field: string; recommendedScale?: ColorScaleType }>,
+) {
+  const state = useVisualizationStore.getState();
+  const recommended = scale
+    ? undefined
+    : colorFieldOptions.find(f => f.field === field)?.recommendedScale;
+  state.setColorByField(field, recommended);
+  if (scale) state.setColorScale(scale);
+  if (palette) state.setCategoricalPalette(palette);
+}
 
 export default function Home() {
   return (
@@ -40,31 +95,73 @@ function HomeContent() {
   const { collections, loading: collectionsLoading, error: collectionsError } = useCollections();
   const searchParams = useSearchParams();
   const router = useRouter();
+  // Mirror the app URL to the HF Space parent page (no-op outside an iframe).
+  useHfSpaceUrlSync();
   const collectionFromUrl = searchParams.get('collection');
   const colorByFromUrl = searchParams.get('colorBy');
   const isInitialLoad = useRef(true);
-  const initialColorByRef = useRef(colorByFromUrl);
-  // Color-scheme params captured from the URL on first render (applied once data loads)
-  const initialColorScaleRef = useRef(deserializeColorScale({
-    scale: searchParams.get('scale'),
-    scaleName: searchParams.get('scaleName'),
-    color: searchParams.get('color'),
-  }));
-  const initialPaletteRef = useRef(searchParams.get('palette'));
+  // Demo preset (`?preset=`) latched once at first render; its colour block
+  // seeds the same initial refs as explicit URL colour params (URL wins).
+  const initialPresetRef = useRef(getPreset(searchParams.get('preset')));
+  // Colour scheme captured from the URL/preset on first render (applied once data loads)
+  const initialColorSeed = useRef(seedInitialColorState({
+    urlColorBy: colorByFromUrl,
+    urlScale: deserializeColorScale({
+      scale: searchParams.get('scale'),
+      scaleName: searchParams.get('scaleName'),
+      color: searchParams.get('color'),
+    }),
+    urlPalette: searchParams.get('palette'),
+    preset: initialPresetRef.current,
+  })).current;
+  const initialColorByRef = useRef(initialColorSeed.colorBy);
+  const initialColorScaleRef = useRef(initialColorSeed.scale);
+  const initialPaletteRef = useRef(initialColorSeed.palette);
+  // One-shot onboarding decision (`?tour=1` / `?intro=1` / demo first visit),
+  // latched before the URL-sync effect strips the one-shot params.
+  const [onboarding] = useState<OnboardingAction>(() =>
+    typeof window === 'undefined'
+      ? null
+      : getOnboardingAction({
+          isDemo: IS_DEMO,
+          search: window.location.search,
+          introSeen: readIntroSeen(),
+          viewportWidth: window.innerWidth,
+        }),
+  );
+  const [introOpen, setIntroOpen] = useState(onboarding === 'intro');
+  const [tourRequested, setTourRequested] = useState(onboarding === 'tour');
+  // A preset applied mid-session (welcome-dialog buttons); its colour block is
+  // applied by a dedicated effect once the collection's data has loaded.
+  const [pendingPreset, setPendingPreset] = useState<PresetDefinition | null>(null);
+
+  // Apply the initial preset's store flags once, after persisted preferences
+  // rehydrate (preset > persisted prefs; flags have no URL representation).
+  useEffect(() => {
+    const preset = initialPresetRef.current;
+    if (!preset) return;
+    const apply = () => runPresetStoreOps(preset);
+    if (useVisualizationStore.persist.hasHydrated()) {
+      apply();
+      return;
+    }
+    return useVisualizationStore.persist.onFinishHydration(apply);
+  }, []);
 
   // Default to the first available collection
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
 
-  // Select collection from URL param, or auto-select first collection
+  // Select the initial collection: URL > preset > demo default > first key
   useEffect(() => {
     if (collections && !selectedCollection) {
-      if (collectionFromUrl && collections[collectionFromUrl]) {
-        setSelectedCollection(collectionFromUrl);
-      } else {
-        const firstCollection = Object.keys(collections)[0];
-        if (firstCollection) {
-          setSelectedCollection(firstCollection);
-        }
+      const initial = resolveInitialCollection({
+        urlCollection: collectionFromUrl,
+        presetCollection: initialPresetRef.current?.collection ?? null,
+        isDemo: IS_DEMO,
+        manifestKeys: Object.keys(collections),
+      });
+      if (initial) {
+        setSelectedCollection(initial);
       }
     }
   }, [collections, selectedCollection, collectionFromUrl]);
@@ -95,16 +192,17 @@ function HomeContent() {
     [colorFieldOptions, probes.fieldOptions],
   );
 
-  // Sync URL when collection or colorBy changes
+  // Sync URL when collection or colorBy changes. Owned params are merged into
+  // the current search string so unknown params (and `preset` while it still
+  // applies) survive; one-shot params (`tour`/`intro`) are always stripped.
   useEffect(() => {
     if (!selectedCollection) return;
-    const params = new URLSearchParams();
-    params.set('collection', selectedCollection);
+    const owned: OwnedViewParams = { collection: selectedCollection };
     // During initial load, preserve colorBy from the original URL until state catches up
     const effectiveColorBy = colorByField
       ?? (isInitialLoad.current ? initialColorByRef.current : null);
     if (effectiveColorBy) {
-      params.set('colorBy', effectiveColorBy);
+      owned.colorBy = effectiveColorBy;
       // Encode the color scheme alongside the field. During initial load the
       // store hasn't applied the URL state yet, so prefer the original URL refs.
       const effectiveScale = isInitialLoad.current
@@ -114,12 +212,23 @@ function HomeContent() {
         ? (initialPaletteRef.current ?? categoricalPalette)
         : categoricalPalette;
       const colorParams = serializeColorScale(effectiveScale, effectivePalette ?? undefined);
-      if (colorParams.scale) params.set('scale', colorParams.scale);
-      if (colorParams.scaleName) params.set('scaleName', colorParams.scaleName);
-      if (colorParams.color) params.set('color', colorParams.color);
-      if (colorParams.palette) params.set('palette', colorParams.palette);
+      owned.scale = colorParams.scale ?? null;
+      owned.scaleName = colorParams.scaleName ?? null;
+      owned.color = colorParams.color ?? null;
+      owned.palette = colorParams.palette ?? null;
+    } else {
+      owned.colorBy = null;
+      owned.scale = null;
+      owned.scaleName = null;
+      owned.color = null;
+      owned.palette = null;
     }
-    const newSearch = `?${params.toString()}`;
+    // `?preset=` stays while the user is on the preset's collection, so the
+    // link keeps reproducing its non-URL flags (nebula, cluster labels, …).
+    if (shouldDropPreset(initialPresetRef.current?.collection, selectedCollection)) {
+      owned.preset = null;
+    }
+    const newSearch = mergeViewSearch(window.location.search, owned);
     // Only navigate if the URL actually changed
     if (newSearch !== window.location.search) {
       router.replace(newSearch, { scroll: false });
@@ -180,7 +289,7 @@ function HomeContent() {
 
   const { points2d, points3d } = useVisualizationPoints(
     probes.augmentedData ?? data,
-    { method, searchQuery },
+    { method, mode, searchQuery },
   );
 
   // Resolve a search result ID to its visualization point (used by useAppSearch
@@ -224,7 +333,8 @@ function HomeContent() {
   // Prompt activation only applies when the points themselves are SAE features;
   // document collections linked to an SAE keep saeInfo for the feature search.
   const saeFeatureInfo = isSaeFeatureCollection(data?.availableFields) ? saeInfo : null;
-  const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(null);
+  // Default 0.01 matches the SAE page; clearing the input disables the filter.
+  const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(0.01);
   const promptHighlight = usePromptHighlight(saeFeatureInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
 
   // Document feature search (two-hop: label → features → documents)
@@ -243,7 +353,8 @@ function HomeContent() {
     (query: string) => {
       promptHighlight.clear();
       featureSearch.clearFeatures();
-      handleSemanticSearch(query);
+      // Returned so imperative callers (the demo tour) can await completion.
+      return handleSemanticSearch(query);
     },
     [handleSemanticSearch, promptHighlight.clear, featureSearch.clearFeatures],
   );
@@ -314,6 +425,9 @@ function HomeContent() {
     featureSearch.clearFeatures();
     setQueryPromptName(null);
     store.getState().resetForCollectionChange();
+    // A preset queued for a different collection no longer applies — without
+    // this, revisiting its collection much later would replay its colours.
+    setPendingPreset(prev => (prev && prev.collection !== selectedCollection ? null : prev));
   }, [selectedCollection, resetSearch, promptHighlight.clear, featureSearch.clearFeatures]);
 
   // Apply the colour scheme for the active collection once its data is loaded.
@@ -355,15 +469,67 @@ function HomeContent() {
     }
 
     if (!field) return;
-    // A recommended scale is only needed when no explicit scale was provided
-    // (e.g. a shared link with colorBy but no scale). Otherwise apply the scale as-is.
-    const recommended = scale
-      ? undefined
-      : colorFieldOptions.find(f => f.field === field)?.recommendedScale;
-    store.getState().setColorByField(field, recommended);
-    if (scale) store.getState().setColorScale(scale);
-    if (palette) store.getState().setCategoricalPalette(palette);
+    applyColorScheme(field, scale, palette, colorFieldOptions);
   }, [selectedCollection, loadedCollection, collections, colorFieldOptions]);
+
+  // Apply a mid-session preset's colour block once its collection has loaded.
+  // Declared after the default-scheme effect so it runs later in the same
+  // commit and wins over the collection default (preset > collection default).
+  useEffect(() => {
+    if (!pendingPreset || loadedCollection !== pendingPreset.collection || colorFieldOptions.length === 0) return;
+    const { color } = pendingPreset;
+    setPendingPreset(null);
+    if (!color) return;
+    applyColorScheme(color.colorBy, color.scale ?? null, color.palette ?? null, colorFieldOptions);
+  }, [pendingPreset, loadedCollection, colorFieldOptions]);
+
+  // Welcome-dialog actions: apply a curated preset / start the guided tour.
+  // Deliberately does NOT write `?preset=` to the URL — the param describes a
+  // link-entry state; interactive use keeps the URL on the regular
+  // collection/colour params only.
+  const applyPresetLive = useCallback((presetId: string) => {
+    const preset = getPreset(presetId);
+    if (!preset || !collections?.[preset.collection]) return;
+    setIntroOpen(false);
+    setSelectedCollection(preset.collection);
+    runPresetStoreOps(preset);
+    setPendingPreset(preset);
+  }, [collections]);
+
+  // Collections present in the manifest — gates the dialog's preset buttons.
+  const availableCollections = useMemo(
+    () => (collections ? new Set(Object.keys(collections)) : null),
+    [collections],
+  );
+
+  const startTour = useCallback(() => {
+    setIntroOpen(false);
+    setTourRequested(true);
+  }, []);
+
+  // Imperative surface for the tour's prepare hooks. The runtime MUST be
+  // identity-stable AND always-fresh: react-joyride deep-compares steps with
+  // function source-text equality, so rebuilt `before` closures are treated
+  // as unchanged and the runtime captured at the tour's first render would be
+  // used for the whole tour. Every capture-prone piece therefore delegates
+  // through a ref reassigned each render (same pattern as screenshotHandlerRef).
+  const loadedCollectionRef = useRef(loadedCollection);
+  loadedCollectionRef.current = loadedCollection;
+  const applyPresetLiveRef = useRef(applyPresetLive);
+  applyPresetLiveRef.current = applyPresetLive;
+  const runSearchRef = useRef(wrappedHandleSemanticSearch);
+  runSearchRef.current = wrappedHandleSemanticSearch;
+  const tourRuntime = useMemo<TourRuntime>(() => ({
+    applyPreset: (presetId: string) => applyPresetLiveRef.current(presetId),
+    runSearch: async (query: string) => {
+      await runSearchRef.current(query);
+    },
+    setActivePanel,
+    setShowLabels: (value: boolean) =>
+      useVisualizationStore.getState().setFlag('showLabels', value),
+    getLoadedCollection: () => loadedCollectionRef.current ?? null,
+    getColorByField: () => useVisualizationStore.getState().colorByField,
+  }), []);
 
   // Auto-reset of mutedCategories on colorByField change is handled by the store subscription
 
@@ -387,6 +553,7 @@ function HomeContent() {
               onToggleSearch={toggleSearch}
               onToggleAnalytics={toggleAnalytics}
               saeInfo={saeInfo}
+              onOpenIntro={IS_DEMO ? () => setIntroOpen(true) : undefined}
             />
           </div>
         </div>
@@ -476,6 +643,16 @@ function HomeContent() {
             </div>
           )}
         </div>
+        <DemoIntro
+          open={introOpen}
+          onOpenChange={setIntroOpen}
+          onStartTour={startTour}
+          onApplyPreset={applyPresetLive}
+          availableCollections={availableCollections}
+        />
+        {tourRequested && (
+          <TourController runtime={tourRuntime} onDone={() => setTourRequested(false)} />
+        )}
       </SidebarInset>
     </SidebarProvider>
   );

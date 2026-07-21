@@ -239,9 +239,17 @@ function ProbeSettingsPopover({
             onChange={(v) => set({ epochs: v })}
           />
         )}
+        {fields.includes('patience') && (
+          <ParamNumberRow
+            label="Patience"
+            value={params.patience}
+            min={1}
+            onChange={(v) => set({ patience: v })}
+          />
+        )}
         {fields.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            Mass-mean is closed-form — no hyperparameters.
+            Mass-mean probes are closed-form — no hyperparameters.
           </p>
         )}
         <div className="border-t pt-2">
@@ -258,6 +266,15 @@ function ProbeSettingsPopover({
               min={0.5}
               max={0.95}
               onChange={(v) => set({ trainSplit: v })}
+            />
+          </div>
+          <div className="pt-2">
+            <ParamNumberRow
+              label="Max samples"
+              value={params.maxTrainSamples}
+              step={1000}
+              min={100}
+              onChange={(v) => set({ maxTrainSamples: v })}
             />
           </div>
         </div>

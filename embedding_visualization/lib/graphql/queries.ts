@@ -24,12 +24,22 @@ export const GET_COLLECTIONS = gql`
  * Non-requested projections return null.
  */
 export const GET_COLLECTION_DATA = gql`
-  query GetCollectionData($name: String!, $projectionTypes: [String!]) {
-    collection(name: $name, projectionTypes: $projectionTypes) {
+  query GetCollectionData(
+    $name: String!
+    $projectionTypes: [String!]
+    $includeCore: Boolean = true
+  ) {
+    collection(
+      name: $name
+      projectionTypes: $projectionTypes
+      includeCore: $includeCore
+    ) {
       ids
       documents
       itemMetadata
       availableFields
+      itemSignature
+      projectionSignatures
       pca2d
       pca3d
       umap2d

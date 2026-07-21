@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "demo",
+  "output": "interpretability_backend/resources/seed_demo",
+  "collections": [
+    {
+      "name": "emotion"
+    },
+    {
+      "name": "xkcd_hilbert_gemini"
+    },
+    {
+      "name": "acl_abstracts_emnlp_findings"
+    }
+  ],
+  "sae_data": [],
+  "publish": {
+    "repo_id_env": "ORRERY_SEED_REPO_ID",
+    "private": true,
+    "path": "snapshots/demo"
+  }
+}

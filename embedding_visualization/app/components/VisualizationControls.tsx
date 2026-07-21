@@ -334,7 +334,7 @@ export function VisualizationControls({
             <div className="space-y-3">
               <Label className={SECTION_HEADER}>Labels</Label>
 
-              
+              {hasHighlights && (
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id="show-labels"
@@ -345,7 +345,7 @@ export function VisualizationControls({
                     Label search results
                   </Label>
                 </div>
-              
+              )}
 
               {colorByField && (
                 <div className="flex items-center space-x-2">

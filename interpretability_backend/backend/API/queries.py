@@ -294,6 +294,7 @@ class Query:
         name: str,
         info,
         projection_types: list[str] | None = None,
+        include_core: bool = True,
     ) -> ProjectionData | None:
         """Get complete projection data for a collection.
 
@@ -301,6 +302,8 @@ class Query:
             name: Collection name
             projection_types: Which projections to load (e.g. ["umap_2d", "umap_3d"]).
                             None means all four. Non-requested projections return null.
+            include_core: Include IDs, documents, item metadata, and collection metadata.
+                          Set false for projection-only follow-up requests.
 
         Returns:
             Projection data with PCA/UMAP projections.
@@ -311,17 +314,39 @@ class Query:
         all_types = ["pca_2d", "pca_3d", "umap_2d", "umap_3d"]
         requested = projection_types or all_types
 
-        # Load one projection type at a time from DuckDB
-        # First pass: load items + first requested type to get shared data
+        # Load shared item data at most once. Projection-only follow-up requests
+        # never read or serialize IDs, documents, or item metadata.
         projections = {}
+        projection_signatures = {}
         items_data = None
 
         for ptype in requested:
-            data = db.get_projection_data(name, ptype)
-            if data is not None:
-                projections[ptype] = data["coordinates"]
-                if items_data is None:
-                    items_data = data  # capture ids, documents, metadata from first result
+            if include_core and items_data is None:
+                data = db.get_projection_data(name, ptype)
+                if data is not None:
+                    projections[ptype] = data["coordinates"]
+                    projection_signatures[ptype] = data["item_signature"]
+                    items_data = data
+            else:
+                projection = db.get_projection_coordinates(name, ptype)
+                if projection is not None:
+                    projections[ptype] = projection["coordinates"]
+                    projection_signatures[ptype] = projection["item_signature"]
+
+        if not include_core:
+            return ProjectionData(
+                ids=[],
+                documents=[],
+                item_metadata=[],
+                available_fields=[],
+                pca_2d=projections.get("pca_2d"),
+                pca_3d=projections.get("pca_3d"),
+                umap_2d=projections.get("umap_2d"),
+                umap_3d=projections.get("umap_3d"),
+                metadata=CollectionMetadata(),
+                item_signature=None,
+                projection_signatures=projection_signatures,
+            )
 
         # If no projections found, try loading items without projections
         if items_data is None:
@@ -344,6 +369,7 @@ class Query:
                 "available_fields": [],
                 "metadata": {},
             }
+            items_data["item_signature"] = db.item_id_signature(items_data["ids"])
             if items_data["item_metadata"]:
                 all_keys = set()
                 for m in items_data["item_metadata"]:
@@ -410,6 +436,8 @@ class Query:
             umap_2d=projections.get("umap_2d"),
             umap_3d=projections.get("umap_3d"),
             metadata=CollectionMetadata(**metadata),
+            item_signature=items_data.get("item_signature"),
+            projection_signatures=projection_signatures,
         )
 
     @strawberry.field

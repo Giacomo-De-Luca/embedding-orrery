@@ -1,10 +1,13 @@
 """Storage for SAE feature activations captured during inference."""
 
+import logging
 from dataclasses import dataclass
 
 import torch
 
 from interpret.sae.sae_config import HookType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -117,8 +120,7 @@ class ActivationStore:
         records = self.get(layer, hook_type, sae_id)
         if not records:
             raise ValueError(
-                f"No activations stored for layer {layer}, hook_type "
-                f"{hook_type}, sae_id={sae_id!r}"
+                f"No activations stored for layer {layer}, hook_type {hook_type}, sae_id={sae_id!r}"
             )
         return torch.cat([r.feature_acts for r in records], dim=1)
 
@@ -126,3 +128,57 @@ class ActivationStore:
         """Remove all stored activations and reset step counters."""
         self._store.clear()
         self._steps.clear()
+
+
+def max_pool_feature_acts(
+    record: ActivationRecord,
+    start: int = 0,
+    end: int | None = None,
+    fallback_to_full: bool = True,
+) -> list[tuple[int, float]]:
+    """Max-pool a record's feature activations across tokens.
+
+    Pools batch row 0 of ``record.feature_acts`` over the token range
+    ``[start, end)`` and returns nonzero ``(feature_index, activation)``
+    pairs sorted by activation descending.
+
+    ``start``/``end`` restrict pooling to a token range (e.g. the
+    user-prompt tokens) so the BOS activation sink and chat-template
+    tokens — identical for every prompt — can't dominate the ranking.
+    The range is clamped to the sequence; a degenerate (empty) range
+    degrades to full-sequence pooling when ``fallback_to_full``, or to
+    no features when not (batch persistence — an empty document must
+    not store the constant BOS/template features).
+    """
+    feature_acts = record.feature_acts[0]  # (seq_len, d_sae)
+    seq_len = feature_acts.shape[0]
+    lo = max(0, min(start, seq_len))
+    hi = seq_len if end is None else max(0, min(end, seq_len))
+    if lo >= hi:
+        if not fallback_to_full:
+            logger.warning(
+                "Empty token range (%d, %s) for seq_len %d — no features",
+                start,
+                end,
+                seq_len,
+            )
+            return []
+        logger.warning(
+            "Empty token range (%d, %s) for seq_len %d — pooling full sequence",
+            start,
+            end,
+            seq_len,
+        )
+        lo, hi = 0, seq_len
+    max_pooled = feature_acts[lo:hi].max(dim=0).values  # (d_sae,)
+
+    nonzero_indices = torch.nonzero(max_pooled > 0, as_tuple=True)[0]
+    if len(nonzero_indices) == 0:
+        return []
+
+    values = max_pooled[nonzero_indices]
+    order = values.argsort(descending=True)
+    return [
+        (int(idx), float(val))
+        for idx, val in zip(nonzero_indices[order], values[order], strict=True)
+    ]

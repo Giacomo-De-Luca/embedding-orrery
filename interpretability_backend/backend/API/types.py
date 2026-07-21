@@ -600,6 +600,9 @@ class ProjectionData:
     umap_3d: list[list[float]] | None = None
     # Collection-level metadata
     metadata: CollectionMetadata
+    # Ordered-item digests used to validate projection-only follow-up requests.
+    item_signature: str | None = None
+    projection_signatures: JSON | None = None
 
 
 # ========== Helper Functions ==========
@@ -804,13 +807,14 @@ class TrainProbeInput:
 
     collection_name: str
     target_field: str
-    kind: str = "ridge"  # ridge | massmean | svr | logreg | mlp
-    alpha: float | None = None  # ridge
+    kind: str = "ridge"  # ridge | lasso | massmean | massmean_cov | svr | logreg | mlp
+    alpha: float | None = None  # ridge / lasso
     c: float | None = None  # svr / logreg
     kernel: str | None = None  # svr
     class_weight: str | None = None  # logreg: null | "balanced"
     epochs: int | None = None  # mlp
     hidden_dims: list[int] | None = None  # mlp
+    patience: int | None = None  # mlp early-stopping patience (dev-set based)
     seed: int | None = None
     train_split: float | None = None
     max_train_samples: int | None = None

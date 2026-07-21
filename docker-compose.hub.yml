@@ -1,0 +1,16 @@
+# Image-only override for published Docker Hub releases.
+# Usage:
+#   ORRERY_IMAGE_NAMESPACE=<dockerhub-user-or-org> \
+#   docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d
+
+services:
+  backend:
+    image: docker.io/${ORRERY_IMAGE_NAMESPACE:?Set ORRERY_IMAGE_NAMESPACE}/orrery-backend:${ORRERY_IMAGE_TAG:-latest}
+    build: !reset null
+
+  frontend:
+    image: docker.io/${ORRERY_IMAGE_NAMESPACE:?Set ORRERY_IMAGE_NAMESPACE}/orrery-frontend:${ORRERY_IMAGE_TAG:-latest}
+    build: !reset null
+
+  sae-warmup:
+    image: docker.io/${ORRERY_IMAGE_NAMESPACE:?Set ORRERY_IMAGE_NAMESPACE}/orrery-backend:${ORRERY_IMAGE_TAG:-latest}

@@ -649,7 +649,7 @@ export function DashboardPanel({
     <div className="relative h-full w-full overflow-hidden">
 
       {/* 1. LAYER: Plot Background (Z-0) */}
-      <div className="absolute inset-0 z-0">
+      <div className="absolute inset-0 z-0" data-tour="plot">
         <div className="h-full w-full rounded-lg text-card-foreground shadow-sm">
           {plot}
         </div>
@@ -790,6 +790,7 @@ export function DashboardPanel({
           hasActiveFilter={hasActiveFilter}
           hasHighlights={hasHighlights}
           variant="floating"
+          data-tour="panel-controls"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
             activePanel === 'controls' ? "left-4" : "-left-[400px] opacity-0"
@@ -836,6 +837,7 @@ export function DashboardPanel({
           featureSearch={featureSearch}
           onFeatureSearchResultClick={onFeatureSearchResultClick}
           variant="floating"
+          data-tour="panel-search"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
             activePanel === 'search' ? "left-4" : "-left-[400px] opacity-0"
@@ -859,6 +861,7 @@ export function DashboardPanel({
           probes={probes}
           onCategoryToggle={handleCategoryToggle}
           variant="floating"
+          data-tour="panel-analytics"
           className={cn(
             "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
             activePanel === 'analytics' ? "left-4" : "-left-[400px] opacity-0"

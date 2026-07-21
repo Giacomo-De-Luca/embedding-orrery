@@ -6,6 +6,8 @@ colorTo: purple
 sdk: docker
 app_port: 7860
 pinned: false
+header: mini
+fullWidth: true
 short_description: Explore embedding spaces — EMNLP abstracts, emotions, colors
 ---
 
@@ -13,6 +15,17 @@ short_description: Explore embedding spaces — EMNLP abstracts, emotions, color
 
 Interactive exploration of embedding spaces: 2D/3D scatter plots with topic
 clustering, semantic search, text filtering, and temporal analytics.
+
+## Start here
+
+- **[Take the 90-second tour]({{SPACE_URL}}?tour=1)** — a guided walk through
+  the map, topics, semantic search, and analytics.
+- **[Explore research topics]({{SPACE_URL}}?preset=emnlp-topics)** — 13,980
+  EMNLP abstracts clustered into 60 LLM-labeled research topics.
+- **[Explore the color manifold]({{SPACE_URL}}?preset=xkcd-manifold)** — 954
+  color names embedded as text; the rainbow re-emerges from language alone.
+- **[Open fullscreen]({{SPACE_DIRECT_URL}})** — the app on its own page,
+  without the HF chrome.
 
 ## Collections in this demo
 
@@ -22,9 +35,10 @@ clustering, semantic search, text filtering, and temporal analytics.
 | **emotion** | 1,000 | all-MiniLM-L6-v2 (384-d) | Emotion-labeled tweets; semantic search runs fully inside the Space |
 | **xkcd colors** | 954 | gemini-embedding-2 (3072-d) | Color names embedded as text — color by `mapped_colour` and see the rainbow |
 
-Tips: pick a collection top-left, color by `topic_label`, enable the nebula
+Tips: pick a collection top-right, color by `topic_label`, enable the nebula
 overlay (3D), right-drag to rotate, and use the search panel for semantic or
-substring search.
+substring search. The view state round-trips through the URL, so any view you
+reach is shareable by copying the address.
 
 ## This Space is read-only
 
@@ -33,17 +47,11 @@ and labels topics, trains probes on embedding spaces, and runs live SAE
 (sparse autoencoder) inference with steering — those write paths are disabled
 here (`ORRERY_READ_ONLY=1` blocks all GraphQL mutations server-side).
 
-**Want to embed your own data?** Duplicate this Space, then:
-
-1. Set a Space **Variable** `ORRERY_READ_ONLY=0` (re-enables mutations and
-   keeps your data in the Space's storage; add persistent storage if you want
-   it to survive restarts).
-2. Add your embedding-provider keys as Space **Secrets** as needed:
-   `GEMINI_API_KEY`, `CHROMA_OPENAI_API_KEY`, `CHROMA_COHERE_API_KEY`, …
-   (SentenceTransformers models run locally with no key).
-3. To also unhide the Collections/SAE pages, change the
-   `NEXT_PUBLIC_DEMO_MODE` build ARG default to `0` in the `Dockerfile`
-   (it is baked into the frontend bundle at build time).
+**Want to embed your own data?** Run the full application from the
+[Orrery GitHub repository](https://github.com/Giacomo-De-Luca/orrery) with its
+published backend/frontend images or local Docker build. Duplicated Spaces do
+not inherit this Space's secrets, including the read token for its private demo
+seed, and are therefore not the supported installation path.
 
 Semantic search on the two Gemini-embedded collections uses this Space's
 `GEMINI_API_KEY` secret (one embedding call per query). If the secret is

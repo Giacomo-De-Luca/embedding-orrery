@@ -181,6 +181,8 @@ def build_probe_config(input) -> ProbeConfig:
         raise ValueError(f"kernel must be one of rbf/linear/poly/sigmoid, got {input.kernel!r}.")
     if input.max_train_samples is not None and input.max_train_samples < 1:
         raise ValueError(f"max_train_samples must be >= 1, got {input.max_train_samples}.")
+    if input.patience is not None and input.patience < 1:
+        raise ValueError(f"patience must be >= 1, got {input.patience}.")
 
     return ProbeConfig(
         collection_name=input.collection_name,
@@ -192,6 +194,7 @@ def build_probe_config(input) -> ProbeConfig:
         class_weight=class_weight,
         epochs=_or(input.epochs, defaults.epochs),
         hidden_dims=list(input.hidden_dims) if input.hidden_dims else None,
+        patience=_or(input.patience, defaults.patience),
         seed=_or(input.seed, defaults.seed),
         train_split=_or(input.train_split, defaults.train_split),
         max_train_samples=_or(input.max_train_samples, defaults.max_train_samples),

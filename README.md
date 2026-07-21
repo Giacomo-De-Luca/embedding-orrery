@@ -46,6 +46,13 @@ The app ships with two small demo collections (an `emotion` sample and Gemini-em
 docker compose up --build   # frontend :3000, GraphQL :8000
 ```
 
+Published backend/frontend images can be run with the image-only override:
+
+```bash
+ORRERY_IMAGE_NAMESPACE=<dockerhub-user-or-org> \
+docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d
+```
+
 Docker support is still being validated across machines — prefer the manual install if you hit trouble. See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
@@ -104,7 +111,8 @@ Optional — only needed for the corresponding provider or LLM labelling.
 The pages below are also published as a documentation website built from [`docs/`](docs/) (Nextra) — see [`docs/README.md`](docs/README.md) to run or deploy it.
 
 - [`documentation/DATABASE_ARCHITECTURE.md`](documentation/DATABASE_ARCHITECTURE.md) — DuckDB/ChromaDB schema and data flow
-- [`documentation/DOCKER.md`](documentation/DOCKER.md) — Docker setup and SAE cache profile
+- [`documentation/DOCKER.md`](documentation/DOCKER.md) — Docker images, gateway, releases, and SAE cache profile
+- [`documentation/SEED_SNAPSHOTS.md`](documentation/SEED_SNAPSHOTS.md) — config-driven seed generation and private Dataset publication
 - [`documentation/SAE_ARCHITECTURE.md`](documentation/SAE_ARCHITECTURE.md) — SAE storage, ingestion, GraphQL API
 - [`documentation/SAE_PIPELINE.md`](documentation/SAE_PIPELINE.md) — Neuronpedia download-to-ingestion pipeline
 - [`documentation/INTERPRET_API.md`](documentation/INTERPRET_API.md) — SAE inference, steering, streaming

@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { Input } from '@/lib/ui-primitives/input';
 import { Label } from '@/lib/ui-primitives/label';
 import { Upload } from 'lucide-react';
+import { resolveApiBaseUrl } from '@/lib/utils/endpointUrls';
 
 interface FileUploadZoneProps {
   filePath: string;
@@ -57,8 +58,8 @@ export function FileUploadZone({ filePath, onFilePathChange, disabled }: FileUpl
       const formData = new FormData();
       formData.append('file', file);
 
-      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-      const apiUrl = `${apiBaseUrl.replace(/\/$/, '')}/upload`;
+      const apiBaseUrl = resolveApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+      const apiUrl = `${apiBaseUrl}/upload`;
 
       const response = await fetch(apiUrl, {
         method: 'POST',

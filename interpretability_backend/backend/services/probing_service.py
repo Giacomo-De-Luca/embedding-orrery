@@ -34,6 +34,7 @@ from ..utils.embedding_loader import load_embeddings_for_ids
 from ..utils.resource_paths import PROBING_RESULTS_DIR
 from .probing_types import (
     _BINARY_KINDS,
+    _CALIBRATED_KINDS,
     _PREDICTIVE_KINDS,
     PROBE_KINDS,
     ProbeConfig,
@@ -77,6 +78,9 @@ class ProbeCoreOutput:
     intercept: float | None
     n_train: int
     n_val: int
+    # Mass-mean family only: the univariate readout {"slope", "intercept"}
+    # mapping projection scores to target units; None for other kinds.
+    calibration: dict | None = None
 
 
 @dataclass
@@ -101,7 +105,9 @@ class ProbeRunResult:
 
 def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
     """Map a ProbeConfig to the toolkit probe spec for its kind."""
-    if config.kind in ("ridge", "massmean"):
+    if config.kind in ("ridge", "lasso", "massmean", "massmean_cov"):
+        # alpha applies to ridge/lasso and is ignored by the closed-form
+        # mass-mean kinds; all four persist a linear direction.
         return SklearnProbeSpec(
             kind=config.kind,
             alpha=config.alpha,
@@ -203,22 +209,23 @@ def _score_linear(X: np.ndarray, npz_path: Path, kind: str) -> tuple[np.ndarray,
     return scores, bundle
 
 
-def _calibrated_r2(
+def _calibrated_readout(
     scores: np.ndarray,
     y: np.ndarray,
     *,
     train_rows: np.ndarray,
     val_rows: np.ndarray,
-) -> dict:
-    """R² for an uncalibrated projection via a univariate readout.
+) -> tuple[dict, dict | None]:
+    """Univariate readout for an uncalibrated projection.
 
     Fits ``y ≈ slope·score + intercept`` by least squares on the train rows,
-    then reports R² of that readout on train and validation rows. Returns {}
-    when the train projections are (near-)constant.
+    then reports R² of that readout on train and validation rows. Returns
+    ``(metrics, {"slope", "intercept"})``, or ``({}, None)`` when the train
+    projections are (near-)constant.
     """
     s_train, y_train = scores[train_rows], y[train_rows]
     if np.std(s_train) < 1e-12:
-        return {}
+        return {}, None
     slope, intercept = np.polyfit(s_train, y_train, 1)
 
     def _r2(rows: np.ndarray) -> float | None:
@@ -229,7 +236,8 @@ def _calibrated_r2(
             return None
         return _clean_number(1.0 - float(((y_true - y_pred) ** 2).sum()) / ss_tot)
 
-    return {"val_r2": _r2(val_rows), "train_r2": _r2(train_rows)}
+    metrics = {"val_r2": _r2(val_rows), "train_r2": _r2(train_rows)}
+    return metrics, {"slope": float(slope), "intercept": float(intercept)}
 
 
 def _score_mlp(X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec) -> np.ndarray:
@@ -457,25 +465,36 @@ def run_probe_core(
             f"The {config.kind} fit produced no usable metrics — the target "
             "may be degenerate or the fit failed (see server logs)."
         )
-    if config.kind == "massmean":
-        # Massmean scores are an uncalibrated projection, so the toolkit only
+    calibration: dict | None = None
+    if config.kind in _CALIBRATED_KINDS:
+        # Mass-mean scores are an uncalibrated projection, so the toolkit only
         # reports correlations. A univariate calibration (slope/intercept fit
-        # on the train split) gives it a comparable validation R².
-        metrics.update(
-            _calibrated_r2(
-                np.asarray(scores),
-                y,
-                train_rows=pool_idx[indices_override[0]],
-                val_rows=pool_idx[indices_override[1]],
-            )
+        # on the train split) gives it a comparable validation R² and
+        # predictions in target units for residuals.
+        cal_metrics, calibration = _calibrated_readout(
+            np.asarray(scores),
+            y,
+            train_rows=pool_idx[indices_override[0]],
+            val_rows=pool_idx[indices_override[1]],
         )
+        metrics.update(cal_metrics)
 
     _, residual_field = score_field_names(config.target_field, config.kind)
     residuals: list[float | None] | None = None
     if residual_field is not None:
-        residuals = [
-            _clean_number(scores[i] - y[i]) if np.isfinite(y[i]) else None for i in range(len(ids))
-        ]
+        if config.kind in _CALIBRATED_KINDS:
+            preds = (
+                calibration["slope"] * np.asarray(scores) + calibration["intercept"]
+                if calibration is not None
+                else None
+            )
+        else:
+            preds = np.asarray(scores)
+        if preds is not None:
+            residuals = [
+                _clean_number(preds[i] - y[i]) if np.isfinite(y[i]) else None
+                for i in range(len(ids))
+            ]
 
     return ProbeCoreOutput(
         metrics=metrics,
@@ -487,6 +506,7 @@ def run_probe_core(
         intercept=bundle["intercept"],
         n_train=n_train,
         n_val=n_val,
+        calibration=calibration,
     )
 
 
@@ -580,7 +600,11 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             config.collection_name,
             config.target_field,
             config.kind,
-            config={**asdict(config), "target_mapping": target_mapping},
+            config={
+                **asdict(config),
+                "target_mapping": target_mapping,
+                "calibration": core.calibration,
+            },
             metrics=core.metrics,
             direction=core.direction,
             scaler_mean=core.scaler_mean,

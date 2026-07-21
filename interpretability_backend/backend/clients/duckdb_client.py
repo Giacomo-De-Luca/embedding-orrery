@@ -10,6 +10,7 @@ Global tables (small, registry-style): datasets, vector_collections,
 projections, projection_metadata, topic_extractions, topic_info, topic_assignments.
 """
 
+import hashlib
 import json
 import logging
 import threading
@@ -674,10 +675,10 @@ class DuckDBClient:
         self._ensure_items_table(dataset_name)
 
         col_metas = []
-        col_row_indices = []
+        provided_row_indices = []
         for meta in metadatas:
-            row_index = None
             clean_meta = None
+            row_index = None
             if meta:
                 clean = {
                     k: v
@@ -688,19 +689,51 @@ class DuckDBClient:
                 clean.pop("row_index", None)
                 clean_meta = json.dumps(clean) if clean else None
             col_metas.append(clean_meta)
-            col_row_indices.append(row_index)
-
-        df = pd.DataFrame(
-            {
-                "id": ids,
-                "document": documents,
-                "metadata": col_metas,
-                "row_index": col_row_indices,
-            }
-        )
+            provided_row_indices.append(row_index)
 
         table = self._items_table(dataset_name)
         with self._write_lock:
+            current_max = self._conn.execute(
+                f"SELECT COALESCE(MAX(row_index), -1) FROM {table}"
+            ).fetchone()[0]
+            legacy_ids = [
+                row[0]
+                for row in self._conn.execute(
+                    f"SELECT id FROM {table} WHERE row_index IS NULL ORDER BY rowid"
+                ).fetchall()
+            ]
+            if legacy_ids:
+                legacy_updates = [
+                    (current_max + offset, item_id)
+                    for offset, item_id in enumerate(legacy_ids, start=1)
+                ]
+                self._conn.executemany(
+                    f"UPDATE {table} SET row_index = ? WHERE id = ?",
+                    legacy_updates,
+                )
+                current_max += len(legacy_ids)
+
+            explicit_max = max(
+                (int(value) for value in provided_row_indices if value is not None),
+                default=-1,
+            )
+            next_row_index = max(current_max, explicit_max) + 1
+            col_row_indices = []
+            for value in provided_row_indices:
+                if value is None:
+                    col_row_indices.append(next_row_index)
+                    next_row_index += 1
+                else:
+                    col_row_indices.append(value)
+
+            df = pd.DataFrame(
+                {
+                    "id": ids,
+                    "document": documents,
+                    "metadata": col_metas,
+                    "row_index": col_row_indices,
+                }
+            )
             self._conn.execute(f"INSERT OR REPLACE INTO {table} SELECT * FROM df")
 
         # Update cached item count
@@ -1001,24 +1034,33 @@ class DuckDBClient:
             [collection_name],
         )
 
-    def get_projection_data(
-        self, collection_name: str, projection_type: str
-    ) -> dict[str, Any] | None:
-        """Load items + one projection type for visualization."""
+    def _load_projection_rows(
+        self,
+        collection_name: str,
+        projection_type: str,
+        *,
+        include_items: bool,
+    ) -> tuple[list[tuple], dict[str, Any], str] | None:
+        """Load ordered projection rows, optionally including shared item columns."""
         vc = self.get_vector_collection(collection_name)
         if not vc:
             return None
         dataset_name = vc["dataset_name"]
         table = self._items_table(dataset_name)
+        selected_columns = (
+            "i.id, i.document, i.metadata, p.coordinates"
+            if include_items
+            else "i.id, p.coordinates"
+        )
 
         rows = self._exec(
             f"""
-            SELECT i.id, i.document, i.metadata, p.coordinates
+            SELECT {selected_columns}
             FROM {table} i
             INNER JOIN projections p ON p.item_id = i.id
             WHERE p.collection_name = ?
               AND p.projection_type = ?
-            ORDER BY i.row_index
+            ORDER BY i.row_index NULLS LAST, i.rowid
         """,
             [collection_name, projection_type],
         ).fetchall()
@@ -1026,6 +1068,53 @@ class DuckDBClient:
         if not rows:
             return None
 
+        return rows, vc, dataset_name
+
+    @staticmethod
+    def item_id_signature(item_ids: list[str]) -> str:
+        """Return a stable digest of ordered item membership."""
+        digest = hashlib.sha256()
+        for item_id in item_ids:
+            encoded = str(item_id).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+        return digest.hexdigest()
+
+    def get_projection_coordinates(
+        self, collection_name: str, projection_type: str
+    ) -> dict[str, Any] | None:
+        """Load one ordered projection plus a compact item-membership digest."""
+        loaded = self._load_projection_rows(
+            collection_name,
+            projection_type,
+            include_items=False,
+        )
+        if loaded is None:
+            return None
+
+        rows, _, _ = loaded
+        dimensions = 3 if projection_type.endswith("_3d") else 2
+        ids = [row[0] for row in rows]
+        return {
+            "coordinates": [
+                list(row[1]) if row[1] else [0.0] * dimensions for row in rows
+            ],
+            "item_signature": self.item_id_signature(ids),
+        }
+
+    def get_projection_data(
+        self, collection_name: str, projection_type: str
+    ) -> dict[str, Any] | None:
+        """Load items + one projection type for visualization."""
+        loaded = self._load_projection_rows(
+            collection_name,
+            projection_type,
+            include_items=True,
+        )
+        if loaded is None:
+            return None
+
+        rows, vc, dataset_name = loaded
         ids = []
         documents = []
         item_metadata = []
@@ -1075,6 +1164,7 @@ class DuckDBClient:
 
         return {
             "ids": ids,
+            "item_signature": self.item_id_signature(ids),
             "documents": documents,
             "item_metadata": item_metadata,
             "available_fields": sorted(available_fields),

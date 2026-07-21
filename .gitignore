@@ -63,16 +63,20 @@ lacan_sentences.tsv
 Papers/
 vector_db/
 
+# Compiled paper PDFs (LaTeX output from documentation/paper/*.tex) — too large to track
+documentation/paper/*.pdf
+
 # Shipped seed snapshot (small demo collections, ~24 MB) — tracked.
 # Negations must follow the broad `vector_db/` rule above to take effect.
 !interpretability_backend/resources/seed/
 !interpretability_backend/resources/seed/main.duckdb
+!interpretability_backend/resources/seed/snapshot-manifest.json
 !interpretability_backend/resources/seed/vector_db/
 !interpretability_backend/resources/seed/vector_db/**
 
 # HF Space demo seed (~313 MB, adds the EMNLP collection) — NEVER tracked:
-# its single HNSW file exceeds GitHub's 100 MB hard limit. Ships only in the
-# Space repo via deploy/hf-space/deploy.py (auto-LFS). See HF_SPACE_DEMO.md.
+# its single HNSW file exceeds GitHub's 100 MB hard limit. It publishes to a
+# private HF Dataset and only its immutable lock is committed. See HF_SPACE_DEMO.md.
 interpretability_backend/resources/seed_demo/
 
 
@@ -117,3 +121,5 @@ wordnet_senses.tsv
 
 # Local-only experiment (kept on disk, not tracked)
 interpretability_backend/interpret/experiments/poetry_directions/
+
+embedding_visualization/tmp/*

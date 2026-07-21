@@ -12,7 +12,11 @@ machinery — the only difference is the SAE class and how its weights
 are downloaded and loaded.
 """
 
-from interpret.sae.activation_store import ActivationRecord, ActivationStore
+from interpret.sae.activation_store import (
+    ActivationRecord,
+    ActivationStore,
+    max_pool_feature_acts,
+)
 from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig
 from interpret.sae.feature_labels import FeatureLabelStore
 from interpret.sae.hook_manager import HookManager
@@ -60,6 +64,7 @@ __all__ = [
     "apply_steering",
     "clear_sae_cache",
     "load_sae",
+    "max_pool_feature_acts",
     "neuronpedia_source_id",
     "neuronpedia_source_id_prefixed",
     "resolve_op",

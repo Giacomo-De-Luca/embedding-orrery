@@ -22,6 +22,7 @@ from backend.services.interpret_service import (
 )
 from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.inference.qwen3_transformers import Qwen3Inference
+from interpret.sae.activation_store import max_pool_feature_acts
 from interpret.sae.sae_config import GemmaScopeSAEConfig, HookType, QwenScopeSAEConfig
 
 # ---------------------------------------------------------------------------
@@ -335,6 +336,38 @@ class TestSteeredGeneration:
 # ---------------------------------------------------------------------------
 
 
+def _make_mock_highlight_session(mock_hm_cls, *feature_acts_list):
+    """Wire HookManager mock: session yields a store whose prefill returns one
+    record per feature_acts tensor (in order)."""
+    records = []
+    for acts in feature_acts_list:
+        record = MagicMock()
+        record.feature_acts = acts
+        records.append(record)
+    mock_store = MagicMock()
+    mock_store.prefill.side_effect = records
+    mock_manager = MagicMock()
+    mock_manager.session.return_value.__enter__ = MagicMock(return_value=mock_store)
+    mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
+    mock_hm_cls.return_value = mock_manager
+    return mock_manager, mock_store
+
+
+# Gemma-IT templated sequence: prefix len 4 (mocked tokenize), prompt at (4, 6).
+GEMMA_IT_TOKENS = [
+    "<bos>",
+    "<start_of_turn>",
+    "user",
+    "\n",
+    "hello",
+    "world",
+    "<end_of_turn>",
+    "\n",
+    "<start_of_turn>",
+    "model",
+]
+
+
 class TestPromptHighlight:
     def test_not_loaded_raises(self, service):
         with pytest.raises(RuntimeError, match="not loaded"):
@@ -342,40 +375,78 @@ class TestPromptHighlight:
 
     @patch("backend.services.interpret_service.GemmaPytorchInference")
     @patch("backend.services.interpret_service.HookManager")
-    def test_returns_feature_activations(self, mock_hm_cls, mock_inf_cls, service):
+    def test_masks_bos_and_template_tokens(self, mock_hm_cls, mock_inf_cls, service):
+        """Max-pool covers only the user-prompt token range — BOS/template
+        positions (identical for every prompt) must not dominate the ranking."""
         wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]  # "<start_of_turn>user\n" → start 4
+        wrapper.format_prompt.return_value = "formatted prompt"
+        wrapper.token_strings.return_value = GEMMA_IT_TOKENS
         mock_inf_cls.return_value = wrapper
         service.load_model("google/gemma-3-4b-it")
 
-        # Simulate prefill feature_acts: shape (1, 5, 16384) with a few nonzero features
-        feature_acts = torch.zeros(1, 5, 100)  # use small d_sae for test
-        feature_acts[0, 0, 10] = 3.0
-        feature_acts[0, 2, 10] = 5.0  # max-pool should pick 5.0 for feature 10
-        feature_acts[0, 1, 42] = 2.5
-        feature_acts[0, 3, 99] = 1.0
-
-        mock_record = MagicMock()
-        mock_record.feature_acts = feature_acts
-
-        mock_store = MagicMock()
-        mock_store.prefill.return_value = mock_record
-
-        mock_manager = MagicMock()
-        mock_manager.session.return_value.__enter__ = MagicMock(return_value=mock_store)
-        mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_hm_cls.return_value = mock_manager
+        feature_acts = torch.zeros(1, 10, 100)  # seq matches GEMMA_IT_TOKENS
+        feature_acts[0, 0, 10] = 30.0  # BOS sink — must NOT win the max
+        feature_acts[0, 4, 10] = 5.0  # prompt token → pooled value
+        feature_acts[0, 1, 42] = 2.5  # template-only feature → excluded
+        feature_acts[0, 5, 99] = 1.0  # prompt token → kept
+        _make_mock_highlight_session(mock_hm_cls, feature_acts)
 
         result = service.run_prompt_highlight("hello", layer=9, width="16k", hook_type="resid_post")
 
-        assert isinstance(result, list)
         assert all(isinstance(f, FeatureActivation) for f in result)
-
-        # Check max-pooled values
         result_dict = {f.feature_index: f.activation for f in result}
-        assert result_dict[10] == pytest.approx(5.0)
-        assert result_dict[42] == pytest.approx(2.5)
-        assert result_dict[99] == pytest.approx(1.0)
-        assert len(result) == 3  # only 3 nonzero features
+        assert result_dict == {10: pytest.approx(5.0), 99: pytest.approx(1.0)}
+        # The formatted string that ran is the one the range was computed on.
+        wrapper.generate_from_template.assert_called_once()
+        assert wrapper.generate_from_template.call_args.args[0] == "formatted prompt"
+        wrapper.token_strings.assert_called_once_with("formatted prompt")
+        wrapper.generate.assert_not_called()
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_pt_variant_masks_only_bos(self, mock_hm_cls, mock_inf_cls, service):
+        """Base models have no chat template: raw prompt runs, only BOS is masked."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.token_strings.return_value = ["<bos>", "hello", "world"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-1b")  # normalises to -pt
+
+        feature_acts = torch.zeros(1, 3, 50)
+        feature_acts[0, 0, 5] = 9.0  # BOS-only → excluded
+        feature_acts[0, 1, 7] = 2.0  # content token → kept
+        _make_mock_highlight_session(mock_hm_cls, feature_acts)
+
+        result = service.run_prompt_highlight("hello", layer=9, width="16k", hook_type="resid_post")
+
+        assert {f.feature_index: f.activation for f in result} == {7: pytest.approx(2.0)}
+        # Raw prompt, no chat wrapping.
+        assert wrapper.generate_from_template.call_args.args[0] == "hello"
+        wrapper.format_prompt.assert_not_called()
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_degenerate_range_falls_back_to_full_sequence(self, mock_hm_cls, mock_inf_cls, service):
+        """A range-detection failure must degrade to full-sequence pooling,
+        never to empty results."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]
+        wrapper.format_prompt.return_value = "formatted prompt"
+        # Template-only sequence: start (4) == end (4) → empty range.
+        wrapper.token_strings.return_value = ["<bos>", "<start_of_turn>", "user", "\n"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+
+        feature_acts = torch.zeros(1, 4, 20)
+        feature_acts[0, 0, 3] = 2.0
+        _make_mock_highlight_session(mock_hm_cls, feature_acts)
+
+        result = service.run_prompt_highlight("hello", layer=9, width="16k", hook_type="resid_post")
+
+        assert {f.feature_index: f.activation for f in result} == {3: pytest.approx(2.0)}
 
 
 # ---------------------------------------------------------------------------
@@ -684,6 +755,258 @@ class TestFindPromptTokenRange:
         toks = ["hello", "world"]
         assert svc._find_prompt_token_range(toks, "hello world") == (0, 2)
 
+    def test_skip_chat_template_ignores_template_markers(self):
+        """Raw-token mode: BOS offset only, even if template-like pieces exist."""
+        svc = self._service("gemma", "it", prepends_bos=True)
+        toks = ["<bos>", "<start_of_turn>", "user", "\n", "hi", "<end_of_turn>"]
+        assert svc._find_prompt_token_range(toks, "hi", skip_chat_template=True) == (1, 6)
+
+    def test_skip_chat_template_no_bos(self):
+        svc = self._service("qwen", "it", prepends_bos=False)
+        toks = ["hello", "world"]
+        assert svc._find_prompt_token_range(toks, "hello world", skip_chat_template=True) == (0, 2)
+
+
+# ---------------------------------------------------------------------------
+# _max_pool_activations: range slicing + clamping
+# ---------------------------------------------------------------------------
+
+
+class TestMaxPoolActivations:
+    @staticmethod
+    def _record(feature_acts: torch.Tensor):
+        record = MagicMock()
+        record.feature_acts = feature_acts
+        return record
+
+    def test_full_sequence_by_default(self):
+        acts = torch.zeros(1, 3, 10)
+        acts[0, 0, 1] = 4.0
+        acts[0, 2, 1] = 2.0
+        result = InterpretService._max_pool_activations(self._record(acts))
+        assert {f.feature_index: f.activation for f in result} == {1: pytest.approx(4.0)}
+
+    def test_start_end_slice(self):
+        acts = torch.zeros(1, 5, 10)
+        acts[0, 0, 1] = 9.0  # before range
+        acts[0, 2, 1] = 3.0  # in range
+        acts[0, 2, 4] = 1.5  # in range
+        acts[0, 4, 6] = 7.0  # after range
+        result = InterpretService._max_pool_activations(self._record(acts), 1, 4)
+        d = {f.feature_index: f.activation for f in result}
+        assert d == {1: pytest.approx(3.0), 4: pytest.approx(1.5)}
+
+    def test_end_clamped_to_seq_len(self):
+        acts = torch.zeros(1, 3, 10)
+        acts[0, 2, 5] = 2.0
+        result = InterpretService._max_pool_activations(self._record(acts), 1, 99)
+        assert [f.feature_index for f in result] == [5]
+
+    def test_empty_range_falls_back_to_full_sequence(self):
+        acts = torch.zeros(1, 3, 10)
+        acts[0, 0, 2] = 1.0
+        result = InterpretService._max_pool_activations(self._record(acts), 3, 3)
+        assert [f.feature_index for f in result] == [2]
+
+    def test_empty_range_without_fallback_returns_no_features(self):
+        acts = torch.zeros(1, 3, 10)
+        acts[0, 0, 2] = 1.0
+        result = InterpretService._max_pool_activations(
+            self._record(acts), 3, 3, fallback_to_full=False
+        )
+        assert result == []
+
+
+class TestMaxPoolFeatureActsToolkit:
+    """Direct contract of interpret.sae.max_pool_feature_acts (the toolkit
+    primitive InterpretService._max_pool_activations wraps): plain
+    (index, value) pairs, no backend types, sorted by activation desc."""
+
+    @staticmethod
+    def _record(feature_acts: torch.Tensor):
+        record = MagicMock()
+        record.feature_acts = feature_acts
+        return record
+
+    def test_returns_pairs_sorted_descending(self):
+        acts = torch.zeros(1, 3, 10)
+        acts[0, 0, 1] = 2.0
+        acts[0, 1, 7] = 5.0
+        acts[0, 2, 4] = 3.5
+        result = max_pool_feature_acts(self._record(acts))
+        assert result == [
+            (7, pytest.approx(5.0)),
+            (4, pytest.approx(3.5)),
+            (1, pytest.approx(2.0)),
+        ]
+
+    def test_range_and_fallback_semantics_match_service(self):
+        acts = torch.zeros(1, 5, 10)
+        acts[0, 0, 1] = 9.0  # outside [1, 4)
+        acts[0, 2, 4] = 1.5  # inside
+        assert max_pool_feature_acts(self._record(acts), 1, 4) == [(4, pytest.approx(1.5))]
+        assert max_pool_feature_acts(self._record(acts), 3, 3, fallback_to_full=False) == []
+        assert [i for i, _ in max_pool_feature_acts(self._record(acts), 3, 3)] == [1, 4]
+
+    def test_all_zero_returns_empty(self):
+        assert max_pool_feature_acts(self._record(torch.zeros(1, 4, 8))) == []
+
+
+# ---------------------------------------------------------------------------
+# UC3b: Batch highlight masks BOS/template per document
+# ---------------------------------------------------------------------------
+
+
+class TestBatchHighlight:
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_masks_template_per_document(self, mock_hm_cls, mock_inf_cls, service):
+        """Stored document activations must cover only each document's own
+        tokens — otherwise the constant BOS/template features pollute
+        sae_document_activations for every document."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]  # gemma prefix → start 4
+        prefix = ["<bos>", "<start_of_turn>", "user", "\n"]
+        suffix = ["<end_of_turn>", "\n", "<start_of_turn>", "model", "\n"]
+        toks_a = prefix + ["alpha"] + suffix  # range (4, 5), len 10
+        toks_b = prefix + ["beta", "gamma"] + suffix  # range (4, 6), len 11
+        wrapper.format_prompt.side_effect = ["fmt-a", "fmt-b"]
+        wrapper.token_strings.side_effect = [toks_a, toks_b]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+
+        acts_a = torch.zeros(1, 10, 20)
+        acts_a[0, 0, 1] = 30.0  # BOS-only → masked
+        acts_a[0, 4, 2] = 4.0  # document token
+        acts_b = torch.zeros(1, 11, 20)
+        acts_b[0, 1, 1] = 8.0  # template-only → masked
+        acts_b[0, 5, 3] = 6.0  # document token
+        _make_mock_highlight_session(mock_hm_cls, acts_a, acts_b)
+
+        results = service.run_batch_highlight(
+            [("id-a", "alpha"), ("id-b", "beta gamma")],
+            layer=9,
+            width="16k",
+            hook_type="resid_post",
+        )
+
+        by_id = {
+            item_id: {f.feature_index: f.activation for f in acts} for item_id, acts in results
+        }
+        assert by_id["id-a"] == {2: pytest.approx(4.0)}
+        assert by_id["id-b"] == {3: pytest.approx(6.0)}
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_failed_document_yields_empty_and_continues(self, mock_hm_cls, mock_inf_cls, service):
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]
+        toks_b = ["<bos>", "<start_of_turn>", "user", "\n", "beta", "<end_of_turn>"]
+        wrapper.format_prompt.side_effect = ["fmt-a", "fmt-b"]
+        wrapper.generate_from_template.side_effect = [RuntimeError("boom"), "ok"]
+        wrapper.token_strings.side_effect = [toks_b]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+
+        acts_b = torch.zeros(1, 6, 20)
+        acts_b[0, 4, 3] = 6.0
+        _make_mock_highlight_session(mock_hm_cls, acts_b)
+
+        results = service.run_batch_highlight(
+            [("id-a", "alpha"), ("id-b", "beta")],
+            layer=9,
+            width="16k",
+            hook_type="resid_post",
+        )
+
+        assert results[0] == ("id-a", [])
+        assert {f.feature_index for f in results[1][1]} == {3}
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_empty_document_stores_no_features(self, mock_hm_cls, mock_inf_cls, service):
+        """A degenerate range in the batch path must persist nothing — NOT the
+        BOS/template features the interactive fallback would surface."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]
+        # Empty document → template-only sequence, range (4, 4).
+        wrapper.format_prompt.return_value = "fmt-empty"
+        wrapper.token_strings.return_value = ["<bos>", "<start_of_turn>", "user", "\n"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+
+        acts = torch.zeros(1, 4, 20)
+        acts[0, 0, 1] = 30.0  # BOS sink
+        _make_mock_highlight_session(mock_hm_cls, acts)
+
+        results = service.run_batch_highlight(
+            [("id-empty", "")], layer=9, width="16k", hook_type="resid_post"
+        )
+
+        assert results == [("id-empty", [])]
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_length_mismatch_warns_but_still_masks(
+        self, mock_hm_cls, mock_inf_cls, service, caplog
+    ):
+        """A prefill/token_strings length divergence (contract drift) must be
+        surfaced in the log, not silently clamped away."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.tokenize.return_value = [0, 1, 2, 3]
+        wrapper.format_prompt.return_value = "formatted prompt"
+        wrapper.token_strings.return_value = GEMMA_IT_TOKENS  # 10 tokens
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+
+        acts = torch.zeros(1, 12, 20)  # 12 positions ≠ 10 tokens
+        acts[0, 4, 5] = 3.0  # still inside the (4, 6) range
+        _make_mock_highlight_session(mock_hm_cls, acts)
+
+        with caplog.at_level("WARNING", logger="orrery"):
+            result = service.run_prompt_highlight(
+                "hello", layer=9, width="16k", hook_type="resid_post"
+            )
+
+        assert {f.feature_index for f in result} == {5}
+        assert any("misaligned" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _compute_coverage_exclusions: density floor guard
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageExclusions:
+    @staticmethod
+    def _exclusions(label_map, feature_acts: torch.Tensor | None = None):
+        svc = InterpretService()
+        if feature_acts is None:
+            feature_acts = torch.zeros(5, 10)
+        return svc._compute_coverage_exclusions(
+            feature_acts, 0, 5, include_bos=True, label_map=label_map
+        )
+
+    def test_zero_density_treated_as_unknown(self):
+        """Qwen-scope features ship with density=0.0 (no Neuronpedia data) —
+        the dead-feature floor must not wipe out every feature."""
+        assert 3 not in self._exclusions({3: ("", 0.0)})
+
+    def test_near_dead_density_excluded(self):
+        assert 3 in self._exclusions({3: ("", 5e-5)})
+
+    def test_none_density_passes(self):
+        assert 3 not in self._exclusions({3: ("", None)})
+
+    def test_high_coverage_excluded(self):
+        acts = torch.zeros(5, 10)
+        acts[:, 9] = 1.0  # fires on 100% of positions
+        assert 9 in self._exclusions({}, acts)
+
 
 # ---------------------------------------------------------------------------
 # Wrapper token_strings(): per-token pieces aligned to the prefill sequence
@@ -810,28 +1133,34 @@ class TestQwenGeneration:
     @patch("backend.services.interpret_service.HookManager")
     def test_prompt_highlight_uses_qwen_config(self, mock_hm_cls, mock_inf_cls, service):
         wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = False
+        wrapper.format_prompt.return_value = "formatted chatml"
+        # ChatML sequence: user content "hi" at (3, 4).
+        wrapper.token_strings.return_value = [
+            "<|im_start|>",
+            "user",
+            "Ċ",
+            "hi",
+            "<|im_end|>",
+            "Ċ",
+            "<|im_start|>",
+            "assistant",
+            "Ċ",
+        ]
         mock_inf_cls.return_value = wrapper
         service.load_model(QWEN_CHECKPOINT)
 
-        feature_acts = torch.zeros(1, 3, 50)
-        feature_acts[0, 1, 7] = 2.0
-        mock_record = MagicMock()
-        mock_record.feature_acts = feature_acts
-        mock_store = MagicMock()
-        mock_store.prefill.return_value = mock_record
+        feature_acts = torch.zeros(1, 9, 50)
+        feature_acts[0, 0, 9] = 8.0  # ChatML template token → masked out
+        feature_acts[0, 3, 7] = 2.0  # user prompt token → kept
+        mock_manager, _ = _make_mock_highlight_session(mock_hm_cls, feature_acts)
 
-        mock_manager = MagicMock()
-        mock_manager.session.return_value.__enter__ = MagicMock(return_value=mock_store)
-        mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_hm_cls.return_value = mock_manager
-
-        result = service.run_prompt_highlight(
-            "hello", layer=14, width="32k", hook_type="resid_post"
-        )
+        result = service.run_prompt_highlight("hi", layer=14, width="32k", hook_type="resid_post")
 
         sae_arg = mock_manager.add_sae.call_args.args[0]
         assert isinstance(sae_arg, QwenScopeSAEConfig)
         assert sae_arg.prefill_only is True
-        assert wrapper.generate.call_args.kwargs.get("enable_thinking") is False
-        assert len(result) == 1
-        assert result[0].feature_index == 7
+        # Thinking stays pinned off in the template (qwen defaults it ON).
+        assert wrapper.format_prompt.call_args.kwargs.get("enable_thinking") is False
+        assert wrapper.generate_from_template.call_args.args[0] == "formatted chatml"
+        assert {f.feature_index: f.activation for f in result} == {7: pytest.approx(2.0)}

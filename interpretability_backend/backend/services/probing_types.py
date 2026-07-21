@@ -10,14 +10,19 @@ heavy ``train_probe_for_collection`` import happens lazily inside the
 import re
 from dataclasses import dataclass
 
-PROBE_KINDS = ("ridge", "massmean", "svr", "logreg", "mlp")
+PROBE_KINDS = ("ridge", "lasso", "massmean", "massmean_cov", "svr", "logreg", "mlp")
 
 # Kinds requiring a binary (two-class) target — scores are P(class 1).
 _BINARY_KINDS = ("logreg",)
 
 # Kinds whose scores are predictions in target units (residuals meaningful).
-# Excludes logreg (probability) and massmean (uncalibrated projection).
-_PREDICTIVE_KINDS = ("ridge", "mlp", "svr")
+# Excludes logreg (probability) and the mass-mean family (uncalibrated
+# projections — their residuals come from the calibrated readout instead).
+_PREDICTIVE_KINDS = ("ridge", "lasso", "mlp", "svr")
+
+# Projection kinds that get a univariate calibrated readout (slope/intercept
+# fitted on the train split): calibrated predictions -> residuals + R².
+_CALIBRATED_KINDS = ("massmean", "massmean_cov")
 
 
 @dataclass
@@ -60,10 +65,12 @@ def binary_target_mapping(values: list[str | None]) -> dict[str, float] | None:
 def score_field_names(target_field: str, kind: str) -> tuple[str, str | None]:
     """Derived metadata field names for a probe's score and residual.
 
-    Residuals only exist for kinds whose score is a prediction in target
-    units; massmean scores are direction projections on an arbitrary scale.
+    Residuals exist for kinds whose score is a prediction in target units,
+    and for the mass-mean family via the calibrated readout. Logreg scores
+    are probabilities — no residual.
     """
     key = sanitize_field_key(target_field)
     score = f"probe_{key}_{kind}_score"
-    residual = f"probe_{key}_{kind}_residual" if kind in _PREDICTIVE_KINDS else None
+    has_residual = kind in _PREDICTIVE_KINDS or kind in _CALIBRATED_KINDS
+    residual = f"probe_{key}_{kind}_residual" if has_residual else None
     return score, residual

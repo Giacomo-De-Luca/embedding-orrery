@@ -1,6 +1,6 @@
 'use client';
 
-import { Moon, Sun, Search, Settings2, BarChart3 } from 'lucide-react';
+import { Moon, Sun, Search, Settings2, BarChart3, CircleHelp } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useState, KeyboardEvent } from 'react';
 import { PageNav } from './PageNav';
@@ -57,6 +57,8 @@ interface AppHeaderProps {
   onToggleSearch?: () => void;
   onToggleAnalytics?: () => void;
   saeInfo?: { modelId: string; saeId: string } | null;
+  /** Reopens the demo welcome dialog; renders the header Help button when set. */
+  onOpenIntro?: () => void;
 }
 
 export function AppHeader({
@@ -74,6 +76,7 @@ export function AppHeader({
   onToggleSearch,
   onToggleAnalytics,
   saeInfo: saeInfoProp,
+  onOpenIntro,
 }: AppHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
@@ -114,6 +117,7 @@ export function AppHeader({
           aria-label="Toggle controls panel"
           title="Visualization controls"
           className="-ml-1"
+          data-tour="toggle-controls"
         >
           <Settings2 className="h-4 w-4" />
         </Button>
@@ -123,6 +127,7 @@ export function AppHeader({
           onClick={onToggleSearch}
           aria-label="Toggle search panel"
           title="Search & filters"
+          data-tour="toggle-search"
         >
           <Search className="h-4 w-4" />
         </Button>
@@ -132,6 +137,7 @@ export function AppHeader({
           onClick={onToggleAnalytics}
           aria-label="Toggle analytics panel"
           title="Analytics"
+          data-tour="toggle-analytics"
         >
           <BarChart3 className="h-4 w-4" />
         </Button>
@@ -153,7 +159,7 @@ export function AppHeader({
 
           {/* Semantic Search */}
           {onSemanticSearch && (
-            <div className="relative max-w-xs flex-1">
+            <div className="relative max-w-xs flex-1" data-tour="search-input">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Semantic search..."
@@ -182,51 +188,64 @@ export function AppHeader({
 
         {/* Collection Selector */}
         <div className="ml-auto flex items-center gap-2">
-          {collectionsLoading ? (
-            <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-muted min-w-[200px]">
-              <Spinner className="h-4 w-4" />
-              <span className="text-sm">Loading...</span>
-            </div>
-          ) : collectionsError ? (
-            <div className="px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 min-w-[200px]">
-              <span className="text-sm text-destructive">Error</span>
-            </div>
-          ) : collections && Object.keys(collections).length > 0 ? (
-            <Combobox
-              value={selectedCollection || ''}
-              onValueChange={(val) => {
-                if (val) onCollectionChange(val);
-              }}
-              items={Object.keys(collections)}
-              itemToStringLabel={(key) => collections[key]?.display_name ?? key}
-              filter={(key, query) => {
-                const name = collections[key]?.display_name ?? key;
-                return name.toLowerCase().includes(query.toLowerCase());
-              }}
-              onInputValueChange={(val) => setCollectionFilter(val)}
-            >
-              <ComboboxInput
-                placeholder="Search collections..."
-                className="w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
-              />
-              <ComboboxContent>
-                {collectionFilter.trim() && (
-                  <ComboboxEmpty>No collections found.</ComboboxEmpty>
-                )}
-                <ComboboxList>
-                  {(key) => (
-                    <ComboboxItem key={key} value={key}>
-                      <span className="font-medium">{collections[key]?.display_name ?? key}</span>
-                      <span className="text-xs text-muted-foreground ml-2">
-                        ({collections[key]?.count.toLocaleString()})
-                      </span>
-                    </ComboboxItem>
+          <div className="flex items-center" data-tour="collection-selector">
+            {collectionsLoading ? (
+              <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-muted min-w-[200px]">
+                <Spinner className="h-4 w-4" />
+                <span className="text-sm">Loading...</span>
+              </div>
+            ) : collectionsError ? (
+              <div className="px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 min-w-[200px]">
+                <span className="text-sm text-destructive">Error</span>
+              </div>
+            ) : collections && Object.keys(collections).length > 0 ? (
+              <Combobox
+                value={selectedCollection || ''}
+                onValueChange={(val) => {
+                  if (val) onCollectionChange(val);
+                }}
+                items={Object.keys(collections)}
+                itemToStringLabel={(key) => collections[key]?.display_name ?? key}
+                filter={(key, query) => {
+                  const name = collections[key]?.display_name ?? key;
+                  return name.toLowerCase().includes(query.toLowerCase());
+                }}
+                onInputValueChange={(val) => setCollectionFilter(val)}
+              >
+                <ComboboxInput
+                  placeholder="Search collections..."
+                  className="w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
+                />
+                <ComboboxContent>
+                  {collectionFilter.trim() && (
+                    <ComboboxEmpty>No collections found.</ComboboxEmpty>
                   )}
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
-          ) : null}
+                  <ComboboxList>
+                    {(key) => (
+                      <ComboboxItem key={key} value={key}>
+                        <span className="font-medium">{collections[key]?.display_name ?? key}</span>
+                        <span className="text-xs text-muted-foreground ml-2">
+                          ({collections[key]?.count.toLocaleString()})
+                        </span>
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            ) : null}
+          </div>
           <PageNav variant="glass" saeHref={saeHref} />
+          {onOpenIntro && (
+            <Button
+              variant="circularghost"
+              size="icon"
+              onClick={onOpenIntro}
+              aria-label="About this demo"
+              title="About this demo"
+            >
+              <CircleHelp className="h-4 w-4" />
+            </Button>
+          )}
           <ModeToggle />
         </div>
       </div>

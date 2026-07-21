@@ -9,8 +9,10 @@ synthetic points. Standalone Node harness — not part of the app, has its own
 
 | File | Purpose |
 |------|---------|
-| `bench.mjs` | The whole harness: Chrome automation, FPS capture, memory telemetry, synthetic data injection |
-| `results/` (gitignored) | `results_<pass>.json` per pass + verification screenshots `shot_<pass>_<collection>.png` |
+| `bench.mjs` | Chrome automation, FPS capture, memory and GraphQL-payload telemetry |
+| `lib/benchmarkContract.mjs` | Synthetic GraphQL contract, membership signatures, telemetry, safe artifact names |
+| `benchmarkContract.test.mjs` | Node tests for the benchmark-only helpers |
+| `results/` (gitignored) | Labeled result JSON and screenshots; historical baselines are retained |
 
 ## Prerequisites
 
@@ -30,17 +32,39 @@ node bench.mjs 2d                        # 2D pan pass (scattergl path)
 node bench.mjs 3d emotion synthetic_1m   # specific targets only
 npm run bench:all                        # all four passes back to back
 BENCH_HEAP_MB=7168 node bench.mjs 3d synthetic_1m   # raise Chrome's renderer heap cap (big machines)
+BENCH_RESULT_LABEL=experiment-b node bench.mjs 3d emotion  # custom output label
+npm test                                 # helper tests; does not launch Chrome
 ```
+
+New runs default to a `current` label, for example
+`results/results_3d_current.json` and
+`results/shot_3d_current_wordnet_senses_full.png`. Historical unlabeled files
+such as `results_3d.json` are never overwritten. Reusing a label merges only
+that label's results.
+
+For the frontend heap-reduction comparison against the 2026-07-10 baseline:
+
+```bash
+node bench.mjs 3d wordnet_senses_full synthetic_500k
+node bench.mjs 2d wordnet_senses_full
+```
+
+The 3D pass is the primary comparison because the previous frontend loaded and
+materialized both 2D and 3D projections in 3D mode. The real-collection 2D pass
+is a control. Do not compare a new synthetic 2D run to the historical synthetic
+2D result: the old interceptor returned both projections even though the live
+2D backend contract returned only 2D, so that old synthetic control was
+artificially inflated.
 
 Pass design: `3d` (uncolored, single trace) is the raw scaling baseline;
 `3d-topics` − `3d` isolates the cost of per-category trace splitting;
 `3d-nebula` − `3d-topics` isolates the haze overlay cost.
 
-Results **merge per pass**: re-running a subset of targets updates only those
-entries in `results_<pass>.json`, so a crashed target can be retried alone
-without redoing the ladder. If a tab/browser crash kills Chrome (e.g. the 1M
-target on small-RAM machines), the failure is recorded as that target's
-result and Chrome is relaunched for the remaining targets.
+Results **merge per pass and label**: re-running a subset of targets updates
+only those entries in the labeled result file, so a crashed target can be
+retried alone without redoing the ladder. If a tab/browser crash kills Chrome
+(e.g. the 1M target on small-RAM machines), the failure is recorded as that
+target's result and Chrome is relaunched for the remaining targets.
 
 Rules during a run (~10–15 min per pass over the full ladder):
 
@@ -55,8 +79,9 @@ keeps everything completed so far. A failed collection is logged and skipped.
 ## Ladder
 
 Eight real collections (1k → 212k points, all with stored UMAP projections
-and extracted topics) plus three synthetic targets (250k / 500k / 1M).
-Any `synthetic_<n>[k|m]` name works as an ad-hoc target.
+and extracted topics) plus two default synthetic targets (250k / 500k). The 1M
+target is explicit opt-in. Any `synthetic_<n>[k|m]` name works as an ad-hoc
+target.
 
 **Synthetic targets never touch the database.** The harness intercepts the
 `GetCollectionData` GraphQL response and substitutes generated Gaussian
@@ -64,8 +89,10 @@ clusters (50 clusters, deterministic PRNG, `topic_id`/`topic_label` metadata
 so topic coloring and nebula haze work). `GetCollections` is passed through
 and the synthetic entry appended (the page only loads URL collections present
 in the list); topics/probes/activations queries for the synthetic name return
-benign empties. Everything downstream of the network — Apollo parsing, point
-transforms, Plotly trace building, WebGL — is the real platform code path.
+benign empties. Synthetic collection responses include ordered-item membership
+signatures and only the active projection dimension. Everything downstream of
+the network — Apollo parsing, point transforms, Plotly trace building, WebGL —
+is the real platform code path.
 
 ## Methodology
 
@@ -96,15 +123,18 @@ transforms, Plotly trace building, WebGL — is the real platform code path.
   are true live memory — without it, readings include uncollected parse
   garbage and vary by GB depending on GC timing. The mid-drag sample skips
   the forced GC (the pause would distort FPS) — treat its heap as noisy.
+- Payload: each target collection's `GetCollectionData` response byte length,
+  requested projection types, and `includeCore` flag are stored under
+  `graphqlPayload`. This verifies that active-only requests reduce transfer
+  size rather than merely changing retained heap.
 
 ## Caveats
 
-- **The 1M target is expected to fail on most machines**: the frontend holds
-  all ids/documents/metadata/coordinates in the tab's JS heap (~3.3 GB at
-  500k points), and Chrome caps a tab's heap at roughly 3.5–4 GB regardless
-  of system RAM. The recorded crash *is* the scalability ceiling of the
-  current load-everything architecture, not a harness bug. On ≥16 GB machines
-  try `BENCH_HEAP_MB=7168`.
+- **The 1M target remains opt-in**: historical runs crashed under memory
+  pressure, but their headline heap reading included uncollected parse garbage
+  and is not a valid retained-heap measurement. Establish the new labeled,
+  forced-GC 500k result before attempting 1M. On ≥16 GB machines, an explicit
+  1M attempt can use `BENCH_HEAP_MB=7168`.
 - FPS is capped by the display refresh rate (120 Hz on ProMotion screens).
 - Numbers are machine- and load-dependent; report them with the hardware and
   the system-RAM baseline the harness prints at start.

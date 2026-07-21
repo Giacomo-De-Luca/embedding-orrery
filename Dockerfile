@@ -9,10 +9,10 @@
 # (Dockerfile.backend + embedding_visualization/Dockerfile) — this file is
 # deliberately separate and changes nothing about the compose stack.
 #
-# Build (Dockerfile.dockerignore takes precedence over .dockerignore for this
-# file, letting the ~313 MB demo seed into the context; build it first at
-# interpretability_backend/resources/seed_demo — see HF_SPACE_DEMO.md):
-#   docker build -t orrery-hf .
+# The demo seed is downloaded from its immutable private Hugging Face Dataset
+# revision. Until the first demo.lock.json is published, builds use the small
+# committed seed as a migration fallback:
+#   docker build --secret id=HF_SEED_TOKEN,env=HF_SEED_TOKEN -t orrery-hf .
 #   docker run -p 7860:7860 -e GEMINI_API_KEY=... orrery-hf
 #
 # See documentation/HF_SPACE_DEMO.md.
@@ -33,11 +33,10 @@ WORKDIR /fe
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV ORRERY_DOCKER_BUILD=1
-# Same-origin GraphQL through the nginx proxy; relative URL resolves against
-# the page origin in the browser. The WS URL keeps its localhost default —
-# demo mode hides every subscription-using component, so no socket is opened.
+# Same-origin API access through the nginx proxy. The browser derives ws/wss
+# from its own origin when NEXT_PUBLIC_GRAPHQL_WS_URL is empty.
 ARG NEXT_PUBLIC_GRAPHQL_URL=/graphql
-ARG NEXT_PUBLIC_GRAPHQL_WS_URL=ws://localhost:8000/graphql
+ARG NEXT_PUBLIC_GRAPHQL_WS_URL=
 ARG NEXT_PUBLIC_API_BASE_URL=
 ARG NEXT_PUBLIC_DEMO_MODE=1
 ENV NEXT_PUBLIC_GRAPHQL_URL=$NEXT_PUBLIC_GRAPHQL_URL
@@ -81,6 +80,7 @@ RUN apt-get update && apt-get install -y \
 # Node runtime for the Next standalone server (both images are Debian
 # bookworm, so the binary's shared-library deps are satisfied).
 COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # HF Spaces runs the container as uid 1000.
 RUN useradd -m -u 1000 user \
@@ -111,6 +111,19 @@ USER root
 
 COPY --chown=user:user pyproject.toml uv.lock README.md ./
 COPY --chown=user:user interpretability_backend ./interpretability_backend
+
+# A committed demo.lock.json makes the token mandatory inside the downloader;
+# before that first publication, the command copies resources/seed as a small
+# buildable fallback. BuildKit exposes Space secrets at /run/secrets without
+# persisting them in this layer.
+USER user
+RUN --mount=type=secret,id=HF_SEED_TOKEN,mode=0444,required=false \
+    --mount=type=cache,target=/home/user/hf,uid=1000,gid=1000 \
+    uv run --frozen python -m interpretability_backend.scripts.download_seed_snapshot \
+      --config interpretability_backend/config/seed_snapshots/demo.json \
+      --token-file /run/secrets/HF_SEED_TOKEN \
+      --fallback interpretability_backend/resources/seed
+USER root
 
 COPY --from=frontend-builder --chown=user:user /fe/public ./frontend/public
 COPY --from=frontend-builder --chown=user:user /fe/.next/standalone ./frontend/

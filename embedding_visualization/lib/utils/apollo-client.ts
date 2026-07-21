@@ -15,10 +15,14 @@ import {
 import { GraphQLWsLink } from '@apollo/client/link/subscriptions';
 import { getMainDefinition } from '@apollo/client/utilities';
 import { createClient } from 'graphql-ws';
+import {
+  resolveGraphqlHttpUrl,
+  resolveGraphqlWebSocketUrl,
+} from './endpointUrls';
 
 // HTTP endpoint for queries and mutations
 const httpLink = new HttpLink({
-  uri: process.env.NEXT_PUBLIC_GRAPHQL_URL || 'http://localhost:8000/graphql',
+  uri: resolveGraphqlHttpUrl(process.env.NEXT_PUBLIC_GRAPHQL_URL),
 });
 
 // WebSocket endpoint for subscriptions
@@ -27,9 +31,10 @@ const wsLink =
   typeof window !== 'undefined'
     ? new GraphQLWsLink(
         createClient({
-          url:
-            process.env.NEXT_PUBLIC_GRAPHQL_WS_URL ||
-            'ws://localhost:8000/graphql',
+          url: resolveGraphqlWebSocketUrl(
+            process.env.NEXT_PUBLIC_GRAPHQL_WS_URL,
+            window.location,
+          ),
           // Reconnect on connection loss
           retryAttempts: 5,
           shouldRetry: () => true,

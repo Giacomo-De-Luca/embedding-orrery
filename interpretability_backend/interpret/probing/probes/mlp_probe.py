@@ -33,6 +33,10 @@ from interpret.probing.utils.cross_validation import resolve_folds
 from interpret.probing.utils.enums import TaskType
 from interpret.utils.distances import ExperimentalDistance, resolve_distance
 
+# Minimum dev-set size for early stopping; below this, best-of-epochs
+# selection is dominated by noise and the trainer falls back to fixed epochs.
+_DEV_FLOOR = 10
+
 # True = maximise, False = minimise. Used by best-epoch selection and summary.
 _HIGHER_IS_BETTER = {
     "val_r2": True,
@@ -45,6 +49,43 @@ _HIGHER_IS_BETTER = {
     "val_mae": False,
     "val_lab_distance": False,
 }
+
+
+def _split_train_dev(
+    n: int,
+    dev_split: float,
+    seed: int,
+    stratify_y: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Carve a dev subset out of ``n`` training rows for early stopping.
+
+    Returns disjoint ``(fit_idx, dev_idx)`` local index arrays covering
+    ``range(n)``. ``dev_idx`` is empty when ``dev_split <= 0`` or the dev
+    set would fall below ``_DEV_FLOOR`` — the caller must then disable
+    early stopping. Stratified per class when ``stratify_y`` is given.
+    """
+    all_idx = np.arange(n)
+    empty = np.empty(0, dtype=np.int64)
+    if dev_split <= 0:
+        return all_idx, empty
+    rng = np.random.default_rng(seed)
+    if stratify_y is not None:
+        dev_parts = [
+            rng.permutation(all_idx[stratify_y == cls])[
+                : int(round((stratify_y == cls).sum() * dev_split))
+            ]
+            for cls in np.unique(stratify_y)
+        ]
+        dev_idx = np.sort(np.concatenate(dev_parts))
+    else:
+        dev_idx = np.sort(rng.permutation(all_idx)[: int(round(n * dev_split))])
+    if len(dev_idx) < _DEV_FLOOR:
+        print(
+            f"  [note] dev set of {len(dev_idx)} rows is below the floor "
+            f"({_DEV_FLOOR}); early stopping disabled for this probe.",
+        )
+        return all_idx, empty
+    return np.setdiff1d(all_idx, dev_idx), dev_idx
 
 
 def _classification_loss(
@@ -262,6 +303,25 @@ def _train_single_probe(
     # rather than to training noise.
     torch.manual_seed(spec.seed)
 
+    # Early stopping and best-checkpoint selection must not read the
+    # reporting split (that selects the epoch flattering val and inflates
+    # the reported metrics). Carve a dev subset out of the train side;
+    # X_val/y_val are touched exactly once, in the final metrics pass.
+    stratify = (
+        y_train.detach().cpu().numpy().reshape(-1)
+        if task_type is TaskType.CLASSIFICATION
+        else None
+    )
+    fit_idx, dev_idx = _split_train_dev(
+        X_train.shape[0], spec.dev_split, spec.seed, stratify_y=stratify,
+    )
+    fit_t = torch.from_numpy(fit_idx).long()
+    X_fit, y_fit = X_train[fit_t], y_train[fit_t]
+    early_stop = len(dev_idx) > 0
+    if early_stop:
+        dev_t = torch.from_numpy(dev_idx).long()
+        X_dev, y_dev = X_train[dev_t], y_train[dev_t]
+
     input_dim = X_train.shape[1]
     output_dim = (
         num_classes if task_type is TaskType.CLASSIFICATION
@@ -274,7 +334,7 @@ def _train_single_probe(
         dropout=spec.dropout,
     )
     loss_fn: nn.Module = (
-        _classification_loss(y_train, spec.class_weight)
+        _classification_loss(y_fit, spec.class_weight)
         if task_type is TaskType.CLASSIFICATION
         else nn.MSELoss()
     )
@@ -284,11 +344,11 @@ def _train_single_probe(
         weight_decay=spec.weight_decay,
     )
 
-    best_val_loss = float("inf")
+    best_dev_loss = float("inf")
     best_state = deepcopy(probe.state_dict())
     best_epoch = 0
     patience_counter = 0
-    n_train = X_train.shape[0]
+    n_fit = X_fit.shape[0]
     final_train_loss = float("inf")
     final_epoch = 0
 
@@ -301,12 +361,12 @@ def _train_single_probe(
         shuffle_gen = torch.Generator().manual_seed(
             spec.seed * 100_000 + epoch,
         )
-        perm = torch.randperm(n_train, generator=shuffle_gen)
+        perm = torch.randperm(n_fit, generator=shuffle_gen)
         epoch_loss = 0.0
         n_batches = 0
-        for start in range(0, n_train, spec.batch_size):
+        for start in range(0, n_fit, spec.batch_size):
             idx = perm[start : start + spec.batch_size]
-            xb, yb = X_train[idx], y_train[idx]
+            xb, yb = X_fit[idx], y_fit[idx]
             optimiser.zero_grad()
             pred = probe(xb)
             loss = loss_fn(pred, yb)
@@ -316,13 +376,15 @@ def _train_single_probe(
             n_batches += 1
         final_train_loss = epoch_loss / max(n_batches, 1)
 
+        if not early_stop:
+            continue
+
         probe.eval()
         with torch.no_grad():
-            val_pred = probe(X_val)
-            val_loss = loss_fn(val_pred, y_val).item()
+            dev_loss = loss_fn(probe(X_dev), y_dev).item()
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if dev_loss < best_dev_loss:
+            best_dev_loss = dev_loss
             best_state = deepcopy(probe.state_dict())
             best_epoch = epoch
             patience_counter = 0
@@ -331,7 +393,13 @@ def _train_single_probe(
             if patience_counter >= spec.patience:
                 break
 
-    probe.load_state_dict(best_state)
+    if early_stop:
+        probe.load_state_dict(best_state)
+    else:
+        # Fixed-epoch training: the final weights are the checkpoint.
+        best_state = deepcopy(probe.state_dict())
+        best_epoch = final_epoch
+
     metrics = _compute_metrics(
         probe, X_val, y_val,
         loss_fn=loss_fn,
@@ -343,6 +411,8 @@ def _train_single_probe(
             "train_loss_final": final_train_loss,
             "best_epoch": best_epoch,
             "total_epochs": final_epoch + 1,
+            # No val_/train_ prefix: excluded from platform metric parsing.
+            "dev_loss_best": best_dev_loss if early_stop else float("nan"),
         },
     )
     return metrics, best_state

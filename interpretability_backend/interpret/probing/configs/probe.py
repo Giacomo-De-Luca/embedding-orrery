@@ -34,6 +34,14 @@ class MLPProbeSpec:
     train_split: float = 0.8
     seed: int = 42
 
+    # Fraction of the TRAIN side held out as a dev set for early stopping and
+    # best-checkpoint selection. Keeps the validation split untouched until
+    # the final metrics pass (selecting checkpoints on the reporting split
+    # inflates val metrics). 0.0 disables early stopping entirely (fixed
+    # epochs, final weights); a dev set below the trainer's floor degrades
+    # the same way.
+    dev_split: float = 0.2
+
     # Controls validation-best metric used for early-stopping summary.
     # Overrides the trainer's hardcoded val_r2/val_accuracy default.
     best_metric: str | None = None
@@ -61,9 +69,16 @@ class MLPProbeSpec:
                 f"MLPProbeSpec.n_folds must be >= 2 or None; got "
                 f"{self.n_folds!r}",
             )
+        if not (0.0 <= self.dev_split < 1.0):
+            raise ValueError(
+                f"MLPProbeSpec.dev_split must be in [0, 1); got "
+                f"{self.dev_split!r}",
+            )
 
 
-SklearnKind = Literal["ridge", "lasso", "svr", "svc", "logreg", "massmean"]
+SklearnKind = Literal[
+    "ridge", "lasso", "svr", "svc", "logreg", "massmean", "massmean_cov"
+]
 
 
 @dataclass

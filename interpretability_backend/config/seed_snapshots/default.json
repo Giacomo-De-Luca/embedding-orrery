@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "default",
+  "output": "interpretability_backend/resources/seed",
+  "collections": [
+    {
+      "name": "emotion"
+    },
+    {
+      "name": "xkcd_hilbert_gemini"
+    }
+  ],
+  "sae_data": []
+}

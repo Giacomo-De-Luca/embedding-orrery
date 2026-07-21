@@ -1,0 +1,626 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[final]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{subcaption}
+\usepackage{dblfloatfix}
+\usepackage{hyperref}
+\renewcommand{\dbltopfraction}{0.8}       % allow a top float to fill 99% of the page
+\renewcommand{\dblfloatpagefraction}{0.8}
+
+% preamble
+\usepackage{cuted}
+\usepackage{capt-of}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{bm}
+
+% For proper rendering and hyphenation of words containing Latin characters (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+%Including images in your LaTeX document requires adding
+%additional package(s)
+\usepackage{graphicx}
+
+% If the title and author information does not fit in the area allocated, uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Embedding Orrery: Visual Exploration of Vector Spaces and Sparse Autoencoder Features}
+
+%% Orrery: a Platform for Visualization of Embedding and Sparse Autoencoders Feature Spaces 
+
+%% Orrery: a Platform for Visual Exploration of Embedding and Sparse Autoencoders Feature Spaces 
+
+%% Orrery: a Platform for Visual Exploration of Embedding Spaces and Sparse Autoencoders Features  
+
+%A Platform for Embedding Visualisation and Mechanistic Interpretability
+
+% Author information can be set in various styles:
+% For several authors from the same institution:
+% \author{Author 1 \and ... \and Author n \\
+%         Address line \\ ... \\ Address line}
+% if the names do not fit well on one line use
+%         Author 1 \\ {\bf Author 2} \\ ... \\ {\bf Author n} \\
+% For authors from different institutions:
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \And  ... \And
+%         Author n \\ Address line \\ ... \\ Address line}
+% To start a separate ``row'' of authors use \AND, as in
+% \author{Author 1 \\ Address line \\  ... \\ Address line
+%         \AND
+%         Author 2 \\ Address line \\ ... \\ Address line \And
+%         Author 3 \\ Address line \\ ... \\ Address line}
+
+
+\author{
+Giacomo De Luca \\
+Department of Enterprise Engineering\\
+University of Rome Tor Vergata\\
+Via del Politecnico 1, 00133, Rome, Italy \\
+  \texttt{\footnotesize deluca@ing.uniroma2.it} \\}
+
+
+\begin{document}
+
+\maketitle
+
+
+\begin{strip}
+  \centering
+  \includegraphics[width=\textwidth]{media/geometry7.png}
+  \captionof{figure}{A screenshot of Orrery displaying the nebula mode on the WordNet dataset. Each point represents a gloss, and each color denotes an extracted topic. The table shows the top semantic-search results for ``geometry'', also highlighted in the scatterplot. On the left, the visualization controls panel. In the header, search and analytics panels can be accessed using the icons, and the Collections and SAE pages through the navigation bar.}
+  \label{fig:teaser}
+\end{strip}
+
+
+\begin{abstract}
+
+\textbf{Embedding Orrery} is an open-source platform for interactive 3-dimensional visualization of embedding spaces, with native support for Sparse Autoencoders (SAEs), built for data exploration and interpretability research. Given any textual, image, or vector dataset, a single pipeline - embedding, projection, clustering, automatic topic labeling and, optionally, the collection of per-document SAE feature activations - turns it into a 3D constellation that can be searched visually, semantically, lexically, or by SAE feature names; probes can be trained, configured and scored directly in the interface. SAEs are automatically downloaded and rendered as navigable constellations in which entering a prompt highlights the features it activates. Individual features can be inspected inside a dashboard and  injected into the model for causal steering. The star-cartography-inspired interface sustains up to 500,000 points, including WebGL animations and volumetric nebula shaders, on 8 GB of RAM. Embedding Orrery is released under the Apache 2.0 license. Code (Docker included): \url{https://github.com/Giacomo-De-Luca/embedding-orrery}. HF Spaces: \url{https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo}.
+%their decoder vectors
+
+
+\end{abstract}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{media/poetry.png}
+    \caption{A screenshot of the SAE dashboard, with features related to ``poetry'' searched semantically. The selected feature's panel shows label, density histogram, top/bottom logits, similar features, and top-activating documents. Right: steered vs.\ baseline response with single-vector steering on ``What is your favorite job?''}
+    \label{fig:dashboard}
+\end{figure*}
+
+
+\section{Introduction}
+
+
+%A screenshot of the SAE dashboard. Features related to ``poetry'' are searched semantically. For the selected feature, the interface displays: label, density, top and bottom logits, density histograms and similar features and top activating documents. On the right steered and baseline response with single vector steering on the question "What is your favorite job
+
+Ever since \citet{mikolov2013distributed} made meaningful textual embedding spaces widely available, multiple platforms have been developed to explore them visually. The Embedding Projector \cite{smilkov2016embeddingprojectorinteractivevisualization} let users explore embedding spaces as 3D scatterplots, reduced with PCA or t-SNE \cite{van2008visualizing}. Its accompanying paper named three tasks for visualizers to solve: (1) \emph{exploring local neighborhoods}, (2) \emph{viewing global geometry and finding clusters}, and (3) \emph{finding meaningful directions}. The Projector solved only the first task: it offered no way to cluster vectors, while direction-finding was limited to constructing an axis from the results of two textual queries.
+
+% later generalized by Parallax \cite{molino-etal-2019-parallax} to explicit algebraic formulae
+
+%, such as the famous man:woman\,::\,king:queen analogy \cite{mikolov-etal-2013-linguistic}
+
+After the popularization of contextualized embeddings \cite{devlin2019bertpretrainingdeepbidirectional}, new platforms \cite{wang2023wizmapscalableinteractivevisualization, nomic2022atlas, johnson2024latentscope, ren2025embeddingatlaslowfrictioninteractive} brought scale, clustering and automated topic labeling, solving the second task proposed in the Projector's list, but reverted to 2D, trading navigation for scalability. 
+
+
+%such as WizMap \cite{wang2023wizmapscalableinteractivevisualization}, Nomic Atlas \cite{nomic2022atlas}, Embedding Atlas  \cite{ren2025embeddingatlaslowfrictioninteractive} and Latent scope\cite{johnson2024latentscope}.
+% Later: "handle millions of data points" ... Unlike the Projector, all those projects reverted back to 2D, trading navigation for scalability. 
+
+The third task, \textit{finding directions in the original space}, remains crucial in interpretability research,yet no visualization platform learns directions from data by training probes. Linear structures emerge unsupervised in LLMs: the separation between factual true and false can be visualized and recovered through linear probes \cite{Marks2023TheGO}; refusal is mediated by a single direction in the residual stream \cite{arditi2024refusallanguagemodelsmediated}. 
+%Orrery allows training and configuring linear and nonlinear probes directly inside the platform §\ref{app:probes}. 
+
+Additionally, since the Projector's release, new interpretability techniques built on vector spaces have emerged, most notably Sparse Autoencoders (SAE) \cite{bricken2023monosemanticity}. SAEs expand the dimensionality of the model's representation space to disentangle superposition \cite{elhage2022superposition}, recover interpretable features \cite{templeton2024scaling}, and can be used in downstream tasks for steering, classification and retrieval \cite{jiang2025interpretableembeddingssparseautoencoders,
+deng2026qwenscopeturningsparsefeatures}. 
+
+%SAE features can be used in downstream tasks, such as classification, steering, clustering, evaluation and retrieval \cite{jiang2025interpretableembeddingssparseautoencoders, deng2026qwenscopeturningsparsefeatures}. 
+
+%Since each row of the SAE decoder matrix is a vector in the original space, 
+SAE features can also be visualized: Anthropic published a dashboard and 2D scatterplots to navigate SAE features in a UMAP-projected space \cite{bricken2023monosemanticity, templeton2024scaling}.
+
+
+%Open-source tooling, however, reproduced the per-feature dashboard while leaving the map behind (\S\ref{sec:related}).
+
+Embedding Orrery (abbreviated Orrery) aims to integrate embedding visualization with interpretability, solving all three of the Projector's tasks. To embedding-space exploration it brings interpretability tooling: corpora become searchable by SAE features, and hypotheses about linear structure can be tested by training probes directly in the interface. To interpretability it brings the capabilities of modern visualization platforms: SAE feature spaces are downloaded, projected, clustered, and labeled; they are also connected in the same interface to feature inspection and causal steering.
+
+%% in order to facilitate interpretability and safety research, and to allow an immediate and interactive access to large textual corpus, such as the one from digital humanities. 
+
+%Orrery aims to integrate embedding visualization with interpretability through its two enabled workflows. The first one allows the frictionless ingesting of local or Huggingface dataset turning them in visualizable collections 
+
+%Orrery aims to bridge the gap between interpretability research and the current generation of embedding-visualization platform, solving all three of the Projector's intended use cases through two pipelines. 
+
+%% here it should be explained what the first pipeline is for, allowing exploration of embedding spaces
+%The first pipeline mirrors the Emedding/Nomic Atlas one: (1) embed the dataset, 2) compute projections, (3) cluster the vectors, and (4) label the clusters with cTF-IDF or LLM \cite{grootendorst2022bertopicneuraltopicmodeling}. Orrery also adds a fifth optional step: collecting per-document SAE activations, enabling SAE-feature search over the text. The processed collection is explored in 3D, where it can be colored, filtered, and searched semantically, lexically, or by SAE feature names. Linear and MLP probes can be trained and scored directly in the interface.
+
+%% the second pipeline is for the exploration of feature spaces
+%The second pipeline treats SAE features themselves as collections: features are visualized either by projecting the raw decoder vectors or by embedding their autointerpreter-generated labels \cite{bills2023language}. Orrery automatically downloads and store SAEs from HuggingFace and feature-labels from Neuronpedia \cite{neuronpedia}, then computes projections and topics for them. The resulting galaxy can be browsed visually, searched semantically over labels, or probed by entering a prompt and watching the activated features highlighted. Any interesting feature can be inspected in a dashboard inspired by Anthropic's and Neuronpedia \cite{neuronpedia} with: top logits, density histograms, similar features, top activating documents. Features can be injected using ActAdd \cite{turner2024steeringlanguagemodelsactivation} in a chat interface to causally steer the model. 
+
+
+
+%Contributions: 
+
+%\begin{itemize}
+%    \item An embedding collection manager with a double database architecture that stores datasets, projections, embeddings, metadata, topics and per-document SAE activations, and automatically downloads SAEs from Gemma Scope 2 together with their Neuronpedia labels and activation data.
+%    \item A star-cartography-inspired 3D interface, with custom WebGL volumetric shaders, animations, 3D labels, advanced filtering,  and four search modes: visual, semantic, lexical, and SAE-based.
+%    \item An SAE workflow that unifies exploration and intervention: feature spaces browsable, clusterable, and labelable like any other embedding collection, with per-feature dashboards and in-interface causal steering via activation addition.
+    %\item Two replication studies to show how the platform can enable research: using the methodology of
+%\end{itemize}
+
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Embedding-visualization platforms.}
+
+
+
+The platforms that followed the Embedding Projector (\S1) converged on two design choices: 2D projections, and scale as the primary goal. Nomic Atlas \cite{nomic2022atlas} renders millions of embeddings with clustering, topic labels, filtering and search, but is a closed commercial service with a fixed embedding model and projection models. WizMap \cite{wang2023wizmapscalableinteractivevisualization} and Embedding Atlas \cite{ren2025embeddingatlaslowfrictioninteractive} reach similar scale in the browser, adding density contours, cross-filtering, and analytical charts. Latent Scope \cite{johnson2024latentscope}, an
+open-source local pipeline, is the only platform with any SAE integration: documents can be filtered by features from an SAE trained on \texttt{nomic-embed-text-v1.5} embeddings \footnote{\url{https://enjalot.github.io/latent-taxonomy}}, but feature spaces are never visualized. 
+
+Three-dimensional embedding views survived mainly as demonstrations: Google's \textit{t-SNE Map} of
+artworks\footnote{\url{https://artsexperiments.withgoogle.com/tsnemap}} and the Hugging Face community's \textit{Semantic Galaxy},\footnote{\url{https://huggingface.co/spaces/webml-community/semantic-galaxy}} an in-browser 3D view of EmbeddingGemma \cite{vera2025embeddinggemmapowerfullightweighttext} vectors and the main inspiration for Orrery's cosmic theme. The third dimension is not cosmetic: rotation-based navigation, as opposed to pure zooming, increases immersion and supports cluster understanding \citep{9222098}.   
+
+
+%The third dimension is not cosmetic: \citet{9222098} show that rotation-based navigation, as opposed to pure zooming, increases immersion and supports cluster understanding.   
+
+
+
+\paragraph{SAE feature visualization.}
+
+
+%% TODO add the paper from 2019 activation atlas and maybe https://www.goodfire.ai/research/evee-explaining-genetic-variants#
+
+Activation atlases \cite{carter2019activation} mapped the activation space of
+vision models on a projected grid. For SAEs,  \citet{bricken2023monosemanticity} established the visual vocabulary still in use: a per-feature dashboard (activation density, top and bottom logits, activating examples) accompanied by a 2D UMAP map of 4,608 features, later extended to Claude Sonnet \cite{templeton2024scaling}. Both interfaces cover a single layer and are closed-source. Open-source tooling, such as SAE-Vis \cite{sae_vis}, SAEDashboard \cite{sae_dashboard}, and Neuronpedia \cite{neuronpedia} replicated the dashboard leaving the navigable space behind. Neuronpedia offers search over feature explanations, activation testing, and in-browser steering, but its only spatial view is a 2D UMAP of GPT-2 Small, without clustering or navigation aids. Google's PAIR published a pedagogical explorable of a 2D visualization of a single Gemma Scope \cite{lieberum2024gemmascopeopensparse} SAE\footnote{\url{https://pair.withgoogle.com/explorables/sae}}. Existing feature maps are one-off showcases of a fixed SAE rather than research platforms. 
+
+
+
+
+\section{System Design}
+\label{sec:system}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{media/pipelineok.png}
+    \caption{Collection pipeline, moving from a dataset to an explorable constellation. The entire pipeline can be set-up and executed visually in the collections page.}
+    \label{fig:pipeline}
+\end{figure}
+
+
+Orrery's design goal is seamless exploration of embedding spaces: frictionless~\cite{ren2025embeddingatlaslowfrictioninteractive} movement from a raw dataset to a navigable constellation, and from a promising SAE feature to its causal effect on the model~\cite{templeton2024scaling}. The platform allows two workflows over one shared backend. The \emph{collection workflow} (embed, project, cluster, label, explore) turns any textual, image, or vector dataset into a searchable space. The \emph{SAE workflow} (visualize, inspect, steer) reuses the same engine for interpretability. 
+
+
+
+\paragraph{Datasets, collections, storage.}
+Orrery separates two concepts. A \emph{dataset} is a set of documents (text, images, or pre-computed vectors) stored and indexed in DuckDB. A \emph{collection} is one representation of that dataset: an embedding, its 2D/3D projections, optional topic extractions and SAE activations. One dataset can therefore have many collections. DuckDB acts as the central orchestrator (documents, metadata, projections, SAE activations), while ChromaDB \cite{chroma2023} stores only IDs and dense vectors for approximate nearest-neighbor search. A GraphQL API serves the Next.js frontend; long-running jobs stream progress over WebSockets and are resumable after interruption.
+
+%so one corpus can be embedded with different models, prompts, or column combinations
+
+% Document duplication was the main limitation encountered with the initial ChromaDB-only storage. 
+
+\paragraph{Ingestion.}
+A dataset is previewed from HuggingFace or from local JSON, CSV, or Parquet files. The columns to embed are specified with a free-form template that supports both custom prompts and column concatenation (e.g.\ \texttt{\{word\}: \{definition\}} for WordNet). Eight embedding providers are supported (Appendix~\ref{app:embedding}). All features can run fully offline selecting local models. \emph{Projections}, the only mandatory step to visualize a collection, are computed with PCA and UMAP~\cite{McInnes2018}, in both 2D and 3D. 
+
+\paragraph{Topic modeling.}
+
+Topic extraction follows and forks BERTopic~\cite{grootendorst2022bertopicneuraltopicmodeling}: since embedding and reduction already exist in the platform, we reuse only its clustering, c-TF-IDF, and labeling components, including its LLM labeling prompt. Clustering (HDBSCAN, k-means, Gaussian mixtures, or spectral) runs on the stored 2D/3D projections, on 5-D UMAP as in BERTopic, or on the original vectors; with BERTopic's defaults, topic assignments are identical (Table~\ref{tab:bertopic-parity} in the Appendix). Labels come from c-TF-IDF keywords or LLMs.
+
+%and can be regenerated or manually edited
+
+%Topic evaluation scores can be computed directly in the collection page.
+
+
+
+
+
+
+%An optional reduction step merges topics hierarchically toward a target count. The originals are counted as subtopics for nested coloring.
+
+
+\paragraph{Per-document SAE activations.}
+Any stored collection can optionally be run through Gemma Scope 2 SAEs~\cite{mcdougall2025gemmascope2}. Following \citet{jiang2025interpretableembeddingssparseautoencoders}, token-level activations are max-pooled into a single sparse vector per document. Because each dimension carries an auto-interpreted feature label, the corpus becomes searchable by feature names. 
+
+\paragraph{Search and filtering.}
+A collection can be searched four ways, with results rendered as a highlighted constellation centered on the first result and colored by similarity (Figure~\ref{fig:teaser}): (i)~\textbf{semantic} search over the original embedding space, also triggered by clicking any point; (ii)~\textbf{text} search (exact, partial, or BM25, with column selection); (iii)~\textbf{SAE feature search}: querying an SAE feature name (e.g.\ \emph{football}) ranks documents by their max activation over matching features; (iv)~\textbf{prompt highlighting}, on SAE collections (\S\ref{sec:sae}): the prompt is run through the model, encoded by the SAE at the selected layer, and every activated feature lights up, ranked and colored by activation strength. This inverts the SAE search: there, features index documents; here, a document indexes features.
+
+
+%via FTS extension
+%executed server-side in DuckDB
+%, - the camera flies to it and its nearest neighbours in the pre-projection space light up
+
+
+%The legend doubles as a filter: categorical fields render as toggleable category lists with counts, numeric fields as histograms with draggable range handles, and auto-detected temporal fields get a dedicated range slider that mutes out-of-range points.
+
+
+%%% TODO ref to an image. 
+%\paragraph{color.}
+%Beyond the standard d3 scales, Orrery ships Crameri's perceptually uniform scientific color maps~\cite{crameri2018scientific}, which avoid scale distortion and remain readable for color-blind users~\cite{crameri2020misuse}. The numeric legend is an interactive histogram of the field's distribution with draggable minimum, center, and maximum handles plus a log option, so outliers skewing a color scale can be visually spotted and directly re-anchored. 
+%a scale skewed by outliers is re-anchored in seconds. 
+
+
+\paragraph{Probing.}
+Probes can be trained and configured directly in the interface on the original embeddings: any metadata field serves as target, fitted with a linear probe (mass mean, logreg, ridge), SVR or a small MLP. Linear probes double as directions: the learned weight vector is stored with the collection, and points can be colored by their projection onto it (\S\ref{sec:glasgow}).
+
+
+
+\paragraph{Rendering 3D galaxies at scale.}
+
+
+The scatterplots are rendered through WebGL using a fork of Plotly.js: on every trace update, Plotly re-reads all $n$ points across all $m$ attributes of every existing trace, an $O(n \cdot m)$ burden that makes real-time overlays and filters impossible at scale. Plotly is used only for camera control and point rendering: tooltips, legend, labels, and animations are re-implemented on an overlay canvas that reads the WebGL context directly. Beyond d3's scales, Orrery employs Crameri's perceptually uniform color maps~\cite{crameri2018scientific, crameri2020misuse}, and numeric legends render as interactive histograms of the field's distribution, with draggable handles to re-anchor scales skewed by outliers (Figure~\ref{fig:concreteness}).  Label placement ports the Embedding Projector's collision-avoidance code~\cite{smilkov2016embeddingprojectorinteractivevisualization}: 3D anchors are projected to screen space each frame and packed on a spatial grid, extended with a priority order and rank-dependent opacity. Since no scatterplot library offers volumetric rendering, the \emph{nebula} mode approximates it: we render feathered sprites around cluster centroids, spread according to cluster extent, in the style of GalaxyThreeJS \footnote{\url{https://github.com/pickles976/GalaxyThreeJS}}. 
+For 2D density contouring we port the code from Embedding Atlas \cite{ren2025embeddingatlaslowfrictioninteractive}, adding coloring according to the categories (Figure~\ref{fig:emnlp}). The interface was tested rendering up to 500k points with 8 GB RAM (Table~\ref{tab:fps} in the Appendix).
+
+
+%greedily
+%Tooltips are positioned from projected coordinates, and \textit{fly-to} animations manipulate the camera directly.
+
+%after an unsuccessful attempt with three.js bloom, 
+
+
+\subsection{SAE collections}
+\label{sec:sae}
+
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{media/gemma93.png}
+    \caption{The Gemma Scope 2 16k SAE (Gemma-3-4B-it, layer 29) as a 3D galaxy of its Neuronpedia-label embeddings. Topic labels appear on zoom and rotation; right-clicking a feature opens its dashboard.}
+    \label{fig:saecluster}
+\end{figure}
+
+
+%Navigable 3D galaxy of the embeddings of the Neuronpedia labels of the Gemma Scope 2 layer 29 SAE 16k of Gemma-3-4B-it. Topic labels appear dynamically when zooming or rotating. Right-clicking a point opens it in the dashboard.
+
+
+
+%\todo{add n_dimensional} This is so repeated. 
+\paragraph{Feature spaces as collections.}
+
+Each SAE feature is a row of the decoder matrix $W_{\mathrm{dec}}$, a vector in the model's original space, so feature sets can be visualized like any vector dataset (Figure~\ref{fig:saecluster}), by projecting the decoder vectors directly or by embedding their auto-interpreter labels \cite{bills2023language, paulo2025automaticallyinterpretingmillionsfeatures} with any provider from \S\ref{sec:system}. From the SAE tab in the \textit{Collections} page, the user selects the target model, layer, and width; the SAE is downloaded and registered as a dataset together with its feature labels and activation examples from Neuronpedia \cite{neuronpedia}. Since these are ordinary vector collections with metadata, the entire collection pipeline (Figure~\ref{fig:pipeline}) is reused with no additional code.
+ 
+
+%The demo currently supports all the Gemma Scope 2 SAEs \cite{mcdougall2025gemmascope2}, with upcoming support for the Qwen-Scope SAEs \cite{deng2026qwenscopeturningsparsefeatures}. 
+
+
+\paragraph{Feature dashboard and steering.}
+Any feature in the SAE galaxy can be right clicked to examine it in the SAE page: a dashboard inspired by \citet{bricken2023monosemanticity} and Neuronpedia \cite{neuronpedia}(Figure~\ref{fig:dashboard}). For each feature, the dashboard displays top and bottom logits, activation-density histograms, features with similar activation patterns, top or decile based activation samples. Features are located through textual or semantic search, or by prompting the model and examining token-level activations in a heatmap. The found features can be directly injected into the model with ActAdd \cite{turner2024steeringlanguagemodelsactivation}, selecting the activation coefficient. Steering with multiple features is supported, as is split view to compare with baseline response. 
+
+%The activated features density-filtered to avoid always activating ones. There is also an optional coverage filter, removing features that appear on all the input tokens above a configurable threshold (default > 80\%).
+
+\paragraph{Interpretability backend.}
+%/TransformerLens  nanda2022transformerlens
+
+SAELens \cite{bloom2024saetrainingcodebase} supports neither multimodal inputs nor streaming generation with interventions active. The requirements for SAEs are small, - read/write caches at three sites per layer (residual, attention output, MLP output), and a single encode/decode pair for each SAE, - so we implement it directly. \texttt{Gemma-pytorch} was forked to add activation caches and streaming generation. JumpReLU \cite{rajamanoharan2024jumpingaheadimprovingreconstruction} for Gemma Scope and TopK \cite{gao2024scalingevaluatingsparseautoencoders} SAEs for Qwen-Scope \cite{deng2026qwenscopeturningsparsefeatures} are written in plain PyTorch. Qwen-Scope SAEs are run via \textit{register\_forward\_hook} on the Transformers model.
+
+
+\section{Case Studies}
+\label{sec:cases}
+
+
+
+%\begin{equation}
+%p_{\mathrm{mm}}(x) = \sigma\!\big((\mu^{+}-\mu^{-})^{\top}x\big),
+%\end{equation}
+
+We validate Orrery with two replication studies, each exercising a different subsystem end-to-end: finding linear directions visually in the embedding space and validating them through probe training in the collection workflow (\S\ref{sec:glasgow}); activation caching and steering in the interpretability backend (\S\ref{sec:refusal}).
+
+%"We validate Orrery with two replication studies, each exercising a different subsystem end-to-end: finding linear directions visually in the embedding space and validating them through probe training in the collection workflow (§4.1) and activation caching and steering in the interpretability backend (§4.2)."
+
+\subsection{Psycholinguistic Norms are Linear Directions}
+\label{sec:glasgow}
+
+
+
+
+
+%LLMs self-organize the internal representation space to encode semantic dimensions linearly \cite{Marks2023TheGO}. A simple \textit{mass mean probe} can recover a factual true/false direction using multiple models. The pervasiveness of this linear encoding phenomenon and whether this extends to the representation spaces of sentence-embedding models remains open. 
+
+LLMs encode semantic dimensions linearly: a simple mass mean probe recovers a factual true/false direction across models \cite{Marks2023TheGO}. Whether this extends to sentence-embedding spaces remains open.
+
+
+%$p_{\mathrm{mm}}(x)=\sigma\!\big((\mu^{+}-\mu^{-})^{\top}x\big)$ where $\mu^{\pm}$ are the class means
+
+%Whether this linear encoding extends to sentence-embedding models remains open
+
+We probe two sets of human psycholinguistic norms in the embedding space of EmbeddingGemma and MiniLM from SentenceTransformers \cite{reimers-gurevych-2019-sentence}. \textbf{Concreteness} ratings for about 40k English words and two-word expressions \cite{Brysbaert2014-py}. \textbf{Glasgow norms} ${\sim}5.5$k words rated on nine dimensions (Appendix~\ref{app:probes}). The collections are first embedded, projected and colored using diverging color scales to find which dimensions appear to be linearly separated (Figure~\ref{fig:concreteness}). We train mass mean, Ridge Regression and SVR probes on the datasets, using 5-fold cross-validation with an 80/20 split in each fold. Every dimension visually separable is linearly recoverable: concreteness 40k is linearly encoded in both models (Ridge $R^2{=}0.69/0.83$; mass mean $R^2{=}0.61/0.71$ for
+MiniLM/EmbeddingGemma). Glasgow norms are all linearly encoded (ridge ranges from $R^2{=}0.59$ to $R^2{=}0.85$ on EmbeddingGemma). Nonlinear probes improve slightly the results (SVR$-$Ridge $\leq 0.1$). Per-dimension results and the full protocol are in Appendix~\ref{app:probes}.
+
+%\begin{enumerate}
+%    \item \textbf{Concreteness} ratings for about 40k English words and two-word expressions obtained from 4,000 participants \cite{Brysbaert2014-py}.
+%    \item \textbf{Glasgow norms} ${\sim}5.5$k words rated on nine dimensions (arousal, valence, dominance concreteness, imageability, familiarity, age of acquisition, semantic size, and gender association).
+%\end{enumerate}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{media/concretenesswhite.png}
+    \caption{3D UMAP of MiniLM embeddings of the Concreteness dataset. The concrete/abstract direction appears visually separated, with a mixed region at the center.}
+    \label{fig:concreteness}
+\end{figure}
+
+
+\subsection{Refusal is a Single Vector Away}
+\label{sec:refusal}
+
+To validate the steering backend (\S\ref{sec:sae}), we replicate
+\citet{arditi2024refusallanguagemodelsmediated} on Gemma-3-4b-it (the reference uses Gemma-2). Candidate refusal directions $r_\ell$ are extracted by difference-in-means between activations over $n{=}128$ harmful prompts (AdvBench \cite{zou2023universaltransferableadversarialattacks}, MaliciousInstruct \cite{ICLR2024_3af25aa3}) and harmless Alpaca instructions  \cite{taori2023alpaca}, at each layer and each of the five end-of-instruction template tokens.
+
+ \citet{arditi2024refusallanguagemodelsmediated} remove refusal by \emph{directional ablation}, projecting the unit-norm $\hat r$ out of the residual stream at every layer; in our evaluation, this collapses the model to degenerate token loops, possibly caused by the residual stream growth over layers \cite{hex2023residual}.
+
+ %, $h \leftarrow h - (\hat r^{\top}h)\,\hat r$
+%In the reference paper \emph{activation addition} was used only to induce refusal
+We instead use ActAdd, the same additive mechanism as our SAE steering (\S\ref{sec:sae}), adding the unnormalized $r_{\ell^{*}}$ at a single layer: $h_{\ell^{*}} \leftarrow h_{\ell^{*}} + \alpha\,r_{\ell^{*}}$, with $\alpha=-1$ suppressing refusal and $\alpha=+1$ inducing it. At
+$\ell^{*}=13$, ActAdd$(+1)$ induces refusal on 100/100 entirely benign prompts using substring matching from \citep{arditi2024refusallanguagemodelsmediated} for comparable results. Using Llama-Guard-4-12B \cite{inan2023llamaguardllmbasedinputoutput} as a harmfulness classifier attack success rises from 0.11 to 0.83 on JailbreakBench \cite{chao2024jailbreakbench} and from 0.21 to 0.86 on HarmBench-test \cite{mazeika2024harmbenchstandardizedevaluationframework}. All completions were manually reviewed for coherence. A single vector at a single layer still suffices to remove refusal or to induce it, suggesting that mid-generation steering is a promising avenue \cite{deng2026qwenscopeturningsparsefeatures}. Vector selection details and per-category results are in Appendix~\ref{app:refusal}. 
+
+%We release the experiment code to support safety research.
+
+%
+%To remove refusal a single vector on a single layer seems to be still sufficient. Since that same vector can induce refusal, classifying the input or monitoring with SAE \cite{deng2026qwenscopeturningsparsefeatures} and steering the model mid-generation seems a promising avenue to increase safety. 
+
+
+
+%including KL-divergence on neutral prompts logits,
+
+\section{Conclusions}
+
+
+%Embedding Orrery turns any textual, image, or vector dataset — including SAE feature spaces — into a navigable 3D collection wired to semantic, lexical, and feature-level search, in-interface probing, feature inspection, and causal steering.
+
+Orrery connects embedding visualization and interpretability: corpus exploration gains SAE-feature search and in-interface probing; interpretability gains the interactivity of modern visualization platforms, with feature spaces rendered as navigable
+collections wired to inspection and causal steering. The case studies display how the platform enables research end-to-end: linear structure spotted visually and confirmed by probes (\S\ref{sec:glasgow}) and a refusal direction for safety-testing extracted, injected, and evaluated without leaving the platform (\S\ref{sec:refusal}).
+
+Beyond interpretability research, the coloring, temporal, and filtering tools target the navigation of digital humanities corpora: by breaking the linear order of texts and drawing similar documents together in space, connections across authors, periods, and passages surface visually. %Code, Docker image, and screencast are released under Apache 2.0.
+
+%The nebula shaders, highlight traces, and 3D labels are not ornaments but navigation aids, inviting users to treat a corpus not as a flat canvas but as a place to explore with curiosity and a sense of wonder.
+
+
+%furthermore, by allowing frictionless movement from textual collection to visualization and probing, it allows novel discovery over directions in embedding spaces. 
+%Orrery aims to be both a visual experiment lab for interpretability researchers and a visual exploration canvas for people interested in the content of the textual corpus displayed. The advanced coloring, temporal analysis and filtering options are aimed at the navigation of digital humanities corpus. By breaking down the linear dimension of the books and by bringing together similar documents in space, connections across authors, periods, or quotes can be easily discovered. The nebula shaders, the highlight connected traces and the 3D topic labels are not ornaments but navigation aids, aimed at inviting users to treat datasets not as flat, anodyne canvas but place to explore with curiosity and a sense of wonder. 
+
+
+
+
+
+\section*{Limitations}
+
+
+Orrery currently fully supports only SAEs from Gemma Scope 2 and Qwen-Scope. Support for additional SAE families requires only an encode/decode implementation and a \textit{register\_forward\_hook attachment}. SAE search is also enabled only for the Gemma Scope 2 family, since the current application downloads labels from Neuronpedia. The backend hosts a working autointerpreter pipeline to generate native labels, which is still pending validation. SAE searching is also limited by the noisiness of the labels \cite{jiang2025interpretableembeddingssparseautoencoders}. While Orrery has been provided to interpretability researchers to debug and experiment, a systematic user evaluation study has not yet been conducted. Finally, Orrery has a scale limitation compared to the millions of points that Nomic Atlas or Embedding Atlas render. This was a deliberate design trade-off in favor of 3D navigation, real-time overlay and volumetric shaders. 
+
+
+%Future versions will expand the hook-based approach or integrate with NNsight \cite{fiottokaufman2025nnsightndifdemocratizingaccess} to generalize to all model families.
+
+%For larger datasets, 2D-first platforms may be preferable. 
+
+
+% and could be corrected by adding post-hoc activations labels \cite{arad-etal-2025-saes}
+
+
+
+%% PUT BACK LATER: final version has 1 more page
+%\section*{Acknowledgments}
+
+%I wish to thank Roksana Geworek for all the conversations, feedbacks, and inspiration on working on the geometry of the embedding spaces, Leonardo Ascione for all the help on the technical side of web-development, in particular in debugging React, and Matteo Rinaldi for wanting to bring forth developing source interpretability-libraries. 
+
+
+
+\section*{Ethics Statement}
+Our refusal case study (\S\ref{sec:refusal}) replicates a published method \cite{arditi2024refusallanguagemodelsmediated}, which can be run using the refusal\_direction code available on GitHub\footnote{\url{https://github.com/andyrdt/refusal_direction}}. Our experiment reproduces it using Gemma-3 instead of Gemma-2, and employs the fork of Gemma-pytorch instead of using Transformers, so the release provides no capability beyond what is already public. Our contribution is reproducibility and tooling for inspecting the safety-relevant direction. The released SAE tooling supports an emerging line of safety work that monitors and intervenes on model internals, using input classification and activation-level steering via SAEs or steering vectors \cite{lu2026assistantaxissituatingstabilizing}, rather than easily broken post-hoc alignment. The refusal vectors themselves are not distributed: the released code contains the extraction and evaluation pipeline, a download script to retrieve the prompts (again adapted from \citep{arditi2024refusallanguagemodelsmediated}), and no harmful completions. The Hugging Face space contains no steering interface. The psycholinguistic norms (\S\ref{sec:glasgow}) are public datasets of aggregate human ratings, used under their licenses.
+
+
+
+
+%We hope that this experiment will bring further awareness that this notorious vulnerability still has not been fixed.
+
+
+
+%on open-weight models. It introduces no new attack capability: the technique and implementations have been public since 2024, and it can be directly reproduced using Transformers from the paper's repository. Our experiments reproduces it on Gemma-3, noting that the vulnerability still has not been fixed. 
+
+%it only employs the fork of Gemma-Pytorch instead of using the Transformers implementation. Our contribution is reproducibility and tooling for \emph{inspecting} safety-relevant directions. The released experiment code contains the extraction and evaluation pipeline, a downloaded to retrieve the prompts from the repository of Arditi, and no harmful completions. Our hope is to signal the need for a paradigm of safety measure that rely on classification and intervention rather than easily broken post-hoc alignemnt. 
+
+
+
+\bibliography{custom}
+\clearpage
+
+\appendix
+
+
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrr}
+\toprule
+Dataset & Pipeline & Topics & Sil. & $C_v$ \\
+\midrule
+emotion & Orrery   & 22 & 0.5259 & 0.3279 \\
+(1k)    & BERTopic & 22 & 0.5259 & 0.3431 \\
+\midrule
+20 Newsgroups & Orrery   & 214 & 0.6166 & 0.6113 \\
+(18.8k)       & BERTopic & 214 & 0.6166 & 0.6128 \\
+\bottomrule
+\end{tabular}
+\caption{Parity with BERTopic on identical inputs (same MiniLM embeddings and
+UMAP/HDBSCAN configuration). Document--topic assignments are identical (ARI $=1.0$), making silhouette match exactly; the small $C_v$ gap stems from minor differences in c-TF-IDF keyword extraction, not clustering.}
+\label{tab:bertopic-parity}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{rrrrr}
+\toprule
+Points & 3D FPS & 2D FPS & Heap (MB) & Load (s) \\
+\midrule
+1{,}000    & 88.8 & 101.7 & 114   & 1.7 \\
+10{,}000   & 91.3 & 102.9 & 169   & 1.7 \\
+19{,}537   & 84.7 &  98.1 & 189   & 1.7 \\
+39{,}954   & 78.6 &  93.7 & 360   & 2.8 \\
+50{,}000   & 74.5 &  90.7 & 470   & 3.0 \\
+65{,}536   & 71.6 &  94.3 & 542   & 4.2 \\
+153{,}772  & 51.6 &  80.9 & 1{,}050 & 7.7 \\
+212{,}478  & 43.3 &  74.8 & 1{,}441 & 7.9 \\
+250{,}000  & 34.5 &  76.6 & 1{,}664 & 6.4 \\
+500{,}000  & 24.9 &  57.4 & 3{,}243 & 6.4 \\
+\bottomrule
+\end{tabular}
+\caption{Rendering performance vs.\ collection size: mean FPS during continuous camera interaction (orbit in 3D, pan in 2D), measured on the live application (Chrome/Metal, MacBook~Pro M3, 8\,GB RAM, 120\,Hz display). Heap is
+the renderer's JS heap after load (3D).}
+\label{tab:fps}
+\end{table}
+
+
+
+\section{Embedding Settings}
+\label{app:embedding}
+
+The platform supports 8 embedding providers for sentence embeddings. Local: SentenceTransformers (default), Ollama, FlagEmbedding for BGE~\cite{chen-etal-2024-m3}, and PyTorch for Qwen~\cite{zhang2025qwen3embeddingadvancingtext}; via API key: OpenAI, Cohere, Gemini, and HuggingFace. The settings include task-type prompts for models that use them, such as EmbeddingGemma~\cite{vera2025embeddinggemmapowerfullightweighttext}. 
+
+
+\section{Probe Settings and Per-Dimension Results}
+\label{app:probes}
+
+\paragraph{Probe settings.}
+We evaluate all probes with five-fold cross-validation, using an 80/20 train–test split (seed $7$) on per-dimension $z$-scored embeddings. \textsc{Ridge}: $\ell_2$ linear regression, $\alpha=1$. \textsc{SVR}: support-vector regression, RBF kernel, $C=1$. \textsc{Mass mean}: the covariance corrected direction $\boldsymbol{\mu}_{+}-\boldsymbol{\mu}_{-}$ of \citet{Marks2023TheGO} on a median split, scored by projection. All probes report $R^2$. 
+
+
+
+\begin{table}[t]
+\centering
+{\small
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Norm} & \textbf{Ridge} & \textbf{SVR} & \textbf{Mass mean} \\
+              & $R^2$ & $R^2$ & $R^2$ \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{MiniLM}} \\
+concreteness     & 0.72\,\scriptsize$\pm$0.02 & 0.77\,\scriptsize$\pm$0.02 & 0.64\,\scriptsize$\pm$0.04 \\
+imageability     & 0.66\,\scriptsize$\pm$0.02 & 0.71\,\scriptsize$\pm$0.02 & 0.56\,\scriptsize$\pm$0.03 \\
+valence          & 0.62\,\scriptsize$\pm$0.02 & 0.70\,\scriptsize$\pm$0.02 & 0.50\,\scriptsize$\pm$0.03 \\
+aoa              & 0.56\,\scriptsize$\pm$0.02 & 0.63\,\scriptsize$\pm$0.02 & 0.44\,\scriptsize$\pm$0.01 \\
+semsize          & 0.58\,\scriptsize$\pm$0.01 & 0.67\,\scriptsize$\pm$0.01 & 0.47\,\scriptsize$\pm$0.02 \\
+gender           & 0.51\,\scriptsize$\pm$0.04 & 0.61\,\scriptsize$\pm$0.03 & 0.39\,\scriptsize$\pm$0.05 \\
+familiarity      & 0.46\,\scriptsize$\pm$0.03 & 0.52\,\scriptsize$\pm$0.02 & 0.36\,\scriptsize$\pm$0.02 \\
+arousal          & 0.47\,\scriptsize$\pm$0.02 & 0.57\,\scriptsize$\pm$0.01 & 0.35\,\scriptsize$\pm$0.03 \\
+dominance        & 0.46\,\scriptsize$\pm$0.03 & 0.55\,\scriptsize$\pm$0.02 & 0.35\,\scriptsize$\pm$0.03 \\
+concreteness-40k & 0.69\,\scriptsize$\pm$0.01 & 0.74\,\scriptsize$\pm$0.00 & 0.61\,\scriptsize$\pm$0.01 \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{EmbeddingGemma}} \\
+concreteness     & 0.85\,\scriptsize$\pm$0.01 & 0.87\,\scriptsize$\pm$0.01 & 0.74\,\scriptsize$\pm$0.02 \\
+imageability     & 0.79\,\scriptsize$\pm$0.01 & 0.82\,\scriptsize$\pm$0.01 & 0.69\,\scriptsize$\pm$0.02 \\
+valence          & 0.83\,\scriptsize$\pm$0.01 & 0.86\,\scriptsize$\pm$0.01 & 0.73\,\scriptsize$\pm$0.01 \\
+aoa              & 0.70\,\scriptsize$\pm$0.01 & 0.72\,\scriptsize$\pm$0.02 & 0.35\,\scriptsize$\pm$0.01 \\
+semsize          & 0.75\,\scriptsize$\pm$0.01 & 0.80\,\scriptsize$\pm$0.01 & 0.54\,\scriptsize$\pm$0.03 \\
+gender           & 0.72\,\scriptsize$\pm$0.03 & 0.77\,\scriptsize$\pm$0.02 & 0.42\,\scriptsize$\pm$0.04 \\
+familiarity      & 0.59\,\scriptsize$\pm$0.03 & 0.60\,\scriptsize$\pm$0.02 & 0.35\,\scriptsize$\pm$0.04 \\
+arousal          & 0.66\,\scriptsize$\pm$0.03 & 0.71\,\scriptsize$\pm$0.02 & 0.50\,\scriptsize$\pm$0.01 \\
+dominance        & 0.64\,\scriptsize$\pm$0.02 & 0.70\,\scriptsize$\pm$0.02 & 0.46\,\scriptsize$\pm$0.05 \\
+concreteness-40k & 0.83\,\scriptsize$\pm$0.00 & 0.84\,\scriptsize$\pm$0.00 & 0.71\,\scriptsize$\pm$0.00 \\
+\bottomrule
+\end{tabular}}
+\caption{Per-dimension recovery of the psycholinguistic norms at the output
+embedding; $5$-fold cross-validation, mean$\,\pm\,$std. Mass mean is the covariance-corrected difference-of-means direction
+($\bm{\mu}_{+}-\bm{\mu}_{-}$), with $R^2$ calibrated via a train-split. \textit{Concreteness-40k} is the full Brysbaert set.}
+\label{tab:probes}
+\end{table}
+%TODO fix equation
+
+
+\section{Refusal-direction evaluation}
+\label{app:refusal}
+
+
+%The best vector is selected by generating completions on 32 examples, evaluating induce and refusal scores by substring matching. K-L divergence is computed over the last token logits on neutral prompts to avoid approving degenerate outputs as bypassing refusal. Selecting $\ell^{*}=14$, ActAdd$(-1)$ drives the substring refusal rate to \textbf{0.00} on both JailbreakBench (from 0.84) and HarmBench-test (from 0.75), while ActAdd$(+1)$ induces refusal on \textbf{100/100} entirely benign prompts (from 4/100). Following the reference, we pair the string-match judge with a harmfulness classifier (Llama-Guard-4-12B): attack success rises from 0.11 to \textbf{0.83} on JailbreakBench and from 0.21 to \textbf{0.86} on HarmBench-test. All the response were manually reviewed and confirmed as being coherent. Detailed and per-category results are in ~\ref{app:refusal}). 
+
+To extract the refusal vectors, we use the difference-in-means equation from \cite{arditi2024refusallanguagemodelsmediated}, with $h_\ell(x)$ the residual-stream activation at layer $\ell$ at the selected token position for input $x$, and $H^{+}$, $H^{-}$ the harmful and harmless instruction sets on the residual stream:
+
+\begin{equation}
+r_\ell = \frac{1}{|H^{+}|}\sum_{x\in H^{+}} h_\ell(x)
+       - \frac{1}{|H^{-}|}\sum_{x\in H^{-}} h_\ell(x).
+\label{eq:diffmeans}
+\end{equation}
+
+This returns a candidate direction per layer and token position. To select among vector candidates we rank candidates on the generations of 32 held-out prompts. To evaluate the generations, following \cite{arditi2024refusallanguagemodelsmediated}, we score refusal by substring matching. Since substring matching cannot detect broken or looped output, we additionally compute the KL divergence between the steered and unsteered next-token distributions on a set of neutral prompts. Since substring matching can only measure overt refusal, not effective harmful content ASR is measured by Llama-Guard-4-12B on the selected vector, residual, token position $-3$, layer~13 ($\ell^{*}{=}13$).
+
+%"To select among candidate vectors, we rank them on generations for 32 held-out prompts, scoring refusal with the substring-matching protocol of Arditi et al. (2024). Because substring matching can miss soft or partial refusals and cannot detect degenerate output, we additionally compute the KL divergence between steered and unsteered next-token distributions on a set of neutral prompts, rejecting vectors that suppress refusal by destroying the output rather than bypassing it. The selected vector is pre_attn, token position −3, layer 14 (ℓ∗ = 14)."
+
+
+\begin{table}[t]
+\centering
+{\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+Set ($n$) &      & base & ActAdd$_{-1}$ & ActAdd$_{+1}$ \\
+\midrule
+JBB (100)      & ref. & 0.84 & \textbf{0.00} & ---           \\
+               & ASR  & 0.11 & \textbf{0.83} & ---           \\
+HB-test (159)  & ref. & 0.75 & \textbf{0.00} & ---           \\
+               & ASR  & 0.21 & \textbf{0.86} & ---           \\
+Harmless (100) & ref. & 0.04 & ---           & \textbf{1.00} \\
+\bottomrule
+\end{tabular}}
+\caption{Refusal rate (ref.) and harm attack-success rate (ASR) under activation addition. ActAdd$_{-1}$ suppresses refusal, ActAdd$_{+1}$ induces it; a single direction controls both. JBB: JailbreakBench; HB-test: HarmBench-test. Refusal (ref.) is scored by substring matching following \cite{arditi2024refusallanguagemodelsmediated}; ASR is scored by Llama-Guard-4-12B.}
+\label{tab:refusal-main}
+\end{table}
+
+\begin{table}[t]
+\centering
+{\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+HarmBench category & $n$ & base & ActAdd$_{-1}$ \\
+\midrule
+Chem./bio.      & 19 & 0.37 & \textbf{1.00} \\
+Cybercrime      & 33 & 0.45 & \textbf{1.00} \\
+Harassment      & 16 & 0.00 & 0.88 \\
+Illegal         & 47 & 0.15 & 0.87 \\
+Misinfo         & 27 & 0.15 & 0.74 \\
+Harmful (gen.)  & 17 & 0.00 & 0.59 \\
+\bottomrule
+\end{tabular}}
+\caption{Per-category harm ASR (HarmBench-test) at $\ell^{*}=13$. The weakest cells are disinformation and generic ``harmful'', where the model complies but Llama-Guard under-scores the output.}
+\label{tab:refusal-cat}
+\end{table}
+
+
+
+
+
+
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{media/EMNLP.png}
+    \caption{UMAP projection of Gemini Embedding 2 embeddings of the EMNLP abstracts dataset 2014--2025. The image displays the density contouring, colored by the topic extraction pipeline. The analytics panel is open, allowing users to filter by category or drag the temporal-histogram handles.}
+    \label{fig:emnlp}
+\end{figure*}
+
+
+
+
+\end{document}
+

@@ -65,6 +65,13 @@ _LINEAR_PROBE_KINDS = {"ridge", "lasso", "logreg"}
 # Probe kinds that take integer class labels rather than continuous targets.
 _CLASSIFICATION_KINDS = {"logreg", "svc"}
 
+# Closed-form difference-of-means probes (no fit() call).
+_MASSMEAN_KINDS = {"massmean", "massmean_cov"}
+
+# Eigenvalue cutoff for the covariance pseudo-inverse in massmean_cov,
+# matching the Geometry of Truth MMProbe (torch.linalg.pinv(..., atol=1e-3)).
+_MASSMEAN_COV_PINV_ATOL = 1e-3
+
 
 def train_sklearn_probe(
     dataset: ActivationDataset,
@@ -311,7 +318,7 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
         return LogisticRegression(
             C=spec.C, max_iter=spec.logreg_max_iter, class_weight=spec.class_weight,
         ), True
-    if kind == "massmean":
+    if kind in _MASSMEAN_KINDS:
         # Closed-form: handled separately in `_fit_one`.
         return DummyRegressor(strategy="mean"), False
     raise ValueError(f"Unknown sklearn probe kind: {kind!r}")
@@ -358,12 +365,16 @@ def _fit_one(
     metrics: dict[str, float] = {}
     coef_for_aggregation: np.ndarray | None = None
 
-    if spec.kind == "massmean":
+    if spec.kind in _MASSMEAN_KINDS:
         # Closed-form direction; no fit() call.
         if y.ndim != 1:
-            raise ValueError("massmean probe requires 1-D targets.")
-        direction = _mass_mean_direction(X_train_s, y_train)
-        if np.linalg.norm(direction) < 1e-10:
+            raise ValueError(f"{spec.kind} probe requires 1-D targets.")
+        if spec.kind == "massmean_cov":
+            direction = _mass_mean_cov_direction(X_train_s, y_train)
+        else:
+            direction = _mass_mean_direction(X_train_s, y_train)
+        norm = float(np.linalg.norm(direction))
+        if not np.isfinite(norm) or norm < 1e-10:
             metrics["val_pearson"] = float("nan")
             metrics["train_pearson"] = float("nan")
             metrics["val_spearman"] = float("nan")
@@ -377,7 +388,7 @@ def _fit_one(
             metrics["train_spearman"] = _safe_spearman(y_train, proj_train)
         if directions_dir is not None:
             _save_probe_direction(
-                directions_dir, layer, intermediate, "massmean",
+                directions_dir, layer, intermediate, spec.kind,
                 coef=direction, intercept=0.0,
                 scaler_mean=scaler_mean,
                 scaler_scale=scaler_scale,
@@ -504,6 +515,44 @@ def _mass_mean_direction(X_train: np.ndarray, y_train: np.ndarray) -> np.ndarray
     mu_high = X_train[high_mask].mean(axis=0)
     mu_low = X_train[~high_mask].mean(axis=0)
     direction = mu_high - mu_low
+    norm = np.linalg.norm(direction)
+    if norm < 1e-10:
+        return direction
+    return direction / norm
+
+
+def _mass_mean_cov_direction(X_train: np.ndarray, y_train: np.ndarray) -> np.ndarray:
+    """Covariance-corrected mass-mean: θ = Σ⁺(μ⁺ − μ⁻), unit-normalized.
+
+    Σ is the pooled within-class covariance (each class centered by its own
+    mean) and Σ⁺ its Hermitian pseudo-inverse with eigenvalues below
+    `_MASSMEAN_COV_PINV_ATOL` discarded — the iid-inference variant of
+    mass-mean probing from Marks & Tegmark, *The Geometry of Truth* (2023),
+    equivalent to Fisher LDA. The eigenvalue cutoff doubles as the N < D
+    regularizer: null-space directions of a rank-deficient Σ are dropped
+    rather than exploded. Continuous targets split at the median, like
+    `_mass_mean_direction`.
+    """
+    median = np.median(y_train)
+    high_mask = y_train >= median
+    X_high = X_train[high_mask]
+    X_low = X_train[~high_mask]
+    mu_high = X_high.mean(axis=0)
+    mu_low = X_low.mean(axis=0)
+    delta = (mu_high - mu_low).astype(np.float64)
+    if not np.all(np.isfinite(delta)) or np.linalg.norm(delta) < 1e-10:
+        # Degenerate split (empty class / constant features): hand back the
+        # raw delta so the caller's norm check reports NaN metrics cleanly.
+        return delta
+    centered = np.concatenate(
+        [X_high - mu_high, X_low - mu_low], axis=0,
+    ).astype(np.float64)
+    cov = centered.T @ centered / centered.shape[0]
+    # Hermitian pseudo-inverse applied to delta via eigendecomposition —
+    # avoids materializing the full D×D inverse.
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    inv_eigvals = np.where(eigvals > _MASSMEAN_COV_PINV_ATOL, 1.0 / eigvals, 0.0)
+    direction = eigvecs @ (inv_eigvals * (eigvecs.T @ delta))
     norm = np.linalg.norm(direction)
     if norm < 1e-10:
         return direction

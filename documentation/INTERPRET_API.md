@@ -185,7 +185,9 @@ Negative strengths steer _away_ from the feature direction.
 
 ## Use Case 3: Prompt Highlight (Main Page Scatter Plot)
 
-When an SAE collection (decoder vectors) is loaded in the scatter plot, run a prompt through the model, max-pool SAE activations across tokens, and return which features fired. These map to points in the scatter plot for highlighting.
+When an SAE collection (decoder vectors) is loaded in the scatter plot, run a prompt through the model, max-pool SAE activations across the **user-prompt tokens**, and return which features fired. These map to points in the scatter plot for highlighting.
+
+BOS and chat-template positions are masked out of the pooling (via the same `_find_prompt_token_range` used by `runPromptActivations`): the BOS token is an activation sink and the template tokens are identical for every prompt, so without masking the same feature set topped the ranking regardless of the prompt.
 
 ### Mutation: `runPromptHighlight`
 
@@ -212,9 +214,9 @@ mutation RunPromptHighlight($input: RunPromptHighlightInput!) {
 
 #### Response
 
-- `features[]`: Nonzero features after max-pooling across token positions, sorted by activation descending
+- `features[]`: Nonzero features after max-pooling across the prompt token positions (BOS + chat template excluded), sorted by activation descending
   - `featureIndex`: Maps to `metadata.index` on scatter plot points
-  - `activation`: Max activation value across all tokens in the prompt
+  - `activation`: Max activation value across the prompt tokens
 
 Typically returns a few hundred to a few thousand features (out of 16384 for 16k width).
 

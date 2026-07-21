@@ -23,6 +23,7 @@ from backend.services.probing_service import (
     train_probe_for_collection,
 )
 from interpret.probing.configs.probe import MLPProbeSpec, SklearnProbeSpec
+from interpret.probing.probes.sklearn_probes import _mass_mean_cov_direction
 
 
 def _linear_data(n: int = 500, d: int = 32, seed: int = 0, noise: float = 0.05):
@@ -32,6 +33,22 @@ def _linear_data(n: int = 500, d: int = 32, seed: int = 0, noise: float = 0.05):
     w = rng.normal(size=d)
     y = X.astype(np.float64) @ w + rng.normal(scale=noise, size=n)
     return X, y
+
+
+def _anisotropic_data(n: int = 600, seed: int = 0):
+    """Signal buried under a high-variance shared nuisance direction.
+
+    dim0 = signal + nuisance, dim1 = nuisance, dims 2-7 = iid noise. The
+    difference-of-means direction points at dim0 and its projection is
+    dominated by the nuisance; the covariance-corrected direction recovers
+    dim0 − dim1 = signal.
+    """
+    rng = np.random.default_rng(seed)
+    s = rng.normal(size=n)
+    nuis = rng.normal(scale=8.0, size=n)
+    rest = rng.normal(size=(n, 6))
+    X = np.column_stack([s + nuis, nuis, rest]).astype(np.float32)
+    return X, s.copy()
 
 
 def _ids(n: int) -> list[str]:
@@ -54,9 +71,14 @@ class TestFieldNaming:
         assert score == "probe_Conc_M_ridge_score"
         assert residual == "probe_Conc_M_ridge_residual"
 
-    def test_score_field_names_massmean_has_no_residual(self):
+    def test_score_field_names_massmean_has_calibrated_residual(self):
         score, residual = score_field_names("rating", "massmean")
         assert score == "probe_rating_massmean_score"
+        assert residual == "probe_rating_massmean_residual"
+
+    def test_score_field_names_logreg_has_no_residual(self):
+        # Probability scores are not target-unit predictions.
+        _, residual = score_field_names("label", "logreg")
         assert residual is None
 
 
@@ -78,6 +100,22 @@ class TestBuildSpec:
         assert isinstance(spec, SklearnProbeSpec)
         assert spec.kind == "massmean"
         assert spec.save_directions is True
+
+    def test_lasso_spec(self):
+        spec = _build_spec(
+            ProbeConfig(collection_name="c", target_field="f", kind="lasso", alpha=0.01)
+        )
+        assert isinstance(spec, SklearnProbeSpec)
+        assert spec.kind == "lasso"
+        assert spec.alpha == 0.01
+        assert spec.save_directions is True
+
+    def test_massmean_cov_spec(self):
+        spec = _build_spec(ProbeConfig(collection_name="c", target_field="f", kind="massmean_cov"))
+        assert isinstance(spec, SklearnProbeSpec)
+        assert spec.kind == "massmean_cov"
+        assert spec.save_directions is True
+        assert spec.standardise is True
 
     def test_mlp_spec(self):
         spec = _build_spec(
@@ -174,15 +212,32 @@ class TestRunProbeCoreRidge:
 
 
 class TestRunProbeCoreMassmean:
-    def test_metrics_and_no_residuals(self, tmp_path):
+    def test_metrics_and_calibrated_residuals(self, tmp_path):
         X, y = _linear_data()
         config = ProbeConfig(collection_name="c", target_field="rating", kind="massmean")
         out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
 
         assert out.metrics["val_spearman"] > 0.5
-        assert out.residuals is None
         assert out.direction is not None
         assert out.intercept == 0.0
+        # Residuals come from the calibrated readout: pred = slope·score + b,
+        # residual = pred − y. On clean linear data the implied predictions
+        # must track the targets.
+        assert out.residuals is not None
+        assert all(r is not None for r in out.residuals)
+        preds = y + np.array(out.residuals, dtype=float)
+        assert np.corrcoef(preds, y)[0, 1] > 0.5
+        assert out.calibration is not None
+        assert set(out.calibration) == {"slope", "intercept"}
+
+    def test_null_targets_have_no_residual(self, tmp_path):
+        X, y = _linear_data(n=200)
+        y[:20] = np.nan
+        config = ProbeConfig(collection_name="c", target_field="rating", kind="massmean")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert len(out.scores) == 200  # every row scored
+        assert out.residuals[0] is None
+        assert out.residuals[50] is not None
 
     def test_calibrated_r2_reported(self, tmp_path):
         """Massmean gets a calibrated R²: slope/intercept fitted on the train
@@ -215,6 +270,83 @@ class TestRunProbeCoreMassmean:
         out = run_probe_core(X, y, _ids(100), config, tmp_path)
         dumped = json.dumps(out.metrics)
         assert "NaN" not in dumped and "Infinity" not in dumped
+
+
+# ------------------------------------------------------------------
+# Pure core: massmean_cov (Geometry-of-Truth covariance correction)
+# ------------------------------------------------------------------
+
+
+class TestRunProbeCoreMassmeanCov:
+    def test_direction_recovers_discriminant(self):
+        """Raw-space check: θ = Σ⁺(μ⁺ − μ⁻) points at dim0 − dim1 (= signal)."""
+        X, y = _anisotropic_data()
+        direction = _mass_mean_cov_direction(X.astype(np.float64), y)
+        assert abs(float(np.linalg.norm(direction)) - 1.0) < 1e-8
+        expected = np.zeros(X.shape[1])
+        expected[0], expected[1] = 1.0, -1.0
+        expected /= np.linalg.norm(expected)
+        assert abs(float(direction @ expected)) > 0.8
+
+    def test_beats_plain_massmean_on_anisotropic_data(self, tmp_path):
+        X, y = _anisotropic_data()
+        base = run_probe_core(
+            X, y, _ids(len(y)),
+            ProbeConfig(collection_name="c", target_field="rating", kind="massmean"),
+            tmp_path / "mm",
+        )
+        cov = run_probe_core(
+            X, y, _ids(len(y)),
+            ProbeConfig(collection_name="c", target_field="rating", kind="massmean_cov"),
+            tmp_path / "cov",
+        )
+        assert cov.metrics["val_spearman"] > base.metrics["val_spearman"] + 0.2
+        assert cov.metrics["val_r2"] > 0.5
+
+    def test_full_output_shape(self, tmp_path):
+        """Same output contract as massmean: direction, calibration, residuals."""
+        X, y = _linear_data()
+        config = ProbeConfig(collection_name="c", target_field="rating", kind="massmean_cov")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+
+        assert out.direction is not None and len(out.direction) == X.shape[1]
+        assert abs(float(np.linalg.norm(np.array(out.direction))) - 1.0) < 1e-6
+        assert out.intercept == 0.0
+        assert out.residuals is not None
+        assert out.calibration is not None
+        assert (tmp_path / "directions" / "L0_embedding_massmean_cov.npz").exists()
+
+    def test_degenerate_targets_raise(self, tmp_path):
+        X, _ = _linear_data(n=100)
+        y = np.full(100, 3.0)
+        config = ProbeConfig(collection_name="c", target_field="rating", kind="massmean_cov")
+        with pytest.raises(ProbeTrainingError):
+            run_probe_core(X, y, _ids(100), config, tmp_path)
+
+
+# ------------------------------------------------------------------
+# Pure core: lasso
+# ------------------------------------------------------------------
+
+
+class TestRunProbeCoreLasso:
+    def test_recovers_linear_signal_with_residuals(self, tmp_path):
+        X, y = _linear_data()
+        config = ProbeConfig(
+            collection_name="c", target_field="rating", kind="lasso", alpha=0.01
+        )
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+
+        assert out.metrics["val_r2"] > 0.85
+        assert out.direction is not None and len(out.direction) == X.shape[1]
+        assert out.residuals is not None  # predictive kind
+        assert all(r is not None for r in out.residuals)
+        assert (tmp_path / "directions" / "L0_embedding_lasso.npz").exists()
+
+    def test_field_names_have_residual(self):
+        score, residual = score_field_names("rating", "lasso")
+        assert score == "probe_rating_lasso_score"
+        assert residual == "probe_rating_lasso_residual"
 
 
 # ------------------------------------------------------------------
@@ -369,6 +501,17 @@ class TestOrchestrator:
         assert result.error is not None
         assert str(MIN_VALID_SAMPLES) in result.error
         assert fake_db.upserted == []
+
+    def test_massmean_persists_calibration(self, linear_setup):
+        """The calibration line lands in the persisted config snapshot."""
+        fake_db = linear_setup
+        config = ProbeConfig(collection_name="col", target_field="rating", kind="massmean")
+        result = train_probe_for_collection(config)
+
+        assert result.error is None
+        _, kwargs = fake_db.upserted[0]
+        cal = kwargs["config"]["calibration"]
+        assert set(cal) == {"slope", "intercept"}
 
     def test_binary_categorical_fallback(self, tmp_path, monkeypatch):
         """A "safe"/"unsafe" column trains via the 0/1 mapping end-to-end."""

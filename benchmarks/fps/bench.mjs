@@ -21,6 +21,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 
+import {
+  BenchmarkResultFile,
+  GraphqlPayloadTelemetry,
+  SyntheticCollectionPayload,
+} from './lib/benchmarkContract.mjs';
+
 const pExecFile = promisify(execFile);
 
 const BASE = 'http://localhost:3000';
@@ -35,7 +41,8 @@ const DRAG_MS = 8000;
 const SETTLE_MS = 4000;
 const SYN_CLUSTERS = Number(process.env.BENCH_SYN_CLUSTERS) || 50;
 const RESULTS_DIR = new URL('./results/', import.meta.url).pathname;
-const RESULTS_PATH = `${RESULTS_DIR}results_${PASS}.json`;
+const RESULT_LABEL = process.env.BENCH_RESULT_LABEL || 'current';
+const RESULTS_PATH = BenchmarkResultFile.path(RESULTS_DIR, PASS, RESULT_LABEL);
 const BENCH_MARKER = '--bench-run-id=fpsbench';
 
 const LADDER = [
@@ -49,9 +56,9 @@ const LADDER = [
   { name: 'wordnet_senses_full', expected: 212478 },
   { name: 'synthetic_250k', expected: 250000, synthetic: true },
   { name: 'synthetic_500k', expected: 500000, synthetic: true },
-  // synthetic_1m is deliberately NOT in the default ladder: it exceeds
-  // Chrome's ~3.5-4 GB tab-heap cap with the current load-everything
-  // architecture and OOM-crashes the browser. Run it explicitly when wanted:
+  // synthetic_1m is deliberately NOT in the default ladder: historical runs
+  // crashed under memory pressure, and it has not yet been re-measured with
+  // the forced-GC methodology. Run it explicitly when wanted:
   //   node bench.mjs 3d synthetic_1m   (optionally BENCH_HEAP_MB=7168)
 ];
 
@@ -80,64 +87,6 @@ const VIZ_PREFS = JSON.stringify({
   version: 0,
 });
 
-// ---------------------------------------------------------------------------
-// Synthetic data (GraphQL interception — nothing written to the database)
-// ---------------------------------------------------------------------------
-
-function mulberry32(seed) {
-  return function () {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Full GetCollectionData response body for n points in Gaussian clusters. */
-function buildSyntheticBody(n, clusters) {
-  const rand = mulberry32(42);
-  const gauss = () => {
-    let u = 0, v = 0;
-    while (u === 0) u = rand();
-    while (v === 0) v = rand();
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  };
-  const centers = Array.from({ length: clusters }, () => [
-    rand() * 14 - 7, rand() * 14 - 7, rand() * 14 - 7,
-  ]);
-  // Build each field as a JSON fragment directly — avoids holding n JS objects
-  // AND their serialization in memory at once (matters at 1M points).
-  const ids = new Array(n), docs = new Array(n), meta = new Array(n);
-  const p3 = new Array(n), p2 = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const c = i % clusters;
-    const [cx, cy, cz] = centers[c];
-    const x = (cx + gauss() * 0.9).toFixed(3);
-    const y = (cy + gauss() * 0.9).toFixed(3);
-    const z = (cz + gauss() * 0.9).toFixed(3);
-    ids[i] = `"s${i}"`;
-    docs[i] = `"Synthetic point ${i} (cluster ${c})"`;
-    meta[i] = `{"topic_id":${c},"topic_label":"Cluster ${c < 10 ? '0' + c : c}"}`;
-    p3[i] = `[${x},${y},${z}]`;
-    p2[i] = `[${x},${y}]`;
-  }
-  const metadata = JSON.stringify({
-    totalItems: n, embeddingDim: 384, timestamp: 'synthetic',
-    pca2dVariance: null, pca3dVariance: null,
-    sourceDataset: 'synthetic-benchmark', sourceSplit: null, sourceFile: null,
-    hasProjections: true, embeddingProvider: 'synthetic',
-    embeddingModel: 'synthetic', embeddingPrompt: null,
-    fieldAnalysis: null, saeModelId: null, saeId: null,
-  });
-  return `{"data":{"collection":{"ids":[${ids.join(',')}],` +
-    `"documents":[${docs.join(',')}],` +
-    `"itemMetadata":[${meta.join(',')}],` +
-    `"availableFields":["topic_id","topic_label"],` +
-    `"pca2d":null,"pca3d":null,` +
-    `"umap2d":[${p2.join(',')}],"umap3d":[${p3.join(',')}],` +
-    `"metadata":${metadata}}}}`;
-}
-
 /**
  * GraphQL interception, installed for EVERY run:
  * - GetCollections → strips each collection's saved default_color_scheme so
@@ -150,10 +99,10 @@ function buildSyntheticBody(n, clusters) {
  *   topics/probes/activations queries for it → benign empties.
  * Everything else passes through to the real backend.
  */
-async function installRoutes(context, target, synBody) {
+async function installRoutes(context, target, synBody, payloadTelemetry) {
   await context.route('**/graphql', async (route) => {
     try {
-      await handleGraphqlRoute(route, target, synBody);
+      await handleGraphqlRoute(route, target, synBody, payloadTelemetry);
     } catch {
       // Page/browser died mid-request — never let a route handler rejection
       // escape (it would take down the whole Node process).
@@ -162,7 +111,7 @@ async function installRoutes(context, target, synBody) {
   });
 }
 
-async function handleGraphqlRoute(route, target, synBody) {
+async function handleGraphqlRoute(route, target, synBody, payloadTelemetry) {
   let payload = {};
   try { payload = JSON.parse(route.request().postData() || '{}'); } catch { /* not JSON */ }
   const op = payload.operationName;
@@ -185,10 +134,24 @@ async function handleGraphqlRoute(route, target, synBody) {
       }
       return route.fulfill({ response: resp, body: JSON.stringify(json) });
     }
-    if (synBody) {
-      if (op === 'GetCollectionData' && vars.name === target.name) {
+    if (op === 'GetCollectionData' && vars.name === target.name) {
+      if (synBody) {
+        payloadTelemetry.record({
+          variables: vars,
+          responseBytes: Buffer.byteLength(synBody),
+        });
         return route.fulfill({ contentType: 'application/json', body: synBody });
       }
+
+      const resp = await route.fetch();
+      const body = await resp.body();
+      payloadTelemetry.record({
+        variables: vars,
+        responseBytes: body.byteLength,
+      });
+      return route.fulfill({ response: resp, body });
+    }
+    if (synBody) {
       if (vars.collectionName === target.name) {
         const empties = {
           GetCollectionTopics: { collectionTopics: null },
@@ -363,6 +326,7 @@ async function runOne(browser, rootPid, target) {
   const { name, expected } = target;
   const pageErrors = [];
   const result = { collection: name, expected, pass: PASS, synthetic: !!target.synthetic };
+  const payloadTelemetry = new GraphqlPayloadTelemetry();
   let context = null;
   try {
     context = await browser.newContext({ viewport: { width: 1600, height: 950 } });
@@ -373,10 +337,15 @@ async function runOne(browser, rootPid, target) {
     let synBody = null;
     if (target.synthetic) {
       console.log(`  generating ${expected.toLocaleString()} synthetic points…`);
-      synBody = buildSyntheticBody(expected, SYN_CLUSTERS);
+      synBody = new SyntheticCollectionPayload({
+        pointCount: expected,
+        clusters: SYN_CLUSTERS,
+        projectionType: `umap_${MODE}`,
+        includeCore: true,
+      }).build();
       console.log(`  payload ${(synBody.length / 1048576).toFixed(0)} MB`);
     }
-    await installRoutes(context, target, synBody);
+    await installRoutes(context, target, synBody, payloadTelemetry);
 
     const page = await context.newPage();
     page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 200)));
@@ -476,7 +445,14 @@ async function runOne(browser, rootPid, target) {
     result.memMidDrag = midMemPromise ? await midMemPromise : null;
     result.memPostDrag = await memSnapshot(page, rootPid, cdp);
     result.pageErrors = pageErrors.slice(0, 5);
-    await page.screenshot({ path: `${RESULTS_DIR}shot_${PASS}_${name}.png` });
+    await page.screenshot({
+      path: BenchmarkResultFile.artifactPath(
+        RESULTS_DIR,
+        PASS,
+        RESULT_LABEL,
+        name,
+      ),
+    });
   } catch (e) {
     let msg = String(e).slice(0, 300);
     if (/closed|crash/i.test(msg)) {
@@ -485,6 +461,7 @@ async function runOne(browser, rootPid, target) {
     result.error = msg;
     result.pageErrors = pageErrors.slice(0, 5);
   } finally {
+    result.graphqlPayload = payloadTelemetry.snapshot();
     // The context (or whole browser) may already be dead — never let cleanup
     // throw or hang.
     if (context) {
@@ -554,7 +531,11 @@ try { existingRuns = JSON.parse(fs.readFileSync(RESULTS_PATH, 'utf8')).runs || [
 const runsByName = new Map(existingRuns.map((r) => [r.collection, r]));
 
 const results = {
-  pass: PASS, idleRefreshHz: +idleRefresh.toFixed(1), sysBaseline, runs: [],
+  pass: PASS,
+  runLabel: RESULT_LABEL,
+  idleRefreshHz: +idleRefresh.toFixed(1),
+  sysBaseline,
+  runs: [],
 };
 for (const target of targets) {
   console.log(`\n=== ${target.name} (${target.expected.toLocaleString()} pts, ${PASS}) ===`);
@@ -594,6 +575,10 @@ for (const target of targets) {
     console.log(
       `  live heap ${heap.heapUsedMB ?? '?'} MB | renderer ${m.rendererMB ?? '?'} MB | ` +
       `gpu-proc ${m.gpuProcessMB ?? '?'} MB | sys free ${m.freeGB ?? '?'} GB / avail ${m.availableGB ?? '?'} GB`,
+    );
+    console.log(
+      `  collection GraphQL ${(r.graphqlPayload?.totalResponseMB ?? 0).toFixed(2)} MB ` +
+      `across ${r.graphqlPayload?.requests?.length ?? 0} request(s)`,
     );
   }
 }

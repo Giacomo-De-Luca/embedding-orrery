@@ -4,6 +4,7 @@
   "type": "module",
   "description": "FPS + RAM benchmark harness for the embedding visualization frontend",
   "scripts": {
+    "test": "node --test benchmarkContract.test.mjs",
     "bench:3d": "node bench.mjs 3d",
     "bench:topics": "node bench.mjs 3d-topics",
     "bench:nebula": "node bench.mjs 3d-nebula",

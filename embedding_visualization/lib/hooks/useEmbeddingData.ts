@@ -10,6 +10,9 @@ import {
   analyzeColorFields,
   type ColorFieldOption,
 } from '../utils/fieldAnalysis';
+import { ProjectionLoadPolicy } from '../utils/projectionLoadPolicy';
+import { LatestRequestGate } from '../utils/latestRequestGate';
+import { ProjectionMembership } from '../utils/projectionMembership';
 
 /** Compute smart default tooltip fields based on available collection fields. */
 function computeSmartDefaults(availableFields: string[]): string[] {
@@ -21,13 +24,6 @@ function computeSmartDefaults(availableFields: string[]): string[] {
     defaults.push('year');
   }
   return defaults;
-}
-
-/** Determine which projection types are needed for the current method + mode. */
-function getNeededProjections(method: ProjectionMethod, mode: DimensionMode): string[] {
-  const prefix = method === 'umap' ? 'umap' : 'pca'; // manual falls back to pca
-  // Always need 2D (used for density clustering). Add 3D if in 3D mode.
-  return mode === '2d' ? [`${prefix}_2d`] : [`${prefix}_2d`, `${prefix}_3d`];
 }
 
 interface UseEmbeddingDataResult {
@@ -51,6 +47,10 @@ export function useEmbeddingData(
   const [colorFieldOptions, setColorFieldOptions] = useState<ColorFieldOption[]>([]);
   const [defaultTooltipFields, setDefaultTooltipFields] = useState<string[]>([]);
   const [loadedCollection, setLoadedCollection] = useState<string | null>(null);
+  const requestGateRef = useRef<LatestRequestGate | null>(null);
+  if (requestGateRef.current === null) {
+    requestGateRef.current = new LatestRequestGate();
+  }
 
   // Track accumulated projections across multiple fetches for the same collection.
   // When the user switches method/mode, we fetch only the new projection and merge it here.
@@ -65,6 +65,7 @@ export function useEmbeddingData(
   // Track core (non-projection) data separately so projection fetches don't re-process it
   const coreDataRef = useRef<{
     collection: string | null;
+    itemSignature: string | null;
     ids: string[];
     documents: string[];
     itemMetadata: Record<string, unknown>[];
@@ -190,6 +191,7 @@ export function useEmbeddingData(
 
       coreDataRef.current = {
         collection: collectionData._collectionName as string,
+        itemSignature: (collectionData.itemSignature as string | null) || null,
         ids: collectionData.ids as string[],
         documents: collectionData.documents as string[],
         itemMetadata,
@@ -197,6 +199,25 @@ export function useEmbeddingData(
         metadata: embeddingMetadata,
         displayConfig,
       };
+    }
+
+    const core = coreDataRef.current!;
+    const projectionSignatures =
+      (collectionData.projectionSignatures as Record<string, string> | null) || {};
+
+    // Validate every requested payload before mutating the accumulated cache.
+    for (const pt of requestedProjections) {
+      const camelKey = pt.replace(/_(\w)/g, (_, c) => c.toUpperCase()) as
+        'pca2d' | 'pca3d' | 'umap2d' | 'umap3d';
+      const projData = collectionData[camelKey] as number[][] | null;
+      if (!projData) continue;
+
+      const projectionSignature = projectionSignatures[pt];
+      ProjectionMembership.assertCompatible(
+        core.itemSignature,
+        projectionSignature,
+        pt,
+      );
     }
 
     // Merge newly fetched projections into the accumulated ref
@@ -212,7 +233,6 @@ export function useEmbeddingData(
     }
 
     // Assemble the full EmbeddingData from core data + accumulated projections
-    const core = coreDataRef.current!;
     const embeddingData: EmbeddingData = {
       ids: core.ids,
       documents: core.documents,
@@ -245,14 +265,18 @@ export function useEmbeddingData(
 
   // Fetch projections when collection or needed projections change
   useEffect(() => {
+    const requestGate = requestGateRef.current!;
+    const requestToken = requestGate.begin();
+
     if (!collectionName) {
       setLoading(false);
       setData(null);
       return;
     }
 
-    const needed = getNeededProjections(method, mode);
     const isNewCollection = projectionsRef.current.collection !== collectionName;
+    const request = ProjectionLoadPolicy.forView(method, mode, isNewCollection);
+    const needed = request.projectionTypes;
 
     // Check which projections we actually need to fetch
     const missing = isNewCollection
@@ -296,8 +320,10 @@ export function useEmbeddingData(
       variables: {
         name: collectionName,
         projectionTypes: missing,
+        includeCore: request.includeCore,
       },
     }).then((queryResult) => {
+      if (!requestGate.isLatest(requestToken)) return;
       if (queryResult.error) {
         setError(queryResult.error);
         setLoading(false);
@@ -314,10 +340,17 @@ export function useEmbeddingData(
         isNewCollection,
       );
     }).catch((err: unknown) => {
+      if (!requestGate.isLatest(requestToken)) return;
       setError(err instanceof Error ? err : new Error(String(err)));
       setLoading(false);
       console.error('Error loading embedding data:', err);
     });
+
+    return () => {
+      if (requestGate.isLatest(requestToken)) {
+        requestGate.invalidate();
+      }
+    };
   }, [collectionName, method, mode, executeQuery, processResponse]);
 
   return { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection };

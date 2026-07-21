@@ -30,6 +30,7 @@ import torch
 from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.inference.qwen3_transformers import Qwen3Inference
 from interpret.sae import paths as sae_paths
+from interpret.sae.activation_store import max_pool_feature_acts
 from interpret.sae.exploration.prompt_explorer import (
     PromptExplorer,
     PromptExplorerConfig,
@@ -535,22 +536,25 @@ class InterpretService:
     # UC1: Prompt activations
     # ------------------------------------------------------------------
 
-    def _find_prompt_token_range(self, token_strings: list[str], prompt: str) -> tuple[int, int]:
+    def _find_prompt_token_range(
+        self, token_strings: list[str], prompt: str, skip_chat_template: bool = False
+    ) -> tuple[int, int]:
         """Find the start/end indices of the actual user prompt tokens.
 
         For IT models, the chat template wraps the prompt, e.g.:
           Gemma: <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model
           Qwen:  <|im_start|>user\\n{prompt}<|im_end|>\\n<|im_start|>assistant (no BOS)
 
-        For base (pt) models, there's no template — just an optional BOS + prompt.
+        For base (pt) models — or when ``skip_chat_template`` forces raw-token
+        mode — there's no template: just an optional BOS + prompt.
 
         Returns (start, end) where token_strings[start:end] are the prompt tokens.
         """
         wrapper = self._require_model()
 
-        # Base models: no chat template. Skip position 0 only if the model
-        # prepends a BOS (Gemma does, Qwen does not).
-        if self._variant == "pt":
+        # Raw-token mode and base models: no chat template. Skip position 0
+        # only if the model prepends a BOS (Gemma does, Qwen does not).
+        if skip_chat_template or self._variant == "pt":
             return (1 if wrapper.prepends_bos else 0), len(token_strings)
 
         if self._family == "qwen":
@@ -634,9 +638,11 @@ class InterpretService:
 
         exclude = set(torch.nonzero(coverage >= self.COVERAGE_THRESHOLD, as_tuple=True)[0].tolist())
 
-        # Dead/near-dead features below density floor
+        # Dead/near-dead features below density floor. Exactly 0.0 means
+        # "unknown", not "dead" — qwen-scope features ship with density=0.0
+        # (no Neuronpedia data) and must not all be excluded.
         for idx, (_, density) in label_map.items():
-            if density is not None and density < self.DENSITY_FLOOR:
+            if density is not None and 0.0 < density < self.DENSITY_FLOOR:
                 exclude.add(idx)
 
         return exclude
@@ -697,13 +703,9 @@ class InterpretService:
 
         # Determine which token positions belong to the actual prompt
         all_token_strings = list(prompt_result.token_strings)
-        if skip_chat_template:
-            # Raw-token mode: only a leading BOS (if the model prepends one)
-            # is template, not content — Gemma has one, Qwen does not.
-            bos_offset = 1 if self._require_model().prepends_bos else 0
-            prompt_start, prompt_end = bos_offset, len(all_token_strings)
-        else:
-            prompt_start, prompt_end = self._find_prompt_token_range(all_token_strings, prompt)
+        prompt_start, prompt_end = self._find_prompt_token_range(
+            all_token_strings, prompt, skip_chat_template=skip_chat_template
+        )
         prompt_token_strings = all_token_strings[prompt_start:prompt_end]
 
         # Use frontend-provided identifiers (authoritative), fall back to derived
@@ -867,29 +869,58 @@ class InterpretService:
     # Shared activation helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _max_pool_activations(record) -> list[FeatureActivation]:
-        """Max-pool activation record across tokens, return nonzero features sorted desc."""
-        feature_acts = record.feature_acts[0]  # (seq_len, d_sae)
-        max_pooled = feature_acts.max(dim=0).values  # (d_sae,)
+    def _format_for_prefill(self, text: str) -> str:
+        """Chat-template ``text`` for IT models; base (pt) models run raw.
 
-        nonzero_mask = max_pooled > 0
-        nonzero_indices = torch.nonzero(nonzero_mask, as_tuple=True)[0]
+        Formatting explicitly (instead of ``wrapper.generate``'s internal
+        wrapping) keeps ``token_strings()`` aligned with the exact prefill
+        sequence — the same contract ``PromptExplorer.run_prompt`` relies on.
+        """
+        wrapper = self._require_model()
+        if self._variant == "pt":
+            return text
+        return wrapper.format_prompt(text, **self._thinking_kwargs())
 
-        if len(nonzero_indices) == 0:
-            return []
+    def _pooled_prompt_features(
+        self, record, formatted: str, text: str, fallback_to_full: bool = True
+    ) -> list[FeatureActivation]:
+        """Max-pool a prefill record over the user-prompt token range only.
 
-        values = max_pooled[nonzero_indices]
-        order = values.argsort(descending=True)
-        sorted_indices = nonzero_indices[order]
-        sorted_values = values[order]
-
-        return [
-            FeatureActivation(
-                feature_index=int(idx),
-                activation=float(val),
+        BOS and chat-template positions are masked out — they are identical
+        for every prompt and would otherwise dominate the ranking.
+        """
+        wrapper = self._require_model()
+        token_strings = wrapper.token_strings(formatted)
+        seq_len = record.feature_acts[0].shape[0]
+        if seq_len != len(token_strings):
+            logger.warning(
+                "Prefill has %d positions but tokenizer produced %d tokens — "
+                "prompt-token range may be misaligned",
+                seq_len,
+                len(token_strings),
             )
-            for idx, val in zip(sorted_indices, sorted_values, strict=True)
+        start, end = self._find_prompt_token_range(token_strings, text)
+        return self._max_pool_activations(record, start, end, fallback_to_full=fallback_to_full)
+
+    @staticmethod
+    def _max_pool_activations(
+        record, start: int = 0, end: int | None = None, fallback_to_full: bool = True
+    ) -> list[FeatureActivation]:
+        """Max-pool activation record across tokens, return nonzero features sorted desc.
+
+        Thin wrapper over :func:`interpret.sae.max_pool_feature_acts` (the
+        toolkit-level primitive, also reusable by the probing engine): this
+        method only converts the ``(index, value)`` pairs into
+        :class:`FeatureActivation`. ``start``/``end`` restrict pooling to the
+        user-prompt tokens; ``fallback_to_full`` selects between full-sequence
+        pooling (interactive highlight) and no features (batch persistence)
+        on a degenerate range.
+        """
+        return [
+            FeatureActivation(feature_index=idx, activation=val)
+            for idx, val in max_pool_feature_acts(
+                record, start, end, fallback_to_full=fallback_to_full
+            )
         ]
 
     # ------------------------------------------------------------------
@@ -906,9 +937,11 @@ class InterpretService:
         """Run a prompt and return max-pooled SAE feature activations.
 
         The returned list contains ``(feature_index, activation)`` pairs
-        for every feature whose max activation across tokens is nonzero.
-        These map directly to ``metadata.index`` in SAE scatter plot
-        collections.
+        for every feature whose max activation across the **prompt tokens**
+        is nonzero — BOS and chat-template positions are masked out, since
+        they are identical for every prompt and would otherwise dominate
+        the ranking. These map directly to ``metadata.index`` in SAE
+        scatter plot collections.
         """
         wrapper = self._require_model()
         ht = self._parse_hook_type(hook_type)
@@ -919,18 +952,17 @@ class InterpretService:
         manager = HookManager()
         manager.add_sae(sae_config)
 
+        formatted = self._format_for_prefill(prompt)
+
         with manager.session(wrapper.model.model.layers) as store:
-            if self._variant == "pt":
-                wrapper.generate_from_template(prompt, output_len=1)
-            else:
-                wrapper.generate(prompt, output_len=1, **self._thinking_kwargs())
+            wrapper.generate_from_template(formatted, output_len=1)
             record = store.prefill(layer=layer, hook_type=ht)
 
         if record is None:
             logger.warning("No prefill activations captured for layer %d", layer)
             return []
 
-        return self._max_pool_activations(record)
+        return self._pooled_prompt_features(record, formatted, prompt)
 
     # ------------------------------------------------------------------
     # UC3b: Batch prompt highlight (max-pooled activations for many docs)
@@ -969,8 +1001,9 @@ class InterpretService:
         Returns
         -------
         List of ``(item_id, activations)`` where *activations* is a list
-        of :class:`FeatureActivation` for nonzero features, sorted by
-        activation descending.
+        of :class:`FeatureActivation` for nonzero features (max-pooled over
+        the document's own tokens — BOS/chat-template positions masked),
+        sorted by activation descending.
         """
         wrapper = self._require_model()
         ht = self._parse_hook_type(hook_type)
@@ -988,14 +1021,20 @@ class InterpretService:
             for i, (item_id, text) in enumerate(documents):
                 manager.reset()
                 try:
-                    if self._variant == "pt":
-                        wrapper.generate_from_template(text, output_len=1)
-                    else:
-                        wrapper.generate(text, output_len=1, **self._thinking_kwargs())
+                    formatted = self._format_for_prefill(text)
+                    wrapper.generate_from_template(formatted, output_len=1)
                     record = store.prefill(layer=layer, hook_type=ht)
+                    if record:
+                        # No full-sequence fallback: an empty document must
+                        # not persist the constant BOS/template features.
+                        activations = self._pooled_prompt_features(
+                            record, formatted, text, fallback_to_full=False
+                        )
+                    else:
+                        activations = []
                 except Exception:
                     logger.exception("Failed inference for item %s (%d/%d)", item_id, i + 1, total)
-                    activations: list[FeatureActivation] = []
+                    activations = []
                     results.append((item_id, activations))
                     if result_callback:
                         result_callback(item_id, activations)
@@ -1003,7 +1042,6 @@ class InterpretService:
                         progress_callback(i + 1, total)
                     continue
 
-                activations = self._max_pool_activations(record) if record else []
                 results.append((item_id, activations))
                 if result_callback:
                     result_callback(item_id, activations)
