@@ -11,6 +11,9 @@
     },
     {
       "name": "acl_abstracts_emnlp_findings"
+    },
+    {
+      "name": "wordnet_senses_full"
     }
   ],
   "sae_data": [],

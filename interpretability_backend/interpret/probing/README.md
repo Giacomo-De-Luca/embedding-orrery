@@ -442,20 +442,84 @@ under `resources/experiments/_consolidated/`:
   `(experiment, extraction, target, probe_kind)`.
 - `summary.md` — markdown coverage table + best-per-condition.
 
+## Token-level two-stage pipeline
+
+The `token_residuals` → `sae_pooled` / `residual_pooled` / `concat` types
+implement the token-level extension the classic path lacks: pooling happens
+AFTER SAE encoding, so per-feature max over tokens (the production
+`sae_document_activations` semantics) is expressible, and one model pass
+serves every downstream pooling/width sweep.
+
+```yaml
+extractions:
+  - name: gemma_tokens          # stage 1: ONE forward pass per sample
+    type: token_residuals
+    family: gemma               # or qwen (resid_post only)
+    checkpoint: null            # gemma: auto from HF cache; qwen: Qwen/Qwen3-1.7B
+    layers: [0, 8, 16, 24, 33]
+    sites: [resid_post, mlp_out, attn_out]   # canonical, family-agnostic
+    storage_dtype: bfloat16
+  - name: sae_max               # stage 2: encode every token, pool per sample
+    type: sae_pooled
+    source_extraction: gemma_tokens
+    site: resid_post
+    pooling: max                # or last
+    width: 16k                  # qwen: 32k etc. — label lookup reads this
+    l0_size: medium             # gemma-only; qwen uses model_size + k
+    model_size: 4b
+    min_active_samples: 10      # dead-feature filter threshold
+    device: cuda
+  - name: res_last              # raw-residual baseline, same forward pass
+    type: residual_pooled
+    source_extraction: gemma_tokens
+    site: resid_post
+    pooling: last
+  - name: sae_concat            # all layers jointly, one wide matrix
+    type: concat
+    source_extractions: [sae_max]
+```
+
+Contract notes:
+
+- The token-level dataset is **ragged**: per `(layer, site)` key one
+  `Tensor[total_tokens, hidden]`, with `metadata["token_offsets"]`
+  (length N+1) delimiting samples. Its dim 0 is tokens, not samples, so
+  the config's `skip_probes: true` (default) excludes it from the probe
+  stage. `metadata["prepends_bos"]` records whether position 0 of each
+  sample is a BOS token.
+- `sae_pooled` masks the BOS position for `max` pooling (the BOS
+  activation sink otherwise tops every sample identically); a BOS-only
+  sample falls back to full-range pooling — the same semantics as
+  `interpret.sae.activation_store.max_pool_feature_acts`. Output keys are
+  `(layer, "sae_max"|"sae_last")`, dead-filtered with `kept_by_layer`
+  recorded like the classic SAE extraction. The SAE family comes from
+  the source's metadata; hook site maps to the family's SAE suite
+  (gemma-scope: resid_post/mlp_out/attn_out; qwen-scope: resid_post).
+- `concat` stacks pooled sources' keys into a single `(0, "concat")` key
+  and writes `metadata["feature_names"]` (`L{layer}_{site}_f{true_idx}`),
+  which the probe stage prefers over manifest feature names for
+  `feature_importance.csv`. Like `csv_features`, its single key is
+  skipped by the cross-experiment `consolidate` pivots.
+- Analyses recognise all SAE intermediates via
+  `sae_analysis/constants.py::SAE_INTERMEDIATES`. `top_features` also
+  handles k-fold direction files (`*_fold_{i}.npz`, signed-mean over
+  folds) and multiclass logreg coefs (ranked by strongest class,
+  `top_class` recorded per feature).
+- Memory: token caches are big (TREC × gemma-3-4b × 34 layers × 3 sites
+  ≈ 43 GB bf16 in one `.pt`). Chunk via layer-subset extractions with
+  distinct names when RAM is tight.
+
+Worked example: `experiments/trec_classification/` (TREC question
+classification, Gemma + Qwen).
+
 ## Known limitations and future extensions
 
-- **Single-token-per-sample extraction.** Both encoders and Gemma pool
-  each sample to one vector at extraction time (encoder: `pooling`;
-  Gemma: `token_position`). To compare pooling strategies you need
-  separate extractions with different `name`s. A future extension would
-  emit `[N, T, hidden]` token-level activations and let downstream
-  consumers (SAE encoding, probes) pool however they like — but that's
-  not implemented today.
-- **SAE inherits source pooling.** SAE encoding takes the source
-  extraction's pre-pooled `[N, hidden]` tensor and produces `[N, d_sae]`.
-  The `token_position` field on the SAE config is required + validated
-  against the source — they MUST match because the SAE can't undo
-  pooling. This is documented in the SAE config docstring.
+- **The classic (non-token) path pools at extraction time.** Encoders and
+  the pooled `gemma` extraction emit one vector per sample (encoder:
+  `pooling`; Gemma: `token_position`), and the classic `sae` extraction
+  inherits that pooling — its `token_position` is validated against the
+  source because SAE encoding can't undo pooling. Use the token-level
+  pipeline above when pooling should happen in SAE-feature space.
 - **Image-mode Gemma extractions** use a separate code path
   (`extract_gemma_activations_from_dataframe`); the manifest must be
   iterable as a DataFrame with an `image_column`. Not used by current

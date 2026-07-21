@@ -58,7 +58,4 @@ def load_all_labels(
     width: str,
 ) -> dict[int, dict[int, str]]:
     """Convenience: load labels for many layers at once."""
-    return {
-        layer: load_feature_labels(sae_vectors_dir, layer, width)
-        for layer in layers
-    }
+    return {layer: load_feature_labels(sae_vectors_dir, layer, width) for layer in layers}

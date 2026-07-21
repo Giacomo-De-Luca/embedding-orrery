@@ -7,6 +7,7 @@ import { Settings2, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import { Button } from '@/lib/ui-primitives/button';
 import { Badge } from '@/lib/ui-primitives/badge';
+import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Input } from '@/lib/ui-primitives/input';
 import { Label } from '@/lib/ui-primitives/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/lib/ui-primitives/popover';
@@ -25,11 +26,14 @@ import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
 import {
   formatTargetMapping,
   isProbeTargetOption,
+  probeAbsErrorField,
+  probeConfusionField,
   resolveProbeTargetSelection,
   type ProbeInfo,
 } from '@/lib/utils/probeFields';
 import {
   DEFAULT_PROBE_PARAMS,
+  MLP_ACTIVATION_OPTIONS,
   PROBE_KIND_OPTIONS,
   buildTrainProbeInput,
   isBinaryKind,
@@ -101,6 +105,9 @@ function ParamNumberRow({
   step = 1,
   min,
   max,
+  disabled = false,
+  checked,
+  onCheckedChange,
 }: {
   label: string;
   value: number;
@@ -108,6 +115,10 @@ function ParamNumberRow({
   step?: number;
   min?: number;
   max?: number;
+  disabled?: boolean;
+  /** When provided, a leading checkbox toggles the row on/off. */
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
 }) {
   const [text, setText] = useState(String(value));
   useEffect(() => {
@@ -115,7 +126,21 @@ function ParamNumberRow({
   }, [value]);
   return (
     <div className="flex items-center justify-between gap-2">
-      <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
+      <div className="flex items-center gap-2">
+        {onCheckedChange !== undefined && (
+          <Checkbox
+            checked={checked}
+            onCheckedChange={(c) => onCheckedChange(c === true)}
+            aria-label={`Enable ${label.toLowerCase()}`}
+            className="size-3.5"
+          />
+        )}
+        <Label
+          className={`text-xs font-normal text-muted-foreground${disabled ? ' opacity-60' : ''}`}
+        >
+          {label}
+        </Label>
+      </div>
       <Input
         type="number"
         className="h-7 w-24 text-right text-xs"
@@ -123,6 +148,7 @@ function ParamNumberRow({
         step={step}
         min={min}
         max={max}
+        disabled={disabled}
         onChange={(e) => {
           setText(e.target.value);
           if (e.target.value.trim() === '') return;
@@ -239,11 +265,46 @@ function ProbeSettingsPopover({
             onChange={(v) => set({ epochs: v })}
           />
         )}
+        {fields.includes('activation') && (
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs font-normal text-muted-foreground">Activation</Label>
+            <Select
+              value={params.activation}
+              onValueChange={(v) => set({ activation: v as ProbeParams['activation'] })}
+            >
+              <SelectTrigger size="sm" className="h-7 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MLP_ACTIVATION_OPTIONS.map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {a}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {fields.includes('devSplit') && (
+          <ParamNumberRow
+            label="Dev split"
+            value={params.devSplit}
+            step={0.05}
+            min={0.05}
+            max={0.5}
+            checked={params.devSplitEnabled}
+            onCheckedChange={(c) => set({ devSplitEnabled: c })}
+            disabled={!params.devSplitEnabled}
+            onChange={(v) => set({ devSplit: v })}
+          />
+        )}
         {fields.includes('patience') && (
           <ParamNumberRow
             label="Patience"
             value={params.patience}
             min={1}
+            // Patience only acts on the dev set; without one it is inert.
+            disabled={!params.devSplitEnabled}
             onChange={(v) => set({ patience: v })}
           />
         )}
@@ -266,15 +327,6 @@ function ProbeSettingsPopover({
               min={0.5}
               max={0.95}
               onChange={(v) => set({ trainSplit: v })}
-            />
-          </div>
-          <div className="pt-2">
-            <ParamNumberRow
-              label="Max samples"
-              value={params.maxTrainSamples}
-              step={1000}
-              min={100}
-              onChange={(v) => set({ maxTrainSamples: v })}
             />
           </div>
         </div>
@@ -301,6 +353,7 @@ function ProbeSettingsPopover({
 export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
   const colorByField = useVisualizationStore((s) => s.colorByField);
   const setColorByField = useVisualizationStore((s) => s.setColorByField);
+  const setCustomNumericRange = useVisualizationStore((s) => s.setCustomNumericRange);
 
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [kind, setKind] = useState<ProbeKind>('ridge');
@@ -444,9 +497,22 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
         {probes.probes.length > 0 && (
           <div className="space-y-2">
             {probes.probes.map((probe) => {
+              const absErrorField = probeAbsErrorField(probe);
+              const confusionField = probeConfusionField(probe);
+              // Derived views only render when their field option exists —
+              // residuals can be absent despite a residualField (degenerate
+              // mass-mean calibration persists all-null residuals), and
+              // confusion needs a client-resolvable actual class.
+              const hasField = (field: string | null) =>
+                field !== null && probes.fieldOptions.some((o) => o.field === field);
+              const hasResidual = hasField(probe.residualField);
+              const hasAbsError = hasField(absErrorField);
+              const hasConfusion = hasField(confusionField);
               const isActive =
-                colorByField === probe.scoreField ||
-                colorByField === probe.residualField;
+                colorByField !== null &&
+                [probe.scoreField, probe.residualField, absErrorField, confusionField].includes(
+                  colorByField,
+                );
               return (
                 <div
                   key={`${probe.targetField}::${probe.kind}`}
@@ -473,14 +539,41 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
                     >
                       Score
                     </Button>
-                    {probe.residualField && (
+                    {hasResidual && (
                       <Button
                         size="sm"
                         variant={colorByField === probe.residualField ? 'secondary' : 'ghost'}
                         className="h-6 px-2 text-[11px]"
-                        onClick={() => setColorByField(probe.residualField!, 'diverging')}
+                        onClick={() => {
+                          setColorByField(probe.residualField!, 'diverging');
+                          // Zero-center the diverging scale: residuals are
+                          // rarely symmetric, and the neutral midpoint must
+                          // mean "no error". (Cleared automatically on the
+                          // next color-field change by the store subscription.)
+                          setCustomNumericRange({ center: 0 });
+                        }}
                       >
                         Residual
+                      </Button>
+                    )}
+                    {hasAbsError && (
+                      <Button
+                        size="sm"
+                        variant={colorByField === absErrorField ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => setColorByField(absErrorField!, 'sequential')}
+                      >
+                        |Err|
+                      </Button>
+                    )}
+                    {hasConfusion && (
+                      <Button
+                        size="sm"
+                        variant={colorByField === confusionField ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => setColorByField(confusionField!, 'categorical')}
+                      >
+                        Confusion
                       </Button>
                     )}
                     <span className="ml-auto text-[10px] text-muted-foreground">

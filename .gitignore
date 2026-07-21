@@ -122,4 +122,10 @@ wordnet_senses.tsv
 # Local-only experiment (kept on disk, not tracked)
 interpretability_backend/interpret/experiments/poetry_directions/
 
+# Local image stash: screenshot candidates and paper figures kept for later use.
+# Only gallery/ (the images the README and docs site actually embed) is tracked;
+# note docs/scripts/sync-content.mjs copies ALL of gallery/ into the public docs
+# site, so unused images must live here, not in a gallery/ subfolder.
+gallery_local/
+
 embedding_visualization/tmp/*

@@ -465,6 +465,7 @@ class Gemma2DecoderLayer(nn.Module):
             mask=mask,
             local_mask=local_mask,
         )
+        self._cache(activation_cache, cache_intermediates, "attn_out", hidden_states)
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = residual + hidden_states
         self._cache(activation_cache, cache_intermediates, "post_attn", hidden_states)
@@ -486,7 +487,9 @@ class Gemma2DecoderLayer(nn.Module):
 class GemmaModel(nn.Module):
 
     # Valid per-layer intermediate names
-    LAYER_INTERMEDIATES = frozenset({"pre_attn", "post_attn", "mlp_out", "post_mlp"})
+    LAYER_INTERMEDIATES = frozenset(
+        {"pre_attn", "attn_out", "post_attn", "mlp_out", "post_mlp"}
+    )
     VALID_INTERMEDIATES = LAYER_INTERMEDIATES | {"final_norm"}
 
     def __init__(self, config: gemma_config.GemmaConfig):
@@ -538,8 +541,12 @@ class GemmaModel(nn.Module):
             layers: Set of layer indices to capture. None means all layers.
                 Out-of-range indices are silently ignored.
             intermediates: Set of intermediate names to capture. None means all
-                (including final_norm). Valid names: "pre_attn", "post_attn",
-                "mlp_out", "post_mlp", "final_norm".
+                (including final_norm). Valid names: "pre_attn", "attn_out",
+                "post_attn", "mlp_out", "post_mlp", "final_norm".
+                "attn_out" is the raw attention-block output (pre
+                post_attention_layernorm, pre residual add) — the site
+                gemma-scope attn_out SAEs are trained on, symmetric with
+                "mlp_out".
             prefill: Capture activations from the first forward call (the prompt).
                 These have shape [B, seq_len, hidden_size] with the full sequence.
             last: Capture activations from the most recent forward call.

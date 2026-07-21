@@ -23,6 +23,8 @@ def _input(**overrides):
         epochs=None,
         hidden_dims=None,
         patience=None,
+        dev_split=None,
+        activation=None,
         seed=None,
         train_split=None,
         max_train_samples=None,
@@ -36,8 +38,9 @@ class TestBuildProbeConfig:
         config = build_probe_config(_input())
         assert config.kind == "ridge"
         assert config.patience == 10
+        assert config.dev_split == 0.2
         assert config.max_train_samples == 50_000
-        assert config.seed == 42
+        assert config.seed == 7
 
     def test_patience_threads_through(self):
         assert build_probe_config(_input(kind="mlp", patience=5)).patience == 5
@@ -46,8 +49,35 @@ class TestBuildProbeConfig:
         with pytest.raises(ValueError, match="patience"):
             build_probe_config(_input(kind="mlp", patience=0))
 
+    def test_dev_split_threads_through(self):
+        assert build_probe_config(_input(kind="mlp", dev_split=0.3)).dev_split == 0.3
+        # 0 is legal: disables early stopping.
+        assert build_probe_config(_input(kind="mlp", dev_split=0.0)).dev_split == 0.0
+
+    def test_dev_split_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="dev_split"):
+            build_probe_config(_input(kind="mlp", dev_split=1.0))
+        with pytest.raises(ValueError, match="dev_split"):
+            build_probe_config(_input(kind="mlp", dev_split=-0.1))
+
+    def test_activation_threads_through(self):
+        assert build_probe_config(_input()).activation == "relu"
+        assert build_probe_config(_input(kind="mlp", activation="gelu")).activation == "gelu"
+
+    def test_unknown_activation_raises(self):
+        with pytest.raises(ValueError, match="activation"):
+            build_probe_config(_input(kind="mlp", activation="swish"))
+
     def test_max_train_samples_threads_through(self):
         assert build_probe_config(_input(max_train_samples=1000)).max_train_samples == 1000
+
+    def test_zero_epochs_raises(self):
+        with pytest.raises(ValueError, match="epochs"):
+            build_probe_config(_input(kind="mlp", epochs=0))
+
+    def test_invalid_hidden_dims_raise(self):
+        with pytest.raises(ValueError, match="hidden_dims"):
+            build_probe_config(_input(kind="mlp", hidden_dims=[256, 0]))
 
     def test_new_kinds_accepted(self):
         assert build_probe_config(_input(kind="massmean_cov")).kind == "massmean_cov"

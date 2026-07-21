@@ -20,6 +20,7 @@ activations depend on but the extraction config does not capture.
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 import traceback
@@ -32,6 +33,9 @@ import yaml
 
 from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.caching import StageCache, _normalise
+from interpret.probing.configs.concat_extraction import (
+    ConcatExtractionConfig,
+)
 from interpret.probing.configs.csv_features_extraction import (
     CSVFeaturesExtractionConfig,
 )
@@ -51,6 +55,9 @@ from interpret.probing.configs.probe import (
     MLPProbeSpec,
     SklearnProbeSpec,
 )
+from interpret.probing.configs.residual_pooled_extraction import (
+    ResidualPooledExtractionConfig,
+)
 from interpret.probing.configs.sae_analysis import (
     CorrelationMapConfig,
     FeatureSweepConfig,
@@ -59,6 +66,15 @@ from interpret.probing.configs.sae_analysis import (
 )
 from interpret.probing.configs.sae_extraction import (
     SAEExtractionConfig,
+)
+from interpret.probing.configs.sae_pooled_extraction import (
+    SAEPooledExtractionConfig,
+)
+from interpret.probing.configs.token_extraction import (
+    TokenLevelExtractionConfig,
+)
+from interpret.probing.extraction.extract_concat_activations import (
+    extract_concat_activations,
 )
 from interpret.probing.extraction.extract_csv_features import (
     extract_csv_features,
@@ -73,8 +89,17 @@ from interpret.probing.extraction.extract_gemma_activations import (
     extract_gemma_activations,
     extract_gemma_activations_from_dataframe,
 )
+from interpret.probing.extraction.extract_residual_pooled import (
+    extract_residual_pooled,
+)
 from interpret.probing.extraction.extract_sae_activations import (
     extract_sae_activations,
+)
+from interpret.probing.extraction.extract_sae_pooled import (
+    extract_sae_pooled,
+)
+from interpret.probing.extraction.extract_token_residuals import (
+    extract_token_residuals,
 )
 from interpret.probing.manifests.manifest_base import ManifestBuilder
 from interpret.probing.probes.mlp_probe import train_mlp_probes
@@ -125,7 +150,11 @@ def run_experiment(config: ExperimentConfig) -> Path:
     for extraction in config.topo_sorted_extractions():
         try:
             datasets[extraction.name] = _resolve_extraction(
-                extraction, manifest, datasets, extractions_by_name, cache,
+                extraction,
+                manifest,
+                datasets,
+                extractions_by_name,
+                cache,
             )
             ds = datasets[extraction.name]
             print(
@@ -148,6 +177,9 @@ def run_experiment(config: ExperimentConfig) -> Path:
 
     # 3. Probes per (extraction, target, probe)
     for ext_name, dataset in datasets.items():
+        if getattr(extractions_by_name.get(ext_name), "skip_probes", False):
+            print(f"probes: skipping token-level extraction '{ext_name}'")
+            continue
         for target in config.targets:
             try:
                 _run_target_probes(
@@ -173,9 +205,11 @@ def run_experiment(config: ExperimentConfig) -> Path:
                     file=sys.stderr,
                 )
 
-    # 4. SAE analysis: only for SAE extractions
+    # 4. SAE analysis: only for SAE extractions (classic + pooled)
     sae_extractions = [
-        e for e in config.extractions if isinstance(e, SAEExtractionConfig)
+        e
+        for e in config.extractions
+        if isinstance(e, (SAEExtractionConfig, SAEPooledExtractionConfig))
     ]
     if config.sae_analysis and sae_extractions:
         for sae_ext in sae_extractions:
@@ -203,8 +237,7 @@ def run_experiment(config: ExperimentConfig) -> Path:
                         },
                     )
                     print(
-                        f"  [error] sae_analysis "
-                        f"{sae_ext.name}/{target.name}: {exc}",
+                        f"  [error] sae_analysis {sae_ext.name}/{target.name}: {exc}",
                         file=sys.stderr,
                     )
 
@@ -267,17 +300,59 @@ def _resolve_extraction(
         dataset = extract_encoder_activations(extraction, manifest.samples)
     elif isinstance(extraction, GemmaExtractionConfig):
         model = _load_gemma(extraction.checkpoint_path)
-        if extraction.image_column is None:
-            # Text mode: extract over manifest.samples so activations align
-            # with manifest.get_sample_indices(...) for downstream filtering.
-            dataset = extract_gemma_activations(
-                extraction, manifest.samples, model,
-            )
+        try:
+            if extraction.image_column is None:
+                # Text mode: extract over manifest.samples so activations
+                # align with manifest.get_sample_indices(...) downstream.
+                dataset = extract_gemma_activations(
+                    extraction,
+                    manifest.samples,
+                    model,
+                )
+            else:
+                # Image mode: needs full DataFrame for image_column lookups.
+                dataset = extract_gemma_activations_from_dataframe(
+                    extraction,
+                    manifest.build_dataframe(),
+                    model,
+                )
+        finally:
+            model = None
+            _release_accelerator_memory()
+    elif isinstance(extraction, TokenLevelExtractionConfig):
+        if extraction.family == "gemma":
+            model = _load_gemma(extraction.checkpoint)
         else:
-            # Image mode: needs full DataFrame for image_column lookups.
-            dataset = extract_gemma_activations_from_dataframe(
-                extraction, manifest.build_dataframe(), model,
+            model = _load_qwen(extraction.checkpoint, extraction.device)
+        try:
+            dataset = extract_token_residuals(
+                extraction,
+                manifest.samples,
+                model,
             )
+        finally:
+            model = None
+            _release_accelerator_memory()
+    elif isinstance(extraction, SAEPooledExtractionConfig):
+        source = _require_source(
+            extraction.source_extraction,
+            extraction.name,
+            datasets,
+        )
+        dataset = extract_sae_pooled(source, extraction)
+    elif isinstance(extraction, ResidualPooledExtractionConfig):
+        source = _require_source(
+            extraction.source_extraction,
+            extraction.name,
+            datasets,
+        )
+        dataset = extract_residual_pooled(source, extraction)
+    elif isinstance(extraction, ConcatExtractionConfig):
+        sources = [
+            (name, _require_source(name, extraction.name, datasets))
+            for name in extraction.source_extractions
+        ]
+        dataset = extract_concat_activations(sources, extraction)
     elif isinstance(extraction, SAEExtractionConfig):
         source = datasets.get(extraction.source_extraction)
         if source is None:
@@ -303,6 +378,42 @@ def _resolve_extraction(
     if cache is not None:
         cache.put(stem, extraction, dataset.save)
     return dataset
+
+
+def _require_source(
+    source_name: str,
+    extraction_name: str,
+    datasets: dict[str, ActivationDataset],
+) -> ActivationDataset:
+    """Fetch a derived extraction's resolved source or raise."""
+    source = datasets.get(source_name)
+    if source is None:
+        raise RuntimeError(
+            f"Extraction '{extraction_name}': source '{source_name}' has no "
+            f"dataset (extraction failed or missing).",
+        )
+    return source
+
+
+def _release_accelerator_memory() -> None:
+    """Reclaim device memory after a model is dropped.
+
+    The caller must clear its own reference first (`model = None`) —
+    otherwise the weights stay alive through that binding.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available() and hasattr(torch.mps, "empty_cache"):
+        torch.mps.empty_cache()
+
+
+def _load_qwen(checkpoint: str, device: str | None):
+    """Lazy import + construct Qwen3Inference (bf16; device auto when None)."""
+    from interpret.inference.qwen3_transformers import Qwen3Inference
+
+    print(f"  loading Qwen from {checkpoint}")
+    return Qwen3Inference(checkpoint, dtype="bfloat16", device=device)
 
 
 def _validate_sae_source_token_position(
@@ -359,7 +470,8 @@ def _run_target_probes(
 ) -> None:
     """Train every probe spec on one (extraction, target) pair."""
     rated_words, ratings = manifest.get_rated_samples(
-        target.source, target.column,
+        target.source,
+        target.column,
     )
     # subset() looks up by sample_id, so it works for full extractions
     # AND derived extractions (delta) whose sample_ids are a proper
@@ -385,7 +497,10 @@ def _run_target_probes(
                 if y.ndim == 1:
                     y = y.unsqueeze(1)
             train_mlp_probes(
-                filtered, spec, y, probe_dir,
+                filtered,
+                spec,
+                y,
+                probe_dir,
                 task_type=target.task_type,
                 num_classes=target.num_classes,
                 target_columns=[target.column],
@@ -393,9 +508,18 @@ def _run_target_probes(
             )
         elif isinstance(spec, SklearnProbeSpec):
             probe_dir = target_dir / spec.name
-            feature_names = getattr(manifest, "feature_columns", None)
+            # Concat datasets carry their own per-column names; fall back
+            # to the manifest's (csv_features) otherwise.
+            feature_names = filtered.metadata.get("feature_names") or getattr(
+                manifest,
+                "feature_columns",
+                None,
+            )
             train_sklearn_probe(
-                filtered, spec, np.asarray(ratings), probe_dir,
+                filtered,
+                spec,
+                np.asarray(ratings),
+                probe_dir,
                 groups=groups,
                 feature_names=list(feature_names) if feature_names else None,
             )
@@ -414,8 +538,7 @@ def _resolve_groups(
     df = manifest.build_dataframe()
     if group_column not in df.columns:
         raise ValueError(
-            f"group_column={group_column!r} not in manifest columns "
-            f"{df.columns.tolist()}",
+            f"group_column={group_column!r} not in manifest columns {df.columns.tolist()}",
         )
     indices = manifest.get_sample_indices(rated_words)
     return df.iloc[indices][group_column].to_numpy()
@@ -426,7 +549,7 @@ def _resolve_groups(
 
 def _run_target_sae_analysis(
     *,
-    sae_extraction: SAEExtractionConfig,
+    sae_extraction: SAEExtractionConfig | SAEPooledExtractionConfig,
     sae_dataset: ActivationDataset,
     target: TargetSpec,
     config: ExperimentConfig,
@@ -434,16 +557,14 @@ def _run_target_sae_analysis(
     output_dir: Path,
 ) -> None:
     rated_words, ratings = manifest.get_rated_samples(
-        target.source, target.column,
+        target.source,
+        target.column,
     )
     filtered_sae = sae_dataset.subset(rated_words)
-    analysis_dir = (
-        output_dir / "sae_analysis" / sae_extraction.name / target.name
-    )
+    analysis_dir = output_dir / "sae_analysis" / sae_extraction.name / target.name
 
     print(
-        f"\n--- sae_analysis extraction={sae_extraction.name} "
-        f"target={target.name} ---",
+        f"\n--- sae_analysis extraction={sae_extraction.name} target={target.name} ---",
     )
     for analysis in config.sae_analysis:
         if isinstance(analysis, CorrelationMapConfig):
@@ -456,8 +577,12 @@ def _run_target_sae_analysis(
             )
         elif isinstance(analysis, TopFeaturesConfig):
             directions_dir = (
-                output_dir / "probes" / sae_extraction.name / target.name
-                / analysis.source_probe / "directions"
+                output_dir
+                / "probes"
+                / sae_extraction.name
+                / target.name
+                / analysis.source_probe
+                / "directions"
             )
             if not directions_dir.exists():
                 print(
@@ -478,8 +603,12 @@ def _run_target_sae_analysis(
             sweep_directions_dir: Path | None = None
             if analysis.ranking == "lasso":
                 sweep_directions_dir = (
-                    output_dir / "probes" / sae_extraction.name
-                    / target.name / analysis.source_probe / "directions"
+                    output_dir
+                    / "probes"
+                    / sae_extraction.name
+                    / target.name
+                    / analysis.source_probe
+                    / "directions"
                 )
                 if not sweep_directions_dir.exists():
                     print(
@@ -488,9 +617,8 @@ def _run_target_sae_analysis(
                         f"{sweep_directions_dir} — skipping",
                     )
                     continue
-            sweep_subdir = (
-                f"feature_sweep_{analysis.ranking}"
-                + ("_pooled" if analysis.pool_layers else "")
+            sweep_subdir = f"feature_sweep_{analysis.ranking}" + (
+                "_pooled" if analysis.pool_layers else ""
             )
             run_feature_sweep(
                 filtered_sae,
@@ -533,8 +661,7 @@ def main() -> None:
     """CLI: `uv run python -m interpret.probing.orchestrator <yaml>`."""
     if len(sys.argv) != 2:
         print(
-            "Usage: python -m interpret.probing.orchestrator "
-            "<path/to/experiment.yaml>",
+            "Usage: python -m interpret.probing.orchestrator <path/to/experiment.yaml>",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -1,8 +1,8 @@
 """Tests for DuckDBClient text_search — document + metadata searching."""
 
 import pytest
-from backend.clients.duckdb_client import DuckDBClient
 
+from backend.clients.duckdb_client import DuckDBClient
 
 # ---------------------------------------------------------------------------
 # Fixtures

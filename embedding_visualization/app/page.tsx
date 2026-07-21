@@ -28,6 +28,7 @@ import {
   seedInitialColorState,
   resolveInitialCollection,
   presetStoreOps,
+  TOUR_PRESET_ID,
   type PresetDefinition,
 } from '../lib/utils/tourPresets';
 import {
@@ -504,8 +505,11 @@ function HomeContent() {
 
   const startTour = useCallback(() => {
     setIntroOpen(false);
+    // Land on the tour collection immediately so step 1's map is already the
+    // one the tour narrates (step 3 re-applies as a safety net).
+    applyPresetLive(TOUR_PRESET_ID);
     setTourRequested(true);
-  }, []);
+  }, [applyPresetLive]);
 
   // Imperative surface for the tour's prepare hooks. The runtime MUST be
   // identity-stable AND always-fresh: react-joyride deep-compares steps with
@@ -519,11 +523,30 @@ function HomeContent() {
   applyPresetLiveRef.current = applyPresetLive;
   const runSearchRef = useRef(wrappedHandleSemanticSearch);
   runSearchRef.current = wrappedHandleSemanticSearch;
+  const resetSearchRef = useRef(resetSearch);
+  resetSearchRef.current = resetSearch;
+  const topicSearchRef = useRef(topicSearch);
+  topicSearchRef.current = topicSearch;
+  const collectionTopicsRef = useRef(selectedCollectionTopics);
+  collectionTopicsRef.current = selectedCollectionTopics;
   const tourRuntime = useMemo<TourRuntime>(() => ({
     applyPreset: (presetId: string) => applyPresetLiveRef.current(presetId),
     runSearch: async (query: string) => {
       await runSearchRef.current(query);
     },
+    clearSearch: () => resetSearchRef.current(),
+    // Isolation = exactly one selected topic; DashboardPanel derives the
+    // muting from `selectedTopicIds` when colouring by topic_label.
+    isolateFirstTopic: () => {
+      const topic = (collectionTopicsRef.current ?? []).find(
+        (t) => t.topicId >= 0 && t.label,
+      );
+      if (!topic) return null;
+      topicSearchRef.current.clearAll();
+      topicSearchRef.current.toggleTopic(topic.topicId);
+      return topic.label;
+    },
+    clearTopicSelection: () => topicSearchRef.current.clearAll(),
     setActivePanel,
     setShowLabels: (value: boolean) =>
       useVisualizationStore.getState().setFlag('showLabels', value),

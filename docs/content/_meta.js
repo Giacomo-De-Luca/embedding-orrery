@@ -5,5 +5,6 @@ export default {
   docker: 'Docker',
   architecture: 'Architecture',
   sae: 'SAE & Interpretability',
+  'case-studies': 'Case Studies',
   visualization: 'Visualisation Internals'
 }

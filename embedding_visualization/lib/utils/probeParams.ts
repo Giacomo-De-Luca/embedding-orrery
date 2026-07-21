@@ -17,6 +17,10 @@ export type ProbeKind =
   | 'logreg'
   | 'mlp';
 
+export type MlpActivation = 'relu' | 'gelu' | 'tanh' | 'silu';
+
+export const MLP_ACTIVATION_OPTIONS: MlpActivation[] = ['relu', 'gelu', 'tanh', 'silu'];
+
 export interface ProbeParams {
   alpha: number; // ridge / lasso L2/L1
   c: number; // svr / logreg inverse-regularisation
@@ -24,10 +28,12 @@ export interface ProbeParams {
   classWeight: 'none' | 'balanced'; // logreg
   hiddenSize: number; // mlp single hidden layer width
   epochs: number; // mlp
+  activation: MlpActivation; // mlp hidden-layer nonlinearity
   patience: number; // mlp early-stopping patience (dev-set based)
+  devSplit: number; // mlp: train fraction held out for early stopping
+  devSplitEnabled: boolean; // mlp: unchecked -> devSplit 0 sent (early stopping off)
   seed: number; // shared
   trainSplit: number; // shared (train fraction)
-  maxTrainSamples: number; // shared (training-pool subsample cap)
 }
 
 export const DEFAULT_PROBE_PARAMS: ProbeParams = {
@@ -37,10 +43,12 @@ export const DEFAULT_PROBE_PARAMS: ProbeParams = {
   classWeight: 'none',
   hiddenSize: 256,
   epochs: 100,
+  activation: 'relu',
   patience: 10,
-  seed: 42, // mirrors the backend ProbeConfig default — displayed = trained
+  devSplit: 0.2,
+  devSplitEnabled: true,
+  seed: 7, // mirrors the backend ProbeConfig default — displayed = trained
   trainSplit: 0.8,
-  maxTrainSamples: 50000,
 };
 
 export const PROBE_KIND_OPTIONS: { value: ProbeKind; label: string }[] = [
@@ -61,7 +69,17 @@ export function isBinaryKind(kind: ProbeKind): boolean {
 /** Which parameter controls the settings popover should show for a kind. */
 export function probeParamFields(
   kind: ProbeKind,
-): Array<'alpha' | 'c' | 'kernel' | 'classWeight' | 'hiddenSize' | 'epochs' | 'patience'> {
+): Array<
+  | 'alpha'
+  | 'c'
+  | 'kernel'
+  | 'classWeight'
+  | 'hiddenSize'
+  | 'epochs'
+  | 'activation'
+  | 'devSplit'
+  | 'patience'
+> {
   switch (kind) {
     case 'ridge':
     case 'lasso':
@@ -71,7 +89,7 @@ export function probeParamFields(
     case 'logreg':
       return ['c', 'classWeight'];
     case 'mlp':
-      return ['hiddenSize', 'epochs', 'patience'];
+      return ['hiddenSize', 'epochs', 'activation', 'devSplit', 'patience'];
     case 'massmean':
     case 'massmean_cov':
     default:
@@ -89,10 +107,11 @@ export interface TrainProbeInputVars {
   classWeight?: string;
   hiddenDims?: number[];
   epochs?: number;
+  activation?: string;
   patience?: number;
+  devSplit?: number;
   seed?: number;
   trainSplit?: number;
-  maxTrainSamples?: number;
 }
 
 /**
@@ -122,15 +141,24 @@ export function buildTrainProbeInput(
     vars.hiddenDims = [params.hiddenSize];
   }
   if (fields.has('epochs') && params.epochs !== d.epochs) vars.epochs = params.epochs;
-  if (fields.has('patience') && params.patience !== d.patience) {
+  if (fields.has('activation') && params.activation !== d.activation) {
+    vars.activation = params.activation;
+  }
+  if (fields.has('devSplit')) {
+    if (!params.devSplitEnabled) {
+      // Unchecked -> early stopping off (backend semantic: devSplit 0).
+      vars.devSplit = 0;
+    } else if (params.devSplit !== d.devSplit) {
+      vars.devSplit = params.devSplit;
+    }
+  }
+  // Patience only matters while early stopping is on.
+  if (fields.has('patience') && params.devSplitEnabled && params.patience !== d.patience) {
     vars.patience = params.patience;
   }
 
   if (params.seed !== d.seed) vars.seed = params.seed;
   if (params.trainSplit !== d.trainSplit) vars.trainSplit = params.trainSplit;
-  if (params.maxTrainSamples !== d.maxTrainSamples) {
-    vars.maxTrainSamples = params.maxTrainSamples;
-  }
 
   return vars;
 }

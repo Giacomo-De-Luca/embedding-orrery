@@ -20,11 +20,10 @@ from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.sae_analysis import (
     TopFeaturesConfig,
 )
+from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
-
-_SAE_INTERMEDIATE = "sae_feat"
 
 
 def run_top_features(
@@ -59,25 +58,25 @@ def run_top_features(
 
     result: dict[int, list[dict]] = {}
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
-        if intermediate != _SAE_INTERMEDIATE:
+        if intermediate not in SAE_INTERMEDIATES:
             continue
-        npz_path = (
-            directions_dir
-            / f"L{layer}_{intermediate}_{config.source_probe}.npz"
+        raw_coef = _load_direction_coef(
+            directions_dir,
+            layer,
+            intermediate,
+            config.source_probe,
         )
-        if not npz_path.exists():
-            print(
-                f"  layer {layer}: no directions at {npz_path}, skipping",
-            )
+        if raw_coef is None:
             continue
-        data = np.load(str(npz_path))
-        raw_coef = data["coef"]
-        # Single-output regression -> 1-D; classification -> 2-D.
-        coef = (
-            raw_coef.reshape(-1)
-            if raw_coef.ndim <= 2
-            else raw_coef.ravel()
-        )
+        # Regression / binary logreg -> one row; multiclass -> [C, d].
+        # Multiclass ranks by the strongest class's |coef| and records
+        # which class that was.
+        if raw_coef.ndim == 2 and raw_coef.shape[0] > 1:
+            top_class = np.abs(raw_coef).argmax(axis=0)
+            coef = raw_coef[top_class, np.arange(raw_coef.shape[1])]
+        else:
+            top_class = None
+            coef = raw_coef.reshape(-1)
         kept = np.asarray(kept_by_layer.get(layer, []), dtype=np.int64)
         if kept.size == 0:
             kept = np.arange(coef.shape[0], dtype=np.int64)
@@ -89,7 +88,9 @@ def run_top_features(
             continue
 
         labels = load_feature_labels(
-            config.sae_vectors_dir, layer, width,
+            config.sae_vectors_dir,
+            layer,
+            width,
         )
         order = np.argsort(np.abs(coef))[::-1][: config.top_k]
         result[layer] = [
@@ -97,6 +98,7 @@ def run_top_features(
                 "feature_idx": int(kept[i]),
                 "coef": float(coef[i]),
                 "label": labels.get(int(kept[i]), ""),
+                **({"top_class": int(top_class[i])} if top_class is not None else {}),
             }
             for i in order
             if coef[i] != 0.0
@@ -108,6 +110,40 @@ def run_top_features(
 
     _print_summary(result)
     return result
+
+
+def _load_direction_coef(
+    directions_dir: Path,
+    layer: int,
+    intermediate: str,
+    source_probe: str,
+) -> np.ndarray | None:
+    """Load a probe's coef for one (layer, intermediate).
+
+    Single-split runs write `L{layer}_{intermediate}_{kind}.npz`; k-fold
+    runs write `..._fold_{i}.npz` instead. When only fold files exist,
+    the per-fold coefs are averaged (signed mean — folds share the class
+    ordering, so the mean keeps meaningful magnitude AND sign).
+    """
+    stem = f"L{layer}_{intermediate}_{source_probe}"
+    npz_path = directions_dir / f"{stem}.npz"
+    if npz_path.exists():
+        return np.asarray(np.load(str(npz_path))["coef"])
+
+    fold_paths = sorted(directions_dir.glob(f"{stem}_fold_*.npz"))
+    if not fold_paths:
+        print(
+            f"  layer {layer}: no directions at {npz_path} (nor {stem}_fold_*.npz), skipping",
+        )
+        return None
+    coefs = [np.asarray(np.load(str(p))["coef"]) for p in fold_paths]
+    shapes = {c.shape for c in coefs}
+    if len(shapes) != 1:
+        print(
+            f"  layer {layer}: fold coef shapes differ ({shapes}), skipping",
+        )
+        return None
+    return np.mean(np.stack(coefs, axis=0), axis=0)
 
 
 def _print_summary(result: dict[int, list[dict]]) -> None:

@@ -1,0 +1,57 @@
+# Local smoke test for trec_gemma.yaml: 200 questions, 5 layers, all three
+# hook sites (exercises the attn_out fork patch), MPS.
+# Distinct name -> its own cache namespace; safe to delete wholesale.
+#   uv run python -m interpret.probing.orchestrator \
+#     experiments/trec_classification/trec_gemma_smoke.yaml
+
+name: trec_gemma_smoke
+output_dir: resources/probing_results/trec_gemma_smoke
+automatic_visualisations: true
+
+manifest:
+  path: "interpret.probing.manifests.labeled_text:LabeledTextManifestBuilder"
+  kwargs:
+    path: resources/datasets/SAE/trec.tsv
+    text_column: text
+    target_columns: [coarse_label]
+    dedupe: true
+    limit: 200
+
+extractions:
+  - name: gemma_tokens
+    type: token_residuals
+    family: gemma
+    checkpoint: null
+    layers: [0, 8, 16, 24, 33]
+    sites: [resid_post, mlp_out, attn_out]
+    storage_dtype: bfloat16
+
+  - name: gemma_res_last
+    type: residual_pooled
+    source_extraction: gemma_tokens
+    site: resid_post
+    pooling: last
+
+  - {name: gemma_sae_resid_max, type: sae_pooled, source_extraction: gemma_tokens,
+     site: resid_post, pooling: max, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 2, device: mps}
+  - {name: gemma_sae_attn_max, type: sae_pooled, source_extraction: gemma_tokens,
+     site: attn_out, pooling: max, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 2, device: mps}
+
+  - name: gemma_sae_concat
+    type: concat
+    source_extractions: [gemma_sae_resid_max]
+
+targets:
+  - {source: labeled_text, column: coarse_label, task_type: classification, num_classes: 6}
+
+probes:
+  - {type: sklearn, kind: logreg, C: 1.0, class_weight: balanced,
+     save_directions: true, logreg_max_iter: 2000}
+  - {type: sklearn, kind: logreg, name: logreg_cv, C: 1.0, class_weight: balanced,
+     n_folds: 5, save_directions: true, logreg_max_iter: 2000}
+
+sae_analysis:
+  - {type: top_features, source_probe: logreg, top_k: 15}
+  - {type: correlation_map, top_k: 15}

@@ -35,12 +35,82 @@ export interface ProbeWithScores {
   scores: ProbeScoresData;
 }
 
+/** Derived |residual| field name, or null when the probe has no residuals. */
+export function probeAbsErrorField(probe: ProbeInfo): string | null {
+  return probe.residualField ? probe.residualField.replace(/_residual$/, '_abserr') : null;
+}
+
+/** Derived confusion-category field name (logreg probes only). */
+export function probeConfusionField(probe: ProbeInfo): string | null {
+  return probe.kind === 'logreg' ? probe.scoreField.replace(/_score$/, '_confusion') : null;
+}
+
+/**
+ * Build a metadata → binary class (0/1) resolver for a logreg probe's target,
+ * mirroring the backend's mapping: the recorded targetMapping for text
+ * targets, otherwise the larger of the field's two distinct numeric values
+ * maps to 1 (`_binarize_for_logreg`). Returns null when the target is not
+ * resolvable as binary (confusion categories are then unavailable).
+ */
+export function buildBinaryActualResolver(
+  itemMetadata: Record<string, unknown>[],
+  targetField: string,
+  targetMapping: Record<string, number> | null,
+): ((meta: Record<string, unknown>) => 0 | 1 | null) | null {
+  if (targetMapping) {
+    return (meta) => {
+      const v = meta[targetField];
+      if (v === null || v === undefined) return null;
+      const mapped = targetMapping[String(v)];
+      if (mapped === undefined) return null;
+      return mapped >= 0.5 ? 1 : 0;
+    };
+  }
+  const distinct = new Set<number>();
+  for (const meta of itemMetadata) {
+    const n = coerceFiniteNumber(meta[targetField]);
+    if (n !== null) {
+      distinct.add(n);
+      if (distinct.size > 2) return null;
+    }
+  }
+  if (distinct.size !== 2) return null;
+  const [low, high] = [...distinct].sort((a, b) => a - b);
+  return (meta) => {
+    const n = coerceFiniteNumber(meta[targetField]);
+    if (n === high) return 1;
+    if (n === low) return 0;
+    return null;
+  };
+}
+
+/**
+ * Numeric coercion matching the backend's DuckDB TRY_CAST: numbers pass
+ * through, numeric strings ("3", "7.5") coerce, everything else is null.
+ */
+function coerceFiniteNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function confusionCategory(predPositive: boolean, actual: 0 | 1): string {
+  if (predPositive) return actual === 1 ? 'TP' : 'FP';
+  return actual === 0 ? 'TN' : 'FN';
+}
+
 /**
  * Merge per-item probe scores/residuals into item metadata.
  *
  * Returns a fresh array of fresh objects (originals untouched). Score item
  * ids missing from `ids` are skipped; null residuals are left absent so the
- * numeric coloring path treats them as missing values.
+ * numeric coloring path treats them as missing values. Two derived error
+ * fields are added alongside: |residual| (kinds with residuals) and the
+ * TP/TN/FP/FN confusion category (logreg, 0.5 threshold, where the actual
+ * class is resolvable).
  */
 export function mergeProbeScores(
   itemMetadata: Record<string, unknown>[],
@@ -52,6 +122,11 @@ export function mergeProbeScores(
 
   for (const { probe, scores } of probesWithScores) {
     const { itemIds, scores: values, residuals } = scores;
+    const absErrorField = probeAbsErrorField(probe);
+    const confusionField = probeConfusionField(probe);
+    const resolveActual = confusionField
+      ? buildBinaryActualResolver(itemMetadata, probe.targetField, probe.targetMapping ?? null)
+      : null;
     for (let j = 0; j < itemIds.length; j++) {
       const idx = idToIndex.get(itemIds[j]);
       if (idx === undefined) continue;
@@ -60,6 +135,13 @@ export function mergeProbeScores(
         const r = residuals[j];
         if (r !== null && r !== undefined) {
           merged[idx][probe.residualField] = r;
+          if (absErrorField) merged[idx][absErrorField] = Math.abs(r);
+        }
+      }
+      if (confusionField && resolveActual) {
+        const actual = resolveActual(itemMetadata[idx]);
+        if (actual !== null) {
+          merged[idx][confusionField] = confusionCategory(values[j] >= 0.5, actual);
         }
       }
     }
@@ -125,13 +207,16 @@ function numericRange(values: number[]): { min: number; max: number } {
 /**
  * Build Color By dropdown options for trained probes.
  *
- * One sequential numeric option per probe score; a residual option is added
- * only when the probe has a residual field with at least one non-null value.
+ * One sequential numeric option per probe score; residual and |error|
+ * options are added only when the probe has a residual field with at least
+ * one non-null value; a categorical confusion option is added for logreg
+ * probes whose actual class is resolvable from `itemMetadata`.
  * (ColorFieldOption's recommendedScale cannot express 'diverging'; the
  * residual button in ProbeSection applies the diverging scale explicitly.)
  */
 export function buildProbeFieldOptions(
   probesWithScores: ProbeWithScores[],
+  itemMetadata?: Record<string, unknown>[],
 ): ColorFieldOption[] {
   const options: ColorFieldOption[] = [];
   for (const { probe, scores } of probesWithScores) {
@@ -160,6 +245,34 @@ export function buildProbeFieldOptions(
         recommendedScale: 'sequential',
         min: residualRange.min,
         max: residualRange.max,
+      });
+      const absErrorField = probeAbsErrorField(probe);
+      if (absErrorField) {
+        const absRange = numericRange(residualValues.map(Math.abs));
+        options.push({
+          field: absErrorField,
+          displayName: `${probe.targetField} · ${probe.kind} |error|`,
+          valueType: 'numeric',
+          uniqueCount: residualValues.length,
+          recommendedScale: 'sequential',
+          min: absRange.min,
+          max: absRange.max,
+        });
+      }
+    }
+
+    const confusionField = probeConfusionField(probe);
+    if (
+      confusionField &&
+      itemMetadata &&
+      buildBinaryActualResolver(itemMetadata, probe.targetField, probe.targetMapping ?? null)
+    ) {
+      options.push({
+        field: confusionField,
+        displayName: `${probe.targetField} · ${probe.kind} confusion`,
+        valueType: 'string',
+        uniqueCount: 4,
+        recommendedScale: 'categorical',
       });
     }
   }

@@ -1,9 +1,9 @@
 """Unit tests for DuckDBClient — all tables, CRUD, and search."""
 
-import pytest
-import json
-from backend.clients.duckdb_client import DuckDBClient
 
+import pytest
+
+from backend.clients.duckdb_client import DuckDBClient
 
 # ------------------------------------------------------------------
 # Schema

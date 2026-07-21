@@ -35,15 +35,13 @@ class CSVFeaturesExtractionConfig:
     def __post_init__(self) -> None:
         if self.type != "csv_features":
             raise ValueError(
-                f"CSVFeaturesExtractionConfig.type must be 'csv_features', "
-                f"got {self.type!r}",
+                f"CSVFeaturesExtractionConfig.type must be 'csv_features', got {self.type!r}",
             )
         if not self.name:
             raise ValueError("CSVFeaturesExtractionConfig.name is required.")
         if self.feature_columns is not None and not self.feature_columns:
             raise ValueError(
-                "CSVFeaturesExtractionConfig.feature_columns, if set, "
-                "must be a non-empty list.",
+                "CSVFeaturesExtractionConfig.feature_columns, if set, must be a non-empty list.",
             )
 
     def cache_filename(self) -> str:

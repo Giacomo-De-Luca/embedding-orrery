@@ -22,7 +22,7 @@ import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 import { cn } from '@/lib/utils/utils';
-import { IS_DEMO } from '@/lib/utils/demoMode';
+import { IS_DEMO, DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
@@ -759,20 +759,32 @@ export function DashboardPanel({
         </div>
       )}
 
-      {/* 3c. LAYER: SAE Context Menu (Z-50) — links to /sae, which demo builds redirect away */}
-      {contextMenu && saeInfo && !IS_DEMO && (
+      {/* 3c. LAYER: SAE Context Menu (Z-50) — in demo builds the item is inert
+          with an explanatory tooltip (/sae also redirects server-side) */}
+      {contextMenu && saeInfo && (
         <div
           className="fixed z-50 min-w-40 rounded-md border bg-popover p-1 shadow-md"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <Link
-            href={`/sae?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
-            className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-            onClick={() => setContextMenu(null)}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            View Feature #{contextMenu.featureIndex}
-          </Link>
+          {IS_DEMO ? (
+            <span
+              aria-disabled="true"
+              title={DEMO_DISABLED_MESSAGE}
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm cursor-not-allowed opacity-50"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Feature #{contextMenu.featureIndex}
+            </span>
+          ) : (
+            <Link
+              href={`/sae?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+              onClick={() => setContextMenu(null)}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Feature #{contextMenu.featureIndex}
+            </Link>
+          )}
         </div>
       )}
 

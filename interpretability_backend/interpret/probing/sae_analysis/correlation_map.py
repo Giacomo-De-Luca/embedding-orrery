@@ -25,12 +25,12 @@ from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.sae_analysis import (
     CorrelationMapConfig,
 )
+
+# SAE intermediate name produced by extract_sae_activations.
+from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
-
-# SAE intermediate name produced by extract_sae_activations.
-_SAE_INTERMEDIATE = "sae_feat"
 
 
 def run_correlation_map(
@@ -64,7 +64,7 @@ def run_correlation_map(
 
     all_corrs: dict[int, pd.DataFrame] = {}
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
-        if intermediate != _SAE_INTERMEDIATE:
+        if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
         feat = feat_tensor.numpy()
@@ -73,7 +73,10 @@ def run_correlation_map(
         labels = load_feature_labels(config.sae_vectors_dir, layer, width)
 
         df = _correlate_features(
-            feat, targets, max_density=config.max_density, kept=kept,
+            feat,
+            targets,
+            max_density=config.max_density,
+            kept=kept,
         )
         df["layer"] = layer
         df["label"] = df["feature_idx"].map(labels).fillna("")
@@ -87,11 +90,14 @@ def run_correlation_map(
         combined.to_csv(output_dir / "all_correlations.csv", index=False)
         _write_summary(all_corrs, target_columns, config.top_k, output_dir)
         _plot_topk_heatmap(
-            all_corrs, target_columns, config.top_k,
+            all_corrs,
+            target_columns,
+            config.top_k,
             output_dir / "topk_heatmap.png",
         )
         _plot_distribution(
-            all_corrs, target_columns,
+            all_corrs,
+            target_columns,
             output_dir / "correlation_distribution.png",
         )
 
@@ -102,7 +108,8 @@ def run_correlation_map(
 
 
 def _to_kept_array(
-    kept: list[int] | None, n_columns: int,
+    kept: list[int] | None,
+    n_columns: int,
 ) -> np.ndarray:
     """Resolve a kept-feature mapping; default to identity if missing."""
     if kept is None:
@@ -226,13 +233,15 @@ def _plot_topk_heatmap(
     layers = sorted(all_corrs)
     n_targets = len(target_columns)
     fig, axes = plt.subplots(
-        n_targets, len(layers),
+        n_targets,
+        len(layers),
         figsize=(5 * len(layers), 0.35 * top_k * n_targets),
         squeeze=False,
     )
     fig.suptitle(
         "Top SAE features by |Spearman ρ| with manifest targets",
-        fontsize=14, y=1.01,
+        fontsize=14,
+        y=1.01,
     )
     for col_idx, layer in enumerate(layers):
         df = all_corrs[layer]
@@ -275,12 +284,15 @@ def _plot_distribution(
     layers = sorted(all_corrs)
     n_targets = len(target_columns)
     fig, axes = plt.subplots(
-        n_targets, len(layers),
+        n_targets,
+        len(layers),
         figsize=(4 * len(layers), 3.5 * n_targets),
         squeeze=False,
     )
     fig.suptitle(
-        "Distribution of feature–target Spearman ρ", fontsize=13, y=1.01,
+        "Distribution of feature–target Spearman ρ",
+        fontsize=13,
+        y=1.01,
     )
     for col_idx, layer in enumerate(layers):
         df = all_corrs[layer]
@@ -291,8 +303,7 @@ def _plot_distribution(
                 ax.set_visible(False)
                 continue
             vals = df[rho_col].dropna().values
-            ax.hist(vals, bins=60, color="steelblue", edgecolor="white",
-                    linewidth=0.3)
+            ax.hist(vals, bins=60, color="steelblue", edgecolor="white", linewidth=0.3)
             ax.axvline(0, color="black", linewidth=0.5)
             ax.set_xlabel("ρ")
             if col_idx == 0:

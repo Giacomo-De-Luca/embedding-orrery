@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
-import { IS_DEMO } from '@/lib/utils/demoMode';
+import { IS_DEMO, DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
+import { Save } from 'lucide-react';
+import { Button } from '@/lib/ui-primitives/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
@@ -285,9 +288,26 @@ export function VisualizationControls({
             </Select>
             {/* Scale selector (override of auto-detected type) + save-as-default, when a field is selected */}
             {colorByField && <ColorScaleSelector />}
-            {colorByField && !IS_DEMO && (
+            {colorByField && (IS_DEMO ? (
+              <Tooltip>
+                {/* span: disabled buttons swallow the hover the tooltip needs */}
+                <TooltipTrigger asChild>
+                  <span tabIndex={0}>
+                    <Button
+                      variant="circularghost"
+                      size="icon"
+                      disabled
+                      aria-label="Save as collection default"
+                    >
+                      <Save className="h-4 w-4" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{DEMO_DISABLED_MESSAGE}</TooltipContent>
+              </Tooltip>
+            ) : (
               <SaveColorDefaultButton collectionName={collectionName ?? null} />
-            )}
+            ))}
           </div>
 
           {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}

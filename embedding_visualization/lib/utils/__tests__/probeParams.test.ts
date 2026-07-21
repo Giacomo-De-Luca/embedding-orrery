@@ -19,7 +19,13 @@ describe('probeParamFields', () => {
     expect(probeParamFields('lasso')).toEqual(['alpha']);
     expect(probeParamFields('svr')).toEqual(['c', 'kernel']);
     expect(probeParamFields('logreg')).toEqual(['c', 'classWeight']);
-    expect(probeParamFields('mlp')).toEqual(['hiddenSize', 'epochs', 'patience']);
+    expect(probeParamFields('mlp')).toEqual([
+      'hiddenSize',
+      'epochs',
+      'activation',
+      'devSplit',
+      'patience',
+    ]);
     expect(probeParamFields('massmean')).toEqual([]);
     expect(probeParamFields('massmean_cov')).toEqual([]);
   });
@@ -85,9 +91,9 @@ describe('buildTrainProbeInput', () => {
   });
 
   it('default seed matches the backend default and is omitted', () => {
-    // The popover shows the backend's own default (42); sending nothing must
+    // The popover shows the backend's own default (7); sending nothing must
     // therefore train with exactly the displayed value.
-    expect(DEFAULT_PROBE_PARAMS.seed).toBe(42);
+    expect(DEFAULT_PROBE_PARAMS.seed).toBe(7);
     expect(buildTrainProbeInput('col', 'f', 'ridge', base).seed).toBeUndefined();
   });
 
@@ -114,11 +120,43 @@ describe('buildTrainProbeInput', () => {
     ).toBeUndefined();
   });
 
-  it('sends shared maxTrainSamples when non-default, for any kind', () => {
-    expect(buildTrainProbeInput('col', 'f', 'ridge', base).maxTrainSamples).toBeUndefined();
+  it('sends mlp devSplit only when changed, and only for mlp', () => {
+    expect(buildTrainProbeInput('col', 'f', 'mlp', base).devSplit).toBeUndefined();
     expect(
-      buildTrainProbeInput('col', 'f', 'massmean', { ...base, maxTrainSamples: 10000 })
-        .maxTrainSamples,
-    ).toBe(10000);
+      buildTrainProbeInput('col', 'f', 'mlp', { ...base, devSplit: 0.3 }).devSplit,
+    ).toBe(0.3);
+    expect(
+      buildTrainProbeInput('col', 'f', 'ridge', { ...base, devSplit: 0.3 }).devSplit,
+    ).toBeUndefined();
+  });
+
+  it('disabling the dev split sends 0 and drops patience', () => {
+    const v = buildTrainProbeInput('col', 'f', 'mlp', {
+      ...base,
+      devSplitEnabled: false,
+      devSplit: 0.3, // preserved locally but irrelevant while disabled
+      patience: 5,
+    });
+    expect(v.devSplit).toBe(0);
+    expect(v.patience).toBeUndefined(); // early stopping off -> patience moot
+  });
+
+  it('default devSplitEnabled is on and sends nothing extra', () => {
+    expect(DEFAULT_PROBE_PARAMS.devSplitEnabled).toBe(true);
+    expect(buildTrainProbeInput('col', 'f', 'mlp', base)).toEqual({
+      collectionName: 'col',
+      targetField: 'f',
+      kind: 'mlp',
+    });
+  });
+
+  it('sends mlp activation only when changed, and only for mlp', () => {
+    expect(buildTrainProbeInput('col', 'f', 'mlp', base).activation).toBeUndefined();
+    expect(
+      buildTrainProbeInput('col', 'f', 'mlp', { ...base, activation: 'gelu' }).activation,
+    ).toBe('gelu');
+    expect(
+      buildTrainProbeInput('col', 'f', 'ridge', { ...base, activation: 'gelu' }).activation,
+    ).toBeUndefined();
   });
 });

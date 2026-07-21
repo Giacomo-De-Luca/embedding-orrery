@@ -9,15 +9,15 @@ Tests topic reduction functionality including:
 - Edge cases (invalid inputs, single topic, etc.)
 """
 
-import pytest
+
 import numpy as np
 import pandas as pd
+import pytest
 import scipy.sparse as sp
-from unittest.mock import Mock, MagicMock
 
 from interpretability_backend.backend.topic_extraction.topic_reducer import (
     TopicReducer,
-    TopicReductionResult
+    TopicReductionResult,
 )
 
 

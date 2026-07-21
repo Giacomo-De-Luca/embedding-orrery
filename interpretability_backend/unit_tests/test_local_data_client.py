@@ -5,16 +5,13 @@ These tests verify file type detection and data loading
 without requiring actual file I/O (unit tests with mocking).
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 import pandas as pd
 
 # Import the functions we're testing
 from backend.clients.local_data_client import (
-    _detect_file_type,
     LocalFileInfo,
     LocalFilePreview,
+    _detect_file_type,
 )
 
 

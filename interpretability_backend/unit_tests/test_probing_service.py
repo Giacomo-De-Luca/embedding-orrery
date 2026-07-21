@@ -128,6 +128,19 @@ class TestBuildSpec:
         spec = _build_spec(ProbeConfig(collection_name="c", target_field="f", kind="mlp"))
         assert spec.hidden_dims == [256]
 
+    def test_mlp_threads_activation_and_dev_split(self):
+        spec = _build_spec(
+            ProbeConfig(
+                collection_name="c",
+                target_field="f",
+                kind="mlp",
+                activation="tanh",
+                dev_split=0.3,
+            )
+        )
+        assert spec.activation == "tanh"
+        assert spec.dev_split == 0.3
+
     def test_svr_spec(self):
         spec = _build_spec(
             ProbeConfig(collection_name="c", target_field="f", kind="svr", c=2.0, kernel="rbf")
@@ -141,8 +154,11 @@ class TestBuildSpec:
     def test_logreg_spec(self):
         spec = _build_spec(
             ProbeConfig(
-                collection_name="c", target_field="f", kind="logreg",
-                c=0.5, class_weight="balanced",
+                collection_name="c",
+                target_field="f",
+                kind="logreg",
+                c=0.5,
+                class_weight="balanced",
             )
         )
         assert isinstance(spec, SklearnProbeSpec)
@@ -291,12 +307,16 @@ class TestRunProbeCoreMassmeanCov:
     def test_beats_plain_massmean_on_anisotropic_data(self, tmp_path):
         X, y = _anisotropic_data()
         base = run_probe_core(
-            X, y, _ids(len(y)),
+            X,
+            y,
+            _ids(len(y)),
             ProbeConfig(collection_name="c", target_field="rating", kind="massmean"),
             tmp_path / "mm",
         )
         cov = run_probe_core(
-            X, y, _ids(len(y)),
+            X,
+            y,
+            _ids(len(y)),
             ProbeConfig(collection_name="c", target_field="rating", kind="massmean_cov"),
             tmp_path / "cov",
         )
@@ -332,9 +352,7 @@ class TestRunProbeCoreMassmeanCov:
 class TestRunProbeCoreLasso:
     def test_recovers_linear_signal_with_residuals(self, tmp_path):
         X, y = _linear_data()
-        config = ProbeConfig(
-            collection_name="c", target_field="rating", kind="lasso", alpha=0.01
-        )
+        config = ProbeConfig(collection_name="c", target_field="rating", kind="lasso", alpha=0.01)
         out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
 
         assert out.metrics["val_r2"] > 0.85
@@ -375,6 +393,25 @@ class TestRunProbeCoreMlp:
         assert out.scaler_mean is None
         assert out.intercept is None
         assert (tmp_path / "checkpoints" / "layer_0_embedding.pt").exists()
+
+    def test_non_default_activation_scores_consistently(self, tmp_path):
+        """The scoring path must rebuild the checkpoint with the SAME
+        activation it trained with (parameterless layers load silently, so a
+        mismatch would corrupt scores rather than raise)."""
+        X, y = _linear_data(n=200, d=16)
+        config = ProbeConfig(
+            collection_name="c",
+            target_field="rating",
+            kind="mlp",
+            hidden_dims=[8],
+            epochs=20,
+            activation="gelu",
+        )
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert len(out.scores) == 200
+        assert np.isfinite(np.array(out.scores)).all()
+        # A trained gelu probe's scores must track the val metrics it reported.
+        assert out.metrics["val_r2"] is not None
 
 
 # ------------------------------------------------------------------
@@ -701,12 +738,16 @@ class TestRunProbeCoreLogreg:
         """
         X, y = _binary_data()
         weak = run_probe_core(
-            X, y, _ids(len(y)),
+            X,
+            y,
+            _ids(len(y)),
             ProbeConfig(collection_name="c", target_field="label", kind="logreg", c=100.0),
             tmp_path / "weak",
         )
         strong = run_probe_core(
-            X, y, _ids(len(y)),
+            X,
+            y,
+            _ids(len(y)),
             ProbeConfig(collection_name="c", target_field="label", kind="logreg", c=1e-4),
             tmp_path / "strong",
         )

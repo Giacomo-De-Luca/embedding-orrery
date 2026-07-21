@@ -34,8 +34,7 @@ from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.sae_analysis import (
     LassoAlphaSweepConfig,
 )
-
-_SAE_INTERMEDIATE = "sae_feat"
+from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
 
 
 def run_lasso_alpha_sweep(
@@ -67,7 +66,7 @@ def run_lasso_alpha_sweep(
 
     result: dict[int, dict] = {}
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
-        if intermediate != _SAE_INTERMEDIATE:
+        if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
         feat = feat_tensor.numpy().astype(np.float64, copy=False)
@@ -75,7 +74,10 @@ def run_lasso_alpha_sweep(
         layer_results: list[dict] = []
         for alpha in config.alphas:
             stats = _kfold_lasso(
-                feat, target_values, alpha=alpha, n_splits=config.n_splits,
+                feat,
+                target_values,
+                alpha=alpha,
+                n_splits=config.n_splits,
             )
             _save_full_fit_direction(
                 directions_dir=directions_dir,
@@ -85,14 +87,16 @@ def run_lasso_alpha_sweep(
                 target_values=target_values,
                 alpha=alpha,
             )
-            layer_results.append({
-                "alpha": float(alpha),
-                "val_r2_mean": round(stats["r2_mean"], 6),
-                "val_r2_std": round(stats["r2_std"], 6),
-                "val_spearman_mean": round(stats["spear_mean"], 6),
-                "n_nonzero_mean": round(stats["nz_mean"], 4),
-                "n_nonzero_max": int(stats["nz_max"]),
-            })
+            layer_results.append(
+                {
+                    "alpha": float(alpha),
+                    "val_r2_mean": round(stats["r2_mean"], 6),
+                    "val_r2_std": round(stats["r2_std"], 6),
+                    "val_spearman_mean": round(stats["spear_mean"], 6),
+                    "n_nonzero_mean": round(stats["nz_mean"], 4),
+                    "n_nonzero_max": int(stats["nz_max"]),
+                }
+            )
 
         result[layer] = {
             "n_features_total": int(feat.shape[1]),
@@ -105,10 +109,14 @@ def run_lasso_alpha_sweep(
 
     if result:
         _plot_r2_vs_alpha(
-            result, target_name, output_dir / "r2_vs_alpha.png",
+            result,
+            target_name,
+            output_dir / "r2_vs_alpha.png",
         )
         _plot_nnz_vs_alpha(
-            result, target_name, output_dir / "n_nonzero_vs_alpha.png",
+            result,
+            target_name,
+            output_dir / "n_nonzero_vs_alpha.png",
         )
         _print_summary(result, target_name)
 
@@ -119,7 +127,11 @@ def run_lasso_alpha_sweep(
 
 
 def _kfold_lasso(
-    X: np.ndarray, y: np.ndarray, *, alpha: float, n_splits: int,
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    alpha: float,
+    n_splits: int,
 ) -> dict[str, float]:
     """K-fold CV with StandardScaler + Lasso(alpha)."""
     n = X.shape[0]
@@ -190,7 +202,9 @@ def _r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def _plot_r2_vs_alpha(
-    result: dict[int, dict], target_name: str, output_path: Path,
+    result: dict[int, dict],
+    target_name: str,
+    output_path: Path,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7, 5))
     for layer in sorted(result):
@@ -199,7 +213,11 @@ def _plot_r2_vs_alpha(
         means = [r["val_r2_mean"] for r in rows]
         stds = [r["val_r2_std"] for r in rows]
         ax.errorbar(
-            alphas, means, yerr=stds, marker="o", capsize=3,
+            alphas,
+            means,
+            yerr=stds,
+            marker="o",
+            capsize=3,
             label=f"L{layer}",
         )
     ax.set_xscale("log")
@@ -215,7 +233,9 @@ def _plot_r2_vs_alpha(
 
 
 def _plot_nnz_vs_alpha(
-    result: dict[int, dict], target_name: str, output_path: Path,
+    result: dict[int, dict],
+    target_name: str,
+    output_path: Path,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7, 5))
     for layer in sorted(result):
@@ -242,8 +262,7 @@ def _print_summary(result: dict[int, dict], target_name: str) -> None:
         if not rows:
             continue
         line = "  ".join(
-            f"α={r['alpha']:g}: R²={r['val_r2_mean']:+.3f} "
-            f"(nnz={r['n_nonzero_mean']:.0f})"
+            f"α={r['alpha']:g}: R²={r['val_r2_mean']:+.3f} (nnz={r['n_nonzero_mean']:.0f})"
             for r in rows
         )
         print(f"  L{layer}: {line}")

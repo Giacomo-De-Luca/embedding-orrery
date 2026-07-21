@@ -9,16 +9,16 @@ Example:
     python test_topic_extraction.py imdb
 """
 
-import sys
 import asyncio
 import logging
+import sys
 
 logging.basicConfig(level=logging.INFO, format="%(name)s - %(message)s")
-from interpretability_backend.backend.services.topic_extraction_service import (
-    extract_topics,
-    TopicExtractionConfig,
-)
 from interpretability_backend.backend.clients.chromadb_client import ChromaDBClient
+from interpretability_backend.backend.services.topic_extraction_service import (
+    TopicExtractionConfig,
+    extract_topics,
+)
 
 
 def print_topics_result(result):
@@ -32,13 +32,13 @@ def print_topics_result(result):
         return
 
     print(f"\n✅ Extraction completed in {result.duration_seconds:.2f} seconds")
-    print(f"\n📊 SUMMARY:")
+    print("\n📊 SUMMARY:")
     print(f"   • Topics Found: {result.num_topics}")
     print(f"   • Noise Points: {result.num_noise_points}")
     print(f"   • Total Topics (including noise): {result.num_topics + 1}")
 
     if result.topics:
-        print(f"\n📋 TOPIC DETAILS:\n")
+        print("\n📋 TOPIC DETAILS:\n")
 
         for topic_info in result.topics:
             print(f"   Topic {topic_info.topic_id}: {topic_info.label or 'Unlabeled'}")
@@ -63,10 +63,10 @@ async def main():
     collection_name = sys.argv[1] if len(sys.argv) > 1 else "imdb"
 
     print(f"\n🔬 Testing Topic Extraction on collection: '{collection_name}'")
-    print(f"=" * 80)
+    print("=" * 80)
 
     # Check if collection exists
-    print(f"\n1️⃣ Checking if collection exists...")
+    print("\n1️⃣ Checking if collection exists...")
     client = ChromaDBClient()
 
     try:
@@ -78,26 +78,26 @@ async def main():
 
         if not has_projections:
             print(f"\n❌ ERROR: Collection '{collection_name}' does not have projections!")
-            print(f"   Run projections first before extracting topics.")
+            print("   Run projections first before extracting topics.")
             return
 
-        print(f"   ✅ Collection has projections")
+        print("   ✅ Collection has projections")
 
         # Check available projection types
-        print(f"\n   Available projection info:")
+        print("\n   Available projection info:")
         print(f"      • Embedding dim: {metadata.get('embedding_dim', 'unknown')}")
         print(f"      • Embedding model: {metadata.get('embedding_model', 'unknown')}")
 
     except Exception as e:
         print(f"\n❌ ERROR: Collection '{collection_name}' not found: {e}")
-        print(f"\n   Available collections:")
+        print("\n   Available collections:")
         collections = client.list_collections()
         for col in collections:
             print(f"      • {col['name']} ({col['count']} items)")
         return
 
     # Configure topic extraction
-    print(f"\n2️⃣ Configuring topic extraction...")
+    print("\n2️⃣ Configuring topic extraction...")
     config = TopicExtractionConfig(
         collection_name=collection_name,
         min_topic_size=10,
@@ -108,7 +108,7 @@ async def main():
         projection_type="umap_2d"
     )
 
-    print(f"   Configuration:")
+    print("   Configuration:")
     print(f"      • Min topic size: {config.min_topic_size}")
     print(f"      • Keywords per topic: {config.n_keywords}")
     print(f"      • Use LLM labels: {config.use_llm_labels}")
@@ -117,8 +117,8 @@ async def main():
     print(f"      • Projection type: {config.projection_type}")
 
     # Extract topics
-    print(f"\n3️⃣ Extracting topics...")
-    print(f"   (This may take 10-60 seconds depending on collection size)")
+    print("\n3️⃣ Extracting topics...")
+    print("   (This may take 10-60 seconds depending on collection size)")
 
     try:
         result = await asyncio.to_thread(extract_topics, config)
@@ -127,16 +127,16 @@ async def main():
         print_topics_result(result)
 
         # Verify metadata was updated
-        print(f"\n4️⃣ Verifying metadata update...")
+        print("\n4️⃣ Verifying metadata update...")
         collection_info = client.get_collection_info(collection_name)
         metadata = collection_info['metadata']
 
         if metadata.get('has_topics'):
-            print(f"   ✅ Collection metadata updated successfully")
+            print("   ✅ Collection metadata updated successfully")
             print(f"      • Topic count: {metadata.get('topic_count')}")
             print(f"      • Extracted at: {metadata.get('topics_extracted_at')}")
         else:
-            print(f"   ⚠️  Metadata update may have failed")
+            print("   ⚠️  Metadata update may have failed")
 
     except Exception as e:
         print(f"\n❌ ERROR during extraction: {e}")
@@ -144,12 +144,12 @@ async def main():
         traceback.print_exc()
         return
 
-    print(f"\n✅ Test completed successfully!")
-    print(f"\nNext steps:")
-    print(f"   1. Open frontend: http://localhost:3000")
+    print("\n✅ Test completed successfully!")
+    print("\nNext steps:")
+    print("   1. Open frontend: http://localhost:3000")
     print(f"   2. Select collection: {collection_name}")
-    print(f"   3. Color by: topic_label or topic_id")
-    print(f"   4. View topics in the legend")
+    print("   3. Color by: topic_label or topic_id")
+    print("   4. View topics in the legend")
 
 
 if __name__ == "__main__":

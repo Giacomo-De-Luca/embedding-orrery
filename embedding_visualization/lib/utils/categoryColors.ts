@@ -328,6 +328,28 @@ export const TOPIC_PRESET: CategoryColorPreset = {
 };
 
 /**
+ * Probe confusion-category colors (`probe_<field>_logreg_confusion`).
+ * Correct predictions are cool (green/blue), errors warm (yellow/magenta).
+ * The four hues are the all-pairs CVD-validated categorical slots, so every
+ * pair stays distinguishable on the scatter plot in both themes.
+ */
+export const CONFUSION_PRESET: CategoryColorPreset = {
+  name: 'Confusion',
+  colors: {
+    TP: '#008300',
+    TN: '#3987e5',
+    FP: '#c98500',
+    FN: '#d55181',
+  },
+  labels: {
+    TP: 'True positive',
+    TN: 'True negative',
+    FP: 'False positive',
+    FN: 'False negative',
+  },
+};
+
+/**
  * All known presets, keyed by category field name.
  */
 export const CATEGORY_PRESETS: Record<string, CategoryColorPreset> = {
@@ -337,6 +359,19 @@ export const CATEGORY_PRESETS: Record<string, CategoryColorPreset> = {
   topic_id: TOPIC_PRESET,
   topic_label: TOPIC_PRESET,
 };
+
+/**
+ * Resolve the preset for a category field: exact name first, then dynamic
+ * probe-derived fields by suffix (confusion fields embed the probed field
+ * name, so they can't be static keys).
+ */
+function resolveCategoryPreset(categoryField: string | null): CategoryColorPreset | null {
+  if (!categoryField) return null;
+  const key = categoryField.toLowerCase();
+  if (CATEGORY_PRESETS[key]) return CATEGORY_PRESETS[key];
+  if (key.startsWith('probe_') && key.endsWith('_confusion')) return CONFUSION_PRESET;
+  return null;
+}
 
 /**
  * Fields whose values follow the HDBSCAN topic-clustering convention, where
@@ -431,7 +466,7 @@ export function buildCategoryColorMap(
   const colorMap: Record<string, string> = {};
 
   // Check for preset
-  const preset = categoryField ? CATEGORY_PRESETS[categoryField.toLowerCase()] : null;
+  const preset = resolveCategoryPreset(categoryField);
 
   if (preset) {
     // Separate values into those with preset colors and those without
@@ -480,7 +515,7 @@ export function buildCategoryColorMap(
  * @returns Human-readable label or the original value
  */
 export function getCategoryLabel(categoryField: string | null, value: string): string {
-  const preset = categoryField ? CATEGORY_PRESETS[categoryField.toLowerCase()] : null;
+  const preset = resolveCategoryPreset(categoryField);
   return preset?.labels?.[value] ?? value;
 }
 
@@ -492,7 +527,7 @@ export function getCategoryLabel(categoryField: string | null, value: string): s
  */
 export function getCategoryDisplayName(categoryField: string | null): string {
   if (!categoryField) return 'Category';
-  const preset = CATEGORY_PRESETS[categoryField.toLowerCase()];
+  const preset = resolveCategoryPreset(categoryField);
   if (preset) return preset.name;
   // Convert snake_case/camelCase to Title Case
   return categoryField

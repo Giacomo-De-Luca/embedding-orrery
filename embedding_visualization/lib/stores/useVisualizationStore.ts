@@ -11,6 +11,7 @@ import type {
   TextSearchConfig,
 } from '../types/types';
 import { DEFAULT_COLOR_SCALE, defaultColorScaleForType } from '../types/types';
+import { IS_DEMO } from '../utils/demoMode';
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -129,7 +130,9 @@ export const useVisualizationStore = create<VisualizationStore>()(
     textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
     distanceMetric: 'COSINE',
     showOnlyHighlighted: false,
-    showLabels: false,
+    // Demo builds label search results out of the box — the glow alone doesn't
+    // tell first-time visitors what matched.
+    showLabels: IS_DEMO,
     showContours: false,
     hideUnclustered: false,
     showClusterLabels: false,

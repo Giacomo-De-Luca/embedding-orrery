@@ -40,9 +40,7 @@ def extract_encoder_activations(
     device = config.device or _autodetect_device()
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     model = (
-        AutoModel.from_pretrained(config.model_name, output_hidden_states=True)
-        .to(device)
-        .eval()
+        AutoModel.from_pretrained(config.model_name, output_hidden_states=True).to(device).eval()
     )
 
     num_hidden_layers = model.config.num_hidden_layers
@@ -86,8 +84,7 @@ def extract_encoder_activations(
                 accum[layer].append(pooled.cpu().float())
 
     activations = {
-        (layer, INTERMEDIATE_KEY): torch.cat(tensors)
-        for layer, tensors in accum.items()
+        (layer, INTERMEDIATE_KEY): torch.cat(tensors) for layer, tensors in accum.items()
     }
     metadata = {
         "model_name": config.model_name,
@@ -108,7 +105,8 @@ def extract_encoder_activations(
 
 
 def _resolve_layers(
-    layers: list[int] | None, num_hidden_layers: int,
+    layers: list[int] | None,
+    num_hidden_layers: int,
 ) -> list[int]:
     """Auto-select first/middle/last when `layers` is None."""
     if layers is not None:
@@ -139,7 +137,8 @@ def _pool(
     if strategy == "last":
         seq_lengths = attention_mask.sum(dim=1) - 1  # 0-indexed
         batch_idx = torch.arange(
-            hidden_states.size(0), device=hidden_states.device,
+            hidden_states.size(0),
+            device=hidden_states.device,
         )
         return hidden_states[batch_idx, seq_lengths, :]
     raise ValueError(f"Unknown pooling strategy: {strategy!r}")

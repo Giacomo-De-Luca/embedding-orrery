@@ -1,0 +1,86 @@
+# TREC question-type probing over gemma-scope-2 SAE features.
+#
+# Two-stage pipeline: ONE token-level residual pass over all 34 layers x
+# 3 hook sites of Gemma-3-4b-it, then per-(layer, site) JumpReLU SAE
+# encoding pooled per question, probed with multiclass logreg + SVC.
+# Neuronpedia labels exist for resid_post layers 9/17/22/29; other
+# layers/sites report feature indices with blank labels.
+#
+# Run from interpretability_backend/ (CWD-relative resources/ paths):
+#   uv run python -m interpret.probing.orchestrator \
+#     experiments/trec_classification/trec_gemma.yaml
+#
+# Disk/RAM note: the token-level cache is ~43 GB bf16 (34 layers x 3 sites).
+# If RAM is tight, split gemma_tokens into per-site extractions (new names)
+# or run sites as separate experiment files — caches make reruns cheap.
+
+name: trec_gemma
+output_dir: resources/probing_results/trec_gemma
+automatic_visualisations: true
+
+manifest:
+  path: "interpret.probing.manifests.labeled_text:LabeledTextManifestBuilder"
+  kwargs:
+    path: resources/datasets/SAE/trec.tsv
+    text_column: text
+    target_columns: [coarse_label, fine_label]
+    dedupe: true
+    # StratifiedKFold(5) requires >= 5 members per class; the smallest
+    # fine_label class has 4. Applied to fine_label only.
+    min_class_count: {fine_label: 5}
+
+extractions:
+  - name: gemma_tokens
+    type: token_residuals
+    family: gemma
+    checkpoint: null    # auto-resolve gemma-3-4b-it from the HF cache
+    layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+             18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+    sites: [resid_post, mlp_out, attn_out]
+    storage_dtype: bfloat16
+
+  # Raw-residual baseline (last token), same forward pass as the SAEs.
+  - name: gemma_res_last
+    type: residual_pooled
+    source_extraction: gemma_tokens
+    site: resid_post
+    pooling: last
+
+  # One sae_pooled per (site, pooling) so kept_by_layer stays a clean
+  # per-layer map and each site gets its own probes/analysis folder.
+  - {name: gemma_sae_resid_max, type: sae_pooled, source_extraction: gemma_tokens,
+     site: resid_post, pooling: max, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 10, device: cuda}
+  - {name: gemma_sae_mlp_max, type: sae_pooled, source_extraction: gemma_tokens,
+     site: mlp_out, pooling: max, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 10, device: cuda}
+  - {name: gemma_sae_attn_max, type: sae_pooled, source_extraction: gemma_tokens,
+     site: attn_out, pooling: max, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 10, device: cuda}
+  - {name: gemma_sae_resid_last, type: sae_pooled, source_extraction: gemma_tokens,
+     site: resid_post, pooling: last, width: 16k, l0_size: medium, variant: it,
+     model_size: 4b, min_active_samples: 10, device: cuda}
+
+  # All resid_post layers' max-pooled SAE features as one wide matrix.
+  - name: gemma_sae_concat
+    type: concat
+    source_extractions: [gemma_sae_resid_max]
+
+  # All-sites mega-concat (~3x wider) — enable once the single-site run
+  # confirms memory headroom:
+  # - name: gemma_sae_concat_all
+  #   type: concat
+  #   source_extractions: [gemma_sae_resid_max, gemma_sae_mlp_max, gemma_sae_attn_max]
+
+targets:
+  - {source: labeled_text, column: coarse_label, task_type: classification, num_classes: 6}
+  - {source: labeled_text, column: fine_label,   task_type: classification, num_classes: 50}
+
+probes:
+  - {type: sklearn, kind: logreg, C: 1.0, class_weight: balanced, n_folds: 5,
+     save_directions: true, logreg_max_iter: 2000}
+  - {type: sklearn, kind: svc, C: 1.0, class_weight: balanced, n_folds: 5}
+
+sae_analysis:
+  - {type: top_features, source_probe: logreg, top_k: 30}
+  - {type: correlation_map, top_k: 30}

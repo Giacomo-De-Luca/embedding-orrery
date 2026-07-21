@@ -93,8 +93,7 @@ def extract_delta_activations(
         )
     if n_non_baseline == 0:
         raise ValueError(
-            f"DeltaExtraction '{config.name}': all rows are baselines — "
-            f"nothing to subtract.",
+            f"DeltaExtraction '{config.name}': all rows are baselines — nothing to subtract.",
         )
 
     # Map pairing-key → baseline row index in source.
@@ -161,10 +160,11 @@ def extract_delta_activations(
 
 
 def _build_baseline_mask(
-    df: pd.DataFrame, baseline_filter: dict[str, Any],
+    df: pd.DataFrame,
+    baseline_filter: dict[str, Any],
 ) -> pd.Series:
     """Combine equality filters with logical AND."""
     mask = pd.Series(True, index=df.index)
     for col, val in baseline_filter.items():
-        mask &= (df[col] == val)
+        mask &= df[col] == val
     return mask

@@ -70,12 +70,13 @@ def _split_train_dev(
         return all_idx, empty
     rng = np.random.default_rng(seed)
     if stratify_y is not None:
-        dev_parts = [
-            rng.permutation(all_idx[stratify_y == cls])[
-                : int(round((stratify_y == cls).sum() * dev_split))
-            ]
-            for cls in np.unique(stratify_y)
-        ]
+        dev_parts = []
+        for cls in np.unique(stratify_y):
+            cls_idx = all_idx[stratify_y == cls]
+            # Cap at len-1 so no class lands entirely in dev (an absent
+            # class breaks balanced CrossEntropy weights downstream).
+            n_dev = min(int(round(len(cls_idx) * dev_split)), len(cls_idx) - 1)
+            dev_parts.append(rng.permutation(cls_idx)[: max(n_dev, 0)])
         dev_idx = np.sort(np.concatenate(dev_parts))
     else:
         dev_idx = np.sort(rng.permutation(all_idx)[: int(round(n * dev_split))])
@@ -89,15 +90,15 @@ def _split_train_dev(
 
 
 def _classification_loss(
-    y_train: torch.Tensor, class_weight: str | None,
+    y_train: torch.Tensor,
+    class_weight: str | None,
 ) -> nn.Module:
     """Build a CrossEntropyLoss, optionally with sklearn-style balanced weights."""
     if class_weight is None:
         return nn.CrossEntropyLoss()
     if class_weight != "balanced":
         raise ValueError(
-            f"MLP class_weight must be None or 'balanced', got "
-            f"{class_weight!r}",
+            f"MLP class_weight must be None or 'balanced', got {class_weight!r}",
         )
     y_np = y_train.cpu().numpy()
     classes = np.unique(y_np)
@@ -106,11 +107,24 @@ def _classification_loss(
     return nn.CrossEntropyLoss(weight=weight_tensor)
 
 
+# Name -> layer class for ProbeModel's hidden nonlinearity. Keep in sync with
+# `MLP_ACTIVATIONS` in configs/probe.py (spec-level validation).
+_ACTIVATION_LAYERS: dict[str, type[nn.Module]] = {
+    "relu": nn.ReLU,
+    "gelu": nn.GELU,
+    "tanh": nn.Tanh,
+    "silu": nn.SiLU,
+}
+
+
 class ProbeModel(nn.Module):
     """Configurable MLP probe.
 
-    Architecture: input -> [Linear + ReLU + Dropout] x N -> Linear -> output.
-    Empty `hidden_dims` produces a linear probe.
+    Architecture: input -> [Linear + activation + Dropout] x N -> Linear ->
+    output. Empty `hidden_dims` produces a linear probe. Checkpoints carry no
+    activation parameters, so the loader MUST rebuild with the same
+    `activation` the probe trained with (a mismatch loads silently and
+    corrupts the forward pass).
     """
 
     def __init__(
@@ -119,13 +133,19 @@ class ProbeModel(nn.Module):
         output_dim: int,
         hidden_dims: list[int] | None = None,
         dropout: float = 0.1,
+        activation: str = "relu",
     ) -> None:
         super().__init__()
+        if activation not in _ACTIVATION_LAYERS:
+            raise ValueError(
+                f"Unknown activation {activation!r}; expected one of {sorted(_ACTIVATION_LAYERS)}",
+            )
+        activation_cls = _ACTIVATION_LAYERS[activation]
         hidden_dims = hidden_dims if hidden_dims is not None else [512]
         layers: list[nn.Module] = []
         prev = input_dim
         for h in hidden_dims:
-            layers.extend([nn.Linear(prev, h), nn.ReLU(), nn.Dropout(dropout)])
+            layers.extend([nn.Linear(prev, h), activation_cls(), nn.Dropout(dropout)])
             prev = h
         layers.append(nn.Linear(prev, output_dim))
         self.net = nn.Sequential(*layers)
@@ -184,10 +204,7 @@ def train_mlp_probes(
         n_folds=spec.n_folds,
         seed=spec.seed,
         is_classification=is_classification,
-        stratify_y=(
-            targets.detach().cpu().numpy().reshape(-1)
-            if is_classification else None
-        ),
+        stratify_y=(targets.detach().cpu().numpy().reshape(-1) if is_classification else None),
         train_split=spec.train_split,
         groups=groups,
         indices_override=indices_override,
@@ -206,8 +223,7 @@ def train_mlp_probes(
     # back to the distance's own `higher_is_better`.
     higher_is_better = _HIGHER_IS_BETTER.get(
         metric_name,
-        resolve_distance(spec.distance).higher_is_better
-        if spec.distance else True,
+        resolve_distance(spec.distance).higher_is_better if spec.distance else True,
     )
 
     csv_path = output_dir / "probe_results.csv"
@@ -224,7 +240,10 @@ def train_mlp_probes(
                 y_train, y_val = targets[train_idx], targets[val_idx]
 
                 metrics, best_state = _train_single_probe(
-                    X_train, y_train, X_val, y_val,
+                    X_train,
+                    y_train,
+                    X_val,
+                    y_val,
                     spec=spec,
                     task_type=task_type,
                     num_classes=num_classes,
@@ -267,23 +286,19 @@ def train_mlp_probes(
 
 
 def _resolve_best_metric(
-    spec: MLPProbeSpec, task_type: TaskType,
+    spec: MLPProbeSpec,
+    task_type: TaskType,
 ) -> str:
     """Pick the best-epoch metric from spec / distance / task_type."""
     if spec.best_metric is not None:
         if spec.best_metric not in _HIGHER_IS_BETTER:
             raise ValueError(
-                f"Unknown best_metric {spec.best_metric!r}. "
-                f"Known: {sorted(_HIGHER_IS_BETTER)}",
+                f"Unknown best_metric {spec.best_metric!r}. Known: {sorted(_HIGHER_IS_BETTER)}",
             )
         return spec.best_metric
     if spec.distance is not None:
         return resolve_distance(spec.distance).metric_key
-    return (
-        "val_r2"
-        if task_type is TaskType.REGRESSION
-        else "val_accuracy"
-    )
+    return "val_r2" if task_type is TaskType.REGRESSION else "val_accuracy"
 
 
 def _train_single_probe(
@@ -308,12 +323,13 @@ def _train_single_probe(
     # the reported metrics). Carve a dev subset out of the train side;
     # X_val/y_val are touched exactly once, in the final metrics pass.
     stratify = (
-        y_train.detach().cpu().numpy().reshape(-1)
-        if task_type is TaskType.CLASSIFICATION
-        else None
+        y_train.detach().cpu().numpy().reshape(-1) if task_type is TaskType.CLASSIFICATION else None
     )
     fit_idx, dev_idx = _split_train_dev(
-        X_train.shape[0], spec.dev_split, spec.seed, stratify_y=stratify,
+        X_train.shape[0],
+        spec.dev_split,
+        spec.seed,
+        stratify_y=stratify,
     )
     fit_t = torch.from_numpy(fit_idx).long()
     X_fit, y_fit = X_train[fit_t], y_train[fit_t]
@@ -323,15 +339,13 @@ def _train_single_probe(
         X_dev, y_dev = X_train[dev_t], y_train[dev_t]
 
     input_dim = X_train.shape[1]
-    output_dim = (
-        num_classes if task_type is TaskType.CLASSIFICATION
-        else y_train.shape[1]
-    )
+    output_dim = num_classes if task_type is TaskType.CLASSIFICATION else y_train.shape[1]
     probe = ProbeModel(
         input_dim=input_dim,
         output_dim=output_dim,
         hidden_dims=spec.hidden_dims,
         dropout=spec.dropout,
+        activation=spec.activation,
     )
     loss_fn: nn.Module = (
         _classification_loss(y_fit, spec.class_weight)
@@ -401,7 +415,9 @@ def _train_single_probe(
         best_epoch = final_epoch
 
     metrics = _compute_metrics(
-        probe, X_val, y_val,
+        probe,
+        X_val,
+        y_val,
         loss_fn=loss_fn,
         task_type=task_type,
         distance=resolve_distance(spec.distance) if spec.distance else None,
@@ -486,14 +502,8 @@ def _compute_metrics(
         out["val_spearman"] = _safe_spearman(y_flat, p)
     else:
         # Multi-dim: average correlation across columns.
-        pearsons = [
-            _safe_pearson(y_np[:, c], pred_np[:, c])
-            for c in range(y_np.shape[1])
-        ]
-        spearmans = [
-            _safe_spearman(y_np[:, c], pred_np[:, c])
-            for c in range(y_np.shape[1])
-        ]
+        pearsons = [_safe_pearson(y_np[:, c], pred_np[:, c]) for c in range(y_np.shape[1])]
+        spearmans = [_safe_spearman(y_np[:, c], pred_np[:, c]) for c in range(y_np.shape[1])]
         out["val_pearson"] = float(np.nanmean(pearsons))
         out["val_spearman"] = float(np.nanmean(spearmans))
 
@@ -507,9 +517,14 @@ def _compute_metrics(
 
 
 _AGGREGATABLE_MLP_METRICS = (
-    "val_loss", "val_mse", "val_mae", "val_r2",
-    "val_pearson", "val_spearman",
-    "val_accuracy", "val_f1_weighted",
+    "val_loss",
+    "val_mse",
+    "val_mae",
+    "val_r2",
+    "val_pearson",
+    "val_spearman",
+    "val_accuracy",
+    "val_f1_weighted",
     "val_lab_distance",
 )
 
@@ -534,6 +549,8 @@ def _write_summary(
             "dropout": spec.dropout,
             "epochs": spec.epochs,
             "patience": spec.patience,
+            "dev_split": spec.dev_split,
+            "activation": spec.activation,
             "learning_rate": spec.learning_rate,
             "weight_decay": spec.weight_decay,
             "batch_size": spec.batch_size,

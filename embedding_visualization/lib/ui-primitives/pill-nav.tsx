@@ -7,6 +7,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
 
 /**
  * iOS-style pill tab bar: rounded container with icon+label items and a
@@ -32,6 +33,9 @@ export interface PillNavItem {
   href: string;
   /** 'prefix' (default) also matches nested paths; use 'exact' for '/'. */
   match?: 'exact' | 'prefix';
+  /** Renders the item inert (no navigation) with `disabledReason` as tooltip. */
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 const pillNavVariants = cva('flex items-center gap-0.5 rounded-xl p-1', {
@@ -98,6 +102,32 @@ export function PillNav({
       {items.map((item) => {
         const active = item.id === resolvedActiveId;
         const Icon = item.icon;
+        if (item.disabled) {
+          // Keyboard-focusable so the tooltip is discoverable without a mouse.
+          const pill = (
+            <span
+              key={item.id}
+              tabIndex={0}
+              aria-disabled="true"
+              className={cn(
+                pillNavItemVariants({ size, active: false }),
+                'cursor-not-allowed opacity-50 hover:text-muted-foreground',
+              )}
+            >
+              <span className="relative z-10 flex items-center gap-1.5">
+                <Icon className={size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+                <span className="hidden sm:inline">{item.label}</span>
+              </span>
+            </span>
+          );
+          if (!item.disabledReason) return pill;
+          return (
+            <Tooltip key={item.id}>
+              <TooltipTrigger asChild>{pill}</TooltipTrigger>
+              <TooltipContent>{item.disabledReason}</TooltipContent>
+            </Tooltip>
+          );
+        }
         return (
           <Link
             key={item.id}

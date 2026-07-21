@@ -112,9 +112,7 @@ def train_sklearn_probe(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "probe_results.csv"
-    directions_dir = (
-        output_dir / "directions" if spec.save_directions else None
-    )
+    directions_dir = output_dir / "directions" if spec.save_directions else None
     if directions_dir is not None:
         directions_dir.mkdir(parents=True, exist_ok=True)
     models_dir = output_dir / "models" if spec.save_models else None
@@ -168,8 +166,11 @@ def train_sklearn_probe(
             }
             try:
                 metrics, fold_coef = _fit_one(
-                    X, targets, y_binned,
-                    train_idx, val_idx,
+                    X,
+                    targets,
+                    y_binned,
+                    train_idx,
+                    val_idx,
                     spec=spec,
                     layer=layer,
                     intermediate=intermediate,
@@ -180,19 +181,18 @@ def train_sklearn_probe(
                 row.update(metrics)
                 if fold_coef is not None and spec.kind == "logreg":
                     coef_buckets.setdefault(
-                        (layer, intermediate), [],
+                        (layer, intermediate),
+                        [],
                     ).append(fold_coef)
             except Exception as exc:  # noqa: BLE001 — per-probe isolation
                 msg = f"{type(exc).__name__}: {exc}"
                 print(
-                    f"  [error] L{layer}/{intermediate}/{spec.kind}/"
-                    f"{fold_label}: {msg}",
+                    f"  [error] L{layer}/{intermediate}/{spec.kind}/{fold_label}: {msg}",
                 )
                 row["error"] = msg
             rows.append(row)
             print(
-                f"  [done]  L{layer}/{intermediate}/{spec.kind}/"
-                f"{fold_label}",
+                f"  [done]  L{layer}/{intermediate}/{spec.kind}/{fold_label}",
             )
 
     multi_fold = len(folds) > 1
@@ -205,7 +205,10 @@ def train_sklearn_probe(
         multi_fold=multi_fold,
     )
     _write_summary(
-        output_dir, spec=spec, rows=rows, multi_fold=multi_fold,
+        output_dir,
+        spec=spec,
+        rows=rows,
+        multi_fold=multi_fold,
     )
     return output_dir
 
@@ -219,10 +222,17 @@ def train_sklearn_probe(
 # regression metrics and vice versa.
 _FIXED_COLUMNS: tuple[str, ...] = ("layer", "intermediate", "probe_kind", "fold")
 _CANONICAL_METRIC_ORDER: tuple[str, ...] = (
-    "val_accuracy", "val_f1_weighted", "val_auc",
-    "val_r2", "val_mse", "val_mae", "train_r2",
-    "val_pearson", "train_pearson",
-    "val_spearman", "train_spearman",
+    "val_accuracy",
+    "val_f1_weighted",
+    "val_auc",
+    "val_r2",
+    "val_mse",
+    "val_mae",
+    "train_r2",
+    "val_pearson",
+    "train_pearson",
+    "val_spearman",
+    "train_spearman",
     "val_lab_distance",
 )
 
@@ -246,7 +256,9 @@ def _write_probe_results(
     values.
     """
     populated = {
-        k for r in rows for k, v in r.items()
+        k
+        for r in rows
+        for k, v in r.items()
         if k not in _FIXED_COLUMNS and k != "error" and pd.notna(v)
     }
     metric_columns = [m for m in _CANONICAL_METRIC_ORDER if m in populated]
@@ -257,13 +269,13 @@ def _write_probe_results(
     # probe and fold distinguishes the per-fold and summary rows), so
     # only `layer` and `intermediate` are eligible for dropping.
     drop_constant = {
-        col for col in ("layer", "intermediate")
-        if len({r.get(col) for r in rows}) <= 1
+        col for col in ("layer", "intermediate") if len({r.get(col) for r in rows}) <= 1
     }
     fixed_kept = tuple(c for c in _FIXED_COLUMNS if c not in drop_constant)
 
     columns = [
-        *fixed_kept, *metric_columns,
+        *fixed_kept,
+        *metric_columns,
         *(["error"] if saw_error else []),
     ]
 
@@ -288,10 +300,7 @@ def _write_probe_results(
                         summary_row[m] = float(np.mean(vals))
                     else:
                         # ddof=0 (population std), matches summary.json.
-                        summary_row[m] = (
-                            float(np.std(vals, ddof=0))
-                            if len(vals) > 1 else np.nan
-                        )
+                        summary_row[m] = float(np.std(vals, ddof=0)) if len(vals) > 1 else np.nan
                 out_rows.append(summary_row)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as handle:
@@ -312,11 +321,15 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
         return SVR(C=spec.C, kernel=spec.kernel), False
     if kind == "svc":
         return SVC(
-            C=spec.C, kernel=spec.kernel, class_weight=spec.class_weight,
+            C=spec.C,
+            kernel=spec.kernel,
+            class_weight=spec.class_weight,
         ), True
     if kind == "logreg":
         return LogisticRegression(
-            C=spec.C, max_iter=spec.logreg_max_iter, class_weight=spec.class_weight,
+            C=spec.C,
+            max_iter=spec.logreg_max_iter,
+            class_weight=spec.class_weight,
         ), True
     if kind in _MASSMEAN_KINDS:
         # Closed-form: handled separately in `_fit_one`.
@@ -388,8 +401,12 @@ def _fit_one(
             metrics["train_spearman"] = _safe_spearman(y_train, proj_train)
         if directions_dir is not None:
             _save_probe_direction(
-                directions_dir, layer, intermediate, spec.kind,
-                coef=direction, intercept=0.0,
+                directions_dir,
+                layer,
+                intermediate,
+                spec.name,
+                coef=direction,
+                intercept=0.0,
                 scaler_mean=scaler_mean,
                 scaler_scale=scaler_scale,
                 fold_label=fold_label,
@@ -441,16 +458,25 @@ def _fit_one(
         coef = getattr(estimator, "coef_", None)
         if coef is not None:
             # `coef` is in StandardScaler-transformed units, so it is the
-            # standardised β. Aggregation only makes sense for binary
-            # logreg (1-D coefficient vector); skip multi-class shapes.
+            # standardised β. Binary logreg aggregates the signed vector;
+            # multiclass collapses to per-feature max |β| over classes —
+            # the sign is class-relative there, so only the magnitude
+            # aggregates meaningfully across folds.
             coef_arr = np.asarray(coef)
-            if spec.kind == "logreg" and coef_arr.shape[0] == 1:
-                coef_for_aggregation = coef_arr.ravel()
+            if spec.kind == "logreg":
+                if coef_arr.ndim == 2 and coef_arr.shape[0] > 1:
+                    coef_for_aggregation = np.abs(coef_arr).max(axis=0)
+                else:
+                    coef_for_aggregation = coef_arr.ravel()
             if directions_dir is not None:
                 intercept = getattr(estimator, "intercept_", 0.0)
                 _save_probe_direction(
-                    directions_dir, layer, intermediate, spec.kind,
-                    coef=coef_arr, intercept=intercept,
+                    directions_dir,
+                    layer,
+                    intermediate,
+                    spec.name,
+                    coef=coef_arr,
+                    intercept=intercept,
                     scaler_mean=scaler_mean,
                     scaler_scale=scaler_scale,
                     fold_label=fold_label,
@@ -465,9 +491,7 @@ def _fit_one(
             {
                 "estimator": estimator,
                 "scaler_mean": np.asarray(scaler_mean),
-                "scaler_scale": (
-                    np.asarray(scaler_scale) if scaler_scale is not None else None
-                ),
+                "scaler_scale": (np.asarray(scaler_scale) if scaler_scale is not None else None),
             },
             models_dir / f"L{layer}_{intermediate}_{spec.kind}{suffix}.joblib",
         )
@@ -545,7 +569,8 @@ def _mass_mean_cov_direction(X_train: np.ndarray, y_train: np.ndarray) -> np.nda
         # raw delta so the caller's norm check reports NaN metrics cleanly.
         return delta
     centered = np.concatenate(
-        [X_high - mu_high, X_low - mu_low], axis=0,
+        [X_high - mu_high, X_low - mu_low],
+        axis=0,
     ).astype(np.float64)
     cov = centered.T @ centered / centered.shape[0]
     # Hermitian pseudo-inverse applied to delta via eigendecomposition —
@@ -573,7 +598,9 @@ def _safe_spearman(a: np.ndarray, b: np.ndarray) -> float:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         warnings.filterwarnings(
-            "ignore", message=".*constant.*", category=Warning,
+            "ignore",
+            message=".*constant.*",
+            category=Warning,
         )
         rho, _ = spearmanr(a, b)
     if rho is None or (isinstance(rho, float) and np.isnan(rho)):
@@ -585,7 +612,7 @@ def _save_probe_direction(
     directions_dir: Path,
     layer: int,
     intermediate: str,
-    kind: str,
+    probe_name: str,
     *,
     coef: np.ndarray,
     intercept: float | np.ndarray,
@@ -621,12 +648,7 @@ def _maybe_write_feature_importance(
     ran. With a single fold there's nothing to aggregate; the .npz in
     `directions/` already exposes the same coefficients.
     """
-    if (
-        spec.kind != "logreg"
-        or not spec.save_directions
-        or not multi_fold
-        or not coef_buckets
-    ):
+    if spec.kind != "logreg" or not spec.save_directions or not multi_fold or not coef_buckets:
         return
 
     rows: list[dict] = []
@@ -664,16 +686,23 @@ def _maybe_write_feature_importance(
     if not rows:
         return
     pd.DataFrame(rows).to_csv(
-        output_dir / "feature_importance.csv", index=False,
+        output_dir / "feature_importance.csv",
+        index=False,
     )
 
 
 _AGGREGATABLE_METRICS = (
-    "val_r2", "val_mse", "val_mae",
+    "val_r2",
+    "val_mse",
+    "val_mae",
     "train_r2",
-    "val_pearson", "train_pearson",
-    "val_spearman", "train_spearman",
-    "val_accuracy", "val_f1_weighted", "val_auc",
+    "val_pearson",
+    "train_pearson",
+    "val_spearman",
+    "train_spearman",
+    "val_accuracy",
+    "val_f1_weighted",
+    "val_auc",
     "val_lab_distance",
 )
 
@@ -705,9 +734,7 @@ def _write_summary(
             "distance": spec.distance,
         },
         "num_probes": len(rows),
-        "num_errors": sum(
-            1 for r in rows if isinstance(r.get("error"), str)
-        ),
+        "num_errors": sum(1 for r in rows if isinstance(r.get("error"), str)),
     }
     df = pd.DataFrame(rows)
 
@@ -741,7 +768,10 @@ def _write_summary(
     # Direction per metric: r2/spearman/accuracy/auc maximise; a distance metric
     # uses its own `higher_is_better` (LAB CIEDE2000 → minimise).
     best_metric_dirs: dict[str, bool] = {
-        "val_r2": True, "val_spearman": True, "val_accuracy": True, "val_auc": True,
+        "val_r2": True,
+        "val_spearman": True,
+        "val_accuracy": True,
+        "val_auc": True,
     }
     if dist is not None:
         best_metric_dirs[dist.metric_key] = dist.higher_is_better
@@ -751,10 +781,7 @@ def _write_summary(
         valid = df[df[metric].notna()]
         if valid.empty:
             continue
-        idx = (
-            valid[metric].idxmax() if higher_is_better
-            else valid[metric].idxmin()
-        )
+        idx = valid[metric].idxmax() if higher_is_better else valid[metric].idxmin()
         best = df.loc[idx]
         summary[f"best_{metric}"] = {
             "value": float(best[metric]),

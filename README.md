@@ -1,31 +1,29 @@
-# Orrery: Interactive Embedding Visualisation with SAE Interpretability
+# Embedding Orrery: Visual Exploration of Vector Spaces and SAE Features
 
 ![Status: Beta](https://img.shields.io/badge/status-beta-orange) ![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
 
-Orrery is an open-source vector visualisation platform with native Sparse Autoencoder (SAE) support, built for data exploration and interpretability research. The platform provides two end-to-end pipelines. The first turns any dataset into an explorable 3D constellation by embedding, projecting, clustering, auto-labelling the clusters, and (optionally) collecting SAE activations for the dataset.
+**Embedding Orrery** is an open-source platform for interactive 3D visualisation of embedding spaces, with native Sparse Autoencoder (SAE) support. Orrery turns any textual, image, or vector dataset into a 3D searcheable constellation with filtering and in-interface probe training. SAE feature spaces can be visualised as collections, with individual features inspection or injection into the model for causal steering.
 
-The second visualises SAE decoder vectors as constellation points in a 3 dimensional space. The constellation can be explored visually, via texual and semantic search, or highlighting points activated by a prompt. Interesting feature-point can be diretly examined in a Neuronpedia-inspired dashboard and used directly to steer the model.
+**[Try the live demo on Hugging Face Spaces](https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo)** — read-only, with a guided tour and preset views. No install needed.
 
-The application runs at 60 FPS with 250k points — animations and nebula mode included — on 8 GB of VRAM.
+> **Beta.** The platform is functional and under active development, and accompanies our EMNLP 2026 system-demonstration submission. If you try it or find bugs, please get in touch, early feedback is very welcome.
 
-> **Beta.** The platform is functional and under active development, and is being prepared as an EMNLP demo submission. If you try it or find bugs, please get in touch — early feedback is very welcome.
+![Orrery displaying nebula mode on the WordNet dataset (212k senses), with semantic search results for "geometry" highlighted in the plot and listed in the Similar Items table](gallery/dimensionality.png)
 
-![WordNet 212k](gallery/geometry.png)
+*WordNet (212k senses) in nebula mode: points are glosses, colours are topics, semantic-search results for "geometry" are highlighted.*
 
 ## Gallery
 
-
-
 | | |
 |---|---|
-| ![Meditation](gallery/meditation.png) | ![HarmBench](gallery/harmbench.png) |
-| WordNet (212k senses) with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
-| ![XKCD Colors](gallery/Gemini_XKCD_PCA.png) | ![Concreteness](gallery/concreteness.jpg) |
-| XKCD colour words coloured by their actual hex value — embedding space mirrors perceptual colour space | Word norms coloured by concreteness rating — a psycholinguistic dimension as a spatial gradient |
+| ![EMNLP abstracts with density contours and analytics panel](gallery/EMNLP.png) | ![Lacan corpus semantic search](gallery/Lacan1.png) |
+| EMNLP abstracts 2014–2025: topic-coloured density contours in 2D with the analytics panel | Lacan corpus (153k sentences): cross-lingual semantic search |
+| ![Gemma Scope SAE feature space as a galaxy](gallery/sae_galaxy.png) | ![Concreteness norms](gallery/concreteness_minilm.png) |
+| Gemma Scope 2 SAE as a galaxy of its feature-label embeddings — right-click a feature to open its dashboard | Concreteness norms as a diverging colour scale — a psycholinguistic dimension as a spatial gradient |
 
-![SAE Feature Explorer with steered chat](gallery/poetry.jpg)
+![SAE Feature Explorer with steered chat](gallery/poetry_steering.png)
 
-*Find a feature in the scatterplot, inspect it, steer the model: with the "poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite job?" in verse.*
+*SAE feature inspection and steering chat interface.*
 
 ## Quick Start
 
@@ -53,25 +51,34 @@ ORRERY_IMAGE_NAMESPACE=<dockerhub-user-or-org> \
 docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d
 ```
 
-Docker support is still being validated across machines — prefer the manual install if you hit trouble. See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
+See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
 
-![The corpus pipeline](gallery/pipeline.png)
+![The collection pipeline](gallery/pipeline_2.png)
 
-*The corpus pipeline: from raw dataset (or pre-computed vectors) to a labelled, SAE-annotated constellation.*
+*The collection pipeline: from raw dataset (or pre-computed vectors) to an explorable, SAE-annotated constellation. Every step can be configured and executed visually from the Collections page.*
 
-**Embedding Visualisation** — Embed from the HuggingFace Hub, local files (CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL 2D/3D scatter plots. Eight providers: SentenceTransformers (local, default), Gemini, OpenAI, Cohere, Ollama, QWEN, BGE, and the HuggingFace API. One dataset can carry multiple embeddings (different models or prompts) without duplication.
+**Embedding Visualisation** — Embed from the HuggingFace Hub, local files (CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL 2D/3D scatter plots. Eight providers: SentenceTransformers (local, default), Gemini, OpenAI, Cohere, Ollama, QWEN, BGE, and the HuggingFace API. One dataset can carry multiple embeddings (different models, prompts, or column combinations) without duplication. Tested up to 500k points on 8 GB of RAM ([benchmarks](benchmarks/fps/)).
 
-**Topic Extraction** — A BERTopic-style pipeline: HDBSCAN clustering (also K-means, GMM, spectral) with c-TF-IDF keywords and optional LLM labels (Gemini/OpenAI). Hierarchical reduction preserves subtopics with nested colouring.
+**Topic Extraction** — A BERTopic-style pipeline: HDBSCAN clustering (also K-means, GMM, spectral) on projected or original vectors, with c-TF-IDF keywords and optional LLM labels (Gemini/OpenAI). With BERTopic's defaults, topic assignments are identical (ARI = 1.0). Hierarchical reduction preserves subtopics with nested colouring.
 
-**SAE Feature Analysis** — Live inference on Gemma 3 with from-scratch JumpReLU/TopK SAE implementations. Capture per-token activations, highlight activated features on the scatter plot, apply additive steering, and chat with the steered model. Visualise the SAE feature space itself as a 3D plot — right-click any feature to inspect it and steer.
+**Four Search Modes** — (i) *semantic* search over the original embedding space, also triggered by clicking any point; (ii) *text* search (exact, partial, or BM25, with column selection); (iii) *SAE feature search*: type "poetry" and Orrery matches SAE features by label and ranks documents by activation strength — search grounded in the model's internal representations rather than lexical or vector similarity; (iv) *prompt highlighting* on SAE collections: run a prompt through the model and every activated feature lights up, ranked and coloured by activation strength. Results render as a highlighted constellation centred on the first match.
 
-**Feature-Grounded Search** — Link a dataset to an SAE, compute per-document activations, then search by feature label: type "poetry" and Orrery matches SAE features by description and ranks documents by activation strength. Search grounded in the model's internal representations rather than lexical or vector similarity.
+**SAE Feature Analysis** — Live inference on two model families: Gemma 3 (Gemma Scope 2, with Neuronpedia labels) and Qwen (Qwen-Scope, label-free), with from-scratch JumpReLU/TopK SAE implementations in plain PyTorch. Capture per-token activations, apply additive steering (ActAdd), and chat with the steered model side-by-side against the baseline. Visualise the SAE feature space itself as a galaxy — right-click any feature to inspect and steer.
 
-**Analytical Colouring** — Colour by any metadata field with categorical, sequential, diverging, and monochrome scales, including 60+ Crameri perceptually-uniform scientific colormaps. Makes linear-direction analyses (concreteness, valence, colour) directly visible.
+**Probing** — Train probes directly in the interface on the stored embeddings: any metadata field serves as target, fitted with mass-mean, ridge, logistic regression, SVR, or a small MLP. Linear probes double as directions — the learned vector is stored with the collection, and points can be coloured by their projection onto it.
 
-**Search & Filtering** — Cosine similarity search (including click-a-point to find neighbours), server-side text search across chosen columns, and SAE feature search, all with topic and temporal scoping. Draggable temporal range picker for diachronic analysis. Glow-effect highlighting on the plot.
+**Density & Analytics** — 2D density contours coloured by category (ported from Embedding Atlas), an analytics panel with topic distribution and category filtering, and a draggable temporal histogram for diachronic analysis.
+
+**Analytical Colouring** — Colour by any metadata field with categorical, sequential, diverging, and monochrome scales, including 60+ Crameri perceptually-uniform scientific colormaps. Numeric legends are interactive histograms with draggable handles, so a scale skewed by outliers is re-anchored in seconds.
+
+## Case Studies
+
+Two replication studies validate the platform end-to-end (see the paper for full protocols):
+
+- **Psycholinguistic norms are linear directions** — Concreteness (40k words) and the nine Glasgow norms are visually separable in projection and linearly recoverable by probes trained in the interface (ridge R² up to 0.85 on EmbeddingGemma). Details in [`documentation/GLASGOW_PSYCHOLINGUISTIC_PROBING.md`](documentation/GLASGOW_PSYCHOLINGUISTIC_PROBING.md).
+- **Refusal is a single vector away** — Replicating Arditi et al. (2024) on Gemma-3-4b-it with the steering backend: a single difference-in-means vector at one layer suppresses refusal (ASR 0.11 → 0.83 on JailbreakBench) or induces it on 100/100 benign prompts.
 
 ## Architecture
 
@@ -90,9 +97,9 @@ Data Sources --> Embedding Providers --> DuckDB (docs, metadata, projections, to
 
 ## Pages
 
-- **`/`** — Visualisation dashboard (2D/3D scatter, semantic/text search, topics, temporal filtering, analytical colouring)
+- **`/`** — Visualisation dashboard (2D/3D scatter, semantic/text search, topics, density contours, temporal filtering, analytical colouring)
 - **`/sae`** — SAE Feature Explorer (activation heatmaps, logit charts, prompt explorer, steering chat)
-- **`/collections`** — Dataset management (embed, manage collections, extract topics, configure SAE links)
+- **`/collections`** — Dataset management (embed, manage collections, extract topics, train probes, configure SAE links)
 
 ## Environment Variables
 
@@ -112,12 +119,27 @@ The pages below are also published as a documentation website built from [`docs/
 
 - [`documentation/DATABASE_ARCHITECTURE.md`](documentation/DATABASE_ARCHITECTURE.md) — DuckDB/ChromaDB schema and data flow
 - [`documentation/DOCKER.md`](documentation/DOCKER.md) — Docker images, gateway, releases, and SAE cache profile
+- [`documentation/HF_SPACE_DEMO.md`](documentation/HF_SPACE_DEMO.md) — the read-only Hugging Face Space demo and onboarding tour
 - [`documentation/SEED_SNAPSHOTS.md`](documentation/SEED_SNAPSHOTS.md) — config-driven seed generation and private Dataset publication
 - [`documentation/SAE_ARCHITECTURE.md`](documentation/SAE_ARCHITECTURE.md) — SAE storage, ingestion, GraphQL API
 - [`documentation/SAE_PIPELINE.md`](documentation/SAE_PIPELINE.md) — Neuronpedia download-to-ingestion pipeline
 - [`documentation/INTERPRET_API.md`](documentation/INTERPRET_API.md) — SAE inference, steering, streaming
+- [`documentation/TOPIC_QUALITY_METRICS.md`](documentation/TOPIC_QUALITY_METRICS.md) — DBCV, silhouette, diversity, and coherence evaluation
+- [`documentation/PROJECTION_FIDELITY.md`](documentation/PROJECTION_FIDELITY.md) — Mantel-test scoring of projection quality
 - [`documentation/LABEL_PLACEMENT_GUIDE.md`](documentation/LABEL_PLACEMENT_GUIDE.md) — 3D label collision avoidance
 - [`documentation/NEBULA_CLUSTER_EFFECTS.md`](documentation/NEBULA_CLUSTER_EFFECTS.md) — Cluster haze rendering
+
+## Citation
+
+```bibtex
+@misc{deluca2026orrery,
+  title  = {Embedding Orrery: Visual Exploration of Vector Spaces and Sparse Autoencoder Features},
+  author = {De Luca, Giacomo},
+  year   = {2026},
+  note   = {EMNLP 2026 system demonstration, under review},
+  url    = {https://github.com/Giacomo-De-Luca/embedding-orrery}
+}
+```
 
 ## License
 

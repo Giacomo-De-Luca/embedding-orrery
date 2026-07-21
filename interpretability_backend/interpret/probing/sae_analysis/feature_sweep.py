@@ -28,11 +28,10 @@ from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.sae_analysis import (
     FeatureSweepConfig,
 )
+from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
-
-_SAE_INTERMEDIATE = "sae_feat"
 
 
 def run_feature_sweep(
@@ -118,7 +117,7 @@ def _run_per_layer(
     kept_by_layer = sae_dataset.metadata.get("kept_by_layer", {})
     result: dict[str | int, dict] = {}
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
-        if intermediate != _SAE_INTERMEDIATE:
+        if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
         feat = feat_tensor.numpy()
@@ -130,6 +129,7 @@ def _run_per_layer(
             ranking=config.ranking,
             directions_dir=directions_dir,
             layer=layer,
+            intermediate=intermediate,
             source_probe=config.source_probe,
         )
         if ranking_scores is None:
@@ -179,7 +179,7 @@ def _run_pooled(
     labels_per_layer: dict[int, dict[int, str]] = {}
 
     for layer, intermediate in sorted(sae_dataset.layer_intermediate_keys()):
-        if intermediate != _SAE_INTERMEDIATE:
+        if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
         feat = feat_tensor.numpy()
@@ -189,14 +189,13 @@ def _run_pooled(
         kept_of_pool.extend(kept.tolist())
         layers_in_pool.append(layer)
         labels_per_layer[layer] = load_feature_labels(
-            config.sae_vectors_dir, layer, width,
+            config.sae_vectors_dir,
+            layer,
+            width,
         )
         if config.ranking == "lasso":
             assert directions_dir is not None
-            npz_path = (
-                directions_dir
-                / f"L{layer}_{_SAE_INTERMEDIATE}_{config.source_probe}.npz"
-            )
+            npz_path = directions_dir / f"L{layer}_{intermediate}_{config.source_probe}.npz"
             if not npz_path.exists():
                 print(
                     f"  feature_sweep[pooled] layer {layer}: no lasso "
@@ -224,10 +223,7 @@ def _run_pooled(
         ranking_scores = np.concatenate(coef_of_pool)
     else:
         # Correlation-based ranking computed over the pooled feature matrix.
-        ranking_fn = (
-            _pearson_per_feature if config.ranking == "pearson"
-            else _spearman_per_feature
-        )
+        ranking_fn = _pearson_per_feature if config.ranking == "pearson" else _spearman_per_feature
         ranking_scores = ranking_fn(feat_pool, target_values)
 
     order = np.argsort(np.abs(ranking_scores))[::-1]
@@ -286,7 +282,9 @@ def _kfold_sweep(
         top_idx = order[:k]
         X_k = feat[:, top_idx]
         r2_mean, r2_std, spear_mean = _kfold_ols(
-            X_k, target_values, n_splits=n_splits,
+            X_k,
+            target_values,
+            n_splits=n_splits,
         )
         feat_indices = [int(kept[i]) for i in top_idx]
         if layer_of_pool is not None:
@@ -304,9 +302,7 @@ def _kfold_sweep(
                 "feature_indices": feat_indices,
                 "labels": [labels_per_kept(fi) for fi in feat_indices],
             }
-        row["ranking_scores"] = [
-            round(float(ranking_scores[i]), 6) for i in top_idx
-        ]
+        row["ranking_scores"] = [round(float(ranking_scores[i]), 6) for i in top_idx]
         row["val_r2_mean"] = round(float(r2_mean), 6)
         row["val_r2_std"] = round(float(r2_std), 6)
         row["val_spearman_mean"] = round(float(spear_mean), 6)
@@ -318,7 +314,8 @@ def _kfold_sweep(
 
 
 def _resolve_kept(
-    kept: list[int] | None, n_columns: int,
+    kept: list[int] | None,
+    n_columns: int,
 ) -> np.ndarray:
     if kept is None:
         return np.arange(n_columns, dtype=np.int64)
@@ -337,6 +334,7 @@ def _compute_ranking(
     ranking: str,
     directions_dir: Path | None,
     layer: int,
+    intermediate: str,
     source_probe: str,
 ) -> np.ndarray | None:
     """Per-feature score whose absolute value drives the top-K selection."""
@@ -346,10 +344,7 @@ def _compute_ranking(
         return _pearson_per_feature(feat, target_values)
     if ranking == "lasso":
         assert directions_dir is not None
-        npz_path = (
-            directions_dir
-            / f"L{layer}_{_SAE_INTERMEDIATE}_{source_probe}.npz"
-        )
+        npz_path = directions_dir / f"L{layer}_{intermediate}_{source_probe}.npz"
         if not npz_path.exists():
             return None
         coef = np.load(str(npz_path))["coef"].reshape(-1)
@@ -365,7 +360,8 @@ def _compute_ranking(
 
 
 def _spearman_per_feature(
-    feat: np.ndarray, target_values: np.ndarray,
+    feat: np.ndarray,
+    target_values: np.ndarray,
 ) -> np.ndarray:
     n_features = feat.shape[1]
     out = np.zeros(n_features, dtype=np.float64)
@@ -382,7 +378,8 @@ def _spearman_per_feature(
 
 
 def _pearson_per_feature(
-    feat: np.ndarray, target_values: np.ndarray,
+    feat: np.ndarray,
+    target_values: np.ndarray,
 ) -> np.ndarray:
     """Vectorised Pearson r between each feature column and the target."""
     y = np.asarray(target_values, dtype=np.float64)
@@ -404,7 +401,10 @@ def _pearson_per_feature(
 
 
 def _kfold_ols(
-    X: np.ndarray, y: np.ndarray, *, n_splits: int,
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    n_splits: int,
 ) -> tuple[float, float, float]:
     """K-fold CV with plain OLS; returns (mean R², std R², mean Spearman)."""
     n = X.shape[0]
@@ -444,7 +444,9 @@ def _r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def _plot_r2_vs_k(
-    result: dict[str | int, dict], target_name: str, output_path: Path,
+    result: dict[str | int, dict],
+    target_name: str,
+    output_path: Path,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7, 5))
     for key in sorted(result, key=str):
@@ -453,7 +455,11 @@ def _plot_r2_vs_k(
         means = [r["val_r2_mean"] for r in rows]
         stds = [r["val_r2_std"] for r in rows]
         ax.errorbar(
-            ks, means, yerr=stds, marker="o", capsize=3,
+            ks,
+            means,
+            yerr=stds,
+            marker="o",
+            capsize=3,
             label=_legend_label(key),
         )
     ranking = next(iter(result.values()))["ranking"]
@@ -478,8 +484,7 @@ def _print_summary(result: dict[str | int, dict], target_name: str) -> None:
         if not rows:
             continue
         line = "  ".join(
-            f"K={r['k']}: R²={r['val_r2_mean']:+.3f}±{r['val_r2_std']:.3f}"
-            for r in rows
+            f"K={r['k']}: R²={r['val_r2_mean']:+.3f}±{r['val_r2_std']:.3f}" for r in rows
         )
         print(f"  {_legend_label(key)}: {line}")
 

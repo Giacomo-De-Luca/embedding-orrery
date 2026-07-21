@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/lib/utils/theme-provider';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { Toaster } from '@/lib/ui-primitives/sonner';
 import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 
 /** Applies persisted visualization preferences after hydration (the store uses
  *  skipHydration so server HTML and first client render agree on defaults). */
@@ -19,7 +20,14 @@ function StoreHydrator() {
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ApolloProvider client={apolloClient}>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      {/* Demo builds open in dark mode (the visualization's showcase look);
+          the header toggle still works and the choice persists per browser. */}
+      <ThemeProvider
+        attribute="class"
+        defaultTheme={IS_DEMO ? 'dark' : 'system'}
+        enableSystem
+        disableTransitionOnChange
+      >
         <StoreHydrator />
         {children}
         {/* Inside ThemeProvider: the sonner wrapper reads useTheme() */}

@@ -271,6 +271,19 @@
     color: #f1f5f9;
   }
 
+  /* Tour variant: react-joyride's floater wrapper (Floating-UI transform +
+     animated opacity) breaks backdrop-filter sampling in Chromium, so the
+     near-transparent frosted background would read as plain transparency.
+     Carry the surface in the background itself; blur stays as enhancement. */
+  .tour-tooltip {
+    background: rgba(255, 247, 235, 0.88);
+  }
+
+  .dark .tour-tooltip {
+    background: rgba(23, 27, 37, 0.85);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
+
 /* ── Chat animations ─────────────────────────────────────────────── */
 
 @keyframes fade-up {

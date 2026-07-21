@@ -16,6 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+# Hidden-layer nonlinearities the MLP trainer supports. Mirrored (torch-free)
+# in backend/services/probing_types.py for GraphQL input validation.
+MLP_ACTIVATIONS = ("relu", "gelu", "tanh", "silu")
+
 
 @dataclass
 class MLPProbeSpec:
@@ -26,6 +30,7 @@ class MLPProbeSpec:
 
     hidden_dims: list[int] = field(default_factory=lambda: [512])
     dropout: float = 0.1
+    activation: str = "relu"  # hidden-layer nonlinearity; one of MLP_ACTIVATIONS
     epochs: int = 100
     patience: int = 10
     learning_rate: float = 1e-3
@@ -66,19 +71,20 @@ class MLPProbeSpec:
             raise ValueError(f"MLPProbeSpec.type must be 'mlp', got {self.type!r}")
         if self.n_folds is not None and self.n_folds < 2:
             raise ValueError(
-                f"MLPProbeSpec.n_folds must be >= 2 or None; got "
-                f"{self.n_folds!r}",
+                f"MLPProbeSpec.n_folds must be >= 2 or None; got {self.n_folds!r}",
             )
         if not (0.0 <= self.dev_split < 1.0):
             raise ValueError(
-                f"MLPProbeSpec.dev_split must be in [0, 1); got "
-                f"{self.dev_split!r}",
+                f"MLPProbeSpec.dev_split must be in [0, 1); got {self.dev_split!r}",
+            )
+        if self.activation not in MLP_ACTIVATIONS:
+            raise ValueError(
+                f"MLPProbeSpec.activation must be one of {MLP_ACTIVATIONS}; "
+                f"got {self.activation!r}",
             )
 
 
-SklearnKind = Literal[
-    "ridge", "lasso", "svr", "svc", "logreg", "massmean", "massmean_cov"
-]
+SklearnKind = Literal["ridge", "lasso", "svr", "svc", "logreg", "massmean", "massmean_cov"]
 
 
 @dataclass
@@ -102,7 +108,7 @@ class SklearnProbeSpec:
     # save_directions (SVR/SVC have no coef_ to save). Mirrors MLP checkpoints.
     # No-op for massmean (closed-form; there is no estimator to save).
     save_models: bool = False
-    center_only: bool = False       # if True, StandardScaler(with_std=False)
+    center_only: bool = False  # if True, StandardScaler(with_std=False)
     # When False, skip StandardScaler entirely. The fitted coef_ is then
     # in the feature's native units rather than per-feature z-scores —
     # useful when downstream consumers want raw-scale β (e.g. comparing
@@ -145,8 +151,7 @@ class SklearnProbeSpec:
             self.name = self.kind
         if self.n_folds is not None and self.n_folds < 2:
             raise ValueError(
-                f"SklearnProbeSpec.n_folds must be >= 2 or None; got "
-                f"{self.n_folds!r}",
+                f"SklearnProbeSpec.n_folds must be >= 2 or None; got {self.n_folds!r}",
             )
 
 

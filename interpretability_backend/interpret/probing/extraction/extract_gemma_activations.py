@@ -61,9 +61,7 @@ def extract_gemma_activations(
     layers_set = set(config.layers)
     intermediates_set = set(config.intermediates)
     act_accum: dict[tuple[int, str], list[torch.Tensor]] = {
-        (layer, inter): []
-        for layer in config.layers
-        for inter in config.intermediates
+        (layer, inter): [] for layer in config.layers for inter in config.intermediates
     }
 
     try:
@@ -101,15 +99,15 @@ def extract_gemma_activations(
                             f"Cache keys: {list(phase_cache.keys())}",
                         )
                     reduced = _reduce_sequence(
-                        act, config.token_position, token_index=token_index,
+                        act,
+                        config.token_position,
+                        token_index=token_index,
                     )
                     act_accum[(layer, inter)].append(reduced.float())
     finally:
         model.clear_cache()
 
-    activations = {
-        key: torch.stack(tensors) for key, tensors in act_accum.items()
-    }
+    activations = {key: torch.stack(tensors) for key, tensors in act_accum.items()}
     metadata = _build_metadata(config, n=len(samples))
     return ActivationDataset(
         activations=activations,
@@ -127,8 +125,7 @@ def extract_gemma_activations_from_dataframe(
     """Image / multimodal mode: iterate DataFrame rows, use `image_column`."""
     if config.image_column is None:
         raise ValueError(
-            "image_column is not set — use extract_gemma_activations "
-            "for text mode.",
+            "image_column is not set — use extract_gemma_activations for text mode.",
         )
     if len(manifest_df) == 0:
         raise ValueError("manifest_df is empty.")
@@ -136,9 +133,7 @@ def extract_gemma_activations_from_dataframe(
     layers_set = set(config.layers)
     intermediates_set = set(config.intermediates)
     act_accum: dict[tuple[int, str], list[torch.Tensor]] = {
-        (layer, inter): []
-        for layer in config.layers
-        for inter in config.intermediates
+        (layer, inter): [] for layer in config.layers for inter in config.intermediates
     }
     sample_ids: list[str] = []
 
@@ -176,15 +171,15 @@ def extract_gemma_activations_from_dataframe(
                             f"Cache keys: {list(phase_cache.keys())}",
                         )
                     reduced = _reduce_sequence(
-                        act, config.token_position, token_index=None,
+                        act,
+                        config.token_position,
+                        token_index=None,
                     )
                     act_accum[(layer, inter)].append(reduced.float())
     finally:
         model.clear_cache()
 
-    activations = {
-        key: torch.stack(tensors) for key, tensors in act_accum.items()
-    }
+    activations = {key: torch.stack(tensors) for key, tensors in act_accum.items()}
     metadata = _build_metadata(config, n=len(sample_ids))
     return ActivationDataset(
         activations=activations,
@@ -231,7 +226,8 @@ def _reduce_sequence(
 
 
 def _resolve_image_path(
-    filename: str, image_dir: Path | None,
+    filename: str,
+    image_dir: Path | None,
 ) -> Path:
     """Resolve an image filename to an absolute path."""
     if image_dir is not None:

@@ -19,16 +19,18 @@ import { fileURLToPath } from 'node:url'
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = path.resolve(docsRoot, '..')
 
-const GITHUB_BLOB = 'https://github.com/Giacomo-De-Luca/orrery/blob/main'
+const GITHUB_BLOB = 'https://github.com/Giacomo-De-Luca/embedding-orrery/blob/main'
 
 // Curated public docs: repo-relative source -> docs-relative destination.
 const PAGES = {
   'documentation/DOCKER.md': 'content/docker.md',
   'documentation/DATABASE_ARCHITECTURE.md': 'content/architecture/database.md',
   'documentation/PROJECTION_FIDELITY.md': 'content/architecture/projection-fidelity.md',
+  'documentation/TOPIC_QUALITY_METRICS.md': 'content/architecture/topic-quality.md',
   'documentation/SAE_ARCHITECTURE.md': 'content/sae/architecture.md',
   'documentation/SAE_PIPELINE.md': 'content/sae/pipeline.md',
   'documentation/INTERPRET_API.md': 'content/sae/interpret-api.md',
+  'documentation/GLASGOW_PSYCHOLINGUISTIC_PROBING.md': 'content/case-studies/glasgow-probing.md',
   'documentation/LABEL_PLACEMENT_GUIDE.md': 'content/visualization/label-placement.md',
   'documentation/NEBULA_CLUSTER_EFFECTS.md': 'content/visualization/nebula-effects.md'
 }

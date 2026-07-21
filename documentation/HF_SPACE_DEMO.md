@@ -237,16 +237,25 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    header `?` button. Opening it fires a one-shot warm-up query so the
    emotion search model cold-starts before the tour reaches the search step.
 3. **Spotlight tour** (react-joyride v3, `?tour=1` in any build — the welcome
-   dialog auto-offers it in demo builds). Five steps defined as data in
+   dialog auto-offers it in demo builds). Six steps defined as data in
    `lib/utils/tourSteps.ts`, rendered by `app/components/TourController.tsx`
-   (dynamically imported, so normal visits don't load the library). Steps
-   prepare state programmatically (apply the emotion preset, run a semantic
-   search, open the Analytics panel) and narrate the outcome — the user is
-   never asked to operate controls. Targets are `data-tour` attributes in
-   `AppHeader`/`DashboardPanel`. The search step only ever queries the
-   emotion collection. Completion/dismissal is recorded under
-   `orrery.demo-tour.v1`; on viewports below 768 px the tour downgrades to
-   the dialog.
+   (dynamically imported, so normal visits don't load the library) with a
+   custom frosted-glass tooltip reusing the plot hover tooltip's
+   `.frosted-tooltip` surface. The tour runs on the **EMNLP collection**
+   (`TOUR_PRESET_ID = 'emnlp-topics'`, applied when the tour starts): steps
+   prepare state programmatically (apply the preset, run a semantic search,
+   open the Analytics panel) and narrate the outcome — the user is never
+   asked to operate controls. The analytics step demonstrates filtering by
+   isolating one topic cluster (cleared again on tour end), and the finale
+   switches collections to the xkcd colour manifold as the "collections are
+   spaces" payoff. The search step queries ONLY the tour
+   collection — a deliberate cost of one Gemini embed call per tour run,
+   hard-guarded in `tourSteps.ts` so no other collection is auto-queried.
+   Targets are `data-tour` attributes in `AppHeader`/`DashboardPanel`.
+   Completion/dismissal is recorded under `orrery.demo-tour.v1`; on
+   viewports below 768 px the tour downgrades to the dialog. Demo builds
+   also default to **dark mode** (`providers.tsx`) and label search results
+   out of the box (`showLabels` store default).
 
 Two supporting mechanisms:
 

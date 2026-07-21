@@ -9,15 +9,19 @@ selection read the reporting split).
 
 import numpy as np
 import pandas as pd
-import torch
-
 import pytest
+import torch
+from torch import nn
 
 from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.probe import MLPProbeSpec
-from interpret.probing.probes.mlp_probe import _DEV_FLOOR, _split_train_dev, train_mlp_probes
+from interpret.probing.probes.mlp_probe import (
+    _DEV_FLOOR,
+    ProbeModel,
+    _split_train_dev,
+    train_mlp_probes,
+)
 from interpret.probing.utils.enums import TaskType
-
 
 # ------------------------------------------------------------------
 # _split_train_dev
@@ -52,6 +56,14 @@ class TestSplitTrainDev:
         assert int((y[dev_idx] == 1).sum()) == 4
         assert int((y[fit_idx] == 1).sum()) == 16
 
+    def test_stratified_cap_never_strands_a_class_in_dev(self):
+        # A 2-member class at dev_split=0.9 would round to 2 dev rows; the
+        # cap keeps one in fit (an absent class breaks balanced CE weights).
+        y = np.array([0] * 98 + [1] * 2)
+        fit_idx, dev_idx = _split_train_dev(100, 0.9, seed=7, stratify_y=y)
+        assert int((y[fit_idx] == 1).sum()) >= 1
+        assert int((y[dev_idx] == 1).sum()) <= 1
+
     def test_deterministic_per_seed(self):
         a_fit, a_dev = _split_train_dev(100, 0.2, seed=7)
         b_fit, b_dev = _split_train_dev(100, 0.2, seed=7)
@@ -74,6 +86,30 @@ class TestDevSplitSpec:
             MLPProbeSpec(dev_split=1.0)
         with pytest.raises(ValueError, match="dev_split"):
             MLPProbeSpec(dev_split=-0.1)
+
+
+# ------------------------------------------------------------------
+# Activation function
+# ------------------------------------------------------------------
+
+
+class TestActivation:
+    def test_probe_model_uses_selected_activation(self):
+        model = ProbeModel(input_dim=4, output_dim=1, hidden_dims=[8], activation="tanh")
+        assert any(isinstance(m, nn.Tanh) for m in model.net)
+        assert not any(isinstance(m, nn.ReLU) for m in model.net)
+        # Default stays relu (old checkpoints keep loading unchanged).
+        assert any(isinstance(m, nn.ReLU) for m in ProbeModel(4, 1, [8]).net)
+
+    def test_unknown_activation_raises(self):
+        with pytest.raises(ValueError, match="activation"):
+            MLPProbeSpec(activation="swish")
+        with pytest.raises(ValueError, match="activation"):
+            ProbeModel(4, 1, [8], activation="swish")
+
+    def test_trainer_threads_activation(self, tmp_path):
+        row = _run(tmp_path, MLPProbeSpec(hidden_dims=[16], epochs=20, seed=7, activation="gelu"))
+        assert np.isfinite(row["val_r2"])
 
 
 # ------------------------------------------------------------------

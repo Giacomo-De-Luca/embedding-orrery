@@ -1,47 +1,53 @@
 {/* Keep the feature blurbs and captions in sync with the root README.md */}
 
-# Orrery
+# Embedding Orrery
 
-**Interactive embedding visualisation with SAE interpretability.**
+**Visual exploration of vector spaces and SAE features.**
 
-Orrery is an open-source vector visualisation platform with native Sparse
-Autoencoder (SAE) support, built for data exploration and interpretability
-research. It turns any dataset into an explorable 3D constellation — embed,
-project, cluster, auto-label — and lets you inspect and steer a live language
-model through the same interface.
+Embedding Orrery is an open-source platform for interactive 3D visualisation of
+embedding spaces, with native Sparse Autoencoder (SAE) support. Orrery turns
+any textual, image, or vector dataset into a 3D constellation searchable
+visually, semantically, lexically, or by SAE feature name, with filtering and
+in-interface probe training. SAE feature spaces themselves can be visualised as
+collections, and individual features inspected in a dashboard or injected into
+the model for causal steering.
 
-![WordNet, 212k senses](/gallery/geometry.png)
+**[Try the live demo on Hugging Face Spaces](https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo)** —
+read-only, with a guided tour and preset views. No install needed.
+
+![WordNet, 212k senses, with semantic search results for "geometry"](/gallery/geometry_ui.png)
 
 ## What it does
 
 **Embedding visualisation** — Embed from the HuggingFace Hub, local files
 (CSV/JSON/Parquet), images, or pre-computed vectors, then explore in WebGL
 2D/3D scatter plots. Eight embedding providers; one dataset can carry multiple
-embeddings without duplication. 60 FPS with 250k points on 8 GB of VRAM.
+embeddings without duplication. Tested up to 500k points on 8 GB of RAM.
 
 **Topic extraction** — A BERTopic-style pipeline: HDBSCAN clustering with
 c-TF-IDF keywords and optional LLM labels, plus hierarchical reduction with
 nested colouring.
 
-**SAE feature analysis** — Live inference on Gemma 3 with from-scratch
-JumpReLU/TopK SAE implementations. Capture per-token activations, highlight
-activated features on the scatter plot, apply additive steering, and chat with
-the steered model.
+**SAE feature analysis** — Live inference on Gemma 3 (Gemma Scope 2) and Qwen
+(Qwen-Scope) with from-scratch JumpReLU/TopK SAE implementations. Capture
+per-token activations, highlight activated features on the scatter plot, apply
+additive steering, and chat with the steered model.
 
-**Feature-grounded search** — Link a dataset to an SAE and search documents by
-feature label: type "poetry" and Orrery ranks documents by how strongly the
-matching SAE features fire on them.
+**Search and probing** — Semantic, text, and SAE-feature search: type "poetry"
+and Orrery ranks documents by how strongly the matching SAE features fire on
+them. Probes (mass-mean, ridge, SVR, MLP) train on any metadata field directly
+in the interface, and linear probes double as directions to colour the plot by.
 
 | | |
 |---|---|
-| ![WordNet semantic search for "meditation"](/gallery/meditation.png) | ![HarmBench dataset](/gallery/harmbench.png) |
-| WordNet (212k senses) with nebula cluster effects and semantic search | HarmBench with LLM-generated topic labels |
+| ![EMNLP abstracts with density contours and analytics panel](/gallery/EMNLP.png) | ![Lacan corpus semantic search](/gallery/Lacan1.png) |
+| EMNLP abstracts 2014–2025: category-coloured density contours with the analytics panel | Lacan corpus (153k sentences): cross-lingual semantic search |
 
-![SAE Feature Explorer with steered chat](/gallery/poetry.jpg)
+![SAE Feature Explorer with steered chat](/gallery/poetry_steering.png)
 
-*Find a feature in the scatter plot, inspect it, steer the model: with the
-"poetry" SAE feature injected, Gemma-3-4b-it answers "What is your favourite
-job?" in verse.*
+*Find a feature, inspect it, steer the model: with the "poetry" feature
+injected, Gemma-3-4b-it answers "What is your favourite job?" in verse, side by
+side with the baseline.*
 
 ## Where to start
 
@@ -50,5 +56,5 @@ job?" in verse.*
 - [Database Architecture](/architecture/database) — the DuckDB + ChromaDB design
 - [SAE & Interpretability](/sae/architecture) — feature storage, pipelines, live inference
 
-Source code on [GitHub](https://github.com/Giacomo-De-Luca/orrery), licensed
-Apache 2.0.
+Source code on [GitHub](https://github.com/Giacomo-De-Luca/embedding-orrery),
+licensed Apache 2.0.

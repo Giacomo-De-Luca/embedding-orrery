@@ -97,7 +97,10 @@ def _encode_and_filter(
     """
     sae = load_sae(
         SAEConfig(
-            layer_index=layer, width=width, device=device, dtype="float32",
+            layer_index=layer,
+            width=width,
+            device=device,
+            dtype="float32",
         ),
     )
     x = residual.to(device=device, dtype=torch.float32)

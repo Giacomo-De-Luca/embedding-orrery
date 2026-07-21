@@ -29,8 +29,7 @@ class CorrelationMapConfig:
     def __post_init__(self) -> None:
         if self.type != "correlation_map":
             raise ValueError(
-                f"CorrelationMapConfig.type must be 'correlation_map', "
-                f"got {self.type!r}",
+                f"CorrelationMapConfig.type must be 'correlation_map', got {self.type!r}",
             )
 
 
@@ -49,8 +48,7 @@ class TopFeaturesConfig:
     def __post_init__(self) -> None:
         if self.type != "top_features":
             raise ValueError(
-                f"TopFeaturesConfig.type must be 'top_features', "
-                f"got {self.type!r}",
+                f"TopFeaturesConfig.type must be 'top_features', got {self.type!r}",
             )
 
 
@@ -94,8 +92,7 @@ class FeatureSweepConfig:
     def __post_init__(self) -> None:
         if self.type != "feature_sweep":
             raise ValueError(
-                f"FeatureSweepConfig.type must be 'feature_sweep', "
-                f"got {self.type!r}",
+                f"FeatureSweepConfig.type must be 'feature_sweep', got {self.type!r}",
             )
         if self.ranking not in ("pearson", "rho", "lasso"):
             raise ValueError(
@@ -109,8 +106,7 @@ class FeatureSweepConfig:
             )
         if self.n_splits < 2:
             raise ValueError(
-                f"FeatureSweepConfig.n_splits must be >= 2, "
-                f"got {self.n_splits}",
+                f"FeatureSweepConfig.n_splits must be >= 2, got {self.n_splits}",
             )
 
 
@@ -136,8 +132,7 @@ class LassoAlphaSweepConfig:
     def __post_init__(self) -> None:
         if self.type != "lasso_alpha_sweep":
             raise ValueError(
-                f"LassoAlphaSweepConfig.type must be 'lasso_alpha_sweep', "
-                f"got {self.type!r}",
+                f"LassoAlphaSweepConfig.type must be 'lasso_alpha_sweep', got {self.type!r}",
             )
         if not self.alphas or any(a <= 0 for a in self.alphas):
             raise ValueError(
@@ -146,12 +141,10 @@ class LassoAlphaSweepConfig:
             )
         if self.n_splits < 2:
             raise ValueError(
-                f"LassoAlphaSweepConfig.n_splits must be >= 2, "
-                f"got {self.n_splits}",
+                f"LassoAlphaSweepConfig.n_splits must be >= 2, got {self.n_splits}",
             )
 
 
 SAEAnalysisConfig = (
-    CorrelationMapConfig | TopFeaturesConfig | FeatureSweepConfig
-    | LassoAlphaSweepConfig
+    CorrelationMapConfig | TopFeaturesConfig | FeatureSweepConfig | LassoAlphaSweepConfig
 )

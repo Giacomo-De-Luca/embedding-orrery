@@ -12,13 +12,13 @@ import pytest
 import torch
 
 from interpret.sae import HookType, QwenScopeSAEConfig
-from interpret.sae.source_ids import qwen_source_id
 from interpret.sae.loading import (
     _config_to_key,
     _load_qwen_scope_sae,
     clear_sae_cache,
     load_sae,
 )
+from interpret.sae.source_ids import qwen_source_id
 
 
 @pytest.fixture(autouse=True)

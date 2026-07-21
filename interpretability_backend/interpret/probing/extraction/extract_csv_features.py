@@ -39,8 +39,7 @@ def extract_csv_features(
     prompt_col = manifest.prompt_column
     if prompt_col not in df.columns:
         raise ValueError(
-            f"manifest.prompt_column={prompt_col!r} not in DataFrame "
-            f"columns {df.columns.tolist()}",
+            f"manifest.prompt_column={prompt_col!r} not in DataFrame columns {df.columns.tolist()}",
         )
 
     missing = [c for c in feature_columns if c not in df.columns]

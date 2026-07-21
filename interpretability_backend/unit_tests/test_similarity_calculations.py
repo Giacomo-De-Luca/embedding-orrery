@@ -5,7 +5,6 @@ These tests verify that distance-to-similarity conversions
 are mathematically correct for different metrics.
 """
 
-import pytest
 
 
 class TestDistanceToSimilarity:
@@ -48,7 +47,7 @@ class TestDistanceToSimilarity:
         prev_similarity = 1.0
         for d in distances:
             similarity = 1 / (1 + d)
-            assert 0 < similarity < prev_similarity, f"L2 similarity should decrease with distance"
+            assert 0 < similarity < prev_similarity, "L2 similarity should decrease with distance"
             prev_similarity = similarity
 
     def test_l2_similarity_always_positive(self):

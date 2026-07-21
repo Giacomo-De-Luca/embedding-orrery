@@ -815,6 +815,8 @@ class TrainProbeInput:
     epochs: int | None = None  # mlp
     hidden_dims: list[int] | None = None  # mlp
     patience: int | None = None  # mlp early-stopping patience (dev-set based)
+    dev_split: float | None = None  # mlp: train fraction held out for early stopping
+    activation: str | None = None  # mlp: relu | gelu | tanh | silu
     seed: int | None = None
     train_split: float | None = None
     max_train_samples: int | None = None

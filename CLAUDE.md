@@ -16,7 +16,7 @@
 
 - If you make a plan, always define and plan tests first, then run the code against those tests after. 
 
-- Never commit or stash changes without being directly asked or explicit approval.
+- Never commit or stash changes without being directly asked or explicit approval. Avoid putting Claude as co-author. 
 
 - For python, never import modules inside function unless strictly necessary. Use imports at the top. 
 

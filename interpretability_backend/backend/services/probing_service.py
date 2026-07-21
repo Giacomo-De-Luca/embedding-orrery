@@ -145,6 +145,8 @@ def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
             hidden_dims=list(config.hidden_dims) if config.hidden_dims else [256],
             epochs=config.epochs,
             patience=config.patience,
+            dev_split=config.dev_split,
+            activation=config.activation,
             seed=config.seed,
             train_split=config.train_split,
         )
@@ -248,6 +250,9 @@ def _score_mlp(X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec) -> np.n
         output_dim=1,
         hidden_dims=spec.hidden_dims,
         dropout=spec.dropout,
+        # Must match training: activation layers are parameterless, so a
+        # mismatched rebuild loads the checkpoint silently but scores wrong.
+        activation=spec.activation,
     )
     model.load_state_dict(state)
     model.eval()

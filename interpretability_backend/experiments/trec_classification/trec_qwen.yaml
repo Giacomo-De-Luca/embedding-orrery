@@ -1,0 +1,90 @@
+# TREC question-type probing over qwen-scope SAE features.
+#
+# Two-stage pipeline: one token-level residual pass over all 28 layers of
+# Qwen3-1.7B, then per-layer TopK SAE encoding pooled per question
+# (max over tokens / last token), probed with multiclass logreg + SVC.
+#
+# Run from interpretability_backend/ (CWD-relative resources/ paths):
+#   uv run python -m interpret.probing.orchestrator \
+#     experiments/trec_classification/trec_qwen.yaml
+#
+# Switching Qwen sizes (see QWEN_SCOPE_MODELS in interpret/sae/sae_config.py):
+#   1.7B -> 28 layers, width 32k     8B  -> 36 layers, width 64k
+#   2B   -> 24 layers, width 32k     27B -> 64 layers, width 80k
+# Edit: `checkpoint`, every `model_size`, the `layers` list, and `width`.
+# Rename the extractions (or the experiment) so caches don't collide.
+
+name: trec_qwen
+output_dir: resources/probing_results/trec_qwen
+automatic_visualisations: true
+
+manifest:
+  path: "interpret.probing.manifests.labeled_text:LabeledTextManifestBuilder"
+  kwargs:
+    path: resources/datasets/SAE/trec.tsv
+    text_column: text
+    target_columns: [coarse_label, fine_label]
+    dedupe: true
+    # StratifiedKFold(5) requires >= 5 members per class; the smallest
+    # fine_label class has 4. Applied to fine_label only.
+    min_class_count: {fine_label: 5}
+
+extractions:
+  - name: qwen_tokens
+    type: token_residuals
+    family: qwen
+    checkpoint: Qwen/Qwen3-1.7B
+    layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+             18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+    sites: [resid_post]
+    storage_dtype: bfloat16
+
+  # Raw-residual baseline (last token), same forward pass as the SAEs.
+  - name: qwen_res_last
+    type: residual_pooled
+    source_extraction: qwen_tokens
+    site: resid_post
+    pooling: last
+
+  - name: qwen_sae_max
+    type: sae_pooled
+    source_extraction: qwen_tokens
+    site: resid_post
+    pooling: max
+    model_size: "1.7B"
+    k: 50
+    width: 32k          # explicit: sae_analysis label lookup reads this
+    min_active_samples: 10
+    device: cuda        # mps for local runs
+
+  - name: qwen_sae_last
+    type: sae_pooled
+    source_extraction: qwen_tokens
+    site: resid_post
+    pooling: last
+    model_size: "1.7B"
+    k: 50
+    width: 32k
+    min_active_samples: 10
+    device: cuda
+
+  # All layers' max-pooled SAE features as one wide matrix; per-column
+  # names L{layer}_resid_post_f{true_idx} flow into feature_importance.csv.
+  - name: qwen_sae_concat
+    type: concat
+    source_extractions: [qwen_sae_max]
+
+targets:
+  - {source: labeled_text, column: coarse_label, task_type: classification, num_classes: 6}
+  - {source: labeled_text, column: fine_label,   task_type: classification, num_classes: 50}
+
+probes:
+  - {type: sklearn, kind: logreg, C: 1.0, class_weight: balanced, n_folds: 5,
+     save_directions: true, logreg_max_iter: 2000}
+  - {type: sklearn, kind: svc, C: 1.0, class_weight: balanced, n_folds: 5}
+
+sae_analysis:
+  # Qwen-scope is not on Neuronpedia -> labels come back blank (indices only)
+  # until the autointerp pass.
+  - {type: top_features, source_probe: logreg, top_k: 30}
+  - {type: correlation_map, top_k: 30}

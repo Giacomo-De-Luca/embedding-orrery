@@ -24,6 +24,10 @@ _PREDICTIVE_KINDS = ("ridge", "lasso", "mlp", "svr")
 # fitted on the train split): calibrated predictions -> residuals + R².
 _CALIBRATED_KINDS = ("massmean", "massmean_cov")
 
+# MLP hidden-layer nonlinearities — torch-free mirror of
+# interpret/probing/configs/probe.py::MLP_ACTIVATIONS (keep in sync).
+MLP_ACTIVATIONS = ("relu", "gelu", "tanh", "silu")
+
 
 @dataclass
 class ProbeConfig:
@@ -39,7 +43,10 @@ class ProbeConfig:
     hidden_dims: list[int] | None = None  # MLP only; None -> [256]
     epochs: int = 100
     patience: int = 10
-    seed: int = 42
+    # MLP: fraction of the train side held out for early stopping (0 disables).
+    dev_split: float = 0.2
+    activation: str = "relu"  # MLP hidden-layer nonlinearity (MLP_ACTIVATIONS)
+    seed: int = 7
     train_split: float = 0.8
     max_train_samples: int = 50_000
 

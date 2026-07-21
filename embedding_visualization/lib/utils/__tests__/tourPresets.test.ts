@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   TOUR_PRESETS,
   DEMO_DEFAULT_COLLECTION,
-  EMOTION_LABEL_FIELD,
+  TOUR_PRESET_ID,
+  TOUR_COLLECTION,
   getPreset,
   seedInitialColorState,
   resolveInitialCollection,
@@ -146,15 +147,33 @@ describe('presetStoreOps', () => {
     ]);
   });
 
-  it('emits no flag ops when a preset has none', () => {
+  it('xkcd preset explicitly turns nebula and cluster labels OFF', () => {
     const ops = presetStoreOps(getPreset('xkcd-manifold')!);
-    expect(ops.every((op) => op.kind !== 'flag')).toBe(true);
+    expect(ops).toContainEqual({ kind: 'flag', flag: 'nebulaMode', value: false });
+    expect(ops).toContainEqual({ kind: 'flag', flag: 'showClusterLabels', value: false });
+  });
+
+  it('emits no flag ops when a preset has none', () => {
+    const ops = presetStoreOps({
+      id: 'x',
+      collection: 'x',
+      label: 'x',
+      description: 'x',
+      method: 'pca',
+    });
+    expect(ops).toEqual([{ kind: 'method', value: 'pca' }]);
   });
 });
 
 describe('tour constants', () => {
-  it('demo default is emotion with its verified label field', () => {
+  it('demo default stays emotion; every preset colors by topics or manifold', () => {
     expect(DEMO_DEFAULT_COLLECTION).toBe('emotion');
-    expect(TOUR_PRESETS.emotion.color?.colorBy).toBe(EMOTION_LABEL_FIELD);
+    expect(TOUR_PRESETS.emotion.color?.colorBy).toBe('topic_label');
+    expect(TOUR_PRESETS['emnlp-topics'].color?.colorBy).toBe('topic_label');
+  });
+
+  it('the tour preset resolves to a real preset targeting the tour collection', () => {
+    expect(getPreset(TOUR_PRESET_ID)?.collection).toBe(TOUR_COLLECTION);
+    expect(TOUR_COLLECTION).toBe('acl_abstracts_emnlp_findings');
   });
 });

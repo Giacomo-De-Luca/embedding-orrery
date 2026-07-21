@@ -23,8 +23,8 @@ from interpret.probing.utils.enums import TokenPosition
 class SAEExtractionConfig:
     """Encode another extraction's residuals through Gemma-Scope SAEs."""
 
-    name: str                           # required, drives cache filename + folder
-    source_extraction: str              # name of the residual extraction to consume
+    name: str  # required, drives cache filename + folder
+    source_extraction: str  # name of the residual extraction to consume
     source_intermediate: str = "post_mlp"  # which intermediate to read from the source
     # Documentation + validation: the upstream pooling that produced the
     # source vectors. The orchestrator raises if this disagrees with the

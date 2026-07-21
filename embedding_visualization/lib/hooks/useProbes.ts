@@ -11,6 +11,8 @@ import type { ColorFieldOption } from '../utils/fieldAnalysis';
 import {
   buildProbeFieldOptions,
   mergeProbeScores,
+  probeAbsErrorField,
+  probeConfusionField,
   type ProbeInfo,
   type ProbeScoresData,
   type ProbeWithScores,
@@ -163,8 +165,8 @@ export function useProbes(
   }, [data, probesWithScores]);
 
   const fieldOptions = useMemo(
-    () => buildProbeFieldOptions(probesWithScores),
-    [probesWithScores],
+    () => buildProbeFieldOptions(probesWithScores, data?.itemMetadata),
+    [probesWithScores, data],
   );
 
   // Auto-recolor once the freshly trained probe's scores are merged.
@@ -229,10 +231,13 @@ export function useProbes(
       if (!collectionName) return;
       const store = useVisualizationStore.getState();
       // Clear a dangling color field before its data disappears.
-      if (
-        store.colorByField === probe.scoreField ||
-        (probe.residualField && store.colorByField === probe.residualField)
-      ) {
+      const probeFields = [
+        probe.scoreField,
+        probe.residualField,
+        probeAbsErrorField(probe),
+        probeConfusionField(probe),
+      ];
+      if (store.colorByField && probeFields.includes(store.colorByField)) {
         store.setColorByField(null);
       }
       try {

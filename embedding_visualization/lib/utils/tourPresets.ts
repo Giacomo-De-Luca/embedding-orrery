@@ -14,18 +14,16 @@ import type { ColorScale, ProjectionMethod, DimensionMode } from '../types/types
 /** Bare-URL default collection in demo builds (small, locally searchable). */
 export const DEMO_DEFAULT_COLLECTION = 'emotion';
 
-/** The preset the guided tour applies (its id happens to equal the collection). */
-export const TOUR_PRESET_ID = 'emotion';
-
-/** Emotion's categorical metadata field (verified against the demo seed). */
-export const EMOTION_LABEL_FIELD = 'label';
+/** The preset the guided tour applies — the flagship research-topics view. */
+export const TOUR_PRESET_ID = 'emnlp-topics';
 
 /**
- * The query the tour's search step runs. Must target `emotion` only — its
- * MiniLM model runs inside the Space; the other demo collections embed via
- * the Gemini API and must never be auto-queried.
+ * The query the tour's search step runs against the tour collection (EMNLP,
+ * Gemini-embedded): a DELIBERATE cost of one Gemini embed call per tour run.
+ * The step's guard keeps auto-search restricted to `TOUR_COLLECTION` so no
+ * other Gemini collection is ever queried without user intent.
  */
-export const TOUR_SEARCH_QUERY = 'nervous before a big exam';
+export const TOUR_SEARCH_QUERY = 'hallucination in summarization';
 
 /** Flags a preset may set (subset of the store's boolean toggles). */
 export type PresetFlagName =
@@ -68,18 +66,24 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     },
     method: 'umap',
     mode: '3d',
+    // Explicit false: the manifold reads as one continuous gradient — haze and
+    // cluster labels from a previous view would only obscure it.
+    flags: { nebulaMode: false, showClusterLabels: false },
   },
   emotion: {
     id: 'emotion',
     collection: 'emotion',
     label: 'Emotion-labeled tweets',
-    description: 'Tweets colored by emotion — the tour uses this collection.',
-    color: { colorBy: EMOTION_LABEL_FIELD },
+    description: 'Tweets clustered into LLM-labeled topics; search runs inside the Space.',
+    color: { colorBy: 'topic_label' },
     method: 'umap',
     mode: '3d',
     flags: { nebulaMode: true, showClusterLabels: true },
   },
 };
+
+/** The collection the tour lands on; its search step may only query this. */
+export const TOUR_COLLECTION = TOUR_PRESETS[TOUR_PRESET_ID].collection;
 
 export function getPreset(id: string | null | undefined): PresetDefinition | null {
   if (!id) return null;

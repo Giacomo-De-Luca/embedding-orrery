@@ -20,6 +20,9 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
+from interpret.probing.configs.concat_extraction import (
+    ConcatExtractionConfig,
+)
 from interpret.probing.configs.csv_features_extraction import (
     CSVFeaturesExtractionConfig,
 )
@@ -35,6 +38,9 @@ from interpret.probing.configs.probe import (
     ProbeSpec,
     SklearnProbeSpec,
 )
+from interpret.probing.configs.residual_pooled_extraction import (
+    ResidualPooledExtractionConfig,
+)
 from interpret.probing.configs.sae_analysis import (
     CorrelationMapConfig,
     FeatureSweepConfig,
@@ -45,6 +51,12 @@ from interpret.probing.configs.sae_analysis import (
 from interpret.probing.configs.sae_extraction import (
     SAEExtractionConfig,
 )
+from interpret.probing.configs.sae_pooled_extraction import (
+    SAEPooledExtractionConfig,
+)
+from interpret.probing.configs.token_extraction import (
+    TokenLevelExtractionConfig,
+)
 from interpret.probing.utils.enums import TaskType
 
 ExtractionConfig = (
@@ -53,10 +65,21 @@ ExtractionConfig = (
     | SAEExtractionConfig
     | DeltaExtractionConfig
     | CSVFeaturesExtractionConfig
+    | TokenLevelExtractionConfig
+    | SAEPooledExtractionConfig
+    | ResidualPooledExtractionConfig
+    | ConcatExtractionConfig
 )
 
-# Extractions whose `source_extraction` field references a sibling extraction.
-_DERIVED_EXTRACTION_TYPES = (SAEExtractionConfig, DeltaExtractionConfig)
+# Extractions that reference sibling extractions (single `source_extraction`
+# or plural `source_extractions`) — resolved after their sources.
+_DERIVED_EXTRACTION_TYPES = (
+    SAEExtractionConfig,
+    DeltaExtractionConfig,
+    SAEPooledExtractionConfig,
+    ResidualPooledExtractionConfig,
+    ConcatExtractionConfig,
+)
 
 _EXTRACTION_TYPES = {
     "encoder": EncoderExtractionConfig,
@@ -64,7 +87,22 @@ _EXTRACTION_TYPES = {
     "sae": SAEExtractionConfig,
     "delta": DeltaExtractionConfig,
     "csv_features": CSVFeaturesExtractionConfig,
+    "token_residuals": TokenLevelExtractionConfig,
+    "sae_pooled": SAEPooledExtractionConfig,
+    "residual_pooled": ResidualPooledExtractionConfig,
+    "concat": ConcatExtractionConfig,
 }
+
+
+def _dependency_names(extraction) -> list[str]:
+    """Names of sibling extractions this one consumes (empty if independent)."""
+    if hasattr(extraction, "source_extractions"):
+        return list(extraction.source_extractions)
+    if hasattr(extraction, "source_extraction"):
+        return [extraction.source_extraction]
+    return []
+
+
 _PROBE_TYPES = {
     "mlp": MLPProbeSpec,
     "sklearn": SklearnProbeSpec,
@@ -89,8 +127,7 @@ class ManifestSpec:
         """Import + return the manifest class."""
         if ":" not in self.path:
             raise ValueError(
-                f"ManifestSpec.path must be 'module.path:ClassName', "
-                f"got {self.path!r}",
+                f"ManifestSpec.path must be 'module.path:ClassName', got {self.path!r}",
             )
         module_path, class_name = self.path.split(":", 1)
         module = importlib.import_module(module_path)
@@ -117,10 +154,7 @@ class TargetSpec:
             self.task_type = TaskType(self.task_type)
         if self.name is None:
             self.name = self.column
-        if (
-            self.task_type is TaskType.CLASSIFICATION
-            and self.num_classes is None
-        ):
+        if self.task_type is TaskType.CLASSIFICATION and self.num_classes is None:
             raise ValueError(
                 f"TargetSpec(source={self.source!r}, column={self.column!r}): "
                 f"num_classes required for classification.",
@@ -173,13 +207,13 @@ class ExperimentConfig:
                 f"must have a unique name (drives the cache filename).",
             )
 
-        # Derived extractions (SAE, Delta) reference a sibling by name.
+        # Derived extractions reference sibling extractions by name.
         for ext in self.extractions:
-            if isinstance(ext, _DERIVED_EXTRACTION_TYPES):
-                if ext.source_extraction not in ext_names:
+            for dep in _dependency_names(ext):
+                if dep not in ext_names:
                     raise ValueError(
                         f"{type(ext).__name__} {ext.name!r}: "
-                        f"source_extraction {ext.source_extraction!r} not "
+                        f"source extraction {dep!r} not "
                         f"in extractions: {ext_names}",
                     )
 
@@ -209,12 +243,10 @@ class ExperimentConfig:
         before any derived extraction that names it.
         """
         independent: list[ExtractionConfig] = [
-            e for e in self.extractions
-            if not isinstance(e, _DERIVED_EXTRACTION_TYPES)
+            e for e in self.extractions if not isinstance(e, _DERIVED_EXTRACTION_TYPES)
         ]
         pending: list[ExtractionConfig] = [
-            e for e in self.extractions
-            if isinstance(e, _DERIVED_EXTRACTION_TYPES)
+            e for e in self.extractions if isinstance(e, _DERIVED_EXTRACTION_TYPES)
         ]
         resolved_names: set[str] = {e.name for e in independent}
         result: list[ExtractionConfig] = list(independent)
@@ -223,7 +255,7 @@ class ExperimentConfig:
             next_round: list[ExtractionConfig] = []
             progress = False
             for e in pending:
-                if e.source_extraction in resolved_names:
+                if all(dep in resolved_names for dep in _dependency_names(e)):
                     result.append(e)
                     resolved_names.add(e.name)
                     progress = True
@@ -258,22 +290,18 @@ class ExperimentConfig:
 
         extraction_dicts = d.pop("extractions", []) or []
         extractions = [
-            _build_tagged(ed, _EXTRACTION_TYPES, "extraction")
-            for ed in extraction_dicts
+            _build_tagged(ed, _EXTRACTION_TYPES, "extraction") for ed in extraction_dicts
         ]
 
         target_dicts = d.pop("targets", []) or []
         targets = [TargetSpec(**td) for td in target_dicts]
 
         probe_dicts = d.pop("probes", []) or []
-        probes = [
-            _build_tagged(pd, _PROBE_TYPES, "probe") for pd in probe_dicts
-        ]
+        probes = [_build_tagged(pd, _PROBE_TYPES, "probe") for pd in probe_dicts]
 
         analysis_dicts = d.pop("sae_analysis", []) or []
         sae_analysis = [
-            _build_tagged(ad, _SAE_ANALYSIS_TYPES, "sae_analysis")
-            for ad in analysis_dicts
+            _build_tagged(ad, _SAE_ANALYSIS_TYPES, "sae_analysis") for ad in analysis_dicts
         ]
 
         return cls(

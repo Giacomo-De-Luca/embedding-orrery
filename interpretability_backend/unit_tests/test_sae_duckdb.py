@@ -1,10 +1,10 @@
 """Unit tests for SAE feature/activation storage in DuckDBClient."""
 
 import json
-import pytest
-import pandas as pd
-from backend.clients.duckdb_client import DuckDBClient
 
+import pandas as pd
+
+from backend.clients.duckdb_client import DuckDBClient
 
 MODEL_ID = "gemma-3-4b-it"
 SAE_ID = "9-gemmascope-2-res-16k"

@@ -9,7 +9,7 @@ from ..embed_dataset import (
     PortionConfig,
     PortionStrategy,
 )
-from ..services.probing_types import PROBE_KINDS, ProbeConfig
+from ..services.probing_types import MLP_ACTIVATIONS, PROBE_KINDS, ProbeConfig
 from ..services.topic_extraction_service import TopicExtractionConfig
 from .types import (
     DataTypeEnum,
@@ -183,6 +183,16 @@ def build_probe_config(input) -> ProbeConfig:
         raise ValueError(f"max_train_samples must be >= 1, got {input.max_train_samples}.")
     if input.patience is not None and input.patience < 1:
         raise ValueError(f"patience must be >= 1, got {input.patience}.")
+    if input.dev_split is not None and not (0.0 <= input.dev_split < 1.0):
+        # 0 is legal: it disables early stopping (fixed epochs, final weights).
+        raise ValueError(f"dev_split must be in [0, 1), got {input.dev_split}.")
+    if input.activation is not None and input.activation not in MLP_ACTIVATIONS:
+        raise ValueError(f"activation must be one of {MLP_ACTIVATIONS}, got {input.activation!r}.")
+    if input.epochs is not None and input.epochs < 1:
+        # epochs=0 would "succeed" by persisting a randomly initialized MLP.
+        raise ValueError(f"epochs must be >= 1, got {input.epochs}.")
+    if input.hidden_dims and any(h < 1 for h in input.hidden_dims):
+        raise ValueError(f"hidden_dims entries must be >= 1, got {input.hidden_dims}.")
 
     return ProbeConfig(
         collection_name=input.collection_name,
@@ -195,6 +205,8 @@ def build_probe_config(input) -> ProbeConfig:
         epochs=_or(input.epochs, defaults.epochs),
         hidden_dims=list(input.hidden_dims) if input.hidden_dims else None,
         patience=_or(input.patience, defaults.patience),
+        dev_split=_or(input.dev_split, defaults.dev_split),
+        activation=_or(input.activation, defaults.activation),
         seed=_or(input.seed, defaults.seed),
         train_split=_or(input.train_split, defaults.train_split),
         max_train_samples=_or(input.max_train_samples, defaults.max_train_samples),

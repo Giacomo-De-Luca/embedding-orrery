@@ -1,0 +1,62 @@
+# Local smoke test for trec_qwen.yaml: 200 questions, 5 layers, MPS.
+# Distinct name -> its own cache namespace; safe to delete wholesale.
+#   uv run python -m interpret.probing.orchestrator \
+#     experiments/trec_classification/trec_qwen_smoke.yaml
+
+name: trec_qwen_smoke
+output_dir: resources/probing_results/trec_qwen_smoke
+automatic_visualisations: true
+
+manifest:
+  path: "interpret.probing.manifests.labeled_text:LabeledTextManifestBuilder"
+  kwargs:
+    path: resources/datasets/SAE/trec.tsv
+    text_column: text
+    target_columns: [coarse_label]
+    dedupe: true
+    limit: 200
+
+extractions:
+  - name: qwen_tokens
+    type: token_residuals
+    family: qwen
+    checkpoint: Qwen/Qwen3-1.7B
+    layers: [0, 7, 14, 21, 27]
+    sites: [resid_post]
+    storage_dtype: bfloat16
+
+  - name: qwen_res_last
+    type: residual_pooled
+    source_extraction: qwen_tokens
+    site: resid_post
+    pooling: last
+
+  - name: qwen_sae_max
+    type: sae_pooled
+    source_extraction: qwen_tokens
+    site: resid_post
+    pooling: max
+    model_size: "1.7B"
+    k: 50
+    width: 32k
+    min_active_samples: 2
+    device: mps
+
+  - name: qwen_sae_concat
+    type: concat
+    source_extractions: [qwen_sae_max]
+
+targets:
+  - {source: labeled_text, column: coarse_label, task_type: classification, num_classes: 6}
+
+probes:
+  # Single split for speed + one k-fold logreg to exercise the fold path
+  # (per-fold directions -> top_features fold-glob).
+  - {type: sklearn, kind: logreg, C: 1.0, class_weight: balanced,
+     save_directions: true, logreg_max_iter: 2000}
+  - {type: sklearn, kind: logreg, name: logreg_cv, C: 1.0, class_weight: balanced,
+     n_folds: 5, save_directions: true, logreg_max_iter: 2000}
+
+sae_analysis:
+  - {type: top_features, source_probe: logreg, top_k: 15}
+  - {type: correlation_map, top_k: 15}
