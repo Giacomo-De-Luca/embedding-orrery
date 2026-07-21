@@ -80,7 +80,7 @@ Data Sources --> Embedding Providers --> DuckDB (docs, metadata, projections, to
                                     Next.js Frontend
 ```
 
-**Dual-database design**: DuckDB is the central orchestrator (documents, metadata, projections, topics, SAE data); ChromaDB stores only dense vectors for similarity search. Decoupling *datasets* from *collections* lets one dataset be embedded many ways — different models, prompts, or column combinations — without re-storing the documents.
+**Dual-database design**: DuckDB is the central orchestrator (documents, metadata, projections, topics, SAE data); ChromaDB stores only dense vectors for similarity search. Decoupling *datasets* from *collections* lets one dataset be embedded many ways without re-storing the documents.
 
 ## Pages
 
