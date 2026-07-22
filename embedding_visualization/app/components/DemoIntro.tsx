@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/lib/ui-primitives/dialog';
+import { Spinner } from '@/lib/ui-primitives/spinner';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { IS_DEMO } from '@/lib/utils/demoMode';
 import { markIntro, warmEmotionSearch, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
@@ -130,6 +131,12 @@ export function DemoIntro({
             onClick={() => handleOpenChange(false)}
           />
         </div>
+        {availableCollections === null && (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner className="h-3 w-3" />
+            Waking the backend — the options above enable in a moment.
+          </p>
+        )}
         {IS_DEMO && (
           <p className="text-xs text-muted-foreground">
             This public demo is read-only; the full platform embeds your own data.

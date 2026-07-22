@@ -2,8 +2,10 @@
 
 import { Moon, Sun, Search, Settings2, BarChart3, CircleHelp } from 'lucide-react';
 import { useTheme } from 'next-themes';
-import { useState, KeyboardEvent } from 'react';
+import { useEffect, useState, KeyboardEvent } from 'react';
 import { PageNav } from './PageNav';
+import { IS_DEMO } from '@/lib/utils/demoMode';
+import { isEmbedded } from '@/lib/utils/hfSpaceUrlSync';
 import {
   Combobox,
   ComboboxInput,
@@ -80,6 +82,15 @@ export function AppHeader({
 }: AppHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
+
+  // Inside the HF Space page (`header: mini`), HuggingFace floats a pill over
+  // the top-right corner of the iframe — exactly where the help button and
+  // theme toggle live. Reserve clearance so nothing renders underneath it.
+  // Effect-set (not render-read) to keep SSR/hydration output stable.
+  const [hfPillClearance, setHfPillClearance] = useState(false);
+  useEffect(() => {
+    if (IS_DEMO && isEmbedded(window)) setHfPillClearance(true);
+  }, []);
 
   const handleSearch = () => {
     if (searchQuery.trim() && onSemanticSearch) {
@@ -247,6 +258,7 @@ export function AppHeader({
             </Button>
           )}
           <ModeToggle />
+          {hfPillClearance && <div aria-hidden className="w-40 shrink-0 sm:w-72" />}
         </div>
       </div>
     </header>
