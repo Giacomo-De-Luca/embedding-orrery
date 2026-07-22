@@ -388,6 +388,13 @@ def test_chroma_export_preserves_metadata_and_uses_fallback(tmp_path: Path) -> N
     feature_collection = result.get_collection("feature-vectors")
     assert feature_collection.metadata["sae_model_id"] == "model-a"
     assert counts == {"documents": 1, "feature-vectors": 1}
+    # Exported collections must carry the legacy EF marker, not Chroma's
+    # persisted default (384-d ONNX MiniLM), or the backend's real embedding
+    # function is rejected as a conflict at query time and semantic search
+    # silently runs with wrong-dimension query embeddings.
+    for name in ("documents", "feature-vectors"):
+        ef_config = result.get_collection(name).configuration_json.get("embedding_function")
+        assert ef_config == {"type": "legacy"}, f"{name}: {ef_config}"
 
 
 def test_chroma_export_rejects_an_interrupted_partial_copy(tmp_path: Path, monkeypatch) -> None:

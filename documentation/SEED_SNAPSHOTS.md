@@ -59,6 +59,13 @@ The committed seed's Chroma store is copied to temporary storage before the
 build and remains the fallback for a selected live collection that exists but
 has no production vectors.
 
+Exported Chroma collections are created with a marker embedding function so
+Chroma 1.x persists `{"type": "legacy"}` rather than its default embedding
+function (384-d ONNX MiniLM). Without the marker, the backend's real embedding
+function is rejected as a conflict at query time and semantic search on the
+seeded collections silently runs with wrong-dimension query embeddings
+(fixed 2026-07-23; seeds built before then need a rebuild to search correctly).
+
 ## Private Hugging Face Dataset publication
 
 `demo.json` reads its repository ID from `ORRERY_SEED_REPO_ID`. Set that plus a

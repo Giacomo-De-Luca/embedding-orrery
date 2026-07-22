@@ -798,6 +798,20 @@ class DuckDBSnapshotExporter:
             )
 
 
+class _LegacyMarkerEmbeddingFunction:
+    """Old-style embedding function passed at collection creation so Chroma 1.x
+    persists ``{"type": "legacy"}`` instead of its default embedding function
+    (384-d ONNX MiniLM). With the default persisted, the backend's attempt to
+    attach the collection's real embedding function at query time is rejected
+    as a conflict and semantic search silently falls back to wrong-dimension
+    query embeddings. The exporter always supplies embeddings explicitly, so
+    this function must never actually run.
+    """
+
+    def __call__(self, input: Any) -> Any:
+        raise RuntimeError("seed snapshot marker embedding function must never be invoked")
+
+
 class ChromaSnapshotExporter:
     """Rebuild selected Chroma collections into a clean snapshot store."""
 
@@ -843,6 +857,7 @@ class ChromaSnapshotExporter:
             source_collection, _ = self._source_collection(selection.name, source, fallback)
             destination_collection = destination.create_collection(
                 name=selection.name,
+                embedding_function=_LegacyMarkerEmbeddingFunction(),
                 metadata=dict(source_collection.metadata or {}),
             )
             total = source_collection.count()
