@@ -33,6 +33,7 @@ from interpret.probing.sae_analysis.directions import load_direction_coef
 from interpret.probing.sae_analysis.labels import (
     load_feature_labels,
 )
+from interpret.probing.utils.matrix_ops import to_dense_numpy
 
 
 def run_feature_sweep(
@@ -121,7 +122,9 @@ def _run_per_layer(
         if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
-        feat = feat_tensor.numpy()
+        # Small-data analysis: densify sparse input (never configured on
+        # concat-scale matrices).
+        feat = to_dense_numpy(feat_tensor)
         kept = _resolve_kept(kept_by_layer.get(layer), feat.shape[1])
 
         ranking_scores = _compute_ranking(
@@ -183,7 +186,7 @@ def _run_pooled(
         if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
-        feat = feat_tensor.numpy()
+        feat = to_dense_numpy(feat_tensor)
         kept = _resolve_kept(kept_by_layer.get(layer), feat.shape[1])
         feat_blocks.append(feat)
         layer_of_pool.extend([layer] * feat.shape[1])

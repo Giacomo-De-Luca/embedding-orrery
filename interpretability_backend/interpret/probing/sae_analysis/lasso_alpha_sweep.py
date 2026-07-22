@@ -35,6 +35,7 @@ from interpret.probing.configs.sae_analysis import (
     LassoAlphaSweepConfig,
 )
 from interpret.probing.sae_analysis.constants import SAE_INTERMEDIATES
+from interpret.probing.utils.matrix_ops import to_dense_numpy
 
 
 def run_lasso_alpha_sweep(
@@ -69,7 +70,9 @@ def run_lasso_alpha_sweep(
         if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
-        feat = feat_tensor.numpy().astype(np.float64, copy=False)
+        # Small-data regression analysis: densify sparse input (this sweep
+        # is never configured on concat-scale matrices).
+        feat = to_dense_numpy(feat_tensor).astype(np.float64, copy=False)
 
         layer_results: list[dict] = []
         for alpha in config.alphas:

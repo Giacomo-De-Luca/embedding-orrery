@@ -44,6 +44,18 @@ class SAEPooledExtractionConfig:
     model_size: str = "4b"  # gemma: "4b"...; qwen: "1.7B"/"2B"/"8B"/"27B"
     k: int = 50  # qwen only (TopK)
 
+    # Store pooled activations as scipy CSR instead of dense tensors.
+    # Pooled SAE rows are typically 1-2% nonzero (TopK k=50 over ~15
+    # tokens; JumpReLU short prompts), so CSR cuts disk/RAM ~25-50x —
+    # required for large widths (64k/262k) and safety-scale sample counts.
+    # Probes consume CSR natively (liblinear/lbfgs/libsvm); the trainer
+    # then standardises scale-only (no mean centering — see
+    # `sklearn_probes._fit_one`). Note: this field is part of the cache
+    # identity — pre-existing sae_pooled sidecars (which lack the key)
+    # fail loud with CacheMismatchError; delete the listed .pt/.yaml to
+    # recompute stage 2 (stage-1 token caches are unaffected).
+    sparse: bool = False
+
     exclude_bos: bool = True  # effective only when the source prepends BOS
     drop_dead_features: bool = True
     # A feature survives iff its pooled activation is > 0 in at least this

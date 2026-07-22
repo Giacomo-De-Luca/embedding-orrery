@@ -39,6 +39,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from scipy.stats import spearmanr
 from sklearn.base import BaseEstimator
 from sklearn.dummy import DummyRegressor
@@ -57,6 +58,7 @@ from sklearn.svm import SVC, SVR, LinearSVC
 from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.probe import SklearnProbeSpec
 from interpret.probing.utils.cross_validation import resolve_folds
+from interpret.probing.utils.matrix_ops import as_feature_matrix
 from interpret.utils.distances import resolve_distance
 
 # Probes whose `coef_` is meaningful for downstream feature ranking.
@@ -155,7 +157,9 @@ def train_sklearn_probe(
 
     for layer, intermediate in keys:
         tensor, _ = dataset.get(layer, intermediate)
-        X = tensor.numpy()
+        X = as_feature_matrix(tensor)
+        if sp.issparse(X):
+            _validate_sparse_spec(spec)
 
         for fold_label, train_idx, val_idx in folds:
             row: dict = {
@@ -347,8 +351,29 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
     raise ValueError(f"Unknown sklearn probe kind: {kind!r}")
 
 
+def _validate_sparse_spec(spec: SklearnProbeSpec) -> None:
+    """Reject spec/input combinations that cannot run on CSR activations.
+
+    Raised before the per-fold loop (whose try/except would otherwise
+    swallow these config errors into per-fold `error` rows).
+    """
+    if spec.kind in _MASSMEAN_KINDS:
+        raise ValueError(
+            f"{spec.kind!r} probes require dense activations — sparse "
+            "class-mean arithmetic is not supported. Re-extract with "
+            "`sparse: false` or drop the mass-mean probe.",
+        )
+    if spec.standardise and spec.center_only:
+        raise ValueError(
+            "center_only standardisation would densify sparse activations "
+            "and shift the meaningful zero. Sparse input standardises "
+            "scale-only automatically; use standardise: false to skip "
+            "scaling entirely.",
+        )
+
+
 def _fit_one(
-    X: np.ndarray,
+    X: np.ndarray | sp.csr_matrix,
     y: np.ndarray,
     y_binned: np.ndarray | None,
     train_idx: np.ndarray,
@@ -371,11 +396,21 @@ def _fit_one(
     y_train, y_val = y[train_idx], y[val_idx]
 
     if spec.standardise:
-        scaler = StandardScaler(with_std=not spec.center_only)
-        X_train_s = scaler.fit_transform(X_train)
-        X_val_s = scaler.transform(X_val)
-        scaler_mean = scaler.mean_  # type: ignore[attr-defined]
-        scaler_scale = getattr(scaler, "scale_", None)
+        if sp.issparse(X_train):
+            # Sparse input: scale-only. Centering would densify the matrix
+            # and shift the meaningful zero ("feature inactive"); per-feature
+            # std scaling is what keeps |β| comparable across features.
+            scaler = StandardScaler(with_mean=False)
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+            scaler_mean = np.zeros(X_train.shape[1], dtype=X_train.dtype)
+            scaler_scale = scaler.scale_
+        else:
+            scaler = StandardScaler(with_std=not spec.center_only)
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+            scaler_mean = scaler.mean_  # type: ignore[attr-defined]
+            scaler_scale = getattr(scaler, "scale_", None)
     else:
         # No scaling: fit + report β in the feature's native units.
         # Persist zero-mean / unit-scale params alongside saved

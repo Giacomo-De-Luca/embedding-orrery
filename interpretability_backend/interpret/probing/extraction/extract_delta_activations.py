@@ -100,7 +100,8 @@ def extract_delta_activations(
     baseline_lookup: dict[Any, int] = {}
     for i, key in zip(
         np.flatnonzero(baseline_mask.to_numpy()),
-        aligned.loc[baseline_mask, config.pairing_column].tolist(), strict=True,
+        aligned.loc[baseline_mask, config.pairing_column].tolist(),
+        strict=True,
     ):
         if key in baseline_lookup:
             raise ValueError(

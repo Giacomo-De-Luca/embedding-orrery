@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 import torch
 from tqdm import tqdm
 
@@ -280,6 +281,11 @@ class ProbeAblationRunner:
     def _ablate_one(self, ctx: _AblationContext) -> None:
         layer, intermediate = ctx.layer_key
         full_X, _ = ctx.dataset.get(layer, intermediate)
+        if sp.issparse(full_X):
+            raise ValueError(
+                "Ablation does not support sparse activations; "
+                "re-extract with `sparse: false` for ablation runs.",
+            )
         n_features = full_X.shape[1]
         if n_features != len(ctx.feature_columns):
             raise RuntimeError(

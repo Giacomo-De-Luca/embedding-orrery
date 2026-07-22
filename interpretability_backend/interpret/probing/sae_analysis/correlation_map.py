@@ -19,6 +19,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from scipy.stats import spearmanr
 
 from interpret.probing.activation_dataset import ActivationDataset
@@ -67,7 +68,7 @@ def run_correlation_map(
         if intermediate not in SAE_INTERMEDIATES:
             continue
         feat_tensor, _ = sae_dataset.get(layer, intermediate)
-        feat = feat_tensor.numpy()
+        feat = feat_tensor if sp.issparse(feat_tensor) else feat_tensor.numpy()
 
         kept = _to_kept_array(kept_by_layer.get(layer), feat.shape[1])
         labels = load_feature_labels(config.sae_vectors_dir, layer, width)
@@ -123,17 +124,32 @@ def _to_kept_array(
 
 
 def _correlate_features(
-    feat: np.ndarray,
+    feat: np.ndarray | sp.spmatrix,
     targets: dict[str, np.ndarray],
     *,
     max_density: float | None,
     kept: np.ndarray,
 ) -> pd.DataFrame:
-    """Spearman correlation between every feature column and every target."""
+    """Spearman correlation between every feature column and every target.
+
+    Accepts dense arrays or scipy sparse matrices; sparse input is
+    converted to CSC once and densified column-by-column (spearmanr needs
+    a dense column anyway), so results are bit-identical to dense.
+    """
     n_samples, n_features = feat.shape
+    if sp.issparse(feat):
+        feat_csc = feat.tocsc()
+
+        def _column(j: int) -> np.ndarray:
+            return np.asarray(feat_csc[:, j].todense()).ravel()
+    else:
+
+        def _column(j: int) -> np.ndarray:
+            return feat[:, j]
+
     rows = []
     for col_idx in range(n_features):
-        col = feat[:, col_idx]
+        col = _column(col_idx)
         nonzero = np.count_nonzero(col)
         density = nonzero / n_samples
         if max_density is not None and density > max_density:

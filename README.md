@@ -12,6 +12,29 @@
 
 *WordNet (212k senses) in nebula mode: points are glosses, colours are topics, semantic-search results for "geometry" are highlighted.*
 
+## Quick Start
+
+```bash
+# Backend
+uv sync
+./start_backend.sh          # GraphQL at http://localhost:8000/graphql
+
+# Frontend
+cd embedding_visualization && npm install && npm run dev   # http://localhost:3000
+```
+
+The app ships with two small demo collections (an `emotion` sample and Gemini-embedded XKCD colours), so it works on a fresh clone with no data setup. 
+
+
+### Docker
+
+```bash
+docker compose up --build   # frontend :3000, GraphQL :8000
+```
+
+See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
+
+
 ## Gallery
 
 | | |
@@ -25,26 +48,6 @@
 
 *SAE feature inspection and steering chat interface.*
 
-## Quick Start
-
-```bash
-# Backend
-uv sync
-./start_backend.sh          # GraphQL at http://localhost:8000/graphql
-
-# Frontend
-cd embedding_visualization && npm install && npm run dev   # http://localhost:3000
-```
-
-The app ships with two small demo collections (an `emotion` sample and Gemini-embedded XKCD colours), so it works on a fresh clone with no data setup. Core features need no API keys — local SentenceTransformers, visualisation, topic extraction, and SAE analysis all run offline.
-
-### Docker
-
-```bash
-docker compose up --build   # frontend :3000, GraphQL :8000
-```
-
-See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-up, volume management, and HuggingFace token options.
 
 ## What It Does
 

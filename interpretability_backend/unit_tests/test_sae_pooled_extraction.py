@@ -21,17 +21,7 @@ from interpret.probing.extraction.extract_residual_pooled import (
 )
 from interpret.probing.extraction.extract_sae_pooled import extract_sae_pooled
 from interpret.sae.activation_store import max_pool_feature_acts
-
-D_IN, D_SAE = 4, 3
-
-
-class StubSAE:
-    """encode(x) = x[:, :3] — feature values mirror the first residual dims."""
-
-    w_dec = torch.zeros(D_SAE, D_IN)
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        return x[:, :D_SAE].clone()
+from unit_tests.sae_pooled_stubs import D_IN, D_SAE, StubSAE, token_source as _token_source
 
 
 @pytest.fixture
@@ -48,40 +38,6 @@ def patched_sae(monkeypatch):
     monkeypatch.setattr(esp, "load_sae", fake_load)
     monkeypatch.setattr(esp, "clear_sae_cache", fake_clear)
     return calls
-
-
-def _token_source(prepends_bos: bool = True, family: str = "gemma") -> ActivationDataset:
-    """3 samples, lengths [3, 2, 1] (first position = BOS when applicable).
-
-    BOS rows carry huge values (the activation sink); sample 2 is BOS-only
-    and exercises the degenerate-range fallback.
-    """
-    residual = torch.tensor(
-        [
-            # sample 0: BOS + 2 tokens
-            [100.0, 100.0, 100.0, 0.0],
-            [1.0, -5.0, 0.0, 0.0],
-            [3.0, 2.0, 0.0, 0.0],
-            # sample 1: BOS + 1 token
-            [100.0, 100.0, 100.0, 0.0],
-            [7.0, -1.0, 0.0, 0.0],
-            # sample 2: BOS only
-            [2.0, 0.0, 5.0, 0.0],
-        ],
-    )
-    return ActivationDataset(
-        activations={(0, "resid_post"): residual, (2, "resid_post"): residual * 2},
-        targets=torch.empty(0),
-        sample_ids=["s0", "s1", "s2"],
-        metadata={
-            "extraction_type": "token_residuals",
-            "token_level": True,
-            "family": family,
-            "token_offsets": [0, 3, 5, 6],
-            "prepends_bos": prepends_bos,
-            "storage_dtype": "float32",
-        },
-    )
 
 
 class TestSAEPooledMax:

@@ -434,6 +434,60 @@ identity.
 - **Qwen Base checkpoint** (§7.2).
 - **`linear_svc` + `skip_extractions`** (§5).
 
+### 6.7 Sparse CSR storage (2026-07-22)
+
+`sparse: true` on a `sae_pooled` extraction stores each layer's pooled
+matrix as a scipy CSR matrix instead of a dense fp32 tensor. Pooled SAE
+rows are ~1–2 % nonzero (TopK k=50 over ~15 tokens; JumpReLU short
+prompts), so CSR cuts the on-disk/RAM cost ~25–50× — the enabler for
+65k/262k width sweeps and safety-scale sample counts, where the dense
+concat matrix stops fitting in memory. Dense stays the default (`sparse:
+false`); TREC-size runs don't need it.
+
+Mechanics (all pinned by `unit_tests/test_sparse_sae_probing.py`, 17
+tests):
+
+- **Extractor** (`extract_sae_pooled`): pooling now iterates sample
+  blocks whose dense `[rows, d_sae]` device buffer stays under a module
+  constant `_POOL_BLOCK_BYTES` (1 GiB — derived, not a config knob, so it
+  stays out of the cache-identity dict); the sparse path CSR-ifies each
+  block as it completes and `scipy.sparse.vstack`s. The restructure
+  applies to the dense path too (numerics unchanged — the existing
+  pooling tests pin equality), lowering the device peak for both. The
+  dead-feature filter keeps its `> 0` semantics on CSR
+  (`_filter_sparse`), and `kept_by_layer` is identical between modes.
+  Negative TopK values in `last` pooling are stored explicitly (only
+  exact zeros are implicit). `metadata["sparse"]` records the mode.
+- **`ActivationDataset`**: `subset` row-selection dispatches on matrix
+  type (`utils/matrix_ops.py::select_rows`); `torch.save`/`load` pickle
+  CSR matrices as-is — caching needed no changes.
+- **Probes** (`train_sklearn_probe`): CSR flows into
+  LogisticRegression / LinearSVC / SVC without densification. Sparse
+  input standardises **scale-only** (`StandardScaler(with_mean=False)`)
+  — centering would densify the matrix and shift the meaningful zero
+  ("feature inactive"); per-feature std scaling is what keeps the |β|
+  ranking comparable. Direction `.npz` files record `scaler_mean = 0` +
+  the real scale, so downstream loaders see the usual schema. Guards
+  raised before the fold loop (so config errors aren't swallowed into
+  per-fold `error` rows): mass-mean kinds and `center_only` reject
+  sparse input.
+- **`concat`**: `scipy.sparse.hstack` when any source is sparse; output
+  stays CSR. `feature_names`/`concat_spans` logic unchanged.
+- **Analyses**: `correlation_map` converts to CSC once and densifies
+  column-by-column (bit-identical to dense); `feature_sweep` /
+  `lasso_alpha_sweep` densify whole layers (small-data analyses, never
+  configured on concat-scale matrices). MLP probes reject sparse input
+  with a clear error.
+- **Cache note**: the new config field enters `sae_pooled` cache
+  identity — pre-existing sidecars (which lack the key) fail loud with
+  `CacheMismatchError` on the next run; delete the listed `.pt`/`.yaml`
+  to recompute stage 2 from the token cache (minutes; stage-1
+  `token_residuals` caches are untouched). Beware the **pre-existing
+  concat cache trap**: concat sidecars record only the concat config,
+  not its sources' — after re-extracting a source as sparse, a stale
+  dense concat cache still sidecar-matches and is silently served.
+  Delete the concat cache by hand whenever a source changes.
+
 ---
 
 ## 7. The experiment configs
@@ -490,6 +544,10 @@ TREC ≈ 5,871 samples / ~83k tokens.
 | Gemma pass-2 token cache (34 × {mlp,attn}, bf16) | ~29 GB |
 | One pooled SAE dataset (34 layers, post-filter, fp32) | ~1–3 GB |
 | Concat matrix (`min_active_samples: 10`, fp32) | `[5.9k, ~100–300k]`, 2–8 GB |
+
+With `sparse: true` (§6.7) the pooled and concat artifacts shrink
+~25–50× (CSR stores only nonzero entries at ~8 bytes each); use it for
+65k/262k widths or datasets much larger than TREC.
 
 Runtimes (A100): extraction ~20–40 min per pass (batch-1 prefills; the
 loop, not attention, is the cost — hence no flash-attention work: prompts
@@ -588,6 +646,7 @@ All in `interpretability_backend/unit_tests/`, offline, no model weights:
 | `test_sae_pooled_extraction.py` | stub SAE: BOS-masked max with single-token fallback, chunk-boundary equality of the scatter max, `last` row selection, `min_active_samples`/`kept_by_layer`, per-layer `clear_sae_cache`, **equivalence with the production `max_pool_feature_acts`**; `residual_pooled` last/max/mean |
 | `test_concat_extraction.py` | feature-name/`kept_by_layer` mapping, span order, layers filter, mismatched-IDs and size-mismatch errors |
 | `test_top_features_multiclass.py` | fold-glob + signed mean, multiclass `top_class` ranking, binary/unsuffixed path, classic `sae_feat` intermediate; end-to-end k-fold `feature_importance.csv` for **both** `logreg` and `linear_svc` (informative feature ranked first, per-fold `[C, d]` directions on disk) |
+| `test_sparse_sae_probing.py` | sparse CSR path (§6.7): dense/sparse pooling equality incl. block/chunk boundaries + BOS masking, negative TopK values in `last`, `min_active_samples`/`kept_by_layer` parity, sparse `subset`/save-load, logreg-on-CSR coef equality vs a hand-built scale-only reference, `linear_svc` k-fold `feature_importance.csv`, sparse guards (center_only/massmean/MLP), sparse + mixed concat, `correlation_map` frame equality |
 
 Run: `uv run pytest interpretability_backend/unit_tests/` from the repo
 root (the torch-free guard's subprocess needs the root CWD).

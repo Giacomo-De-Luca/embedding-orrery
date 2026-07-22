@@ -14,12 +14,17 @@ from pathlib import Path
 
 import torch
 
+from interpret.probing.utils.matrix_ops import FeatureMatrix, select_rows
+
 
 class ActivationDataset:
     """Collected activation–target pairs from model inference.
 
     Attributes:
-        activations: Mapping from (layer, intermediate) to Tensor[N, hidden_size].
+        activations: Mapping from (layer, intermediate) to Tensor[N, hidden_size]
+            — or a scipy CSR matrix of the same shape for sparse SAE-pooled
+            extractions (``sparse: true``). `save`/`load` handle both
+            (torch.save pickles scipy matrices as-is).
         targets: Tensor[N, target_dim] for regression, or LongTensor[N] for classification.
             Empty Tensor when activations are pre-target (e.g. fresh extraction
             before joining with manifest values).
@@ -33,7 +38,7 @@ class ActivationDataset:
 
     def __init__(
         self,
-        activations: dict[tuple[int, str], torch.Tensor] | None = None,
+        activations: dict[tuple[int, str], FeatureMatrix] | None = None,
         targets: torch.Tensor | None = None,
         sample_ids: list[str] | None = None,
         metadata: dict | None = None,
@@ -72,7 +77,7 @@ class ActivationDataset:
     def __len__(self) -> int:
         return len(self.sample_ids)
 
-    def get(self, layer: int, intermediate: str) -> tuple[torch.Tensor, torch.Tensor]:
+    def get(self, layer: int, intermediate: str) -> tuple[FeatureMatrix, torch.Tensor]:
         """Get (activations, targets) for a specific layer/intermediate."""
         key = (layer, intermediate)
         if key not in self.activations:
@@ -103,11 +108,9 @@ class ActivationDataset:
             raise KeyError(
                 f"{len(missing)} sample_ids not in dataset. First 5: {missing[:5]}",
             )
-        indices = torch.tensor(
-            [id_to_idx[s] for s in sample_ids],
-            dtype=torch.long,
-        )
-        new_acts = {key: tensor[indices] for key, tensor in self.activations.items()}
+        index_list = [id_to_idx[s] for s in sample_ids]
+        indices = torch.tensor(index_list, dtype=torch.long)
+        new_acts = {key: select_rows(mat, index_list) for key, mat in self.activations.items()}
         new_targets = self.targets[indices] if self.targets.numel() > 0 else self.targets
         new_metadata = dict(self.metadata)
         new_metadata["subset_n"] = len(sample_ids)

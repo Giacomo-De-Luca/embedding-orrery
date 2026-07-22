@@ -20,6 +20,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import scipy.sparse as sp
 import torch
 import torch.nn as nn
 from scipy.stats import spearmanr
@@ -235,6 +236,11 @@ def train_mlp_probes(
         keys = dataset.layer_intermediate_keys()
         for layer, inter in tqdm(keys, desc="MLP probes"):
             X, _ = dataset.get(layer, inter)
+            if sp.issparse(X):
+                raise ValueError(
+                    "train_mlp_probes does not support sparse activations; "
+                    "re-extract with `sparse: false` for MLP probes.",
+                )
             for fold_label, train_idx, val_idx in folds:
                 X_train, X_val = X[train_idx], X[val_idx]
                 y_train, y_val = targets[train_idx], targets[val_idx]

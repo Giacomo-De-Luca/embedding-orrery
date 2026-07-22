@@ -468,6 +468,7 @@ extractions:
     l0_size: medium             # gemma-only; qwen uses model_size + k
     model_size: 4b
     min_active_samples: 10      # dead-feature filter threshold
+    sparse: true                # store scipy CSR instead of dense (optional)
   - name: res_last              # raw-residual baseline, same forward pass
     type: residual_pooled
     source_extraction: gemma_tokens
@@ -504,6 +505,20 @@ Contract notes:
   handles k-fold direction files (`*_fold_{i}.npz`, signed-mean over
   folds) and multiclass logreg coefs (ranked by strongest class,
   `top_class` recorded per feature).
+- **Sparse storage** (`sparse: true` on `sae_pooled`): pooled activations
+  are stored as scipy CSR matrices instead of dense tensors. Pooled SAE
+  rows are typically 1-2% nonzero, so CSR cuts disk/RAM ~25-50× — use it
+  for large widths (65k/262k) or safety-scale sample counts. Everything
+  downstream accepts CSR: `subset`/save/load, `concat`
+  (`scipy.sparse.hstack`, stays CSR), sklearn probes (liblinear/lbfgs/
+  libsvm train on CSR natively — standardisation switches to scale-only,
+  `StandardScaler(with_mean=False)`, since centering would densify and
+  shift the meaningful zero), `correlation_map` (per-column densify),
+  and the sweeps (small-data densify). Mass-mean kinds and MLP probes
+  reject sparse input with a clear error; `center_only` is likewise
+  rejected. Pooling always iterates sample blocks whose dense device
+  buffer stays under ~1 GiB (`_POOL_BLOCK_BYTES`), so peak memory never
+  scales with `N × d_sae`. Tests: `unit_tests/test_sparse_sae_probing.py`.
 - Memory: token caches are big (TREC × gemma-3-4b × 34 layers × 3 sites
   ≈ 43 GB bf16 in one `.pt`). Chunk via layer-subset extractions with
   distinct names when RAM is tight.
