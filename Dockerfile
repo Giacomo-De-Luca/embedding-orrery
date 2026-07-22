@@ -15,6 +15,15 @@
 #   docker build --secret id=HF_SEED_TOKEN,env=HF_SEED_TOKEN -t orrery-hf .
 #   docker run -p 7860:7860 -e GEMINI_API_KEY=... orrery-hf
 #
+# Stage graph — deliberately SERIALIZED, not parallel:
+#   backend-deps → runner-base → frontend-builder → runner
+# The HF Space build VM OOM-kills the whole job (exit 137) when webpack's
+# compile peak lands on top of the concurrent venv copy / model bake / seed
+# download that BuildKit would otherwise run in parallel. A marker COPY from
+# runner-base gates the frontend build, so peak memory is the largest single
+# step instead of the sum of overlapping ones. Wall-clock cost is fine; the
+# builder's memory ceiling is the binding constraint.
+#
 # See documentation/HF_SPACE_DEMO.md.
 
 ########## Frontend deps (mirrors embedding_visualization/Dockerfile) ##########
@@ -25,31 +34,6 @@ WORKDIR /fe
 COPY embedding_visualization/package.json embedding_visualization/package-lock.json ./
 COPY embedding_visualization/forked ./forked
 RUN npm ci
-
-########## Frontend build ##########
-FROM node:22-slim AS frontend-builder
-
-WORKDIR /fe
-
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV ORRERY_DOCKER_BUILD=1
-# Same-origin API access through the nginx proxy. The browser derives ws/wss
-# from its own origin when NEXT_PUBLIC_GRAPHQL_WS_URL is empty.
-ARG NEXT_PUBLIC_GRAPHQL_URL=/graphql
-ARG NEXT_PUBLIC_GRAPHQL_WS_URL=
-ARG NEXT_PUBLIC_API_BASE_URL=
-ARG NEXT_PUBLIC_DEMO_MODE=1
-ENV NEXT_PUBLIC_GRAPHQL_URL=$NEXT_PUBLIC_GRAPHQL_URL
-ENV NEXT_PUBLIC_GRAPHQL_WS_URL=$NEXT_PUBLIC_GRAPHQL_WS_URL
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
-
-COPY --from=frontend-deps /fe/node_modules ./node_modules
-COPY embedding_visualization/ .
-# Bound V8's heap below the build VM's cgroup limit (HF Space builder) so the
-# webpack build GCs under pressure instead of getting OOM-killed.
-ENV NODE_OPTIONS=--max-old-space-size=4096
-RUN npm run build:docker
 
 ########## Backend deps ##########
 FROM python:3.12-slim AS backend-deps
@@ -70,8 +54,8 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-install-project
 
-########## Runner ##########
-FROM python:3.12-slim AS runner
+########## Runner base (everything memory-heavy except the frontend build) ##########
+FROM python:3.12-slim AS runner-base
 
 WORKDIR /app
 
@@ -127,6 +111,41 @@ RUN --mount=type=secret,id=HF_SEED_TOKEN,mode=0444,required=false \
       --token-file /run/secrets/HF_SEED_TOKEN \
       --fallback interpretability_backend/resources/seed
 USER root
+
+########## Frontend build ##########
+FROM node:22-slim AS frontend-builder
+
+WORKDIR /fe
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV ORRERY_DOCKER_BUILD=1
+# Same-origin API access through the nginx proxy. The browser derives ws/wss
+# from its own origin when NEXT_PUBLIC_GRAPHQL_WS_URL is empty.
+ARG NEXT_PUBLIC_GRAPHQL_URL=/graphql
+ARG NEXT_PUBLIC_GRAPHQL_WS_URL=
+ARG NEXT_PUBLIC_API_BASE_URL=
+ARG NEXT_PUBLIC_DEMO_MODE=1
+ENV NEXT_PUBLIC_GRAPHQL_URL=$NEXT_PUBLIC_GRAPHQL_URL
+ENV NEXT_PUBLIC_GRAPHQL_WS_URL=$NEXT_PUBLIC_GRAPHQL_WS_URL
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
+
+COPY --from=frontend-deps /fe/node_modules ./node_modules
+COPY embedding_visualization/ .
+# Ordering gate, not a real input: forces runner-base (venv copy, model bake,
+# seed download) to finish before webpack starts, so their memory peaks never
+# stack on the HF Space builder. See "Stage graph" at the top of this file.
+COPY --from=runner-base /app/pyproject.toml /tmp/.stage-order
+# Cap V8's heap well below the build VM's cgroup limit so webpack GCs under
+# pressure instead of the job getting OOM-killed. Node would otherwise size
+# the default cap from the builder HOST's physical RAM, which overshoots the
+# container limit. 3072 also leaves room for V8's non-heap memory (external
+# strings, code, malloc).
+ENV NODE_OPTIONS=--max-old-space-size=3072
+RUN npm run build:docker
+
+########## Runner ##########
+FROM runner-base AS runner
 
 COPY --from=frontend-builder --chown=user:user /fe/public ./frontend/public
 COPY --from=frontend-builder --chown=user:user /fe/.next/standalone ./frontend/

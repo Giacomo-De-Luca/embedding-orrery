@@ -17,6 +17,14 @@ const nextConfig: NextConfig = {
   // memory-capped build VMs (HF Space builder).
   reactCompiler: !isDockerBuild,
 
+  experimental: {
+    // Docker builds only: interns strings and drops webpack's in-memory cache
+    // generations during the compile, trading build speed for a lower peak on
+    // the memory-capped HF Space builder. The forked Plotly's huge source
+    // modules make the string savings significant.
+    webpackMemoryOptimizations: isDockerBuild,
+  },
+
   // Old route names — query strings are preserved automatically.
   async redirects() {
     return [
