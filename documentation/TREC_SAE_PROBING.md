@@ -38,10 +38,16 @@ pipeline splits extraction in two:
    SAE keys across layers/sites into one wide matrix with per-column
    `feature_names` `L{layer}_{site}_f{true_idx}` for joint probing).
 
-Probes are multiclass logreg + SVC (`class_weight: balanced`, 5-fold
-stratified CV); analyses are `top_features` (probe-|coef| ranking, fold-
-aware, multiclass-aware with per-feature `top_class`) and
-`correlation_map`.
+Probes are multiclass logreg + **linear_svc** (one-vs-rest `LinearSVC`;
+`coef_` is `[C, d]` like logreg, so directions/feature-importance/
+top_features all work — an independent hinge-loss feature ranking, O(n·d)
+so it runs on the concat matrix too) + RBF SVC as a nonlinear accuracy
+ceiling (all `class_weight: balanced`, 5-fold stratified CV). Probe specs
+support `skip_extractions:` (validated names) — used to keep RBF SVC off
+the concat matrix (O(n²·d) Gram, no feature ranking). Analyses are
+`top_features` (probe-|coef| ranking, fold-aware, multiclass-aware with
+per-feature `top_class`; `source_probe` can be `logreg` or `linear_svc`)
+and `correlation_map`.
 
 ## What was changed (2026-07)
 

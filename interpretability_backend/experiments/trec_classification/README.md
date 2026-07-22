@@ -42,8 +42,12 @@ CUDA on the A100); set `device:` on a `sae_pooled` block only to override.
 
 Budget (full runs): qwen token cache ≈ 9.5 GB, < 1 h end-to-end. Gemma pass 1
 token cache ≈ 14 GB bf16 (pass 2 adds ~29 GB); extraction ~20–40 min per
-pass, the 5-fold logreg/SVC probes are the long pole (hours for the full
-layer × site grid).
+pass, the 5-fold probes are the long pole (hours for the full layer × site
+grid). Three probes per cell: **logreg** and **linear_svc** (both linear,
+both save directions — two independent loss functions ranking the same
+features), plus **RBF svc** as a nonlinear accuracy ceiling
+(`skip_extractions` keeps it off the concat matrix, where an n×n Gram over
+~300k dims would take days and yield no feature ranking).
 
 ## Results tree
 
@@ -51,9 +55,10 @@ layer × site grid).
 - `probes/<extraction>/<target>/logreg/probe_results.csv` — accuracy/F1 per
   (layer, fold) + mean/std rows. Majority-class baseline for coarse_label is
   ~22.6%.
-- `probes/gemma_sae_concat/<target>/logreg/feature_importance.csv` — per-
-  feature standardized |β| across folds, columns named
-  `L{layer}_{site}_f{true_feature_idx}`.
+- `probes/gemma_sae_concat/<target>/{logreg,linear_svc}/feature_importance.csv`
+  — per-feature standardized |β| across folds, columns named
+  `L{layer}_{site}_f{true_feature_idx}`; agreement between the two linear
+  probes' rankings is the robustness signal.
 - `sae_analysis/<extraction>/<target>/top_features/top_features.json` —
   top-K features by |coef| with Neuronpedia labels where available
   (gemma resid_post L9/17/22/29; qwen has no labels yet) and, for

@@ -77,9 +77,9 @@ the extraction stages — the slow work is the probe training itself.
        ┌────────────────────────────────────────────────────┐
        │  Probes (per extraction × target × probe)          │
        │   • train_mlp_probes              (ProbeModel MLP) │
-       │   • train_sklearn_probe           (ridge/lasso/    │
-       │                                    svr/logreg/     │
-       │                                    massmean)       │
+       │   • train_sklearn_probe           (ridge/lasso/svr/ │
+       │                                    svc/linear_svc/  │
+       │                                    logreg/massmean) │
        └────────────────────────────────────────────────────┘
                           │  per-probe CSV + summary.json
                           ▼
