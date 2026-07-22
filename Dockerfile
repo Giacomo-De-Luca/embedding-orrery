@@ -46,6 +46,9 @@ ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
 
 COPY --from=frontend-deps /fe/node_modules ./node_modules
 COPY embedding_visualization/ .
+# Bound V8's heap below the build VM's cgroup limit (HF Space builder) so the
+# webpack build GCs under pressure instead of getting OOM-killed.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN npm run build:docker
 
 ########## Backend deps ##########

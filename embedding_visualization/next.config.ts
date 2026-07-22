@@ -12,8 +12,10 @@ const nextConfig: NextConfig = {
   },
 
   // Promoted from `experimental.reactCompiler` to a top-level option in Next 16
-  // (React Compiler is stable as of the 1.0 release).
-  reactCompiler: true,
+  // (React Compiler is stable as of the 1.0 release). Disabled for Docker
+  // builds: its Babel pass over the forked-plotly module graph OOM-kills
+  // memory-capped build VMs (HF Space builder).
+  reactCompiler: !isDockerBuild,
 
   // Old route names — query strings are preserved automatically.
   async redirects() {
