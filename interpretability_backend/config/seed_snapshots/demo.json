@@ -14,9 +14,28 @@
     },
     {
       "name": "wordnet_senses_full"
+    },
+    {
+      "name": "Gemma_9_16k_embedded"
     }
   ],
-  "sae_data": [],
+  "sae_data": [
+    {
+      "model_id": "gemma-3-4b-it",
+      "sae_id": "9-gemmascope-2-res-16k",
+      "features": true,
+      "activation_examples": true,
+      "max_activation_examples_per_feature": 10,
+      "explanation_vector_collection": "Gemma_9_16k_embedded"
+    },
+    {
+      "model_id": "gemma-3-1b",
+      "sae_id": "22-gemmascope-2-res-16k",
+      "features": true,
+      "document_activations": ["acl_abstracts_emnlp_findings"],
+      "document_activation_top_k": 256
+    }
+  ],
   "publish": {
     "repo_id_env": "ORRERY_SEED_REPO_ID",
     "private": true,

@@ -12,21 +12,25 @@ import { stripQueryPrefix } from './urlViewParams';
 /** Versioned storage keys — bump the suffix to re-show after a redesign. */
 export const INTRO_STORAGE_KEY = 'orrery.demo-intro.v1';
 export const TOUR_STORAGE_KEY = 'orrery.demo-tour.v1';
+export const SAE_TOUR_STORAGE_KEY = 'orrery.demo-sae-tour.v1';
 
 export type OnboardingMark = 'dismissed' | 'completed';
 
 /** Below this viewport width the spotlight tour is too cramped — intro only. */
 export const TOUR_MIN_VIEWPORT = 768;
 
-export type OnboardingAction = 'intro' | 'tour' | null;
+export type OnboardingAction = 'intro' | 'tour' | 'sae-tour' | null;
 
 /** URL params whose presence means the visitor followed a deep link (no auto-intro). */
 const DEEP_LINK_PARAMS = ['collection', 'colorBy', 'preset', 'tour'] as const;
 
 /**
  * Decide what to auto-present, from first-render inputs only.
- * - `?tour=1` starts the tour in ANY build (dev testing included), downgraded
- *   to the intro on viewports too narrow for a spotlight tour.
+ * - `?tour=sae` is the "Inspect SAE" tour: its first segment runs on the
+ *   Explore page's label map (the page owns the viewport downgrade), then
+ *   hands off to /sae for the inspection segment.
+ * - `?tour=1` starts the Explore tour in ANY build (dev testing included),
+ *   downgraded to the intro on viewports too narrow for a spotlight tour.
  * - `?intro=1` reopens the welcome dialog in any build, ignoring storage.
  * - Otherwise the intro auto-opens once per browser, demo builds only, and
  *   never on top of a deep link.
@@ -38,6 +42,7 @@ export function getOnboardingAction(args: {
   viewportWidth: number;
 }): OnboardingAction {
   const params = new URLSearchParams(stripQueryPrefix(args.search));
+  if (params.get('tour') === 'sae') return 'sae-tour';
   if (params.get('tour') === '1') {
     return args.viewportWidth < TOUR_MIN_VIEWPORT ? 'intro' : 'tour';
   }
@@ -67,8 +72,13 @@ export function markIntro(value: OnboardingMark): void {
   safeSet(INTRO_STORAGE_KEY, value);
 }
 
+/** Record a tour outcome under an arbitrary storage key (one per tour). */
+export function markTourKey(key: string, value: OnboardingMark): void {
+  safeSet(key, value);
+}
+
 export function markTour(value: OnboardingMark): void {
-  safeSet(TOUR_STORAGE_KEY, value);
+  markTourKey(TOUR_STORAGE_KEY, value);
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ import { DashboardPanel, type ActivePanel } from './components/DashboardPanel';
 import { SidebarInset, SidebarProvider } from '@/lib/ui-primitives/sidebar';
 import { useEmbeddingData } from '../lib/hooks/useEmbeddingData';
 import { useCollections } from '../lib/hooks/useCollections';
+import { useCollectionTopics } from '../lib/hooks/useCollectionTopics';
 import { useVisualizationPoints } from '../lib/hooks/useVisualizationPoints';
 import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
@@ -17,8 +18,9 @@ import { useTextSearch, TEXT_SEARCH_GLOW_CAP } from '../lib/hooks/useTextSearch'
 import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/usePromptHighlight';
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
 import { isInTemporalRange } from '../lib/utils/temporalFilters';
+import { detectTemporalFields, computeTemporalCounts, windowPeriodsByFraction } from '../lib/utils/temporalAnalysis';
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
-import type { HighlightMap, ColorScale, ColorScaleType } from '../lib/types/types';
+import type { HighlightMap, ColorScale, ColorScaleType, Point2D, Point3D } from '../lib/types/types';
 import { getSaeInfo, getSaeInfoFromMetadata, isSaeFeatureCollection } from '../lib/utils/saeCollections';
 import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
 import { mergeViewSearch, shouldDropPreset, type OwnedViewParams } from '../lib/utils/urlViewParams';
@@ -35,11 +37,18 @@ import {
   getOnboardingAction,
   readIntroSeen,
   markIntro,
+  TOUR_STORAGE_KEY,
+  SAE_TOUR_STORAGE_KEY,
+  TOUR_MIN_VIEWPORT,
   type OnboardingAction,
 } from '../lib/utils/demoOnboarding';
 import { IS_DEMO } from '../lib/utils/demoMode';
 import { DemoIntro } from './components/DemoIntro';
-import type { TourRuntime } from '../lib/utils/tourSteps';
+import { TOUR_ANCHORS, TOUR_STEPS, waitFor, type TourRuntime } from '../lib/utils/tourSteps';
+import { apolloClient } from '../lib/utils/apollo-client';
+import { SEARCH_SAE_FEATURES } from '../lib/graphql/queries';
+import { SAE_MAP_TOUR_STEPS, saeInspectPath } from '../lib/utils/saeTourSteps';
+import { SAE_FEATURE_INDEX_FIELD } from '../lib/utils/saeCollections';
 import dynamic from 'next/dynamic';
 
 // Loaded on demand so regular visits never pay for the tour library.
@@ -132,6 +141,15 @@ function HomeContent() {
   );
   const [introOpen, setIntroOpen] = useState(onboarding === 'intro');
   const [tourRequested, setTourRequested] = useState(onboarding === 'tour');
+  // "Inspect SAE" tour, segment 1: runs HERE on the label map, then hands
+  // off to /sae (`saeInspectPath`) when it finishes. Below the viewport
+  // floor the trigger is dropped, same as the main tour.
+  const [saeTourRequested, setSaeTourRequested] = useState(
+    () =>
+      onboarding === 'sae-tour' &&
+      typeof window !== 'undefined' &&
+      window.innerWidth >= TOUR_MIN_VIEWPORT,
+  );
   // A preset applied mid-session (welcome-dialog buttons); its colour block is
   // applied by a dedicated effect once the collection's data has loaded.
   const [pendingPreset, setPendingPreset] = useState<PresetDefinition | null>(null);
@@ -236,11 +254,15 @@ function HomeContent() {
     }
   }, [selectedCollection, colorByField, colorScale, categoricalPalette, router]);
 
-  // Get topics for selected collection
+  // Topics for the selected collection: the canonical `collectionTopics`
+  // query, with the manifest's legacy `topic_summary` blob as fallback (that
+  // blob is empty on post-DuckDB-migration stores — see useCollectionTopics).
+  const { topics: fetchedTopics } = useCollectionTopics(selectedCollection);
   const selectedCollectionTopics = useMemo(() => {
+    if (fetchedTopics) return fetchedTopics;
     if (!collections || !selectedCollection) return undefined;
     return collections[selectedCollection]?.topics;
-  }, [collections, selectedCollection]);
+  }, [fetchedTopics, collections, selectedCollection]);
 
   // Query prompt name for semantic search (null=none, 'auto'=auto-detect, or explicit value)
   const [queryPromptName, setQueryPromptName] = useState<string | null>(null);
@@ -331,12 +353,17 @@ function HomeContent() {
 
   // SAE prompt activation highlight — prefer metadata-based lookup, fall back to hardcoded
   const saeInfo = getSaeInfoFromMetadata(data?.metadata) ?? getSaeInfo(selectedCollection);
-  // Prompt activation only applies when the points themselves are SAE features;
-  // document collections linked to an SAE keep saeInfo for the feature search.
+  // Feature collections (points ARE SAE features) get the right-click
+  // cross-link; document collections linked to an SAE keep saeInfo for the
+  // feature search only.
   const saeFeatureInfo = isSaeFeatureCollection(data?.availableFields) ? saeInfo : null;
+  // Prompt-activation highlighting is live inference (runPromptHighlight
+  // mutation) — never offered in the read-only demo, where the seeded label
+  // map would otherwise surface it.
+  const promptActivationInfo = IS_DEMO ? null : saeFeatureInfo;
   // Default 0.01 matches the SAE page; clearing the input disables the filter.
   const [promptMaxDensity, setPromptMaxDensity] = useState<number | null>(0.01);
-  const promptHighlight = usePromptHighlight(saeFeatureInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
+  const promptHighlight = usePromptHighlight(promptActivationInfo, data?.itemMetadata ?? EMPTY_METADATA, promptMaxDensity);
 
   // Document feature search (two-hop: label → features → documents)
   const featureSearch = useDocumentFeatureSearch(selectedCollection, saeInfo);
@@ -511,6 +538,13 @@ function HomeContent() {
     setTourRequested(true);
   }, [applyPresetLive]);
 
+  // Welcome-dialog entry for the "Inspect SAE" tour — its first step's
+  // prepare applies the sae-map preset itself, so only the request is set.
+  const startSaeTour = useCallback(() => {
+    setIntroOpen(false);
+    setSaeTourRequested(true);
+  }, []);
+
   // Imperative surface for the tour's prepare hooks. The runtime MUST be
   // identity-stable AND always-fresh: react-joyride deep-compares steps with
   // function source-text equality, so rebuilt `before` closures are treated
@@ -529,12 +563,69 @@ function HomeContent() {
   topicSearchRef.current = topicSearch;
   const collectionTopicsRef = useRef(selectedCollectionTopics);
   collectionTopicsRef.current = selectedCollectionTopics;
+  const selectedPointRef = useRef(selectedPoint);
+  selectedPointRef.current = selectedPoint;
+  const featureSearchRef = useRef(featureSearch);
+  featureSearchRef.current = featureSearch;
+  const saeInfoRef = useRef(saeInfo);
+  saeInfoRef.current = saeInfo;
+  // Source for the tour's temporal window: metadata is identical across
+  // modes, so either point set works — prefer whichever is populated.
+  const temporalSourceRef = useRef<{
+    points: Array<Point2D | Point3D>;
+    fields: string[];
+  }>({ points: [], fields: [] });
+  temporalSourceRef.current = {
+    points: points3d.length > 0 ? points3d : points2d,
+    fields: data?.availableFields ?? [],
+  };
+  // Bumped by the tour to undo a search fly-to (consumed by ScatterPlot3D).
+  const [cameraResetTick, setCameraResetTick] = useState(0);
   const tourRuntime = useMemo<TourRuntime>(() => ({
     applyPreset: (presetId: string) => applyPresetLiveRef.current(presetId),
     runSearch: async (query: string) => {
       await runSearchRef.current(query);
     },
-    clearSearch: () => resetSearchRef.current(),
+    // Feature-name → document search (two-hop, DuckDB-only): resolve the top
+    // label matches on the collection's linked SAE, select them, and wait
+    // for the ranked-document highlight the selection effect fires.
+    runFeatureSearch: async (labelQuery: string) => {
+      const info = saeInfoRef.current;
+      if (!info) return false;
+      try {
+        const { data: search } = await apolloClient.query<{
+          saeFeatureSearch: Array<{
+            feature: { featureIndex: number; label: string | null; density: number | null };
+          }>;
+        }>({
+          query: SEARCH_SAE_FEATURES,
+          variables: { modelId: info.modelId, saeId: info.saeId, query: labelQuery, limit: 2 },
+          fetchPolicy: 'network-only',
+        });
+        const features = (search?.saeFeatureSearch ?? []).map((r) => ({
+          featureIndex: r.feature.featureIndex,
+          label: r.feature.label,
+          density: r.feature.density,
+        }));
+        if (features.length === 0) return false;
+        for (const f of features) featureSearchRef.current.addFeature(f);
+        await waitFor(
+          () =>
+            featureSearchRef.current.results.length > 0 ||
+            featureSearchRef.current.status === 'error',
+          10000,
+        );
+        return featureSearchRef.current.results.length > 0;
+      } catch {
+        return false;
+      }
+    },
+    // "Search" for tour purposes = semantic glow AND feature ranking.
+    clearSearch: () => {
+      resetSearchRef.current();
+      featureSearchRef.current.clearFeatures();
+    },
+    resetCamera: () => setCameraResetTick((t) => t + 1),
     // Isolation = exactly one selected topic; DashboardPanel derives the
     // muting from `selectedTopicIds` when colouring by topic_label.
     isolateFirstTopic: () => {
@@ -547,11 +638,40 @@ function HomeContent() {
       return topic.label;
     },
     clearTopicSelection: () => topicSearchRef.current.clearAll(),
+    // Same detection + period math as the Analytics sidebar's useTemporalData,
+    // run imperatively so the tour can brush a window without the panel.
+    applyTemporalWindow: (fromFrac: number, toFrac: number) => {
+      const { points, fields } = temporalSourceRef.current;
+      if (points.length === 0) return false;
+      const itemMetadata = points.map((p) => p.metadata ?? {}) as Record<string, unknown>[];
+      const field = detectTemporalFields(fields, itemMetadata)[0];
+      if (!field) return false;
+      const periods = computeTemporalCounts(points, field).map((r) => r.period);
+      const window = windowPeriodsByFraction(periods, fromFrac, toFrac);
+      if (!window) return false;
+      useVisualizationStore.getState().setTemporalRange({ field, ...window, allPeriods: periods });
+      return true;
+    },
+    clearTemporalFilter: () => useVisualizationStore.getState().setTemporalRange(null),
+    setDensityView: (on: boolean) => {
+      const state = useVisualizationStore.getState();
+      state.setMode(on ? '2d' : '3d');
+      state.setFlag('densityMode', on);
+    },
     setActivePanel,
     setShowLabels: (value: boolean) =>
       useVisualizationStore.getState().setFlag('showLabels', value),
     getLoadedCollection: () => loadedCollectionRef.current ?? null,
     getColorByField: () => useVisualizationStore.getState().colorByField,
+    getSelectedFeatureIndex: () => {
+      const meta = selectedPointRef.current?.metadata as
+        | Record<string, unknown>
+        | undefined;
+      const raw = meta?.[SAE_FEATURE_INDEX_FIELD];
+      if (raw == null || raw === '') return null;
+      const index = Number(raw);
+      return Number.isInteger(index) && index >= 0 ? index : null;
+    },
   }), []);
 
   // Auto-reset of mutedCategories on colorByField change is handled by the store subscription
@@ -612,11 +732,11 @@ function HomeContent() {
                   semanticSearchResults={semanticSearchResults}
                   searchQueryLabel={searchQueryLabel}
                   embeddingDim={data.metadata.embedding_dim}
-                  saeInfo={saeInfo}
+                  saeInfo={saeFeatureInfo}
                   promptHighlightStatus={promptHighlight.status}
                   promptHighlightError={promptHighlight.error}
                   promptHighlightActivePrompt={promptHighlight.activePrompt}
-                  onPromptHighlightSubmit={saeFeatureInfo ? promptHighlight.submit : undefined}
+                  onPromptHighlightSubmit={promptActivationInfo ? promptHighlight.submit : undefined}
                   onPromptHighlightClear={promptHighlight.clear}
                   promptHighlightResults={promptHighlightResults}
                   promptMaxDensity={promptMaxDensity}
@@ -654,6 +774,7 @@ function HomeContent() {
                   onToggleTopic={topicSearch.toggleTopic}
                   onSelectAllTopics={topicSearch.selectAll}
                   onClearAllTopics={topicSearch.clearAll}
+                  cameraResetSignal={cameraResetTick}
                 />
               {/*<AppFooter
                     timestamp={data.metadata.timestamp}
@@ -670,11 +791,54 @@ function HomeContent() {
           open={introOpen}
           onOpenChange={setIntroOpen}
           onStartTour={startTour}
+          onStartSaeTour={startSaeTour}
           onApplyPreset={applyPresetLive}
           availableCollections={availableCollections}
         />
         {tourRequested && (
-          <TourController runtime={tourRuntime} onDone={() => setTourRequested(false)} />
+          <TourController
+            steps={TOUR_STEPS}
+            anchors={TOUR_ANCHORS}
+            runtime={tourRuntime}
+            storageKey={TOUR_STORAGE_KEY}
+            // A mid-tour skip must not strand tour-applied state: the search
+            // glow/fly-to (camera included), topic isolation, the temporal
+            // window, or the 2D density view (all no-ops when the tour ran to
+            // completion — the finale's preset already restored the 3D
+            // defaults on the fresh collection).
+            onBeforeEnd={(r: TourRuntime) => {
+              r.clearSearch();
+              r.resetCamera();
+              r.clearTopicSelection();
+              r.clearTemporalFilter();
+              r.setDensityView(false);
+            }}
+            onDone={() => setTourRequested(false)}
+          />
+        )}
+        {saeTourRequested && (
+          <TourController
+            steps={SAE_MAP_TOUR_STEPS}
+            anchors={TOUR_ANCHORS}
+            runtime={tourRuntime}
+            storageKey={SAE_TOUR_STORAGE_KEY}
+            // No onBeforeEnd: it runs before onDone regardless of outcome,
+            // and clearing the search there would drop the selected point
+            // whose feature index the completed-handoff below still needs.
+            onDone={(outcome) => {
+              setSaeTourRequested(false);
+              if (outcome === 'completed') {
+                // Segment 2 continues on /sae with the top match deep-linked
+                // (or unpinned when the search never landed — /sae's anatomy
+                // step then runs its own fallback search).
+                router.push(saeInspectPath(tourRuntime.getSelectedFeatureIndex()));
+              } else {
+                // Mid-tour skip: drop the tour-applied glow and camera dive.
+                tourRuntime.clearSearch();
+                tourRuntime.resetCamera();
+              }
+            }}
+          />
         )}
       </SidebarInset>
     </SidebarProvider>

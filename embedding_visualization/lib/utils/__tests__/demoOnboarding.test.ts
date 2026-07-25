@@ -5,6 +5,7 @@ import {
   resetWarmEmotionSearchForTests,
   INTRO_STORAGE_KEY,
   TOUR_STORAGE_KEY,
+  SAE_TOUR_STORAGE_KEY,
   TOUR_MIN_VIEWPORT,
 } from '../demoOnboarding';
 
@@ -46,12 +47,32 @@ describe('getOnboardingAction', () => {
   it('?tour=1 wins over ?intro=1', () => {
     expect(getOnboardingAction({ ...base, search: '?tour=1&intro=1' })).toBe('tour');
   });
+
+  it('?tour=sae routes to the SAE tour in any build, at any viewport', () => {
+    expect(getOnboardingAction({ ...base, search: '?tour=sae' })).toBe('sae-tour');
+    expect(
+      getOnboardingAction({ ...base, search: '?tour=sae', isDemo: false, introSeen: true }),
+    ).toBe('sae-tour');
+    // No downgrade here — the /sae page owns the viewport floor.
+    expect(
+      getOnboardingAction({ ...base, search: '?tour=sae', viewportWidth: TOUR_MIN_VIEWPORT - 1 }),
+    ).toBe('sae-tour');
+  });
+
+  it('?tour=sae wins over ?intro=1', () => {
+    expect(getOnboardingAction({ ...base, search: '?tour=sae&intro=1' })).toBe('sae-tour');
+  });
+
+  it('unknown ?tour values fall through to the ordinary gating', () => {
+    expect(getOnboardingAction({ ...base, search: '?tour=nope' })).toBeNull();
+  });
 });
 
 describe('storage keys', () => {
   it('are the versioned constants', () => {
     expect(INTRO_STORAGE_KEY).toBe('orrery.demo-intro.v1');
     expect(TOUR_STORAGE_KEY).toBe('orrery.demo-tour.v1');
+    expect(SAE_TOUR_STORAGE_KEY).toBe('orrery.demo-sae-tour.v1');
   });
 });
 

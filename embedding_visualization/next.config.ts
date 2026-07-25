@@ -30,13 +30,12 @@ const nextConfig: NextConfig = {
     return [
       { source: "/features", destination: "/sae", permanent: true },
       { source: "/test-embed", destination: "/collections", permanent: true },
-      // Read-only demo builds expose the Explore page only.
+      // Read-only demo builds expose the Explore and SAE pages; Collections
+      // (the embedding workbench) stays server-side redirected.
       ...(isDemoMode
         ? [
             { source: "/collections/:path*", destination: "/", permanent: false },
             { source: "/collections", destination: "/", permanent: false },
-            { source: "/sae/:path*", destination: "/", permanent: false },
-            { source: "/sae", destination: "/", permanent: false },
           ]
         : []),
     ];

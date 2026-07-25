@@ -16,7 +16,6 @@ import {
 } from '@/lib/ui-primitives/combobox';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { Separator } from '@/lib/ui-primitives/separator';
 import { Button } from '@/lib/ui-primitives/button';
 import { cn } from '@/lib/utils/utils';
 import { Input } from '@/lib/ui-primitives/input';
@@ -112,15 +111,37 @@ export function AppHeader({
     ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
     : undefined;
 
+  // Demo builds split the header into two rows: the nav pills, help button,
+  // and theme toggle move down beside the Plotly modebar (pinned to the same
+  // band by `.modebar-container` in globals.css), leaving row 1 room for the
+  // HuggingFace pill clearance without clipping. Normal builds keep one row.
+  const navCluster = (
+    <>
+      <PageNav variant="glass" saeHref={saeHref} />
+      {onOpenIntro && (
+        <Button
+          variant="circularghost"
+          size="icon"
+          onClick={onOpenIntro}
+          aria-label="About this demo"
+          title="About this demo"
+        >
+          <CircleHelp className="h-4 w-4" />
+        </Button>
+      )}
+      <ModeToggle />
+    </>
+  );
+
   return (
     <header
       className={cn(
-        "flex bg-transparent h-16 shrink-0 items-center transition-all duration-300 ease-in-out",
+        "flex flex-col bg-transparent shrink-0 transition-all duration-300 ease-in-out",
         "pl-0"
         // isExpanded ? "pl-84" : "pl-0"
       )}
     >
-      <div className="flex w-full items-center gap-2 px-4">
+      <div className="flex h-16 w-full items-center gap-2 px-4">
         <Button
           variant={activePanel === 'controls' ? 'circular' : 'circularghost'}
           size="icon"
@@ -152,7 +173,6 @@ export function AppHeader({
         >
           <BarChart3 className="h-4 w-4" />
         </Button>
-        <Separator orientation="vertical" className="mr-2 h-4" />
 
         <div className="flex items-center gap-3 flex-1">
           <div className="flex items-center gap-3">
@@ -245,22 +265,21 @@ export function AppHeader({
               </Combobox>
             ) : null}
           </div>
-          <PageNav variant="glass" saeHref={saeHref} />
-          {onOpenIntro && (
-            <Button
-              variant="circularghost"
-              size="icon"
-              onClick={onOpenIntro}
-              aria-label="About this demo"
-              title="About this demo"
-            >
-              <CircleHelp className="h-4 w-4" />
-            </Button>
-          )}
-          <ModeToggle />
+          {!IS_DEMO && navCluster}
           {hfPillClearance && <div aria-hidden className="w-40 shrink-0 sm:w-72" />}
         </div>
       </div>
+      {IS_DEMO && (
+        // Row 2 is right-aligned to sit above the legend/modebar column (both
+        // pinned to the right edge over the plot; the plot's modebar is nudged
+        // below this row in demo builds — see `.demo-plot-chrome` in
+        // globals.css). pointer-events dance: the page wraps the whole header
+        // in an interactive overlay, but row 2 is mostly empty space over the
+        // plot, so only the cluster itself may capture input.
+        <div className="pointer-events-none flex h-10 w-full items-center justify-end gap-2 px-4">
+          <div className="pointer-events-auto flex items-center gap-2">{navCluster}</div>
+        </div>
+      )}
     </header>
   );
 }

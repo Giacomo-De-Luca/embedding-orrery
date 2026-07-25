@@ -107,7 +107,10 @@ export function FeatureHeader({
     // search share column 2 (capped at 36rem = max-w-xl, stopping the search
     // bar from stretching indefinitely). SaeMultiSelect contributes its three
     // cells via `display: contents`.
-    <div className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-[11rem_minmax(0,36rem)_auto] md:gap-x-3 md:gap-y-2">
+    <div
+      className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-[11rem_minmax(0,36rem)_auto] md:gap-x-3 md:gap-y-2"
+      data-tour="sae-header"
+    >
       <SaeMultiSelect
         modelId={modelId}
         modelOptions={modelOptions}
@@ -167,7 +170,7 @@ export function FeatureHeader({
             )}
           </ToggleGroup>
         )}
-        <div className="flex items-center gap-1 flex-1 min-w-0">
+        <div className="flex items-center gap-1 flex-1 min-w-0" data-tour="sae-search-input">
           <Input
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
@@ -192,6 +195,7 @@ export function FeatureHeader({
         <a
           href={`/?collection=${encodeURIComponent(collectionLink)}`}
           className="text-xs text-blue-500 hover:underline shrink-0 whitespace-nowrap justify-self-start"
+          data-tour="sae-map-link"
         >
           View in scatter plot
         </a>

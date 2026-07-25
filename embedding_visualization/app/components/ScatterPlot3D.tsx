@@ -156,6 +156,11 @@ interface ScatterPlot3DProps {
   selectedDimensions?: number[];
   /** Called with the composited plot canvas when the modebar screenshot button is clicked */
   onScreenshot?: (canvas: HTMLCanvasElement) => void;
+  /**
+   * Increment to animate the camera back to the default wide framing (demo
+   * tour: recovering from a search fly-to; muting refits handle themselves).
+   */
+  cameraResetSignal?: number;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -200,6 +205,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   showAxes = false,
   selectedDimensions,
   onScreenshot,
+  cameraResetSignal,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hoveredPointRef = useRef<Point3D | null>(null);
@@ -668,6 +674,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   // Track whether camera was refitted so we can animate back when muting clears
   const wasRefittedRef = useRef(false);
+  // Last `cameraResetSignal` value acted on — lets a bump that arrives before
+  // the plot is ready be latched and replayed once `plotReady` flips true,
+  // instead of silently dropped.
+  const lastCameraResetRef = useRef(0);
 
   // Auto-refit camera to frame active points when muting is active
   useEffect(() => {
@@ -732,6 +742,25 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       renderLabelsRef, labelCanvasRef,
     });
   }, [activeBounds, plotReady, bounds, defaultEye, isAnimatingRef, animationFrameRef]);
+
+  // Imperative wide shot: the demo tour bumps `cameraResetSignal` to undo a
+  // point fly-to (selection-driven zooms have no muting, so the auto-refit
+  // above never animates them back). Runs on both the signal and `plotReady`
+  // so a bump arriving before the plot mounts is replayed once it's ready; the
+  // last-handled guard keeps unrelated `plotReady`/`defaultEye` changes from
+  // re-firing a reset the user has since moved away from.
+  useEffect(() => {
+    if (!cameraResetSignal || cameraResetSignal === lastCameraResetRef.current) return;
+    if (!plotReady || !plotlyLibRef.current || !graphDivRef.current) return;
+    lastCameraResetRef.current = cameraResetSignal;
+    wasRefittedRef.current = false;
+    animateCameraToRegion({
+      targetEye: defaultEye, targetCenter: defaultCenter, duration: 1200,
+      graphDivRef, currentCameraRef, plotlyLibRef,
+      isAnimatingRef, animationFrameRef,
+      renderLabelsRef, labelCanvasRef,
+    });
+  }, [cameraResetSignal, plotReady, defaultEye, defaultCenter]);
 
   // Pre-compute highlighted points via direct index lookup — O(k) not O(n)
   const highlightedPoints = useMemo(() => {

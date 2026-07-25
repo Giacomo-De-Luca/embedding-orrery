@@ -224,23 +224,26 @@ export function AnalyticsSidebar({
           {showTemporalSection && (
             <>
               {hasCategoricalData && <Separator />}
-              <TemporalFilterChart
-                temporalField={temporalField ?? ''}
-                allPeriods={allPeriods}
-                onBrushChange={handleBrushChange}
-                brushStartIndex={brushStartIndex}
-                brushEndIndex={brushEndIndex}
-                temporalCounts={temporalCounts}
-                categoryField={hasStackedTemporalData ? colorByField : null}
-                categoryValues={hasStackedTemporalData ? filteredCategoryValues : undefined}
-                categoryCounts={hasStackedTemporalData ? denoisedCategoryCounts : undefined}
-                crossTabData={hasStackedTemporalData ? crossTabData : undefined}
-                categoricalPalette={categoricalPalette}
-                mutedCategories={mutedCategories}
-                availableFields={availableFields}
-                temporalFieldOverride={temporalFieldOverride}
-                onTemporalFieldChange={handleTemporalFieldChange}
-              />
+              {/* data-tour: spotlight target for the demo tour's temporal step */}
+              <div data-tour="temporal-chart">
+                <TemporalFilterChart
+                  temporalField={temporalField ?? ''}
+                  allPeriods={allPeriods}
+                  onBrushChange={handleBrushChange}
+                  brushStartIndex={brushStartIndex}
+                  brushEndIndex={brushEndIndex}
+                  temporalCounts={temporalCounts}
+                  categoryField={hasStackedTemporalData ? colorByField : null}
+                  categoryValues={hasStackedTemporalData ? filteredCategoryValues : undefined}
+                  categoryCounts={hasStackedTemporalData ? denoisedCategoryCounts : undefined}
+                  crossTabData={hasStackedTemporalData ? crossTabData : undefined}
+                  categoricalPalette={categoricalPalette}
+                  mutedCategories={mutedCategories}
+                  availableFields={availableFields}
+                  temporalFieldOverride={temporalFieldOverride}
+                  onTemporalFieldChange={handleTemporalFieldChange}
+                />
+              </div>
             </>
           )}
 

@@ -228,6 +228,13 @@
   right: 24px !important;
 }
 
+/* Demo builds render a two-row header (nav pills move to a second row beside
+   the modebar). Drop the modebar below that row so they don't overlap; the
+   legend, which sits under the modebar, is dropped to match in DashboardPanel. */
+.demo-plot-chrome .modebar-container {
+  top: 120px !important;
+}
+
 /* Lucide icons are stroke-based — override Plotly's default fill rendering.
    All modebar buttons use custom Lucide icons, no default Plotly buttons remain. */
 .modebar-btn path {

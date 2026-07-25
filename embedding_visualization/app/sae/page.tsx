@@ -2,8 +2,10 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { useQuery, useLazyQuery, useApolloClient } from '@apollo/client/react';
-import { Sparkles, Sun, Moon, X } from 'lucide-react';
+import Link from 'next/link';
+import { CircleHelp, Sparkles, Sun, Moon, X } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 import {
@@ -33,6 +35,7 @@ import { CollapsibleSection } from './components/CollapsibleSection';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { PageNav } from '@/app/components/PageNav';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
@@ -48,7 +51,19 @@ import { useChatSessions } from '@/lib/hooks/useChatSessions';
 import { useSaeSelection } from './hooks/useSaeSelection';
 import { attachSaeIdentity, poolPromptFeatures, MAX_POOLED_ROWS } from './utils/promptPooling';
 import { serializeSaesParam } from './utils/saeSelection';
+import {
+  SAE_TOUR_ANCHORS,
+  SAE_TOUR_STEPS,
+  type SaeTourRuntime,
+} from '@/lib/utils/saeTourSteps';
+import { SAE_TOUR_STORAGE_KEY, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
 import type { ChatMessage } from '@/lib/types/types';
+
+// Loaded on demand so regular visits never pay for the tour library.
+const TourController = dynamic(
+  () => import('@/app/components/TourController'),
+  { ssr: false },
+);
 
 /** Shape of a single collection's fan-out semantic search result. */
 interface FanoutResult {
@@ -109,8 +124,20 @@ function FeaturesPageContent() {
     hookType: searchParams.get('hookType'),
     width: searchParams.get('width'),
     featureIndex: searchParams.get('featureIndex'),
+    // One-shot SAE-tour trigger; the URL-sync effect rebuilds the query from
+    // scratch, so the param disappears from the URL on its first pass.
+    tour: searchParams.get('tour'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
+
+  // "Inspect SAE" tour — latched from ?tour=sae at mount; below the viewport
+  // floor the trigger is simply dropped (no dialog exists on this page).
+  const [tourRequested, setTourRequested] = useState(
+    () =>
+      urlParams.tour === 'sae' &&
+      typeof window !== 'undefined' &&
+      window.innerWidth >= TOUR_MIN_VIEWPORT,
+  );
 
   // The feature open in the detail pane — independent of the SAE selection,
   // so clicking search results never rewrites the selection or the results.
@@ -181,7 +208,7 @@ function FeaturesPageContent() {
     saveMessage,
     deleteSession,
     setActiveSessionId,
-  } = useChatSessions();
+  } = useChatSessions({ demo: IS_DEMO });
 
   const [loadedMessages, setLoadedMessages] = useState<ChatMessage[] | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -237,7 +264,13 @@ function FeaturesPageContent() {
   const { data: modelsData, loading: modelsLoading } = useQuery<{ saeModels: SaeModelInfo[] }>(
     GET_SAE_MODELS,
   );
-  const models = useMemo(() => modelsData?.saeModels ?? [], [modelsData]);
+  // Demo seeds may carry features-only pairs whose labels exist purely to
+  // serve the Explore page's feature→document search — without activation
+  // examples the explorer is a degraded experience, so hide them here.
+  const models = useMemo(() => {
+    const all = modelsData?.saeModels ?? [];
+    return IS_DEMO ? all.filter((m) => (m.activationCount ?? 0) > 0) : all;
+  }, [modelsData]);
 
   // Selection: one model + a multi-select over its SAEs (defaults to all)
   const {
@@ -384,6 +417,47 @@ function FeaturesPageContent() {
     }
   }, [modelId, singleSaeId]);
 
+  // Fan-out semantic search across the selected SAEs' embedded collections.
+  // Extracted from handleSearch so the tour runtime can await it directly.
+  const performSemanticSearch = useCallback(async (q: string) => {
+    if (semanticCollections.length === 0) return;
+
+    setSemanticFanoutLoading(true);
+    try {
+      const promises = semanticCollections.map(({ modelId: mId, saeId: sId, collectionName }): Promise<FanoutResult> =>
+        apolloClient.query<{ semanticSearch: FanoutResult['results'] }>({
+          query: SEMANTIC_SEARCH,
+          variables: { collectionName, query: q, nResults: 50 },
+        }).then(({ data }) => ({
+          modelId: mId,
+          saeId: sId,
+          results: (data?.semanticSearch ?? []) as FanoutResult['results'],
+        })),
+      );
+
+      const allResults = await Promise.allSettled(promises);
+      const merged: SemanticFeatureResult[] = [];
+      for (const r of allResults) {
+        if (r.status !== 'fulfilled') continue;
+        const { modelId: mId, saeId: sId, results } = r.value;
+        for (const item of results) {
+          merged.push({
+            featureIndex: Number(item.metadata?.index ?? 0),
+            label: item.document ?? null,
+            density: (item.metadata?.density as number) ?? null,
+            similarity: item.similarity,
+            modelId: mId,
+            saeId: sId,
+          });
+        }
+      }
+      merged.sort((a, b) => b.similarity - a.similarity);
+      setMergedSemanticResults(merged.slice(0, 50));
+    } finally {
+      setSemanticFanoutLoading(false);
+    }
+  }, [semanticCollections, apolloClient]);
+
   const handleSearch = useCallback(async () => {
     const q = searchQuery.trim();
     if (!q) return;
@@ -391,6 +465,7 @@ function FeaturesPageContent() {
     if (searchMode === 'prompt') {
       // Prompt activation search: ONE runPromptActivations call hooks every
       // selected SAE (same model) in a single forward pass.
+      if (IS_DEMO) return; // inference — mode toggle is hidden, this is defense-in-depth
       if (!modelId || pairs.length === 0) return;
       if (promptSearchLoading) return;
       setPromptSearchLoading(true);
@@ -435,43 +510,7 @@ function FeaturesPageContent() {
         setPromptSearchLoading(false);
       }
     } else if (searchMode === 'semantic') {
-      // Fan-out semantic search across the selected SAEs' embedded collections
-      if (semanticCollections.length === 0) return;
-
-      setSemanticFanoutLoading(true);
-      try {
-        const promises = semanticCollections.map(({ modelId: mId, saeId: sId, collectionName }): Promise<FanoutResult> =>
-          apolloClient.query<{ semanticSearch: FanoutResult['results'] }>({
-            query: SEMANTIC_SEARCH,
-            variables: { collectionName, query: q, nResults: 50 },
-          }).then(({ data }) => ({
-            modelId: mId,
-            saeId: sId,
-            results: (data?.semanticSearch ?? []) as FanoutResult['results'],
-          })),
-        );
-
-        const allResults = await Promise.allSettled(promises);
-        const merged: SemanticFeatureResult[] = [];
-        for (const r of allResults) {
-          if (r.status !== 'fulfilled') continue;
-          const { modelId: mId, saeId: sId, results } = r.value;
-          for (const item of results) {
-            merged.push({
-              featureIndex: Number(item.metadata?.index ?? 0),
-              label: item.document ?? null,
-              density: (item.metadata?.density as number) ?? null,
-              similarity: item.similarity,
-              modelId: mId,
-              saeId: sId,
-            });
-          }
-        }
-        merged.sort((a, b) => b.similarity - a.similarity);
-        setMergedSemanticResults(merged.slice(0, 50));
-      } finally {
-        setSemanticFanoutLoading(false);
-      }
+      await performSemanticSearch(q);
     } else {
       // Text search across the selected SAEs (model always set → no cross-model
       // ambiguity for saeIds shared between models)
@@ -482,7 +521,7 @@ function FeaturesPageContent() {
     }
   }, [
     searchQuery, searchMode, modelId, pairs, saeIds, isSingleSae, singleSaeId,
-    semanticCollections, fetchSearch, apolloClient, promptSearchLoading,
+    performSemanticSearch, fetchSearch, apolloClient, promptSearchLoading,
     skipChatTemplate, activationFilterMode,
   ]);
 
@@ -525,6 +564,56 @@ function FeaturesPageContent() {
     ? selectedFeature.featureIndex
     : null;
 
+  // ---------- "Inspect SAE" tour runtime ----------
+  // Identity-stable (useMemo with no deps) and delegating through per-render
+  // refs: react-joyride deep-equals steps by function SOURCE TEXT, so a
+  // runtime rebuilt per render would freeze the first render's closures.
+  const performSemanticSearchRef = useRef(performSemanticSearch);
+  performSemanticSearchRef.current = performSemanticSearch;
+  const mergedSemanticResultsRef = useRef(mergedSemanticResults);
+  mergedSemanticResultsRef.current = mergedSemanticResults;
+  const selectedFeatureRef = useRef(selectedFeature);
+  selectedFeatureRef.current = selectedFeature;
+  const detailLoadedRef = useRef(false);
+  detailLoadedRef.current =
+    selectedFeature != null && !featureLoading && (featureData?.saeFeature ?? null) != null;
+  const chatSessionsRef = useRef(chatSessions);
+  chatSessionsRef.current = chatSessions;
+  const chatSessionsLoadingRef = useRef(chatSessionsLoading);
+  chatSessionsLoadingRef.current = chatSessionsLoading;
+  const handleSelectSessionRef = useRef(handleSelectSession);
+  handleSelectSessionRef.current = handleSelectSession;
+
+  const saeTourRuntime = useMemo<SaeTourRuntime>(() => ({
+    setSearchMode: (mode) => setSearchMode(mode),
+    runSemanticSearch: async (query) => {
+      setSearchQuery(query);
+      setSearchMode('semantic');
+      await performSemanticSearchRef.current(query);
+    },
+    openFirstResult: () => {
+      const first = mergedSemanticResultsRef.current[0];
+      if (!first?.modelId || !first?.saeId) return false;
+      setSelectedFeature({
+        modelId: first.modelId,
+        saeId: first.saeId,
+        featureIndex: first.featureIndex,
+      });
+      return true;
+    },
+    hasSelectedFeature: () => selectedFeatureRef.current != null,
+    isDetailLoaded: () => detailLoadedRef.current,
+    getResultCount: () => mergedSemanticResultsRef.current.length,
+    openChat: () => setChatOpen(true),
+    isChatReady: () => !chatSessionsLoadingRef.current,
+    loadFirstDemoSession: async () => {
+      const first = chatSessionsRef.current[0];
+      if (!first) return false;
+      await handleSelectSessionRef.current(first.id);
+      return true;
+    },
+  }), []);
+
   // Active search results depend on mode
   const isSemanticSearch = searchMode === 'semantic';
   const isPromptSearch = searchMode === 'prompt';
@@ -560,6 +649,22 @@ function FeaturesPageContent() {
         <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
           <PageNav variant="solid" size="sm" />
           <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
+          {/* Demo: route back to the Explore page's mission menu — /sae has
+              no welcome dialog of its own, and without this there is no way
+              to re-enter a tour from here. */}
+          {IS_DEMO && (
+            <Button
+              variant="circularghost"
+              size="icon"
+              asChild
+              aria-label="About this demo"
+              title="About this demo"
+            >
+              <Link href="/?intro=1">
+                <CircleHelp className="h-4 w-4" />
+              </Link>
+            </Button>
+          )}
           <ModeToggle />
         </header>
 
@@ -593,7 +698,7 @@ function FeaturesPageContent() {
                   searchMode={searchMode}
                   onSearchModeChange={setSearchMode}
                   hasSemanticSearch={hasAnySemanticCollection}
-                  hasPromptSearch={pairs.length > 0}
+                  hasPromptSearch={!IS_DEMO && pairs.length > 0}
                 />
             )}
           </div>
@@ -735,7 +840,10 @@ function FeaturesPageContent() {
                   )}
 
                   {/* Scrollable results area */}
-                  <ScrollArea className="flex-1 min-h-0 [&>[data-radix-scroll-area-viewport]>div]:block!">
+                  <ScrollArea
+                    className="flex-1 min-h-0 [&>[data-radix-scroll-area-viewport]>div]:block!"
+                    data-tour="sae-results"
+                  >
                     {activeSearchLoading ? (
                       <div className="flex items-center justify-center gap-2 py-4">
                         <Spinner className="h-4 w-4" />
@@ -789,7 +897,10 @@ function FeaturesPageContent() {
                     (only its viewport is), so without it this grid item's automatic min
                     height is content-sized and the auto row grows past lg:h-full — the
                     viewport then never overflows and scrolling dies. */}
-                <ScrollArea className="lg:col-span-2 overflow-hidden [&>[data-radix-scroll-area-viewport]>div]:block!">
+                <ScrollArea
+                  className="lg:col-span-2 overflow-hidden [&>[data-radix-scroll-area-viewport]>div]:block!"
+                  data-tour="sae-detail"
+                >
                   <div className="space-y-4">
                   {selectedFeature == null ? (
                     <div className="text-center py-8 text-muted-foreground text-sm">
@@ -844,21 +955,23 @@ function FeaturesPageContent() {
                         />
                       )}
 
-                      <CollapsibleSection title="Activations" count={activations.length} defaultOpen>
-                        {activationsLoading ? (
-                          <div className="flex justify-center py-4">
-                            <Spinner className="h-4 w-4" />
-                          </div>
-                        ) : (
-                          <ActivationExamples
-                            activations={activations}
-                            quantileGroups={quantileGroups}
-                            quantileLoading={quantilesLoading}
-                            onRequestQuantiles={handleRequestQuantiles}
-                            onHoverActivation={setHoveredActivationValue}
-                          />
-                        )}
-                      </CollapsibleSection>
+                      <div data-tour="sae-activations">
+                        <CollapsibleSection title="Activations" count={activations.length} defaultOpen>
+                          {activationsLoading ? (
+                            <div className="flex justify-center py-4">
+                              <Spinner className="h-4 w-4" />
+                            </div>
+                          ) : (
+                            <ActivationExamples
+                              activations={activations}
+                              quantileGroups={quantileGroups}
+                              quantileLoading={quantilesLoading}
+                              onRequestQuantiles={handleRequestQuantiles}
+                              onHoverActivation={setHoveredActivationValue}
+                            />
+                          )}
+                        </CollapsibleSection>
+                      </div>
                     </>
                   ) : (
                     <div className="text-center py-8 text-muted-foreground text-sm">
@@ -873,7 +986,11 @@ function FeaturesPageContent() {
         </main>
       </div>
 
-      {/* Chat sidebar */}
+      {/* Chat sidebar. In the demo it mounts too: sessions come from the
+          committed fixture (useChatSessions demo mode), the composer is
+          disabled, and no inference machinery activates — the generation
+          subscription only opens on send, and the model-status poll is
+          hidden by ChatPanel's demo gating. */}
       <div
         className="group/chat"
         data-state={chatOpen ? 'open' : 'closed'}
@@ -895,7 +1012,7 @@ function FeaturesPageContent() {
               before:bg-transparent hover:before:bg-border active:before:bg-primary
               ${isDragging ? 'before:!bg-primary' : ''}`}
           />
-          <div className="flex h-full flex-col border-l bg-background">
+          <div className="flex h-full flex-col border-l bg-background" data-tour="sae-chat">
             <ChatPanel
               currentFeature={feature}
               onClose={closeChat}
@@ -930,6 +1047,16 @@ function FeaturesPageContent() {
           />
           <span className="sr-only">Open steered chat</span>
         </Button>
+      )}
+
+      {tourRequested && (
+        <TourController
+          steps={SAE_TOUR_STEPS}
+          anchors={SAE_TOUR_ANCHORS}
+          runtime={saeTourRuntime}
+          storageKey={SAE_TOUR_STORAGE_KEY}
+          onDone={() => setTourRequested(false)}
+        />
       )}
     </div>
   );

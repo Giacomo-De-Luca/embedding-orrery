@@ -16,6 +16,7 @@ import {
   type SteeringChatOptions,
 } from '@/lib/hooks/useSteeringChat';
 import { downloadJson } from '@/lib/utils/downloadJson';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { isQwenModel } from '@/lib/utils/modelCheckpoints';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { STEERING_PRESETS } from '@/lib/utils/steeringPresets';
@@ -118,7 +119,9 @@ export function ChatPanel({
     setSeed(value);
     setSeedText(value?.toString() ?? '');
   }, []);
-  const [showHistory, setShowHistory] = useState(false);
+  // Demo: history opens by default — the pre-recorded sessions ARE the chat
+  // experience there, so they must be discoverable without hunting for a pill.
+  const [showHistory, setShowHistory] = useState(IS_DEMO);
   const [compareMode, setCompareMode] = useState(false);
   const prevLoadedRef = useRef<ChatMessageType[] | null | undefined>(undefined);
 
@@ -298,7 +301,9 @@ export function ChatPanel({
     }
   }, [activeSessionId, fetchSessionForDownload]);
 
-  const canDownload = !!activeSessionId && steeredMessages.length > 0;
+  // Demo: download re-fetches the session over GraphQL, which fixture
+  // sessions don't have — and compare mode only matters when you can send.
+  const canDownload = !IS_DEMO && !!activeSessionId && steeredMessages.length > 0;
 
   return (
     <div className="flex h-full">
@@ -319,6 +324,7 @@ export function ChatPanel({
               onSelectSession={(id) => onSelectSession?.(id)}
               onDeleteSession={(id) => onDeleteSession?.(id)}
               onNewChat={handleNewChat}
+              readOnly={IS_DEMO}
             />
           </motion.div>
         )}
@@ -330,13 +336,15 @@ export function ChatPanel({
         <div className="flex items-center justify-between px-4 pt-4 pb-0">
           <h2 className="text-sm font-semibold">Steered Chat</h2>
           <div className="flex items-center gap-1">
-            <HeaderIconButton
-              label={compareMode ? 'Exit compare mode' : 'Compare with baseline'}
-              variant={compareMode ? 'secondary' : 'ghost'}
-              onClick={handleToggleCompare}
-            >
-              <Columns2 className="size-3.5" />
-            </HeaderIconButton>
+            {!IS_DEMO && (
+              <HeaderIconButton
+                label={compareMode ? 'Exit compare mode' : 'Compare with baseline'}
+                variant={compareMode ? 'secondary' : 'ghost'}
+                onClick={handleToggleCompare}
+              >
+                <Columns2 className="size-3.5" />
+              </HeaderIconButton>
+            )}
             <HeaderIconButton
               label="History"
               variant={showHistory ? 'secondary' : 'ghost'}
@@ -470,9 +478,10 @@ export function ChatPanel({
             steeringFeatures={steeringConfig.features}
             votes={votes}
             onVote={handleVote}
-            onEdit={steeredEdit}
-            onRegenerate={handleRegenerate}
-            onStartCompare={handleToggleCompare}
+            // Demo: edit/regenerate/compare all re-run inference — hidden.
+            onEdit={IS_DEMO ? undefined : steeredEdit}
+            onRegenerate={IS_DEMO ? undefined : handleRegenerate}
+            onStartCompare={IS_DEMO ? undefined : handleToggleCompare}
           />
         )}
 
@@ -481,10 +490,17 @@ export function ChatPanel({
           onSend={handleSend}
           onStop={handleStop}
           isGenerating={isBusy}
-          showSuggestions={steeredEmpty}
+          disabled={IS_DEMO}
+          placeholder={
+            IS_DEMO
+              ? 'Live generation is off in this demo — open History to replay real steered chats.'
+              : undefined
+          }
+          showModelStatus={!IS_DEMO}
+          showSuggestions={steeredEmpty && !IS_DEMO}
           onSuggest={handleSend}
           onSelectModel={onSelectModel}
-          showThinking={isQwen}
+          showThinking={isQwen && !IS_DEMO}
           thinkingEnabled={enableThinking}
           onToggleThinking={() => setEnableThinking((v) => !v)}
         />

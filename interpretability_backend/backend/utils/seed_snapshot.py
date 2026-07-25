@@ -66,6 +66,9 @@ class SnapshotSAEConfig:
     activation_examples: bool
     document_activations: tuple[str, ...]
     explanation_vector_collection: str | None
+    # Pruning knobs for size-constrained snapshots (None = copy everything).
+    max_activation_examples_per_feature: int | None = None
+    document_activation_top_k: int | None = None
 
 
 @dataclass(frozen=True)
@@ -267,7 +270,9 @@ class SeedSnapshotConfig:
             "sae_id",
             "features",
             "activation_examples",
+            "max_activation_examples_per_feature",
             "document_activations",
+            "document_activation_top_k",
             "explanation_vector_collection",
         }
         for index, entry in enumerate(value):
@@ -290,6 +295,16 @@ class SeedSnapshotConfig:
             if activation_examples and not features:
                 raise SeedSnapshotConfigError(
                     f"sae_data[{index}] activation_examples requires features"
+                )
+
+            max_examples = cls._optional_positive_int(
+                entry.get("max_activation_examples_per_feature"),
+                f"sae_data[{index}].max_activation_examples_per_feature",
+            )
+            if max_examples is not None and not activation_examples:
+                raise SeedSnapshotConfigError(
+                    f"sae_data[{index}] max_activation_examples_per_feature "
+                    "requires activation_examples"
                 )
 
             documents_raw = entry.get("document_activations", [])
@@ -317,6 +332,16 @@ class SeedSnapshotConfig:
                     )
                 document_activation_owners[collection_name] = pair
 
+            document_top_k = cls._optional_positive_int(
+                entry.get("document_activation_top_k"),
+                f"sae_data[{index}].document_activation_top_k",
+            )
+            if document_top_k is not None and not document_activations:
+                raise SeedSnapshotConfigError(
+                    f"sae_data[{index}] document_activation_top_k "
+                    "requires document_activations"
+                )
+
             explanation = entry.get("explanation_vector_collection")
             if explanation is not None:
                 explanation = cls._nonempty_string(
@@ -343,9 +368,21 @@ class SeedSnapshotConfig:
                     activation_examples=activation_examples,
                     document_activations=document_activations,
                     explanation_vector_collection=explanation,
+                    max_activation_examples_per_feature=max_examples,
+                    document_activation_top_k=document_top_k,
                 )
             )
         return tuple(result)
+
+    @staticmethod
+    def _optional_positive_int(value: Any, field: str) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise SeedSnapshotConfigError(f"{field} must be a positive integer")
+        if value < 1:
+            raise SeedSnapshotConfigError(f"{field} must be a positive integer")
+        return value
 
     @classmethod
     def _parse_publish(
@@ -673,19 +710,12 @@ class DuckDBSnapshotExporter:
                 "sae_features",
                 tuple(sae for sae in config.sae_data if sae.features),
             )
-            counts["sae_activations"] = self._copy_sae_rows(
+            counts["sae_activations"] = self._copy_sae_activation_examples(
                 connection,
-                "sae_activations",
                 tuple(sae for sae in config.sae_data if sae.activation_examples),
             )
-            document_activation_names = tuple(
-                dict.fromkeys(name for sae in config.sae_data for name in sae.document_activations)
-            )
-            counts["sae_document_activations"] = self._copy_filtered(
-                connection,
-                "sae_document_activations",
-                "collection_name",
-                document_activation_names,
+            counts["sae_document_activations"] = self._copy_document_activations(
+                connection, config.sae_data
             )
 
             self._normalize_flags(connection, config)
@@ -769,6 +799,71 @@ class DuckDBSnapshotExporter:
                 "WHERE model_id = ? AND sae_id = ?",
                 [selection.model_id, selection.sae_id],
             )
+        return copied
+
+    @classmethod
+    def _copy_sae_activation_examples(
+        cls,
+        connection: duckdb.DuckDBPyConnection,
+        selections: tuple[SnapshotSAEConfig, ...],
+    ) -> int:
+        copied = 0
+        for selection in selections:
+            limit = selection.max_activation_examples_per_feature
+            if limit is None:
+                copied += cls._insert_count(
+                    connection,
+                    "INSERT INTO sae_activations BY NAME "
+                    "SELECT * FROM prod.sae_activations WHERE model_id = ? AND sae_id = ?",
+                    [selection.model_id, selection.sae_id],
+                )
+                continue
+            # Keep the strongest examples per feature; `id` tiebreak keeps the
+            # copy deterministic so manifest checksums are reproducible.
+            copied += cls._insert_count(
+                connection,
+                "INSERT INTO sae_activations BY NAME "
+                "SELECT * FROM prod.sae_activations WHERE model_id = ? AND sae_id = ? "
+                "QUALIFY row_number() OVER ("
+                "  PARTITION BY feature_index"
+                "  ORDER BY max_value DESC NULLS LAST, id"
+                ") <= ?",
+                [selection.model_id, selection.sae_id, limit],
+            )
+        return copied
+
+    @classmethod
+    def _copy_document_activations(
+        cls,
+        connection: duckdb.DuckDBPyConnection,
+        selections: tuple[SnapshotSAEConfig, ...],
+    ) -> int:
+        copied = 0
+        for selection in selections:
+            for collection_name in selection.document_activations:
+                limit = selection.document_activation_top_k
+                if limit is None:
+                    copied += cls._insert_count(
+                        connection,
+                        "INSERT INTO sae_document_activations BY NAME "
+                        "SELECT * FROM prod.sae_document_activations "
+                        "WHERE collection_name = ?",
+                        [collection_name],
+                    )
+                    continue
+                # Keep each document's strongest features; `feature_index`
+                # tiebreak keeps the copy deterministic.
+                copied += cls._insert_count(
+                    connection,
+                    "INSERT INTO sae_document_activations BY NAME "
+                    "SELECT * FROM prod.sae_document_activations "
+                    "WHERE collection_name = ? "
+                    "QUALIFY row_number() OVER ("
+                    "  PARTITION BY item_id"
+                    "  ORDER BY activation DESC, feature_index"
+                    ") <= ?",
+                    [collection_name, limit],
+                )
         return copied
 
     @staticmethod

@@ -123,6 +123,28 @@ export function computeTemporalCounts(
 }
 
 /**
+ * Select a fractional sub-window of an ordered period list as an inclusive
+ * `[startPeriod, endPeriod]` pair matching the `TemporalRange` contract.
+ * `fromFrac`/`toFrac` are 0..1 over the period count; the end index is
+ * inclusive (`ceil(toFrac·n) − 1`). Returns `null` when the window would span
+ * the full range (no filtering needed) or the list has fewer than two periods.
+ * Shared by the Analytics brush's fraction math and the demo tour's
+ * `applyTemporalWindow`, so the two can't drift.
+ */
+export function windowPeriodsByFraction(
+  periods: string[],
+  fromFrac: number,
+  toFrac: number,
+): { startPeriod: string; endPeriod: string } | null {
+  if (periods.length < 2) return null;
+  const last = periods.length - 1;
+  const start = Math.min(last, Math.max(0, Math.floor(fromFrac * periods.length)));
+  const end = Math.min(last, Math.max(start, Math.ceil(toFrac * periods.length) - 1));
+  if (start === 0 && end === last) return null; // full range = no filter
+  return { startPeriod: periods[start], endPeriod: periods[end] };
+}
+
+/**
  * Cross-tabulate category values across temporal periods.
  * Produces recharts-compatible data: [{ period: "2020", "Topic A": 12, "Topic B": 8 }, ...]
  */

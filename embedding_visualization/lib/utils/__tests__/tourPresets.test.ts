@@ -11,7 +11,13 @@ import {
 } from '../tourPresets';
 import { serializeColorScale, deserializeColorScale } from '../colorScaleUrl';
 
-const DEMO_COLLECTIONS = ['emotion', 'xkcd_hilbert_gemini', 'acl_abstracts_emnlp_findings'];
+// Keep in sync with the demo seed manifest (demo.json `collections`).
+const DEMO_COLLECTIONS = [
+  'emotion',
+  'xkcd_hilbert_gemini',
+  'acl_abstracts_emnlp_findings',
+  'Gemma_9_16k_embedded',
+];
 
 describe('TOUR_PRESETS', () => {
   it('only references real demo collections, with ids matching their keys', () => {
@@ -144,13 +150,22 @@ describe('presetStoreOps', () => {
       { kind: 'mode', value: '3d' },
       { kind: 'flag', flag: 'nebulaMode', value: true },
       { kind: 'flag', flag: 'showClusterLabels', value: true },
+      { kind: 'flag', flag: 'densityMode', value: false },
     ]);
   });
 
-  it('xkcd preset explicitly turns nebula and cluster labels OFF', () => {
+  it('xkcd preset explicitly turns nebula, cluster labels, and density OFF', () => {
     const ops = presetStoreOps(getPreset('xkcd-manifold')!);
     expect(ops).toContainEqual({ kind: 'flag', flag: 'nebulaMode', value: false });
     expect(ops).toContainEqual({ kind: 'flag', flag: 'showClusterLabels', value: false });
+    // The finale relies on this to undo the tour's 2D density step.
+    expect(ops).toContainEqual({ kind: 'flag', flag: 'densityMode', value: false });
+  });
+
+  it('every preset pins densityMode (persisted flag — curated views must be deterministic)', () => {
+    for (const preset of Object.values(TOUR_PRESETS)) {
+      expect(preset.flags?.densityMode).toBe(false);
+    }
   });
 
   it('emits no flag ops when a preset has none', () => {

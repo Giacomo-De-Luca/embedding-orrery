@@ -359,9 +359,16 @@ export function SearchSidebar({
             </div>
           )}
 
-          {/* Feature Search (Document Activations — combobox multi-select) */}
-          {saeInfo && featureSearch && featureSearch.hasActivations === true && (
-            <div className="space-y-3">
+          {/* Feature Search (Document Activations — combobox multi-select).
+              data-tour: spotlight target for the demo tour's feature-search step.
+              Gated on hasActivations alone: the probe only ever resolves true
+              when the collection carries an SAE link, and the `saeInfo` prop
+              can't stand in for it — DashboardPanel receives the
+              feature-collection-only `saeFeatureInfo` (null for linked
+              DOCUMENT collections like EMNLP, exactly where this search
+              matters). Requiring it here kept the section unreachable. */}
+          {featureSearch && featureSearch.hasActivations === true && (
+            <div className="space-y-3" data-tour="feature-search">
               <Label className="text-base">Feature Search</Label>
               <Combobox<string, true>
                 multiple

@@ -22,7 +22,7 @@ import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 import { cn } from '@/lib/utils/utils';
-import { IS_DEMO, DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
@@ -100,6 +100,8 @@ interface DashboardPanelProps {
   onToggleTopic?: (id: number) => void;
   onSelectAllTopics?: () => void;
   onClearAllTopics?: () => void;
+  /** Bump to animate the 3D camera back to its default framing (demo tour). */
+  cameraResetSignal?: number;
 }
 
 export function DashboardPanel({
@@ -157,6 +159,7 @@ export function DashboardPanel({
   onToggleTopic,
   onSelectAllTopics,
   onClearAllTopics,
+  cameraResetSignal,
 }: DashboardPanelProps) {
   const isExpanded = activePanel !== null;
 
@@ -641,24 +644,43 @@ export function DashboardPanel({
       showAxes={showAxes}
       selectedDimensions={selectedDimensions}
       onScreenshot={handleScreenshot}
+      cameraResetSignal={cameraResetSignal}
     />
   );
 
   return (
 
-    <div className="relative h-full w-full overflow-hidden">
+    <div className={cn(
+      "relative h-full w-full overflow-hidden",
+      // Demo builds have a two-row header; nudge the plot's modebar below it
+      // (`.demo-plot-chrome .modebar-container` in globals.css) so the nav row
+      // and the modebar don't overlap.
+      IS_DEMO && "demo-plot-chrome",
+    )}>
 
       {/* 1. LAYER: Plot Background (Z-0) */}
       <div className="absolute inset-0 z-0" data-tour="plot">
         <div className="h-full w-full rounded-lg text-card-foreground shadow-sm">
           {plot}
         </div>
+        {/* Invisible tour anchor: whole-plot steps hang their card off the
+            plot's right edge (placement "left") so it never covers the view
+            it narrates. Lives inside the plot layer so it unmounts with it —
+            joyride's target-wait then covers collection loads. */}
+        <div
+          data-tour="plot-side"
+          aria-hidden
+          className="pointer-events-none absolute right-6 top-1/2 h-px w-px"
+        />
       </div>
 
       {/* 2. LAYER: Legend Overlay (Z-10) */}
+      {/* Demo builds push the modebar below the two-row header, so the legend
+          (which sits under the modebar) drops with it. */}
       {showLegend && !legendCollapsed && (
         <div ref={legendOverlayRef} className={cn(
-          "absolute top-30 right-4 z-10 pointer-events-none",
+          "absolute right-4 z-10 pointer-events-none",
+          IS_DEMO ? "top-40" : "top-30",
           legendDragging && "select-none"
         )}>
           <Legend
@@ -689,7 +711,7 @@ export function DashboardPanel({
 
       {/* 2b. LAYER: Collapsed Legend Pill (Z-10) */}
       {showLegend && legendCollapsed && (
-        <div className="absolute top-30 right-4 z-10">
+        <div className={cn("absolute right-4 z-10", IS_DEMO ? "top-40" : "top-30")}>
           <Button
             variant="circularghost"
             size="icon"
@@ -759,32 +781,22 @@ export function DashboardPanel({
         </div>
       )}
 
-      {/* 3c. LAYER: SAE Context Menu (Z-50) — in demo builds the item is inert
-          with an explanatory tooltip (/sae also redirects server-side) */}
+      {/* 3c. LAYER: SAE Context Menu (Z-50) — live in every build; the parent
+          passes saeInfo only for genuine feature collections, and the SAE
+          explorer's read paths are served in the demo too. */}
       {contextMenu && saeInfo && (
         <div
           className="fixed z-50 min-w-40 rounded-md border bg-popover p-1 shadow-md"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          {IS_DEMO ? (
-            <span
-              aria-disabled="true"
-              title={DEMO_DISABLED_MESSAGE}
-              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm cursor-not-allowed opacity-50"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              View Feature #{contextMenu.featureIndex}
-            </span>
-          ) : (
-            <Link
-              href={`/sae?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
-              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
-              onClick={() => setContextMenu(null)}
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              View Feature #{contextMenu.featureIndex}
-            </Link>
-          )}
+          <Link
+            href={`/sae?modelId=${encodeURIComponent(saeInfo.modelId)}&saeId=${encodeURIComponent(saeInfo.saeId)}&featureIndex=${contextMenu.featureIndex}`}
+            className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            onClick={() => setContextMenu(null)}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            View Feature #{contextMenu.featureIndex}
+          </Link>
         </div>
       )}
 

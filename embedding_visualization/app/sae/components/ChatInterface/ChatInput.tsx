@@ -20,6 +20,10 @@ interface ChatInputProps {
   onStop: () => void;
   isGenerating: boolean;
   disabled?: boolean;
+  /** Overrides the composer placeholder (demo: explains why input is off). */
+  placeholder?: string;
+  /** Hide the model-status pill and its 5s polling (demo: no inference). */
+  showModelStatus?: boolean;
   showSuggestions?: boolean;
   onSuggest?: (prompt: string) => void;
   onSelectModel?: (modelId: string, saeId: string) => void;
@@ -34,6 +38,8 @@ export function ChatInput({
   onStop,
   isGenerating,
   disabled,
+  placeholder,
+  showModelStatus = true,
   showSuggestions,
   onSuggest,
   onSelectModel,
@@ -137,7 +143,7 @@ export function ChatInput({
           onPaste={handlePaste}
           onCompositionStart={() => { isComposingRef.current = true; }}
           onCompositionEnd={() => { isComposingRef.current = false; }}
-          placeholder="Ask anything..."
+          placeholder={placeholder ?? 'Ask anything...'}
           disabled={disabled}
           rows={1}
           className={cn(
@@ -161,7 +167,7 @@ export function ChatInput({
               <Paperclip style={{ width: 14, height: 14 }} />
             </div>
             {/* Model status indicator */}
-            <ModelStatusButton onSelectModel={onSelectModel} />
+            {showModelStatus && <ModelStatusButton onSelectModel={onSelectModel} />}
             {/* Reasoning-mode toggle (Qwen only): streams the model's <think>
                 block into the collapsible reasoning panel. Applies to the next
                 message. */}

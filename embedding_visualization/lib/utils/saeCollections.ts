@@ -54,7 +54,13 @@ export const COLLECTION_TO_SAE: Record<string, SaeIdentifier> = Object.fromEntri
   SAE_ENTRIES.map((e) => [e.collectionName, { modelId: e.modelId, saeId: e.saeId }]),
 );
 
-/** "modelId::saeId" -> collection name (used by features page to link back to visualization) */
+/**
+ * "modelId::saeId" -> collection name (used by features page to link back to
+ * visualization). fromEntries is last-wins, so for pairs with several
+ * collections (gemma-3-4b-it/9-…: decoder scatter `gemma_9_16k` AND label map
+ * `Gemma_9_16k_embedded`) the back-link resolves to the LATER entry — keep the
+ * label map second: it is the collection the demo seeds and the better landing.
+ */
 export const SAE_TO_COLLECTION: Record<string, string> = Object.fromEntries(
   SAE_ENTRIES.map((e) => [`${e.modelId}::${e.saeId}`, e.collectionName]),
 );

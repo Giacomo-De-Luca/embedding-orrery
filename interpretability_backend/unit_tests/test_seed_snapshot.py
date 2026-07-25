@@ -134,6 +134,34 @@ def test_config_parses_defaults_and_resolves_paths(tmp_path: Path) -> None:
         ),
         (_disable_all_sae_payloads, "selects no payloads"),
         (_add_duplicate_document_activation_owner, "assigned to multiple SAE"),
+        (
+            lambda data: data["sae_data"][0].update(
+                {"activation_examples": True, "max_activation_examples_per_feature": 0}
+            ),
+            "positive integer",
+        ),
+        (
+            lambda data: data["sae_data"][0].update(
+                {"activation_examples": True, "max_activation_examples_per_feature": "5"}
+            ),
+            "positive integer",
+        ),
+        (
+            lambda data: data["sae_data"][0].update(
+                {"max_activation_examples_per_feature": 5}
+            ),
+            "requires activation_examples",
+        ),
+        (
+            lambda data: data["sae_data"][0].update({"document_activation_top_k": True}),
+            "positive integer",
+        ),
+        (
+            lambda data: data["sae_data"][0].update(
+                {"document_activations": [], "document_activation_top_k": 3}
+            ),
+            "requires document_activations",
+        ),
     ],
 )
 def test_config_rejects_invalid_manifests(tmp_path: Path, mutate, message: str) -> None:
@@ -349,6 +377,94 @@ def test_duckdb_export_optionally_includes_activation_examples(tmp_path: Path) -
         assert connection.execute("SELECT id FROM sae_activations").fetchall() == [
             ("activation-a",)
         ]
+    finally:
+        connection.close()
+
+
+def _add_pruning_rows(path: Path) -> None:
+    """Extra multi-example / multi-feature rows for the pruning-knob tests."""
+    connection = duckdb.connect(str(path))
+    try:
+        for feature_index in (10, 11, 12):
+            for rank in range(4):
+                connection.execute(
+                    "INSERT INTO sae_activations "
+                    "(id, model_id, sae_id, feature_index, tokens, act_values, max_value) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        f"act-{feature_index}-{rank}",
+                        "model-a",
+                        "sae-a",
+                        feature_index,
+                        "[]",
+                        "[]",
+                        float(rank),
+                    ],
+                )
+        for item_id in ("doc-x", "doc-y"):
+            for feature_index in range(5):
+                connection.execute(
+                    "INSERT INTO sae_document_activations VALUES (?, ?, ?, ?)",
+                    ["documents", item_id, 100 + feature_index, float(feature_index)],
+                )
+    finally:
+        connection.close()
+
+
+def test_duckdb_export_prunes_activation_examples_per_feature(tmp_path: Path) -> None:
+    source = tmp_path / "source.duckdb"
+    destination = tmp_path / "seed.duckdb"
+    _create_source_duckdb(source)
+    _add_pruning_rows(source)
+    payload = _payload()
+    payload["sae_data"][0].update(
+        {"activation_examples": True, "max_activation_examples_per_feature": 2}
+    )
+    config = SeedSnapshotConfig.from_file(_write_config(tmp_path, payload), project_root=tmp_path)
+
+    counts = DuckDBSnapshotExporter(source).export(config, destination)
+
+    connection = duckdb.connect(str(destination), read_only=True)
+    try:
+        # Feature 7 has a single example (kept); features 10-12 prune 4 → 2,
+        # keeping the highest max_value rows.
+        assert counts["sae_activations"] == 7
+        kept = connection.execute(
+            "SELECT id FROM sae_activations WHERE feature_index = 10 ORDER BY id"
+        ).fetchall()
+        assert kept == [("act-10-2",), ("act-10-3",)]
+    finally:
+        connection.close()
+
+
+def test_duckdb_export_prunes_document_activations_per_item(tmp_path: Path) -> None:
+    source = tmp_path / "source.duckdb"
+    destination = tmp_path / "seed.duckdb"
+    _create_source_duckdb(source)
+    _add_pruning_rows(source)
+    payload = _payload()
+    payload["sae_data"][0]["document_activation_top_k"] = 3
+    # Second, doc-free entry: multi-entry configs must export independently.
+    payload["sae_data"].append(
+        {"model_id": "model-b", "sae_id": "sae-b", "features": True}
+    )
+    config = SeedSnapshotConfig.from_file(_write_config(tmp_path, payload), project_root=tmp_path)
+
+    counts = DuckDBSnapshotExporter(source).export(config, destination)
+
+    connection = duckdb.connect(str(destination), read_only=True)
+    try:
+        # item-dataset-a has one row (kept); doc-x / doc-y prune 5 → 3,
+        # keeping the strongest activations.
+        assert counts["sae_document_activations"] == 7
+        kept = connection.execute(
+            "SELECT feature_index FROM sae_document_activations "
+            "WHERE item_id = 'doc-x' ORDER BY feature_index"
+        ).fetchall()
+        assert kept == [(102,), (103,), (104,)]
+        assert set(
+            connection.execute("SELECT model_id, sae_id FROM sae_features").fetchall()
+        ) == {("model-a", "sae-a"), ("model-b", "sae-b")}
     finally:
         connection.close()
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery } from '@apollo/client/react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   GET_CHAT_SESSION,
@@ -13,6 +13,10 @@ import {
   DELETE_CHAT_SESSION,
   SAVE_CHAT_MESSAGE,
 } from '../graphql/mutations';
+import {
+  fetchDemoChatFixture,
+  type DemoChatFixture,
+} from '../utils/demoChatSessions';
 import type {
   ChatMessage,
   ChatSessionSummary,
@@ -49,7 +53,16 @@ export interface UseChatSessionsReturn {
   setActiveSessionId: (id: string | null) => void;
 }
 
-export function useChatSessions(): UseChatSessionsReturn {
+export function useChatSessions(options?: {
+  skip?: boolean;
+  /**
+   * Demo mode: sessions come from the committed static fixture
+   * (`public/demo/chat-sessions.json`) instead of GraphQL, and every write
+   * (create/save/delete) is a no-op — the demo backend is read-only anyway.
+   */
+  demo?: boolean;
+}): UseChatSessionsReturn {
+  const demo = options?.demo === true;
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   activeSessionIdRef.current = activeSessionId;
@@ -58,26 +71,51 @@ export function useChatSessions(): UseChatSessionsReturn {
   const { data, loading, refetch } = useQuery<{ chatSessions: any[] }>(GET_CHAT_SESSIONS, {
     variables: { limit: 50 },
     fetchPolicy: 'cache-and-network',
+    skip: options?.skip || demo,
   });
+
+  // Demo fixture: fetched once, null while loading. Failure (fixture not
+  // committed, bad JSON) resolves to the empty fixture — chat shows no
+  // saved sessions but stays functional as a read-only surface.
+  const [fixture, setFixture] = useState<DemoChatFixture | null>(null);
+  const fixtureRef = useRef<DemoChatFixture | null>(null);
+  fixtureRef.current = fixture;
+  useEffect(() => {
+    if (!demo) return;
+    let cancelled = false;
+    fetchDemoChatFixture().then((parsed) => {
+      if (!cancelled) setFixture(parsed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [demo]);
 
   const [createSessionMutation] = useMutation(CREATE_CHAT_SESSION);
   const [saveMessageMutation] = useMutation(SAVE_CHAT_MESSAGE);
   const [deleteSessionMutation] = useMutation(DELETE_CHAT_SESSION);
 
-  const sessions: ChatSessionSummary[] = (data?.chatSessions ?? []).map(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (s: any) => ({
-      id: s.id,
-      title: s.title,
-      config: s.config,
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-    })
-  );
+  const sessions: ChatSessionSummary[] = demo
+    ? fixture?.summaries ?? []
+    : (data?.chatSessions ?? []).map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: any) => ({
+          id: s.id,
+          title: s.title,
+          config: s.config,
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+        })
+      );
 
   const createSession = useCallback(
     async (config: SteeringConfig, firstMessage: string): Promise<string> => {
       const id = generateId();
+      // Demo: no persistence — hand back an id so callers proceed unchanged.
+      if (demo) {
+        setActiveSessionId(id);
+        return id;
+      }
       const title = deriveTitle(firstMessage);
       await createSessionMutation({
         variables: {
@@ -88,13 +126,23 @@ export function useChatSessions(): UseChatSessionsReturn {
       refetch();
       return id;
     },
-    [createSessionMutation, refetch]
+    [demo, createSessionMutation, refetch]
   );
 
   const loadSession = useCallback(
     async (
       id: string
     ): Promise<{ messages: ChatMessage[]; config: SteeringConfig }> => {
+      if (demo) {
+        const parsed = fixtureRef.current;
+        const messages = parsed?.messagesById.get(id);
+        const config = parsed?.configById.get(id);
+        if (!messages || !config) {
+          throw new Error(`Session ${id} not found`);
+        }
+        setActiveSessionId(id);
+        return { messages, config };
+      }
       const { apolloClient } = await import('../utils/apollo-client');
       const { data: detail } = await apolloClient.query<ChatSessionQueryResult>({
         query: GET_CHAT_SESSION,
@@ -119,7 +167,7 @@ export function useChatSessions(): UseChatSessionsReturn {
       setActiveSessionId(id);
       return { messages, config: session.config };
     },
-    []
+    [demo]
   );
 
   const saveMessage = useCallback(
@@ -128,6 +176,7 @@ export function useChatSessions(): UseChatSessionsReturn {
       message: ChatMessage,
       steeringSnapshot?: SteeringConfig | null
     ) => {
+      if (demo) return;
       saveMessageMutation({
         variables: {
           input: {
@@ -143,11 +192,12 @@ export function useChatSessions(): UseChatSessionsReturn {
         console.error('Failed to save chat message:', err);
       });
     },
-    [saveMessageMutation]
+    [demo, saveMessageMutation]
   );
 
   const deleteSession = useCallback(
     (id: string) => {
+      if (demo) return;
       deleteSessionMutation({
         variables: { id },
       }).then(() => {
@@ -157,12 +207,12 @@ export function useChatSessions(): UseChatSessionsReturn {
         refetch();
       });
     },
-    [deleteSessionMutation, refetch]
+    [demo, deleteSessionMutation, refetch]
   );
 
   return {
     sessions,
-    loading,
+    loading: demo ? fixture === null : loading,
     activeSessionId,
     createSession,
     loadSession,

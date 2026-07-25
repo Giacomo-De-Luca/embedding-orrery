@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Compass, Palette, GraduationCap, Telescope } from 'lucide-react';
+import { useQuery } from '@apollo/client/react';
+import { Microscope, Compass, Palette, GraduationCap, Telescope } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -10,15 +11,20 @@ import {
   DialogTitle,
 } from '@/lib/ui-primitives/dialog';
 import { Spinner } from '@/lib/ui-primitives/spinner';
+import { GET_SAE_MODELS } from '@/lib/graphql/queries';
+import type { SaeModelInfo } from '@/lib/types/types';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { IS_DEMO } from '@/lib/utils/demoMode';
 import { markIntro, warmEmotionSearch, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
-import { TOUR_PRESETS, TOUR_PRESET_ID } from '@/lib/utils/tourPresets';
+import { TOUR_PRESETS, TOUR_PRESET_ID, SAE_MAP_PRESET_ID } from '@/lib/utils/tourPresets';
+import { SAE_TOUR_MODEL_ID, SAE_TOUR_SAE_ID } from '@/lib/utils/saeTourSteps';
 
 interface DemoIntroProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onStartTour: () => void;
+  /** Starts the "Inspect SAE" tour's Explore segment (the label map). */
+  onStartSaeTour: () => void;
   onApplyPreset: (presetId: string) => void;
   /** Manifest collection names; null while loading. Gates the entry buttons. */
   availableCollections: ReadonlySet<string> | null;
@@ -61,6 +67,7 @@ export function DemoIntro({
   open,
   onOpenChange,
   onStartTour,
+  onStartSaeTour,
   onApplyPreset,
   availableCollections,
 }: DemoIntroProps) {
@@ -75,6 +82,15 @@ export function DemoIntro({
   // when their collection simply doesn't exist — a click would no-op silently.
   const hasCollection = (presetId: string) =>
     availableCollections?.has(TOUR_PRESETS[presetId].collection) ?? false;
+
+  // The SAE entry needs the tour's exact pair in the DB — its own gate, since
+  // SAE availability isn't part of the collections manifest.
+  const { data: saeModelsData } = useQuery<{ saeModels: SaeModelInfo[] }>(GET_SAE_MODELS, {
+    skip: !open,
+  });
+  const hasSaeTourPair = (saeModelsData?.saeModels ?? []).some(
+    (m) => m.modelId === SAE_TOUR_MODEL_ID && m.saeId === SAE_TOUR_SAE_ID,
+  );
 
   const handleOpenChange = (next: boolean) => {
     if (!next) markIntro('dismissed');
@@ -124,6 +140,18 @@ export function DemoIntro({
               onApplyPreset('xkcd-manifold');
             }}
           />
+          {tourFits && (
+            <EntryButton
+              icon={<Microscope className="h-4 w-4" />}
+              title="Inspect SAE features"
+              description="Peek inside the model: a map of 16k sparse-autoencoder features, then one under the microscope."
+              disabled={!hasSaeTourPair || !hasCollection(SAE_MAP_PRESET_ID)}
+              onClick={() => {
+                markIntro('completed');
+                onStartSaeTour();
+              }}
+            />
+          )}
           <EntryButton
             icon={<Telescope className="h-4 w-4" />}
             title="Explore on my own"

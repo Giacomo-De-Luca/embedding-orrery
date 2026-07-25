@@ -32,7 +32,11 @@ nginx :7860 ── /graphql, /health ──▶ uvicorn :8000  (FastAPI + Strawbe
 - `deploy/hf-space/nginx.conf` is non-root friendly (pid/temp under `/tmp`);
   `/upload` is deliberately unrouted. WS upgrade headers are configured on
   `/graphql` even though demo mode never opens a socket (insurance for
-  duplicated Spaces with writes enabled).
+  duplicated Spaces with writes enabled). gzip is on (`gzip_proxied any` is
+  load-bearing — HF's front proxy adds a `Via` header, and nginx skips
+  compressing proxied requests without it): the full-collection GraphQL JSON
+  compresses ~5–8×, which is what makes large collections shippable at all.
+  Next's node server gzips its own pages/chunks; nginx passes those through.
 - HF Spaces runs containers as uid 1000: the image creates `user`, points
   `ORRERY_RESOURCE_DIR=/home/user/data` and `HF_HOME=/home/user/hf` at
   writable paths. Space restarts wipe `/home/user/data` → the seed bootstrap
@@ -141,8 +145,9 @@ constraints, in the order they actually bite:
 1. **The full-collection load, not HF.** The Explore page fetches the entire
    collection in one GraphQL response (documents + metadata + projections; no
    pagination). At ~1.5–3 KB/doc of JSON, 100k docs ≈ 200–300 MB serialized
-   per request — tens of seconds on 2 vCPU, per visitor, before gzip. This is
-   the real ceiling and it's architectural, not a platform limit.
+   per request — tens of seconds on 2 vCPU, per visitor. nginx gzip (~5–8× on
+   JSON) fixes the wire size but not the serialization time. This is the real
+   ceiling and it's architectural, not a platform limit.
 2. **Seed / image size.** At 3072-d (Gemini) a document costs ~20 KB in the
    seed (12.3 KB vectors + HNSW + DuckDB rows + Chroma's sqlite copy) —
    measured: EMNLP's 13,980 docs added ~290 MB. The seed bakes into the image
@@ -204,16 +209,61 @@ jobs, and your API keys' quota to every visitor.
    should work (`GEMINI_API_KEY`, `CHROMA_OPENAI_API_KEY`, …).
    SentenceTransformers models run locally with no key (CPU: fine for
    MiniLM-class models, slow for large ones).
-6. **SAE page reality check** — the demo seed ships **no SAE tables**, so an
-   unhidden `/sae` page starts empty. Options: add a `sae_data` entry to
-   `demo.json` selecting `features` and, if wanted, `activation_examples`
-   (the token-window examples are the bulky part), rebuild/publish the locked
-   snapshot, or use the live `prepareSaeData` flow (downloads GBs from
-   Neuronpedia S3 — wants persistent storage so it survives restarts). Chat +
-   steering additionally need `loadModel`: Gemma-3-4b fits in 16 GB RAM but
-   is impractically slow on 2 vCPUs — that feature realistically needs a GPU
-   Space tier. Progress bars and chat streaming use WebSocket subscriptions,
-   which the nginx config already proxies.
+6. **SAE inference** — the read-only `/sae` explorer is live in the demo (see
+   "SAE feature exploration" below); what re-enabling would add is the
+   inference layer. Chat + steering + prompt search need `loadModel`:
+   Gemma-3-4b fits in 16 GB RAM but is impractically slow on 2 vCPUs — that
+   feature realistically needs a GPU Space tier. Progress bars and chat
+   streaming use WebSocket subscriptions, which the nginx config already
+   proxies.
+
+## SAE feature exploration (read-only, live in the demo)
+
+The `/sae` Feature Explorer runs in the demo on seeded DuckDB/Chroma tables —
+no model, no torch, no mutations. `demo.json` carries two `sae_data` entries:
+
+- **`gemma-3-4b-it` / `9-gemmascope-2-res-16k`** — the paper's steering SAE
+  and the explorable one: 16,384 features (~97% Neuronpedia-labeled),
+  activation examples pruned to the top-10 per feature
+  (`max_activation_examples_per_feature`), plus the MiniLM-embedded label
+  collection `Gemma_9_16k_embedded` as `explanation_vector_collection` —
+  semantic feature search embeds queries with the Space-local MiniLM model
+  (no API quota). The label collection also appears in the Explore dropdown
+  as a browsable map of the SAE's label space, and right-clicking its points
+  cross-links into the explorer.
+- **`gemma-3-1b` / `22-gemmascope-2-res-16k`** — features only (no activation
+  examples), included purely because it owns the EMNLP document activations
+  (`document_activations: ["acl_abstracts_emnlp_findings"]`, pruned to each
+  document's top-256 features via `document_activation_top_k`) that power the
+  Explore page's feature→document search. The `/sae` page hides zero-example
+  pairs in demo builds, so this pair never appears in the explorer UI.
+  **Upgrade path**: recompute document activations against the 4b SAE
+  (`computeDocumentActivations`), move `document_activations` to the 4b
+  entry, drop this one, reseed.
+
+Demo gating on `/sae`: the Prompt search mode is hidden and the feature label
+field is read-only. Everything else — browse by index, text + semantic
+search, logits, densities, activation examples, quantiles, similar features —
+is served read-only. A demo-only `?` button in the page header links back to
+`/?intro=1` (the mission menu lives on the Explore page).
+
+### Demo chat: pre-recorded steered sessions
+
+The steered-chat sidebar opens in the demo, but plays back instead of
+generating: `useChatSessions({ demo: true })` fetches
+`public/demo/chat-sessions.json` (a committed static fixture) instead of
+GraphQL, and every write is a no-op. The composer is disabled with an
+explanatory placeholder, the model-status poll never mounts, edit/regenerate/
+compare are hidden, History opens by default and lists the recorded sessions
+read-only. No inference machinery activates — the generation WebSocket
+subscription only ever opens on send.
+
+**Recording a session** (`lib/utils/demoChatSessions.ts` documents the
+format): run the full app locally with inference, steer, chat, then use the
+chat header's **Download chat as JSON** button — each fixture entry is
+exactly one such export, and the fixture file is a JSON array of them. A
+missing or malformed fixture degrades to an empty History; a malformed entry
+is skipped without blanking the rest.
 
 ## Onboarding: welcome dialog, presets, spotlight tour
 
@@ -232,32 +282,81 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
 2. **First-visit welcome dialog** (`app/components/DemoIntro.tsx`). Auto-opens
    once per browser (`localStorage` key `orrery.demo-intro.v1`), demo builds
    only, never on top of a deep link (any `collection`/`colorBy`/`preset`/
-   `tour` param suppresses it). Four entries: start the tour, the two preset
-   missions, or dismiss. Reopenable via `?intro=1` (any build) and the
+   `tour` param suppresses it). Five entries: the guided tour, the two preset
+   missions, the "Inspect SAE features" tour (gated on both the SAE pair and
+   the label-map collection being present), or dismiss. Reopenable via `?intro=1` (any build) and the
    header `?` button. Opening it fires a one-shot warm-up query so the
    emotion search model cold-starts before the tour reaches the search step.
 3. **Spotlight tour** (react-joyride v3, `?tour=1` in any build — the welcome
-   dialog auto-offers it in demo builds). Six steps defined as data in
+   dialog auto-offers it in demo builds). Seven steps defined as data in
    `lib/utils/tourSteps.ts`, rendered by `app/components/TourController.tsx`
    (dynamically imported, so normal visits don't load the library) with a
    custom frosted-glass tooltip reusing the plot hover tooltip's
    `.frosted-tooltip` surface. The tour runs on the **EMNLP collection**
-   (`TOUR_PRESET_ID = 'emnlp-topics'`, applied when the tour starts): steps
-   prepare state programmatically (apply the preset, run a semantic search,
-   open the Analytics panel) and narrate the outcome — the user is never
-   asked to operate controls. The analytics step demonstrates filtering by
-   isolating one topic cluster (cleared again on tour end), and the finale
-   switches collections to the xkcd colour manifold as the "collections are
-   spaces" payoff. The search step queries ONLY the tour
-   collection — a deliberate cost of one Gemini embed call per tour run,
-   hard-guarded in `tourSteps.ts` so no other collection is auto-queried.
-   Targets are `data-tour` attributes in `AppHeader`/`DashboardPanel`.
+   (`TOUR_PRESET_ID = 'emnlp-topics'`, applied when the tour starts) and
+   follows map → search → feature-search → focus-topic → temporal →
+   density → finale: steps prepare state programmatically and narrate the
+   outcome — the user is never asked to operate controls. The **map** step carries the corpus
+   narration (abstract count, 60 LLM-named topics, haze); the **search**
+   step (second) owns the tour-collection wait, then fires the semantic
+   query without awaiting it — the tooltip shows immediately, the search
+   input's own spinner (inside the spotlight) shows progress, and the glow +
+   camera dive land as a reveal; **feature-search** opens the Search panel
+   and demos the SAE feature-name → document search
+   (`TourRuntime.runFeatureSearch`, query "humor" → the model's "humor and
+   jokes" feature → abstracts ranked by stored activation, spotlight on the
+   `feature-search` anchor) — pure DuckDB over the seeded
+   `sae_document_activations`, zero API cost, works read-only;
+   **focus-topic** isolates one topic cluster
+   programmatically (polling until the topics query has landed; the muting
+   auto-refit reframes the camera on it); **temporal** opens the Analytics
+   panel and brushes the earliest third of the detected temporal field
+   (`TourRuntime.applyTemporalWindow`; its card sits on the right-edge
+   `plot-side` anchor like the other map-narrating steps — the prepare waits
+   on the `temporal-chart` element so the timeline is on-screen first);
+   **density** flips to the 2D projection with density contours
+   (`TourRuntime.setDensityView` = mode `2d` + `densityMode`), deliberately
+   leaving the Analytics panel open; the finale switches collections to
+   **emotion** as the "collections are spaces" payoff — the demo default,
+   whose search model runs inside the Space so visitors keep querying
+   without Gemini quota (its preset pins `densityMode` off, restoring 3D).
+   All tour-applied state — search glow, camera framing
+   (`TourRuntime.resetCamera` → `cameraResetSignal` prop into
+   `ScatterPlot3D`), topic isolation, temporal window, density view — is
+   also cleared on any tour end, so a mid-tour skip can't strand it. The
+   search step queries ONLY the tour collection — a deliberate cost of one
+   Gemini embed call per tour run, hard-guarded in `tourSteps.ts` so no
+   other collection is auto-queried. Targets are `data-tour` attributes in
+   `AppHeader`/`DashboardPanel`/`AnalyticsSidebar`. The Explore page's topic
+   list (which the focus-topic step and topic search depend on) comes from
+   the `collectionTopics` GraphQL query (`lib/hooks/useCollectionTopics.ts`)
+   — the manifest's legacy `topic_summary` blob is never written by
+   post-DuckDB-migration stores. Steps whose waits have native feedback
+   suppress joyride's built-in waiting spinner (`suppressWaitLoader` in
+   `tourSteps.ts`) — the page's own full-screen loader covers the
+   collection-switching waits, and both at once read as a bug.
    Completion/dismissal is recorded under `orrery.demo-tour.v1`; on
    viewports below 768 px the tour downgrades to the dialog. Demo builds
    also default to **dark mode** (`providers.tsx`) and label search results
-   out of the box (`showLabels` store default).
-
-Two supporting mechanisms:
+   out of the box (`showLabels` store default). Demo builds use a
+   **two-row header**: nav pills, the `?` button, and the theme toggle sit
+   in a second right-aligned row beside the Plotly modebar, clear of the
+   HuggingFace pill that `header: mini` floats over the iframe's top-right
+   (row 1 keeps a clearance spacer under it when embedded).
+4. **"Inspect SAE" tour** (`?tour=sae`, steps in `lib/utils/saeTourSteps.ts`,
+   storage key `orrery.demo-sae-tour.v1`). Two segments chained across a page
+   navigation, because joyride cannot survive one. **Segment 1** runs on the
+   Explore page over the SAE label map: applies the `sae-map` preset
+   (`Gemma_9_16k_embedded`), semantic-searches "poetry" on the Space-local
+   MiniLM model, and teaches the right-click → "View Feature" gesture; its
+   Done handler navigates to `/sae` with the top match deep-linked
+   (`saeInspectPath` → `modelId`/`saeId`/`featureIndex` + `tour=sae`), using
+   the `TourController.onDone(outcome)` argument to hand off only on a real
+   finish, never on skip. **Segment 2** runs on `/sae`: feature anatomy
+   (label, density, logits) → activation examples → the pre-recorded steered
+   chat (opens the sidebar and replays the first fixture session) → the link
+   back to the map. A direct `/sae?tour=sae` entry still works — the anatomy
+   step falls back to running the semantic search itself.
 
 - **Unknown URL params survive**: the Explore page's URL sync merges its
   owned params into the existing query string (`lib/utils/urlViewParams.ts`)

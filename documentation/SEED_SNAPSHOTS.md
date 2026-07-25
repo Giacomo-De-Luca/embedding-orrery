@@ -38,10 +38,21 @@ the generated database.
 
 - `features` defaults to `true`.
 - `activation_examples` defaults to `false` and requires features.
+- `max_activation_examples_per_feature` (optional int ≥ 1, requires
+  `activation_examples`) keeps only each feature's top-K examples by
+  `max_value` — the token-window examples are the bulky payload, so this is
+  the main size knob (e.g. 10 roughly halves the demo pair's examples).
 - `document_activations` lists exported document collections whose sparse
   activation rows should be included.
+- `document_activation_top_k` (optional int ≥ 1, requires
+  `document_activations`) keeps only each document's top-K features by
+  activation (56M rows → ~3.6M at K=256 for the ACL collection; feature→
+  document search ranks over the retained strong signals).
 - `explanation_vector_collection` names a normal exported collection. Its
   Chroma metadata must match the selected model and SAE.
+
+Both pruning copies are deterministic (explicit tiebreaks), so repeated
+builds from the same source produce identical manifest checksums.
 
 The builder rejects unknown keys, duplicate selections, missing collections,
 invalid SAE references, empty required vector collections, and mismatched

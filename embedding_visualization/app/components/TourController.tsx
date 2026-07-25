@@ -10,14 +10,33 @@ import {
   type Step,
   type TooltipRenderProps,
 } from 'react-joyride';
-import { markTour } from '@/lib/utils/demoOnboarding';
-import { TOUR_ANCHORS, TOUR_STEPS, type TourRuntime } from '@/lib/utils/tourSteps';
+import { markTourKey, type OnboardingMark } from '@/lib/utils/demoOnboarding';
+import type { TourStepDefinitionBase } from '@/lib/utils/tourSteps';
 
+/*
+ * The runtime is intentionally type-erased here: each tour's steps module
+ * (tourSteps.ts, saeTourSteps.ts) pairs its own runtime interface with its
+ * step definitions, and the page passes a matching pair — this shell only
+ * threads the value through to prepare hooks.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 interface TourControllerProps {
-  runtime: TourRuntime;
-  /** Called when the tour ends for any reason (finished, skipped, closed). */
-  onDone: () => void;
+  steps: ReadonlyArray<TourStepDefinitionBase<string, any>>;
+  /** Anchor name → CSS selector map for the page hosting the tour. */
+  anchors: Readonly<Record<string, string>>;
+  runtime: any;
+  /** localStorage key recording this tour's completed/dismissed outcome. */
+  storageKey: string;
+  /** Page-specific cleanup run when the tour ends for any reason. */
+  onBeforeEnd?: (runtime: any) => void;
+  /**
+   * Called when the tour ends for any reason. `outcome` distinguishes a real
+   * finish ('completed') from skip/close ('dismissed') — chained tours use it
+   * to decide whether to hand off to their next segment.
+   */
+  onDone: (outcome: OnboardingMark) => void;
 }
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Frosted-glass tour tooltip matching the plot hover tooltip (`.frosted-tooltip`
@@ -87,12 +106,19 @@ function TourTooltip({
  * `lib/utils/tourSteps.ts`. Mounted lazily (next/dynamic in page.tsx) only
  * while a tour is requested, so regular visits never load the library.
  */
-export function TourController({ runtime, onDone }: TourControllerProps) {
+export function TourController({
+  steps: stepDefs,
+  anchors,
+  runtime,
+  storageKey,
+  onBeforeEnd,
+  onDone,
+}: TourControllerProps) {
   const steps = useMemo<Step[]>(
     () =>
-      TOUR_STEPS.map((def) => ({
+      stepDefs.map((def) => ({
         id: def.id,
-        target: TOUR_ANCHORS[def.anchor],
+        target: anchors[def.anchor],
         title: def.title,
         content: def.body,
         placement: def.placement ?? 'auto',
@@ -101,8 +127,11 @@ export function TourController({ runtime, onDone }: TourControllerProps) {
         hideOverlay: def.allowInteraction === true,
         before: def.prepare ? () => def.prepare!(runtime) : undefined,
         beforeTimeout: def.prepareTimeoutMs,
+        // Collection-switching steps sit behind the page's own full-screen
+        // loader — joyride's waiting spinner on top of it reads as a bug.
+        ...(def.suppressWaitLoader ? { loaderComponent: null } : {}),
       })),
-    [runtime],
+    [stepDefs, anchors, runtime],
   );
 
   const reducedMotion =
@@ -111,11 +140,13 @@ export function TourController({ runtime, onDone }: TourControllerProps) {
 
   const handleEvent = (data: EventData) => {
     if (data.type !== EVENTS.TOUR_END) return;
-    // A mid-tour skip must not strand the analytics step's topic isolation
-    // (after a completed finale this is a no-op on the fresh collection).
-    runtime.clearTopicSelection();
-    markTour(data.status === STATUS.FINISHED ? 'completed' : 'dismissed');
-    onDone();
+    // Page-specific cleanup (e.g. the Explore tour drops its topic isolation
+    // so a mid-tour skip can't strand it).
+    onBeforeEnd?.(runtime);
+    const outcome: OnboardingMark =
+      data.status === STATUS.FINISHED ? 'completed' : 'dismissed';
+    markTourKey(storageKey, outcome);
+    onDone(outcome);
   };
 
   return (

@@ -28,6 +28,8 @@ interface ChatHistoryProps {
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onNewChat: () => void;
+  /** Hide destructive actions (demo: fixture sessions can't be deleted). */
+  readOnly?: boolean;
 }
 
 const ChatHistoryItem = memo(function ChatHistoryItem({
@@ -39,7 +41,7 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
   session: ChatSessionSummary;
   isActive: boolean;
   onSelect: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   return (
     <div
@@ -58,6 +60,7 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
         crossfadeOnChange
       />
       <span className="flex-1 truncate text-xs">{session.title}</span>
+      {onDelete && (
       <DropdownMenu>
         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
           <Button
@@ -78,6 +81,7 @@ const ChatHistoryItem = memo(function ChatHistoryItem({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
     </div>
   );
 });
@@ -93,7 +97,7 @@ function SessionGroup({
   sessions: ChatSessionSummary[];
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
-  onRequestDelete: (id: string) => void;
+  onRequestDelete?: (id: string) => void;
 }) {
   if (sessions.length === 0) return null;
   return (
@@ -107,7 +111,7 @@ function SessionGroup({
           session={session}
           isActive={session.id === activeSessionId}
           onSelect={() => onSelectSession(session.id)}
-          onDelete={() => onRequestDelete(session.id)}
+          onDelete={onRequestDelete && (() => onRequestDelete(session.id))}
         />
       ))}
     </div>
@@ -121,8 +125,10 @@ export function ChatHistory({
   onSelectSession,
   onDeleteSession,
   onNewChat,
+  readOnly = false,
 }: ChatHistoryProps) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const requestDelete = readOnly ? undefined : setDeleteId;
 
   const grouped: GroupedSessions = groupSessionsByDate(sessions);
 
@@ -165,7 +171,9 @@ export function ChatHistory({
 
         {sessions.length === 0 ? (
           <div className="mt-8 text-center text-sm text-muted-foreground">
-            Your conversations will appear here once you start chatting.
+            {readOnly
+              ? 'No saved conversations in this demo.'
+              : 'Your conversations will appear here once you start chatting.'}
           </div>
         ) : (
           <>
@@ -174,35 +182,35 @@ export function ChatHistory({
               sessions={grouped.today}
               activeSessionId={activeSessionId}
               onSelectSession={onSelectSession}
-              onRequestDelete={setDeleteId}
+              onRequestDelete={requestDelete}
             />
             <SessionGroup
               label="Yesterday"
               sessions={grouped.yesterday}
               activeSessionId={activeSessionId}
               onSelectSession={onSelectSession}
-              onRequestDelete={setDeleteId}
+              onRequestDelete={requestDelete}
             />
             <SessionGroup
               label="Last 7 days"
               sessions={grouped.lastWeek}
               activeSessionId={activeSessionId}
               onSelectSession={onSelectSession}
-              onRequestDelete={setDeleteId}
+              onRequestDelete={requestDelete}
             />
             <SessionGroup
               label="Last 30 days"
               sessions={grouped.lastMonth}
               activeSessionId={activeSessionId}
               onSelectSession={onSelectSession}
-              onRequestDelete={setDeleteId}
+              onRequestDelete={requestDelete}
             />
             <SessionGroup
               label="Older"
               sessions={grouped.older}
               activeSessionId={activeSessionId}
               onSelectSession={onSelectSession}
-              onRequestDelete={setDeleteId}
+              onRequestDelete={requestDelete}
             />
           </>
         )}

@@ -25,12 +25,23 @@ export const TOUR_PRESET_ID = 'emnlp-topics';
  */
 export const TOUR_SEARCH_QUERY = 'hallucination in summarization';
 
+/**
+ * The label query the tour's SAE feature-search step resolves against the
+ * tour collection's linked SAE (gemma-3-1b L22). Unlike the semantic step
+ * this is FREE — feature-label match and document ranking are both DuckDB
+ * queries over stored activations; no embedding call, no model in the loop.
+ * "humor" resolves to the model's "humor and jokes" feature, whose
+ * top-ranked EMNLP abstracts are the computational-humor papers.
+ */
+export const TOUR_FEATURE_QUERY = 'humor';
+
 /** Flags a preset may set (subset of the store's boolean toggles). */
 export type PresetFlagName =
   | 'nebulaMode'
   | 'showClusterLabels'
   | 'showAllClusterLabels'
-  | 'showLabels';
+  | 'showLabels'
+  | 'densityMode';
 
 export interface PresetDefinition {
   id: string;
@@ -53,7 +64,9 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     color: { colorBy: 'topic_label' },
     method: 'umap',
     mode: '3d',
-    flags: { nebulaMode: true, showClusterLabels: true },
+    // densityMode is persisted — pin it off so the curated 3D view is
+    // deterministic (the tour's 2D density step re-enables it explicitly).
+    flags: { nebulaMode: true, showClusterLabels: true, densityMode: false },
   },
   'xkcd-manifold': {
     id: 'xkcd-manifold',
@@ -66,9 +79,10 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     },
     method: 'umap',
     mode: '3d',
-    // Explicit false: the manifold reads as one continuous gradient — haze and
-    // cluster labels from a previous view would only obscure it.
-    flags: { nebulaMode: false, showClusterLabels: false },
+    // Explicit false: the manifold reads as one continuous gradient — haze,
+    // cluster labels, and density contours from a previous view would only
+    // obscure it.
+    flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
   },
   emotion: {
     id: 'emotion',
@@ -78,9 +92,26 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     color: { colorBy: 'topic_label' },
     method: 'umap',
     mode: '3d',
-    flags: { nebulaMode: true, showClusterLabels: true },
+    // The tour's finale lands here — densityMode:false undoes its 2D step.
+    flags: { nebulaMode: true, showClusterLabels: true, densityMode: false },
+  },
+  'sae-map': {
+    id: 'sae-map',
+    collection: 'Gemma_9_16k_embedded',
+    label: 'Map the model’s features',
+    description:
+      '16,384 SAE feature labels from gemma-3-4b-it embedded as their own map — right-click any point to inspect it.',
+    // No colour block: the label map ships without topic extraction (LLM
+    // topics are the planned 4b-pt upgrade), so the collection default rules.
+    method: 'umap',
+    mode: '3d',
+    flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
   },
 };
+
+/** The "Inspect SAE" tour opens on this preset (the SAE label map). */
+export const SAE_MAP_PRESET_ID = 'sae-map';
+export const SAE_MAP_COLLECTION = TOUR_PRESETS[SAE_MAP_PRESET_ID].collection;
 
 /** The collection the tour lands on; its search step may only query this. */
 export const TOUR_COLLECTION = TOUR_PRESETS[TOUR_PRESET_ID].collection;

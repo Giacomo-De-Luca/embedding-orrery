@@ -7,6 +7,7 @@ import type { SaeFeature } from '@/lib/types/types';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { UPDATE_SAE_FEATURE_LABEL } from '@/lib/graphql/mutations';
 import { InlineEditableField } from '@/app/collections/components/InlineEditableField';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { LogitBarChart } from './LogitBarChart';
 
 interface FeatureDetailCardProps {
@@ -62,7 +63,8 @@ export function FeatureDetailCard({ feature, onLabelUpdated }: FeatureDetailCard
         )}
       </div>
 
-      {/* Editable label */}
+      {/* Editable label (read-only in the demo — the server blocks the
+          mutation anyway; this removes the dead affordance) */}
       <InlineEditableField
         fieldKey="label"
         label="Label"
@@ -70,6 +72,7 @@ export function FeatureDetailCard({ feature, onLabelUpdated }: FeatureDetailCard
         type="text"
         isSaving={isSaving}
         onSave={handleSaveLabel}
+        readOnly={IS_DEMO}
       />
 
       {/* Logit charts side by side */}
