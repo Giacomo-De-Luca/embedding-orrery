@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useTheme } from 'next-themes';
 import { X } from 'lucide-react';
 import {
   Joyride,
@@ -138,6 +139,9 @@ export function TourController({
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === 'dark';
+
   const handleEvent = (data: EventData) => {
     if (data.type !== EVENTS.TOUR_END) return;
     // Page-specific cleanup (e.g. the Explore tour drops its topic isolation
@@ -158,7 +162,26 @@ export function TourController({
       tooltipComponent={TourTooltip}
       // No opacity fade on the floater wrapper: the animated layer is part of
       // what defeats backdrop-filter sampling under the tooltip.
-      styles={{ floater: { transition: 'none' } }}
+      styles={{
+        floater: { transition: 'none' },
+        // Dark mode: a translucent black overlay is invisible over the pure-
+        // black plot, so the light theme's "dim everything but the target"
+        // effect vanishes. Draw the cutout explicitly instead — joyride
+        // renders any non-empty `spotlight` as an outline path over the hole
+        // (fill:none), so a soft ring + glow marks the highlighted area.
+        ...(isDark
+          ? {
+              spotlight: {
+                stroke: 'rgba(255, 255, 255, 0.5)',
+                strokeWidth: 1.5,
+                style: {
+                  pointerEvents: 'none',
+                  filter: 'drop-shadow(0 0 10px rgba(140, 170, 255, 0.65))',
+                },
+              },
+            }
+          : {}),
+      }}
       options={{
         skipBeacon: true,
         overlayClickAction: false,
@@ -168,7 +191,12 @@ export function TourController({
         zIndex: 100,
         // The scene should stay alive behind the tour: light dim, spotlight
         // target always interactive, no library arrow on the frosted surface.
-        overlayColor: 'rgba(0, 0, 0, 0.25)',
+        // Dark needs a somewhat stronger dim — over a black background the
+        // overlay itself is invisible, and the highlight reads through the
+        // contrast between dimmed points/panels and the untouched cutout
+        // (the spotlight ring above carries most of the effect; 0.55 muted
+        // the scene too much).
+        overlayColor: isDark ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.25)',
         blockTargetInteraction: false,
         arrowColor: 'transparent',
       }}

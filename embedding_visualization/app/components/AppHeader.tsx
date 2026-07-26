@@ -1,6 +1,6 @@
 'use client';
 
-import { Moon, Sun, Search, Settings2, BarChart3, CircleHelp } from 'lucide-react';
+import { Moon, Sun, Search, Settings2, BarChart3, CircleHelp, Github } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useEffect, useState, KeyboardEvent } from 'react';
 import { PageNav } from './PageNav';
@@ -21,6 +21,9 @@ import { cn } from '@/lib/utils/utils';
 import { Input } from '@/lib/ui-primitives/input';
 import type { CollectionsManifest } from '../../lib/types/types';
 import { getSaeInfo } from '../../lib/utils/saeCollections';
+
+/** Canonical repo URL (the older `/orrery` path only 301-redirects here). */
+const REPO_URL = 'https://github.com/Giacomo-De-Luca/embedding-orrery';
 
 function ModeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -111,13 +114,12 @@ export function AppHeader({
     ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
     : undefined;
 
-  // Demo builds split the header into two rows: the nav pills, help button,
-  // and theme toggle move down beside the Plotly modebar (pinned to the same
+  // Demo builds split the header into two rows: the icon buttons and nav pills
+  // move down beside the Plotly modebar (pinned to the same
   // band by `.modebar-container` in globals.css), leaving row 1 room for the
   // HuggingFace pill clearance without clipping. Normal builds keep one row.
   const navCluster = (
     <>
-      <PageNav variant="glass" saeHref={saeHref} />
       {onOpenIntro && (
         <Button
           variant="circularghost"
@@ -129,7 +131,22 @@ export function AppHeader({
           <CircleHelp className="h-4 w-4" />
         </Button>
       )}
+      {/* New tab is required, not cosmetic: inside the HF Space iframe a
+          same-tab navigation would load GitHub into the frame, which its
+          X-Frame-Options then blanks — taking the demo with it. */}
+      <Button
+        variant="circularghost"
+        size="icon"
+        asChild
+        aria-label="Source code on GitHub"
+        title="Source code on GitHub"
+      >
+        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+          <Github className="h-4 w-4" />
+        </a>
+      </Button>
       <ModeToggle />
+      <PageNav variant="glass" saeHref={saeHref} />
     </>
   );
 
@@ -141,7 +158,10 @@ export function AppHeader({
         // isExpanded ? "pl-84" : "pl-0"
       )}
     >
-      <div className="flex h-16 w-full items-center gap-2 px-4">
+      {/* Wraps below `sm`: the collection selector alone is 200px, so on a phone
+          the whole right-hand group moves to a second line instead of being
+          clipped past the right edge. */}
+      <div className="flex min-h-16 w-full flex-wrap items-center gap-2 px-4 sm:h-16 sm:flex-nowrap">
         <Button
           variant={activePanel === 'controls' ? 'circular' : 'circularghost'}
           size="icon"
@@ -174,7 +194,7 @@ export function AppHeader({
           <BarChart3 className="h-4 w-4" />
         </Button>
 
-        <div className="flex items-center gap-3 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <div className="flex items-center gap-3">
             {totalWords && embeddingDim && (
               <>
@@ -218,15 +238,15 @@ export function AppHeader({
         </div>
 
         {/* Collection Selector */}
-        <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center" data-tour="collection-selector">
+        <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+          <div className="flex min-w-0 flex-1 items-center sm:flex-none" data-tour="collection-selector">
             {collectionsLoading ? (
-              <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-muted min-w-[200px]">
+              <div className="flex w-full items-center gap-2 px-3 py-2 border rounded-md bg-muted sm:w-auto sm:min-w-[200px]">
                 <Spinner className="h-4 w-4" />
                 <span className="text-sm">Loading...</span>
               </div>
             ) : collectionsError ? (
-              <div className="px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 min-w-[200px]">
+              <div className="w-full px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 sm:w-auto sm:min-w-[200px]">
                 <span className="text-sm text-destructive">Error</span>
               </div>
             ) : collections && Object.keys(collections).length > 0 ? (
@@ -245,7 +265,7 @@ export function AppHeader({
               >
                 <ComboboxInput
                   placeholder="Search collections..."
-                  className="w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
+                  className="w-full sm:w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
                 />
                 <ComboboxContent>
                   {collectionFilter.trim() && (

@@ -358,6 +358,19 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    back to the map. A direct `/sae?tour=sae` entry still works — the anatomy
    step falls back to running the semantic search itself.
 
+- **Phone-sized viewports** get a fourth surface: a one-time "Best viewed on
+  desktop" card (`app/components/MobileNotice.tsx`), mounted on both `/` and
+  `/sae`. Gating is the shared `shouldShowMobileNotice` predicate in
+  `demoOnboarding.ts` — demo builds only, `viewportWidth < TOUR_MIN_VIEWPORT`
+  (768), and not yet dismissed (`orrery.demo-mobile-notice.v1`, one key across
+  both pages). It is **dismissible, not blocking**: the app is usable on a
+  phone, just cramped. `getOnboardingAction` checks it **first**, so on a
+  phone it pre-empts `?tour=1` / `?intro=1` / `?tour=sae` — the tours are
+  already downgraded below 768 px anyway, and a `?tour=sae` deep link stays on
+  Explore rather than forwarding until the card has been dismissed once. On
+  the next visit the ordinary gating resumes (so a phone visitor sees the
+  welcome dialog then, not a second copy of the card).
+  Mobile support is otherwise deliberately partial — see "Known exposures".
 - **Unknown URL params survive**: the Explore page's URL sync merges its
   owned params into the existing query string (`lib/utils/urlViewParams.ts`)
   instead of rebuilding it, and strips the one-shot `tour`/`intro` params.
@@ -382,3 +395,12 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
   (PID 1) keeps the container "up" serving 502s until HF restarts it. Fine
   for a demo; a `wait -n` wrapper that exits on any child death would let the
   platform restart the Space automatically.
+- **Mobile is functional, not designed.** Below 768 px the header wraps, the
+  three panels open as near-full-width overlays, and the desktop-notice card
+  sets expectations — but the plot chrome is still laid out for a desktop:
+  the legend and Plotly modebar keep their fixed `right-4` / `top: 80px`
+  offsets and overlap an open panel, the `useZoomLimit` clamp only listens for
+  `wheel` so pinch-zoom is unbounded, the SAE context menu needs a right-click,
+  and the 3D GL scene + Three.js haze overlay are untested for memory on
+  mobile Safari. Fixing those (plus defaulting to 2D on small screens) is the
+  scoped follow-up; nothing here is load-bearing for the demo's desktop path.

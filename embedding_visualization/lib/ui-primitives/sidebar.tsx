@@ -143,6 +143,7 @@ function Sidebar({
   side = "left",
   variant = "sidebar",
   collapsible = "offcanvas",
+  mobileSheet = true,
   className,
   children,
   ...props
@@ -150,6 +151,14 @@ function Sidebar({
   side?: "left" | "right"
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
+  /**
+   * Below `md` the sidebar normally becomes a Sheet driven by the provider's
+   * `openMobile`. Pass `false` when the caller drives visibility itself (via
+   * `className`) and wants the same DOM and chrome at every viewport — the
+   * Sheet branch discards `className` entirely, so a caller-positioned sidebar
+   * silently becomes unreachable on mobile. See `DashboardPanel`.
+   */
+  mobileSheet?: boolean
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
 
@@ -168,7 +177,7 @@ function Sidebar({
     )
   }
 
-  if (isMobile) {
+  if (isMobile && mobileSheet) {
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
         <SheetContent
@@ -195,7 +204,11 @@ function Sidebar({
 
   return (
     <div
-      className="group peer text-sidebar-foreground hidden md:block"
+      className={cn(
+        "group peer text-sidebar-foreground",
+        // `mobileSheet={false}` callers render this same branch at every width.
+        mobileSheet ? "hidden md:block" : "block"
+      )}
       data-state={state}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
@@ -217,7 +230,8 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 hidden  w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+          "fixed inset-y-0 z-10 w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear",
+          mobileSheet ? "hidden md:flex" : "flex",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",

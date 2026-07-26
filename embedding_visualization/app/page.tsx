@@ -36,6 +36,7 @@ import {
 import {
   getOnboardingAction,
   readIntroSeen,
+  readMobileNoticeSeen,
   markIntro,
   TOUR_STORAGE_KEY,
   SAE_TOUR_STORAGE_KEY,
@@ -44,6 +45,7 @@ import {
 } from '../lib/utils/demoOnboarding';
 import { IS_DEMO } from '../lib/utils/demoMode';
 import { DemoIntro } from './components/DemoIntro';
+import { MobileNotice } from './components/MobileNotice';
 import { TOUR_ANCHORS, TOUR_STEPS, waitFor, type TourRuntime } from '../lib/utils/tourSteps';
 import { apolloClient } from '../lib/utils/apollo-client';
 import { SEARCH_SAE_FEATURES } from '../lib/graphql/queries';
@@ -127,8 +129,10 @@ function HomeContent() {
   const initialColorByRef = useRef(initialColorSeed.colorBy);
   const initialColorScaleRef = useRef(initialColorSeed.scale);
   const initialPaletteRef = useRef(initialColorSeed.palette);
-  // One-shot onboarding decision (`?tour=1` / `?intro=1` / demo first visit),
-  // latched before the URL-sync effect strips the one-shot params.
+  // One-shot onboarding decision (mobile notice / `?tour=1` / `?intro=1` /
+  // demo first visit), latched before the URL-sync effect strips the one-shot
+  // params. Every surface below derives its initial open state from this single
+  // value, so exactly one of them can auto-open.
   const [onboarding] = useState<OnboardingAction>(() =>
     typeof window === 'undefined'
       ? null
@@ -137,9 +141,11 @@ function HomeContent() {
           search: window.location.search,
           introSeen: readIntroSeen(),
           viewportWidth: window.innerWidth,
+          mobileNoticeSeen: readMobileNoticeSeen(),
         }),
   );
   const [introOpen, setIntroOpen] = useState(onboarding === 'intro');
+  const [mobileNoticeOpen, setMobileNoticeOpen] = useState(onboarding === 'mobile-notice');
   const [tourRequested, setTourRequested] = useState(onboarding === 'tour');
   // "Inspect SAE" tour, segment 1: runs HERE on the label map, then hands
   // off to /sae (`saeInspectPath`) when it finishes. Below the viewport
@@ -795,6 +801,7 @@ function HomeContent() {
           onApplyPreset={applyPresetLive}
           availableCollections={availableCollections}
         />
+        <MobileNotice open={mobileNoticeOpen} onOpenChange={setMobileNoticeOpen} />
         {tourRequested && (
           <TourController
             steps={TOUR_STEPS}

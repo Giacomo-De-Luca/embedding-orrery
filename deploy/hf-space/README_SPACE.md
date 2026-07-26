@@ -8,7 +8,7 @@ app_port: 7860
 pinned: false
 header: mini
 fullWidth: true
-short_description: Explore embedding spaces and SAE features — EMNLP, WordNet, colors
+short_description: Explore embedding spaces and SAE features — EMNLP, WordNet
 ---
 
 # Orrery — Embedding Observatory (demo)

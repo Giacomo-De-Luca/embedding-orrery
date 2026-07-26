@@ -34,6 +34,28 @@ import { toast } from 'sonner';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
+/**
+ * Shared chrome for the three left-hand panels. They are always mounted and
+ * slid off-canvas by class, so this is the single source of truth for their
+ * geometry — `-left-[400px]` parks them fully offscreen, which holds at every
+ * viewport because the width is capped below 400px.
+ *
+ * The panels pass `mobileSheet={false}` to the Sidebar primitive so this
+ * className drives visibility on mobile too; the primitive's default Sheet
+ * branch discards `className` and binds to a provider flag nothing here sets.
+ */
+const panelClass = (active: boolean) =>
+  cn(
+    'pointer-events-auto absolute bottom-2 z-40 shadow-2xl transition-all duration-300 ease-in-out',
+    // Below `sm` the header wraps (AppHeader), growing from 112px to 128px and
+    // moving its right-aligned cluster over the panel's column — start below it.
+    // At `sm+` the cluster is right-aligned again and 80px is clear.
+    'top-34 sm:top-20',
+    // 20rem on desktop; on a 390px phone a fixed w-80 would leave ~54px of plot.
+    'w-[min(20rem,calc(100vw-2rem))]',
+    active ? 'left-4' : '-left-[400px] opacity-0',
+  );
+
 interface DashboardPanelProps {
   // Data
   points2d: Point2D[];
@@ -814,11 +836,9 @@ export function DashboardPanel({
           hasActiveFilter={hasActiveFilter}
           hasHighlights={hasHighlights}
           variant="floating"
+          mobileSheet={false}
           data-tour="panel-controls"
-          className={cn(
-            "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
-            activePanel === 'controls' ? "left-4" : "-left-[400px] opacity-0"
-          )}
+          className={panelClass(activePanel === 'controls')}
         />
 
         {/* Search Sidebar */}
@@ -861,11 +881,9 @@ export function DashboardPanel({
           featureSearch={featureSearch}
           onFeatureSearchResultClick={onFeatureSearchResultClick}
           variant="floating"
+          mobileSheet={false}
           data-tour="panel-search"
-          className={cn(
-            "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
-            activePanel === 'search' ? "left-4" : "-left-[400px] opacity-0"
-          )}
+          className={panelClass(activePanel === 'search')}
         />
 
         {/* Analytics Sidebar */}
@@ -885,11 +903,9 @@ export function DashboardPanel({
           probes={probes}
           onCategoryToggle={handleCategoryToggle}
           variant="floating"
+          mobileSheet={false}
           data-tour="panel-analytics"
-          className={cn(
-            "pointer-events-auto absolute top-20 bottom-2 z-40 w-80 shadow-2xl transition-all duration-300 ease-in-out",
-            activePanel === 'analytics' ? "left-4" : "-left-[400px] opacity-0"
-          )}
+          className={panelClass(activePanel === 'analytics')}
         />
       </div>
     </div>

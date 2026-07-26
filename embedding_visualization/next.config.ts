@@ -23,6 +23,13 @@ const nextConfig: NextConfig = {
     // the memory-capped HF Space builder. The forked Plotly's huge source
     // modules make the string savings significant.
     webpackMemoryOptimizations: isDockerBuild,
+    // Docker builds only: cap the "Collecting page data" / static-generation
+    // worker pool. The default (builder CPUs - 1; 7 on the HF builder) spawns
+    // that many Node processes, each loading the forked-Plotly bundle —
+    // observed OOMKilled (exit 137) AFTER a successful webpack compile. Two
+    // workers keep the peak bounded; the page count is small, so the cost is
+    // seconds.
+    ...(isDockerBuild ? { cpus: 2 } : {}),
   },
 
   // Old route names — query strings are preserved automatically.

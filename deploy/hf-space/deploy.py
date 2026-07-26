@@ -36,6 +36,10 @@ DEPLOY_DIR = REPO_ROOT / "deploy" / "hf-space"
 # not cover "interpretability_backend/benchmarks/*", and ".env" does not
 # cover nested ".env" files; both need explicit entries.
 IGNORE_PATTERNS = [
+    # The GitHub project README must never reach the Space repo: the Space's
+    # README.md is the frontmatter card (README_SPACE.md, uploaded first) and
+    # the project readme has no frontmatter → instant CONFIG_ERROR if it wins.
+    "README.md",
     ".git/*",
     ".git*",
     ".venv/*",
@@ -111,7 +115,26 @@ def render_space_readme(repo_id: str) -> bytes:
     text = (DEPLOY_DIR / "README_SPACE.md").read_text(encoding="utf-8")
     text = text.replace("{{SPACE_URL}}", f"https://huggingface.co/spaces/{repo_id}")
     text = text.replace("{{SPACE_DIRECT_URL}}", space_direct_url(repo_id))
+    validate_space_readme(text)
     return text.encode("utf-8")
+
+
+def validate_space_readme(text: str) -> None:
+    """Fail fast on the frontmatter constraints the Hub enforces server-side.
+
+    The Hub validates README.md YAML on the commit that touches it; failing
+    there used to strand a half-deployed Space in CONFIG_ERROR (observed:
+    a 66-char short_description). Catch what we can locally, before any
+    upload happens.
+    """
+    if not text.startswith("---\n"):
+        sys.exit("ERROR: README_SPACE.md must start with a '---' frontmatter block.")
+    match = re.search(r"^short_description:\s*(.+?)\s*$", text, re.MULTILINE)
+    if match and len(match.group(1)) > 60:
+        sys.exit(
+            f"ERROR: short_description is {len(match.group(1))} chars; "
+            "the Hub rejects anything over 60."
+        )
 
 
 def main() -> int:
@@ -148,6 +171,18 @@ def main() -> int:
         )
         print(f"[deploy] space ensured: {args.repo_id}")
 
+    # README goes FIRST: the Hub validates its frontmatter on commit, so a
+    # rejected card must fail the deploy before the tree is touched (the tree
+    # upload excludes the project README.md, so this file is never clobbered).
+    print("[deploy] uploading Space README (frontmatter card)…")
+    api.upload_file(
+        path_or_fileobj=render_space_readme(args.repo_id),
+        path_in_repo="README.md",
+        repo_id=args.repo_id,
+        repo_type="space",
+        commit_message="Space README",
+    )
+
     print(f"[deploy] uploading filtered tree from {REPO_ROOT} (large files go via LFS)…")
     api.upload_folder(
         folder_path=str(REPO_ROOT),
@@ -158,14 +193,7 @@ def main() -> int:
         commit_message="Deploy Orrery demo",
     )
 
-    print("[deploy] uploading Space README (frontmatter) and .dockerignore…")
-    api.upload_file(
-        path_or_fileobj=render_space_readme(args.repo_id),
-        path_in_repo="README.md",
-        repo_id=args.repo_id,
-        repo_type="space",
-        commit_message="Space README",
-    )
+    print("[deploy] uploading .dockerignore…")
     api.upload_file(
         path_or_fileobj=str(REPO_ROOT / ".dockerignore"),
         path_in_repo=".dockerignore",

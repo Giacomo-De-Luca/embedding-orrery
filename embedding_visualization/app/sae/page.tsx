@@ -56,7 +56,13 @@ import {
   SAE_TOUR_STEPS,
   type SaeTourRuntime,
 } from '@/lib/utils/saeTourSteps';
-import { SAE_TOUR_STORAGE_KEY, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
+import {
+  SAE_TOUR_STORAGE_KEY,
+  TOUR_MIN_VIEWPORT,
+  readMobileNoticeSeen,
+  shouldShowMobileNotice,
+} from '@/lib/utils/demoOnboarding';
+import { MobileNotice } from '@/app/components/MobileNotice';
 import type { ChatMessage } from '@/lib/types/types';
 
 // Loaded on demand so regular visits never pay for the tour library.
@@ -137,6 +143,19 @@ function FeaturesPageContent() {
       urlParams.tour === 'sae' &&
       typeof window !== 'undefined' &&
       window.innerWidth >= TOUR_MIN_VIEWPORT,
+  );
+
+  // Same one-time desktop notice as Explore, sharing its storage key so a
+  // visitor who dismissed it there never sees it again here. This page has no
+  // `getOnboardingAction` call, so it applies the shared predicate directly.
+  const [mobileNoticeOpen, setMobileNoticeOpen] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      shouldShowMobileNotice({
+        isDemo: IS_DEMO,
+        viewportWidth: window.innerWidth,
+        mobileNoticeSeen: readMobileNoticeSeen(),
+      }),
   );
 
   // The feature open in the detail pane — independent of the SAE selection,
@@ -1058,6 +1077,8 @@ function FeaturesPageContent() {
           onDone={() => setTourRequested(false)}
         />
       )}
+
+      <MobileNotice open={mobileNoticeOpen} onOpenChange={setMobileNoticeOpen} />
     </div>
   );
 }
