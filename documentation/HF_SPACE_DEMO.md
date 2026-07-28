@@ -1,9 +1,12 @@
 # HuggingFace Space Demo (read-only)
 
 A public, read-only demo of Orrery ships as a single-container HuggingFace
-Docker Space. Demo = Explore page only, three seeded collections (emotion,
-xkcd colors, and the 13,980-abstract `acl_abstracts_emnlp_findings` EMNLP
-collection with 60 LLM-labeled topics).
+Docker Space. Demo = the Explore page plus the read-only `/sae` explorer, six
+seeded collections: emotion, xkcd colors, the 13,980-abstract
+`acl_abstracts_emnlp_findings` EMNLP collection (60 LLM-labeled topics), the
+`Gemma_9_16k_embedded` SAE label map, the 212,478-sense `wordnet_senses_full`
+galaxy, and `Glasgow_norm_all-gemini-2` (4,682 words, nine psycholinguistic
+norms, pre-trained probes).
 
 ## What was built (implementation summary)
 
@@ -13,7 +16,7 @@ Five independent pieces, each usable on its own:
 |---|---|---|
 | Server-side read-only gate | `backend/API/read_only.py`, wired in `backend/API/__init__.py`; upload gating in `backend/main.py`; `generateStream` early-refusal in `backend/API/subscriptions.py` | With `ORRERY_READ_ONLY` truthy, every GraphQL mutation is rejected before execution (never touches resolvers/DB) and `/upload` isn't mounted. This is the actual security boundary — the GraphQL endpoint is public. Tests: `unit_tests/test_read_only.py`. |
 | Frontend demo mode | `lib/utils/demoMode.ts` (`IS_DEMO`), gates in `PageNav`, `next.config.ts` redirects, `VisualizationControls`, `AnalyticsSidebar`, `DashboardPanel` | Cosmetic layer: Explore-only nav, `/collections` + `/sae` redirect to `/`, write-UI hidden. Build-time flag (`NEXT_PUBLIC_DEMO_MODE` Docker ARG). |
-| Demo seed | `config/seed_snapshots/demo.json` + snapshot builder/publisher | The three demo collections are generated from a validated manifest, checksummed, and published to a private Dataset repository at an immutable revision. |
+| Demo seed | `config/seed_snapshots/demo.json` + snapshot builder/publisher | The demo collections (plus SAE tables and Glasgow probes) are generated from a validated manifest, checksummed, and published to a private Dataset repository at an immutable revision. |
 | Single image | root `Dockerfile`, `deploy/hf-space/nginx.conf`, `deploy/hf-space/start.sh` | nginx :7860 fronts uvicorn :8000 + Next standalone :3000; the build downloads and verifies the locked seed with a secret-mounted token. |
 | Deploy tooling | `deploy/hf-space/deploy.py`, `.github/workflows/containers.yml` | Uploads filtered GitHub source after tests; the Space rebuilds automatically once `demo.lock.json` is committed. |
 
@@ -275,16 +278,22 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    view: collection, colour scheme (fed through the same initial-refs path
    as explicit URL colour params — explicit URL params win), projection
    method/mode, and store flags (nebula, cluster labels). Shipped ids:
-   `emnlp-topics`, `xkcd-manifold`, `emotion`. The param persists while the
-   user stays on the preset's collection and is dropped on switch. In demo
-   builds the bare-URL default collection is `emotion` (small, and its
-   MiniLM search model runs inside the Space — no Gemini quota).
+   `emnlp-topics`, `xkcd-manifold`, `emotion`, `sae-map`, `wordnet-pos`,
+   `glasgow-norms`. The param persists while the user stays on the preset's
+   collection and is dropped on switch. In demo builds the bare-URL default
+   collection is `emotion` (small, and its MiniLM search model runs inside
+   the Space — no Gemini quota). Presets are deep-link-only: the welcome
+   dialog lists guided tours, not raw preset views (the former EMNLP/xkcd
+   preset buttons were removed; their ids remain for links).
 2. **First-visit welcome dialog** (`app/components/DemoIntro.tsx`). Auto-opens
    once per browser (`localStorage` key `orrery.demo-intro.v1`), demo builds
    only, never on top of a deep link (any `collection`/`colorBy`/`preset`/
-   `tour` param suppresses it). Five entries: the guided tour, the two preset
-   missions, the "Inspect SAE features" tour (gated on both the SAE pair and
-   the label-map collection being present), or dismiss. Reopenable via `?intro=1` (any build) and the
+   `tour` param suppresses it). Five entries, all guided: the 90-second tour,
+   "Inspect SAE features" (gated on both the SAE pair and the label-map
+   collection being present), "Decode human ratings" (the probing tour, gated
+   on the Glasgow collection), "Tour the WordNet galaxy" (gated on the
+   WordNet collection; its copy carries the heavy-load warning), or dismiss.
+   Reopenable via `?intro=1` (any build) and the
    header `?` button. Opening it fires a one-shot warm-up query so the
    emotion search model cold-starts before the tour reaches the search step.
 3. **Spotlight tour** (react-joyride v3, `?tour=1` in any build — the welcome
@@ -357,6 +366,48 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    chat (opens the sidebar and replays the first fixture session) → the link
    back to the map. A direct `/sae?tour=sae` entry still works — the anatomy
    step falls back to running the semantic search itself.
+5. **WordNet galaxy tour** (`?tour=wordnet`, steps in
+   `lib/utils/wordnetTourSteps.ts`, storage key
+   `orrery.demo-wordnet-tour.v1`). Single-page, on `wordnet_senses_full`
+   (212,478 senses — the paper's Figure-1 dataset, the demo's heaviest map;
+   load waits get 90 s ceilings). Narrative: the map opens already wearing
+   POS colours (the `wordnet-pos` preset, which matches the collection's
+   saved default — deliberately NO recolor on arrival, an earlier
+   uncoloured-reveal design flickered), step 2 narrates the POS continents
+   (its prepare only restores POS/no-nebula for Back-nav), step 3 is the
+   Figure-1 view: recolor by `topic_label` (thousands of LLM-named topics —
+   the heaviest recolor the demo does, 45 s prepare ceiling) + nebula haze +
+   cluster labels (`TourRuntime.setNebulaMode`/`setShowClusterLabels`),
+   step 4 fire-and-forget searches "geometry" (the collection is
+   MiniLM-embedded — the exact model the image bakes, so search is free and
+   offline; hard collection guard as always), step 5 resets the camera for
+   the parting nebula shot. Completion leaves the nebula view; a mid-tour
+   skip re-applies the preset (guarded on the collection having actually
+   loaded, so bailing during the long load never re-triggers it).
+6. **Probing tour** (`?tour=probe`, steps in `lib/utils/probeTourSteps.ts`,
+   storage key `orrery.demo-probe-tour.v1`). Single-page, on
+   `Glasgow_norm_all-gemini-2` (4,682 words, nine Glasgow norms as numeric
+   metadata) — the paper's probing experiment as a guided walk. Steps: actual
+   concreteness ratings (the `glasgow-norms` preset pins the managua
+   diverging scale — the collection's curated look; without an explicit
+   scale the recommended-scale path lands on the rainbow-like sinebow) → the
+   ridge probe's predicted scores in the SAME managua palette so "the
+   picture barely changes" (`probe_concreteness_ridge_score`, R² = 0.80
+   held-out) → zero-centered diverging residuals → valence
+   (`probe_valence_ridge_score`, R² = 0.76, managua) → the Direction Probes
+   bench in the Analytics panel (`probe-section` anchor; demo builds render
+   the REAL `ProbeSection` read-only — shipped probes stay listed and
+   colourable, only fitting/deleting disappear). Entirely free and
+   read-only: probes + per-word scores are trained offline and shipped in
+   the seed (`demo.json` sets `include.probes` for the collection), and the
+   steps only recolor by fields `useProbes` merges client-side — recoloring
+   steps wait on `TourRuntime.hasColorField` since probe fields arrive via
+   their own queries, and skip rather than paint a missing field. There is
+   deliberately NO search step: the collection is Gemini-embedded, and
+   auto-searching it would spend metered quota. (The initial score-fetch
+   fan-out bug this tour exposed — a single `useLazyQuery` executor
+   cancelling all but the last of N parallel calls — is fixed in
+   `useProbes` with independent `client.query` calls.)
 
 - **Phone-sized viewports** get a fourth surface: a one-time "Best viewed on
   desktop" card (`app/components/MobileNotice.tsx`), mounted on both `/` and
@@ -365,7 +416,8 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
   (768), and not yet dismissed (`orrery.demo-mobile-notice.v1`, one key across
   both pages). It is **dismissible, not blocking**: the app is usable on a
   phone, just cramped. `getOnboardingAction` checks it **first**, so on a
-  phone it pre-empts `?tour=1` / `?intro=1` / `?tour=sae` — the tours are
+  phone it pre-empts `?tour=1` / `?intro=1` / `?tour=sae` / `?tour=wordnet` /
+  `?tour=probe` — the tours are
   already downgraded below 768 px anyway, and a `?tour=sae` deep link stays on
   Explore rather than forwarding until the card has been dismissed once. On
   the next visit the ordinary gating resumes (so a phone visitor sees the

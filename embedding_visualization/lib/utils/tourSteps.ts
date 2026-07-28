@@ -35,10 +35,17 @@ export const TOUR_ANCHORS = {
    */
   plotSide: '[data-tour="plot-side"]',
   collectionSelector: '[data-tour="collection-selector"]',
+  /** The `?` mission-menu button (demo builds only — absent elsewhere). */
+  introButton: '[data-tour="intro-button"]',
   searchInput: '[data-tour="search-input"]',
   panelAnalytics: '[data-tour="panel-analytics"]',
   temporalChart: '[data-tour="temporal-chart"]',
   featureSearch: '[data-tour="feature-search"]',
+  probeSection: '[data-tour="probe-section"]',
+  /** ProbeSection's settings popover content — mounted only while open. */
+  probeSettings: '[data-tour="probe-settings"]',
+  /** The probe row whose field is the active colouring (at most one). */
+  probeActive: '[data-tour="probe-active"]',
   // Reserved:
   toggleControls: '[data-tour="toggle-controls"]',
   toggleSearch: '[data-tour="toggle-search"]',
@@ -48,6 +55,29 @@ export const TOUR_ANCHORS = {
 } as const;
 
 export type TourAnchor = keyof typeof TOUR_ANCHORS;
+
+/** Optional adjustment applied on top of the default camera framing. */
+export interface CameraViewAdjustment {
+  /** Orbit around the vertical axis, degrees. Positive = counterclockwise from above. */
+  azimuthDeg?: number;
+  /** Tilt, degrees. Negative lowers the camera toward the horizon (looks "downwards"). */
+  elevationDeg?: number;
+  /** Eye-distance multiplier: 0.75 = 25% closer than the default framing. */
+  zoom?: number;
+  /** Vertical pan (eye + target together). Negative = camera down / scene up. */
+  panZ?: number;
+  /** Animation length, ms (default 1200). Longer = a slow cinematic move. */
+  durationMs?: number;
+  /**
+   * Apply the adjustment to the LIVE camera instead of the default framing.
+   * Use for moves that must compose with wherever the user (or a search
+   * fly-to) left the camera — e.g. "20% closer than right now" (`zoom: 0.8`).
+   * Default-relative zoom cannot express that: after a search dive the camera
+   * is far closer than any default multiple, so every absolute target reads
+   * as zooming back out.
+   */
+  relative?: boolean;
+}
 
 /** Imperative surface the Explore page hands to the tour's prepare hooks. */
 export interface TourRuntime {
@@ -65,8 +95,14 @@ export interface TourRuntime {
   runFeatureSearch: (labelQuery: string) => Promise<boolean>;
   /** Clear any search highlight — semantic glow AND feature ranking. */
   clearSearch: () => void;
-  /** Animate the 3D camera back to the default wide framing. */
-  resetCamera: () => void;
+  /**
+   * Animate the 3D camera to the default wide framing, optionally adjusted
+   * (orbit / tilt / zoom / vertical pan — see `CameraViewAdjustment`; flip a
+   * sign if a view reads rotated the wrong way). Tours use it both to undo a
+   * search fly-to and to open a collection at the angle where its structure
+   * is actually visible.
+   */
+  resetCamera: (view?: CameraViewAdjustment) => void;
   /** Isolate the first topic cluster (others mute); returns its label. */
   isolateFirstTopic: () => string | null;
   /** Drop any tour-applied topic isolation (tour-end cleanup). */
@@ -81,6 +117,25 @@ export interface TourRuntime {
   clearTemporalFilter: () => void;
   /** true → 2D + density contours; false → back to the 3D galaxy. */
   setDensityView: (on: boolean) => void;
+  /**
+   * Recolor the map by a metadata field (null → the uncoloured single-hue
+   * view). `scaleType` picks the scale family; `opts.scaleName` pins a
+   * specific named scale (otherwise the family default applies — the
+   * sequential default is the rainbow-like sinebow); `centerZero` pins a
+   * diverging scale's neutral midpoint at 0 (probe residuals — mirrors
+   * ProbeSection).
+   */
+  setColorBy: (
+    field: string | null,
+    scaleType?: 'sequential' | 'diverging' | 'categorical',
+    opts?: { scaleName?: string; centerZero?: boolean },
+  ) => void;
+  /** Whether `field` is currently a known Color By option (probe fields load async). */
+  hasColorField: (field: string) => boolean;
+  /** Toggle the nebula haze overlay (per-category density glow). */
+  setNebulaMode: (on: boolean) => void;
+  /** Toggle topic-name labels at cluster centroids. */
+  setShowClusterLabels: (on: boolean) => void;
   setActivePanel: (panel: 'controls' | 'search' | 'analytics' | null) => void;
   setShowLabels: (value: boolean) => void;
   getLoadedCollection: () => string | null;
@@ -103,8 +158,24 @@ export interface TourStepDefinitionBase<A extends string, R> {
   anchor: A;
   title: string;
   body: string;
+  /**
+   * Overrides the primary button's caption for this step. The default is
+   * "Next" ("Done" on the last step) — a chained tour's handoff step sets
+   * "Next" so finishing segment 1 doesn't read as the end of the tour.
+   */
+  primaryLabel?: string;
   /** Let pointer events through the spotlight (rotate/zoom the plot). */
   allowInteraction?: boolean;
+  /**
+   * Extra anchors to ring-highlight while the step's tooltip is shown.
+   * joyride cuts only ONE spotlight per step, so a step that points at
+   * several controls (the finale: collection selector + `?` mission menu,
+   * on different header rows in demo builds) lists them here instead —
+   * `TourController` draws its own spotlight-style rings over each, on top
+   * of whatever overlay the step has. Anchors that aren't mounted (the `?`
+   * button outside demo builds) are silently skipped.
+   */
+  highlightAnchors?: A[];
   placement?: 'auto' | 'center' | 'bottom' | 'left' | 'right';
   /** Ceiling for `prepare` (react-joyride `beforeTimeout`), ms. */
   prepareTimeoutMs?: number;
@@ -138,7 +209,68 @@ export function waitFor(
   });
 }
 
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Promise that resolves after `ms` (shared by every tour's settle waits). */
+export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait for a step's anchor element to be mounted and laid out.
+ *
+ * **Any prepare on a step whose anchor mounts late MUST call this.**
+ * react-joyride polls for a not-yet-mounted target only on steps WITHOUT a
+ * `before` hook (`useLifecycleEffect` effect 2: the polling branch is
+ * `else if (!beforeRef.current)`). Adding a prepare opts the step out of that
+ * polling entirely — the step goes straight to READY when the hook resolves,
+ * and a missing target is then treated as TARGET_NOT_FOUND, which silently
+ * advances to the next step. So a prepare on the tour's first step turned the
+ * built-in wait for the collection load into "skip step 1".
+ *
+ * The `left >= 0` check also covers the panels, which are always mounted and
+ * slid off-screen: an anchor inside one is in the DOM long before it's visible.
+ */
+export function waitForAnchor(selector: string, timeoutMs: number): Promise<boolean> {
+  return waitFor(() => {
+    // Headless test runs have no document — treat the anchor as in place.
+    if (typeof document === 'undefined') return true;
+    const el = document.querySelector(selector);
+    return el !== null && el.getBoundingClientRect().left >= 0;
+  }, timeoutMs);
+}
+
+/**
+ * Scroll a step's anchor into the middle of its scroll container. Used for
+ * anchors below the fold of a panel — joyride only auto-scrolls to the step's
+ * own target, and the map-narrating steps deliberately anchor on the plot.
+ */
+export function scrollAnchorIntoView(selector: string): void {
+  if (typeof document === 'undefined') return;
+  const el = document.querySelector(selector);
+  if (!el) return;
+  const reducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+}
+
+/**
+ * Apply a preset and poll until its collection is the loaded one, re-applying
+ * on every tick — a direct `?tour=` cold entry can beat the collections
+ * manifest, in which case the early calls no-op. Returns whether the
+ * collection landed within `timeoutMs`.
+ */
+export async function ensurePresetCollection(
+  runtime: Pick<TourRuntime, 'applyPreset' | 'getLoadedCollection'>,
+  presetId: string,
+  collection: string,
+  timeoutMs: number,
+  intervalMs = 1000,
+): Promise<boolean> {
+  runtime.applyPreset(presetId);
+  return waitFor(() => {
+    if (runtime.getLoadedCollection() === collection) return true;
+    runtime.applyPreset(presetId);
+    return false;
+  }, timeoutMs, intervalMs);
+}
 
 /**
  * Re-apply the tour preset and wait for its collection + colouring to land.
@@ -170,25 +302,35 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     anchor: 'plotSide',
     title: 'A map of meaning',
     body:
-      'Every point is one of 13,980 EMNLP paper abstracts, placed by a language model so ' +
-      'that distance mirrors meaning: nearby points say similar things. The 60 colored ' +
-      'clusters are research topics named by an LLM — labels mark their centers, haze ' +
-      'traces their extent. Drag to rotate, scroll to zoom — the tour will wait.',
+      'Every point is one of 13,980 EMNLP paper abstracts, embedded by a language model so ' +
+      'that distance mirrors meaning: nearby points are semantically similar. The 60 colored ' +
+      'clusters are research topics labeled by an LLM. Drag to rotate, scroll to zoom, click to inspect.',
     allowInteraction: true,
     placement: 'left',
     // Tour start switches to the tour collection: the plot target is behind
     // the page's own loader while joyride waits for it to appear.
     suppressWaitLoader: true,
+    prepareTimeoutMs: 35000,
+    prepare: async (runtime) => {
+      // Closing the panel is a no-op going forward (panels start closed); it
+      // matters on Back from the search step, which opens the Search panel.
+      runtime.setActivePanel(null);
+      // MANDATORY, not a nicety: having any prepare at all disables joyride's
+      // own target polling (see waitForAnchor), and this step's anchor only
+      // mounts once the tour collection has loaded. Without this wait the
+      // first step is dropped as TARGET_NOT_FOUND and the tour opens on step 2.
+      await waitForAnchor(TOUR_ANCHORS.plotSide, 30000);
+    },
   },
   {
     id: 'search',
     anchor: 'searchInput',
     title: 'Search by meaning',
     body:
-      `We're searching "${TOUR_SEARCH_QUERY}" — the query is embedded into the same space, ` +
-      'so as results land the matching abstracts glow by similarity even when they share ' +
-      'no words with it, and the camera dives to the best match. The Search panel adds ' +
-      'substring and metadata filtering on top.',
+      `We're semantically searching "${TOUR_SEARCH_QUERY}". ` +
+      'The matching abstracts glow according to similarity in the original space even when they share ' +
+      'no words with the query, and the camera dives to the best match. The Search panel ' +
+      'adds text search and metadata filtering.',
     prepareTimeoutMs: 30000,
     // The only awaited work is the collection wait, which sits behind the
     // page's own loader; the search itself is fire-and-forget (below).
@@ -198,6 +340,11 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       await ensureTourCollection(runtime);
       // Hard guard: auto-search is allowed against the tour collection only.
       if (runtime.getLoadedCollection() !== TOUR_COLLECTION) return;
+      // The panel is an absolutely-positioned overlay, so opening it doesn't
+      // move the header input the spotlight is anchored to — no reposition
+      // wait needed (unlike the feature-search step, whose anchor lives
+      // inside the panel). It also stays open into that next step.
+      runtime.setActivePanel('search');
       runtime.setShowLabels(true);
       // Deliberately NOT awaited: the tooltip appears immediately, the search
       // input's own spinner (inside the spotlight) shows progress, and the
@@ -210,13 +357,13 @@ export const TOUR_STEPS: TourStepDefinition[] = [
   {
     id: 'feature-search',
     anchor: 'featureSearch',
-    title: 'Search by the model’s features',
+    title: 'Search by the model’s SAE features',
     body:
-      `A different kind of search: this corpus also carries Gemma’s SAE activations. ` +
+      `An experimental kind of search: this corpus also carries Gemma Scope 2 SAE activations. ` +
       `We typed “${TOUR_FEATURE_QUERY}”, matched the model’s own ` +
       '“humor and jokes” feature, and the abstracts where it fires strongest ' +
-      'light up — the computational-humor papers surface without sharing a keyword. ' +
-      'This runs entirely on stored activations: no model in the loop.',
+      'light up: the computational-humor papers surface. ' +
+      'SAE search runs entirely on stored activations without reloading the model.',
     placement: 'right',
     prepareTimeoutMs: 15000,
     prepare: async (runtime) => {
@@ -227,11 +374,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       runtime.setActivePanel('search');
       // The Feature Search section renders once the hasActivations probe
       // resolves and the panel slides in — wait for it to be measurable.
-      await waitFor(() => {
-        if (typeof document === 'undefined') return true;
-        const el = document.querySelector(TOUR_ANCHORS.featureSearch);
-        return el !== null && el.getBoundingClientRect().left >= 0;
-      }, 4000);
+      await waitForAnchor(TOUR_ANCHORS.featureSearch, 4000);
       await runtime.runFeatureSearch(TOUR_FEATURE_QUERY);
       await delay(150);
     },
@@ -242,13 +385,19 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     title: 'One topic in focus',
     body:
       'We just selected a single research topic: every other cluster fades to a whisper and ' +
-      'the camera reframes on what remains — its haze and label stay live. Any legend row, ' +
-      'analytics row, or cluster label isolates the same way.',
+      'the camera centers on what remains. Any click on the legend row, ' +
+      'analytics row, or cluster label filters the same way. Shift-click adds to the selection, double click resets.',
     allowInteraction: true,
     placement: 'left',
     prepare: async (runtime) => {
       runtime.clearSearch();
-      runtime.setActivePanel(null);
+      // The Analytics category list is where the isolation is legible as data
+      // (rows for the surviving topic) and it's one of the surfaces the body
+      // names as clickable. It sits far left; this step's card is pinned to
+      // the plot's right edge, so they never collide. The 400 ms settle below
+      // covers the panel's 300 ms slide-in — and the anchor is outside the
+      // panel, so nothing needs to wait on it.
+      runtime.setActivePanel('analytics');
       // Topics arrive via their own query after the collection loads; on a
       // fast path they're long since present and the first call isolates.
       // Otherwise poll until they land (each failed attempt is a no-op).
@@ -269,10 +418,10 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     anchor: 'plotSide',
     title: 'Travel through time',
     body:
-      'Every abstract carries its year, so the Analytics panel (left) grows a timeline. We ' +
-      'narrowed it to the earliest years of the corpus — later work fades in the map, and ' +
-      'whole regions go dark: those research topics did not exist yet. Drag the handles to ' +
-      'scrub; double-click resets.',
+      'Every abstract carries its year, so the Analytics panel (left) displays a timeline with the yearly count. We ' +
+      'narrowed it to the earliest years of the corpus: later work fades, and ' +
+      'whole topics go silent: those research topics did not exist yet. Drag the handles to ' +
+      'change intervals; double-click resets.',
     allowInteraction: true,
     placement: 'left',
     prepare: async (runtime) => {
@@ -283,14 +432,14 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       runtime.setActivePanel('analytics');
       runtime.applyTemporalWindow(0, 1 / 3);
       // The panel is always mounted, slid offscreen; wait out its transition
-      // so the spotlight measures the on-screen position. (Headless test runs
-      // have no document — treat the chart as already in place.)
-      await waitFor(() => {
-        if (typeof document === 'undefined') return true;
-        const el = document.querySelector(TOUR_ANCHORS.temporalChart);
-        return el !== null && el.getBoundingClientRect().left >= 0;
-      }, 2000);
-      await delay(150);
+      // so the chart is on-screen before we scroll to it.
+      await waitForAnchor(TOUR_ANCHORS.temporalChart, 2000);
+      // The category list above it is tall enough to push the timeline below
+      // the panel's fold — joyride only auto-scrolls to a step's own target,
+      // and this step deliberately anchors on the plot instead.
+      scrollAnchorIntoView(TOUR_ANCHORS.temporalChart);
+      // Covers both the panel transition and the smooth scroll.
+      await delay(400);
     },
   },
   {
@@ -298,8 +447,8 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     anchor: 'plotSide',
     title: 'The flat map',
     body:
-      'The same space, flattened to 2D with density contours: ink pools where abstracts ' +
-      'concentrate, tinted by topic. Rotation becomes panning — this is the view built for ' +
+      'The same space, flattened to 2D with density contouring: ink pools where abstracts ' +
+      'concentrate, tinted by topic. Rotation becomes panning: this is the view built for ' +
       'scale, and one click in Controls flips any collection between galaxy and map.',
     allowInteraction: true,
     placement: 'left',
@@ -320,19 +469,28 @@ export const TOUR_STEPS: TourStepDefinition[] = [
   },
   {
     id: 'finale',
+    // Card on the plot's right edge (vertically centered → just under the
+    // legend), NOT over the map it invites the user to explore. The two ways
+    // on from here — the collection selector and the `?` mission menu — get
+    // ring highlights instead of a spotlight: `allowInteraction` drops the
+    // overlay (map + header stay fully live), and joyride could only cut one
+    // spotlight anyway while these sit on different header rows in demo builds.
     anchor: 'plotSide',
-    title: 'Every collection is a new space',
+    highlightAnchors: ['collectionSelector', 'introButton'],
+    title: 'Explore other collections',
     body:
-      'Last stop: 1,000 tweets mapped into emotional topics — a different corpus, the same ' +
-      'instrument. Its search model runs entirely inside this Space, so query as much as ' +
-      'you like. That was the tour. The map is yours; replay it or pick another mission ' +
-      'from the ? button up top.',
+      'Explore different corpus: 1,000 tweets embedded with MiniLM and mapped into emotional topics. ' +
+      'Its search model runs entirely inside this Space, so query as much as ' +
+      'you like. Switch corpus from the highlighted selector up top, and replay ' +
+      'the tour or pick another mission from the ? button.',
     allowInteraction: true,
     placement: 'left',
     prepareTimeoutMs: 30000,
     suppressWaitLoader: true,
     prepare: async (runtime) => {
-      runtime.setActivePanel(null);
+      // Parting view doubles as an invitation to keep exploring: the Controls
+      // panel is open so "how to draw" is discoverable the moment the tour ends.
+      runtime.setActivePanel('controls');
       // The preset restores 3D and pins densityMode off (see tourPresets).
       runtime.applyPreset(FINALE_PRESET_ID);
       await waitFor(

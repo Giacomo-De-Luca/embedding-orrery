@@ -21,6 +21,10 @@ function makeRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     applyTemporalWindow: vi.fn().mockReturnValue(true),
     clearTemporalFilter: vi.fn(),
     setDensityView: vi.fn(),
+    setColorBy: vi.fn(),
+    hasColorField: vi.fn().mockReturnValue(true),
+    setNebulaMode: vi.fn(),
+    setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
     setShowLabels: vi.fn(),
     getLoadedCollection: () => TOUR_COLLECTION,
@@ -39,6 +43,44 @@ describe('TOUR_STEPS', () => {
     ]);
     for (const s of TOUR_STEPS) {
       expect(TOUR_ANCHORS[s.anchor]).toMatch(/^\[data-tour=/);
+      for (const extra of s.highlightAnchors ?? []) {
+        expect(TOUR_ANCHORS[extra]).toMatch(/^\[data-tour=/);
+      }
+    }
+  });
+
+  it('the map step closes any open panel (Back from the search step)', async () => {
+    const runtime = makeRuntime();
+    await step('map').prepare!(runtime);
+    expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+  });
+
+  it('the map step blocks on its plot anchor mounting', async () => {
+    // Regression: react-joyride polls for a missing target ONLY on steps with
+    // no `before` hook, so a step that has a prepare must wait for its own
+    // anchor. Without this the tour's first step was dropped as
+    // TARGET_NOT_FOUND while the collection was still loading.
+    let mounted = false;
+    vi.stubGlobal('document', {
+      querySelector: (selector: string) =>
+        mounted && selector === TOUR_ANCHORS.plotSide
+          ? { getBoundingClientRect: () => ({ left: 0 }) }
+          : null,
+    });
+    try {
+      let done = false;
+      const prep = step('map')
+        .prepare!(makeRuntime())
+        .then(() => {
+          done = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(done).toBe(false);
+      mounted = true;
+      await prep;
+      expect(done).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
@@ -49,6 +91,8 @@ describe('TOUR_STEPS', () => {
     // First prepared step: the tour-preset safety net moved here from structure.
     expect(runtime.applyPreset).toHaveBeenCalledWith(TOUR_PRESET_ID);
     expect(runtime.setShowLabels).toHaveBeenCalledWith(true);
+    // The Search panel is open beside the spotlit header input (the body says so).
+    expect(runtime.setActivePanel).toHaveBeenCalledWith('search');
     expect(runtime.runSearch).toHaveBeenCalledWith(TOUR_SEARCH_QUERY);
   });
 
@@ -63,6 +107,7 @@ describe('TOUR_STEPS', () => {
         await prep;
         expect(runtime.runSearch).not.toHaveBeenCalled();
         expect(runtime.setShowLabels).not.toHaveBeenCalled();
+        expect(runtime.setActivePanel).not.toHaveBeenCalled();
       }
     } finally {
       vi.useRealTimers();
@@ -85,12 +130,13 @@ describe('TOUR_STEPS', () => {
     expect(runtime.setActivePanel).not.toHaveBeenCalled();
   });
 
-  it('the focus step isolates one topic programmatically with panels closed', async () => {
+  it('the focus step isolates one topic programmatically in the analytics panel', async () => {
     const runtime = makeRuntime();
     await step('focus-topic').prepare!(runtime);
     expect(runtime.isolateFirstTopic).toHaveBeenCalled();
     expect(runtime.clearSearch).toHaveBeenCalled();
-    expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+    // The category list makes the isolation legible as data.
+    expect(runtime.setActivePanel).toHaveBeenCalledWith('analytics');
   });
 
   it('the temporal step swaps isolation for an early-years window in the analytics panel', async () => {
@@ -100,8 +146,35 @@ describe('TOUR_STEPS', () => {
     expect(runtime.clearTopicSelection).toHaveBeenCalled();
     expect(runtime.setActivePanel).toHaveBeenCalledWith('analytics');
     expect(runtime.applyTemporalWindow).toHaveBeenCalledWith(0, 1 / 3);
-    // Back-navigation from the 2D density step must land back in 3D.
     expect(runtime.setDensityView).toHaveBeenCalledWith(false);
+  });
+
+  it('the temporal step scrolls the timeline into view inside the panel', async () => {
+    // The category list above it can push the chart below the panel's fold,
+    // and joyride only auto-scrolls to a step's own target (here: the plot).
+    const scrollIntoView = vi.fn();
+    vi.stubGlobal('document', {
+      querySelector: (selector: string) =>
+        selector === TOUR_ANCHORS.temporalChart
+          ? { getBoundingClientRect: () => ({ left: 0 }), scrollIntoView }
+          : null,
+    });
+    try {
+      await step('temporal').prepare!(makeRuntime());
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('the finale rings the collection selector and the ? mission button', () => {
+    const finale = step('finale');
+    // Card off to the right edge, map fully interactive (no overlay) — the
+    // highlights come from the controller's rings, one per anchor, because
+    // joyride can only cut a single spotlight.
+    expect(finale.anchor).toBe('plotSide');
+    expect(finale.allowInteraction).toBe(true);
+    expect(finale.highlightAnchors).toEqual(['collectionSelector', 'introButton']);
   });
 
   it('the density step clears the filters and flips to the 2D density view', async () => {
@@ -129,14 +202,15 @@ describe('TOUR_STEPS', () => {
     expect(isolate.mock.results.at(-1)?.value).toBe('Machine Learning NLP');
   });
 
-  it('the finale closes the panel and lands on the emotion collection (a real preset)', async () => {
+  it('the finale opens the Controls panel and lands on the emotion collection (a real preset)', async () => {
     expect(FINALE_PRESET_ID).toBe('emotion');
     expect(getPreset(FINALE_PRESET_ID)).not.toBeNull();
     const runtime = makeRuntime({
       getLoadedCollection: () => TOUR_PRESETS[FINALE_PRESET_ID].collection,
     });
     await step('finale').prepare!(runtime);
-    expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+    // The parting view invites exploration: "how to draw" is left discoverable.
+    expect(runtime.setActivePanel).toHaveBeenCalledWith('controls');
     expect(runtime.applyPreset).toHaveBeenCalledWith(FINALE_PRESET_ID);
   });
 

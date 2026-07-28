@@ -1,8 +1,8 @@
 {
-  "manifest_sha256": "6279263812a816bd87cfd9324d6e5b3a18115b12b63a3083368f43ff52930b62",
+  "manifest_sha256": "44cd32c273b36002a6cec54168f9c93482055d6fc1dea514bdbccc13f8c69540",
   "path": "snapshots/demo",
   "repo_id": "GiacomoDeLuca/orrery-demo-seed",
-  "revision": "62649d31e2495462434e93665b26012de4c3b0de",
+  "revision": "d26718ad3da74ff8bcf6f38b34d05e8c8d4429b7",
   "schema_version": 1,
   "snapshot_name": "demo"
 }

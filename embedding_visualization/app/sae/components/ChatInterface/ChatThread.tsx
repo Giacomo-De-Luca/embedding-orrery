@@ -66,7 +66,9 @@ export function ChatThread({
         />
       )}
 
-      <div ref={containerRef} className="absolute inset-0 overflow-y-auto">
+      {/* data-chat-thread: scroll handle for the SAE tour's steered-chat
+          step, which rewinds a replayed session to its first message. */}
+      <div ref={containerRef} data-chat-thread className="absolute inset-0 overflow-y-auto">
         <div className="mx-auto flex min-h-full max-w-2xl flex-col gap-5 px-4 py-6 md:gap-7">
           {messages.map((msg, i) => {
             // Skip the trailing empty assistant placeholder while busy —

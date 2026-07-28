@@ -4,7 +4,6 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { useQuery, useLazyQuery, useApolloClient } from '@apollo/client/react';
-import Link from 'next/link';
 import { CircleHelp, Sparkles, Sun, Moon, X } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
@@ -54,6 +53,8 @@ import { serializeSaesParam } from './utils/saeSelection';
 import {
   SAE_TOUR_ANCHORS,
   SAE_TOUR_STEPS,
+  SAE_TOUR_STEP_OFFSET,
+  SAE_TOUR_TOTAL_STEPS,
   type SaeTourRuntime,
 } from '@/lib/utils/saeTourSteps';
 import {
@@ -63,6 +64,8 @@ import {
   shouldShowMobileNotice,
 } from '@/lib/utils/demoOnboarding';
 import { MobileNotice } from '@/app/components/MobileNotice';
+import { DemoIntro } from '@/app/components/DemoIntro';
+import { useCollections } from '@/lib/hooks/useCollections';
 import type { ChatMessage } from '@/lib/types/types';
 
 // Loaded on demand so regular visits never pay for the tour library.
@@ -137,7 +140,8 @@ function FeaturesPageContent() {
   }), []);
 
   // "Inspect SAE" tour — latched from ?tour=sae at mount; below the viewport
-  // floor the trigger is simply dropped (no dialog exists on this page).
+  // floor the trigger is simply dropped (the mission menu is reachable from
+  // the header's `?` button, which needs no viewport floor).
   const [tourRequested, setTourRequested] = useState(
     () =>
       urlParams.tour === 'sae' &&
@@ -156,6 +160,30 @@ function FeaturesPageContent() {
         viewportWidth: window.innerWidth,
         mobileNoticeSeen: readMobileNoticeSeen(),
       }),
+  );
+
+  // Mission menu, opened by the header's `?`. It lives here rather than on
+  // Explore so asking for help never costs the visitor their SAE state; the
+  // entries that need the Explore page navigate there only once chosen.
+  const [introOpen, setIntroOpen] = useState(false);
+  // Manifest, solely to gate the dialog's collection-backed entries. Usually
+  // an Apollo cache hit (Explore ran the same query); a direct /sae load pays
+  // for one extra query, and only the entry buttons wait on it. The dialog
+  // only opens in demo builds (the `?` button is demo-gated), so non-demo
+  // builds skip the query — and its unreachable-backend retry loop — entirely.
+  const { collections } = useCollections({ skip: !IS_DEMO });
+  const availableCollections = useMemo(
+    () => (collections ? new Set(Object.keys(collections)) : null),
+    [collections],
+  );
+
+  /** Leave for Explore carrying a one-shot onboarding param. */
+  const goToExplore = useCallback(
+    (params: string) => {
+      setIntroOpen(false);
+      router.push(`/?${params}`);
+    },
+    [router],
   );
 
   // The feature open in the detail pane — independent of the SAE selection,
@@ -668,20 +696,18 @@ function FeaturesPageContent() {
         <header className="border-b px-4 py-3 flex items-center gap-3 shrink-0">
           <PageNav variant="solid" size="sm" />
           <h1 className="font-semibold text-sm">SAE Feature Explorer</h1>
-          {/* Demo: route back to the Explore page's mission menu — /sae has
-              no welcome dialog of its own, and without this there is no way
-              to re-enter a tour from here. */}
+          {/* Demo: opens the mission menu in place. It used to navigate to
+              `/?intro=1`, which threw away the model/SAE/feature state just
+              for asking. */}
           {IS_DEMO && (
             <Button
               variant="circularghost"
               size="icon"
-              asChild
+              onClick={() => setIntroOpen(true)}
               aria-label="About this demo"
               title="About this demo"
             >
-              <Link href="/?intro=1">
-                <CircleHelp className="h-4 w-4" />
-              </Link>
+              <CircleHelp className="h-4 w-4" />
             </Button>
           )}
           <ModeToggle />
@@ -1074,11 +1100,27 @@ function FeaturesPageContent() {
           anchors={SAE_TOUR_ANCHORS}
           runtime={saeTourRuntime}
           storageKey={SAE_TOUR_STORAGE_KEY}
+          // Segment 2 of the chained tour: continue the step counter where
+          // the Explore label-map segment left off (4…7 of 7).
+          progressOffset={SAE_TOUR_STEP_OFFSET}
+          progressTotal={SAE_TOUR_TOTAL_STEPS}
           onDone={() => setTourRequested(false)}
         />
       )}
 
       <MobileNotice open={mobileNoticeOpen} onOpenChange={setMobileNoticeOpen} />
+      {/* Both tours start on Explore (the SAE tour's first segment runs on the
+          label map), so each entry hands off with the same one-shot param a
+          deep link would carry. */}
+      <DemoIntro
+        open={introOpen}
+        onOpenChange={setIntroOpen}
+        onStartTour={() => goToExplore('tour=1')}
+        onStartSaeTour={() => goToExplore('tour=sae')}
+        onStartWordnetTour={() => goToExplore('tour=wordnet')}
+        onStartProbeTour={() => goToExplore('tour=probe')}
+        availableCollections={availableCollections}
+      />
     </div>
   );
 }

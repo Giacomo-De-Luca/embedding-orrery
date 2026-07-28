@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLazyQuery, useMutation, useQuery } from '@apollo/client/react';
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 
 import { GET_COLLECTION_PROBES, GET_PROBE_SCORES } from '../graphql/queries';
 import { DELETE_PROBE, TRAIN_PROBE, type TrainProbeResult } from '../graphql/mutations';
@@ -92,11 +92,23 @@ export function useProbes(
     [probesData],
   );
 
+  // Direct client.query, NOT useLazyQuery: a single lazy-query executor
+  // aborts its previous in-flight call when re-invoked, so fanning the
+  // initial load's N score fetches through one executor cancelled all but
+  // the last — and the batch-level catch then dropped even that. Independent
+  // client queries run concurrently without shared state.
   // no-cache: retrained probes reuse identical query args, and score arrays
   // are too large to duplicate in Apollo's normalized cache.
-  const [fetchScores] = useLazyQuery<ProbeScoresQueryData>(GET_PROBE_SCORES, {
-    fetchPolicy: 'no-cache',
-  });
+  const client = useApolloClient();
+  const fetchScores = useCallback(
+    (variables: { collectionName: string; targetField: string; kind: string }) =>
+      client.query<ProbeScoresQueryData>({
+        query: GET_PROBE_SCORES,
+        variables,
+        fetchPolicy: 'no-cache',
+      }),
+    [client],
+  );
   const [trainProbeMutation] = useMutation<{ trainProbe: TrainProbeResult }>(TRAIN_PROBE);
   const [deleteProbeMutation] = useMutation<{ deleteProbe: boolean }>(DELETE_PROBE);
 
@@ -117,31 +129,31 @@ export function useProbes(
     let cancelled = false;
     Promise.all(
       missing.map(async (p) => {
-        const result = await fetchScores({
-          variables: {
+        // Per-probe isolation: one failed fetch must not drop the batch —
+        // that probe just stays listed without coloring.
+        try {
+          const result = await fetchScores({
             collectionName,
             targetField: p.targetField,
             kind: p.kind,
-          },
-        });
-        return [probeKey(p.targetField, p.kind), result.data?.probeScores ?? null] as const;
+          });
+          return [probeKey(p.targetField, p.kind), result.data?.probeScores ?? null] as const;
+        } catch {
+          return [probeKey(p.targetField, p.kind), null] as const;
+        }
       }),
-    )
-      .then((entries) => {
-        if (cancelled) return;
-        const loaded = entries.filter(([, scores]) => scores !== null);
-        if (loaded.length === 0) return;
-        setScoresByKey((prev) => {
-          const next = { ...prev };
-          for (const [key, scores] of loaded) {
-            next[key] = scores as ProbeScoresData;
-          }
-          return next;
-        });
-      })
-      .catch(() => {
-        /* per-probe score fetch failures leave the probe listed without coloring */
+    ).then((entries) => {
+      if (cancelled) return;
+      const loaded = entries.filter(([, scores]) => scores !== null);
+      if (loaded.length === 0) return;
+      setScoresByKey((prev) => {
+        const next = { ...prev };
+        for (const [key, scores] of loaded) {
+          next[key] = scores as ProbeScoresData;
+        }
+        return next;
       });
+    });
     return () => {
       cancelled = true;
     };

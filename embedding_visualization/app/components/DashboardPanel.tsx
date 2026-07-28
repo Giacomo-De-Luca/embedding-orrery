@@ -21,6 +21,7 @@ import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopi
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
+import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import { cn } from '@/lib/utils/utils';
 import { IS_DEMO } from '@/lib/utils/demoMode';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
@@ -124,6 +125,8 @@ interface DashboardPanelProps {
   onClearAllTopics?: () => void;
   /** Bump to animate the 3D camera back to its default framing (demo tour). */
   cameraResetSignal?: number;
+  /** Optional orbit/tilt/zoom/pan applied on top of the reset framing. */
+  cameraResetView?: CameraViewAdjustment | null;
 }
 
 export function DashboardPanel({
@@ -182,6 +185,7 @@ export function DashboardPanel({
   onSelectAllTopics,
   onClearAllTopics,
   cameraResetSignal,
+  cameraResetView,
 }: DashboardPanelProps) {
   const isExpanded = activePanel !== null;
 
@@ -667,6 +671,7 @@ export function DashboardPanel({
       selectedDimensions={selectedDimensions}
       onScreenshot={handleScreenshot}
       cameraResetSignal={cameraResetSignal}
+      cameraResetView={cameraResetView}
     />
   );
 
@@ -687,12 +692,15 @@ export function DashboardPanel({
         </div>
         {/* Invisible tour anchor: whole-plot steps hang their card off the
             plot's right edge (placement "left") so it never covers the view
-            it narrates. Lives inside the plot layer so it unmounts with it —
-            joyride's target-wait then covers collection loads. */}
+            it narrates. Sits at 62% height, not center — the legend occupies
+            the top-right (top-30/40 + its resizable height), and a vertically
+            centered card overlapped it; this parks cards just below. Lives
+            inside the plot layer so it unmounts with it — joyride's
+            target-wait then covers collection loads. */}
         <div
           data-tour="plot-side"
           aria-hidden
-          className="pointer-events-none absolute right-6 top-1/2 h-px w-px"
+          className="pointer-events-none absolute right-6 top-[62%] h-px w-px"
         />
       </div>
 

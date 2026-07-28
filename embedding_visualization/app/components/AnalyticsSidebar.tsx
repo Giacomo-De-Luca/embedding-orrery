@@ -12,7 +12,7 @@ import { Separator } from '@/lib/ui-primitives/separator';
 import { CategoryBarList } from './charts/CategoryBarList';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { ProbeSection } from './ProbeSection';
-import { IS_DEMO, DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
+import { IS_DEMO } from '@/lib/utils/demoMode';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
@@ -253,22 +253,19 @@ export function AnalyticsSidebar({
             </p>
           )}
 
-          {/* Probe training is a write op — demo builds show an inert stub. */}
+          {/* Probe training is a write op — demo builds render the section
+              read-only: shipped probes stay browsable/colorable (all client-
+              side), only fitting and deleting disappear. The data-tour
+              wrapper gives the probing tour's final step its anchor. */}
           {probes && (
-            <>
+            <div data-tour="probe-section" className="space-y-6">
               {(hasCategoricalData || showTemporalSection) && <Separator />}
-              {IS_DEMO ? (
-                <div className="space-y-1 opacity-60" title={DEMO_DISABLED_MESSAGE}>
-                  <p className="text-sm font-medium">Direction Probes</p>
-                  <p className="text-xs text-muted-foreground">
-                    Train linear probes on the embedding space against any numeric
-                    metadata field. {DEMO_DISABLED_MESSAGE}
-                  </p>
-                </div>
-              ) : (
-                <ProbeSection probes={probes} colorFieldOptions={colorFieldOptions} />
-              )}
-            </>
+              <ProbeSection
+                probes={probes}
+                colorFieldOptions={colorFieldOptions}
+                readOnly={IS_DEMO}
+              />
+            </div>
           )}
         </div>
       </SidebarContent>

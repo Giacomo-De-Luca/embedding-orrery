@@ -64,9 +64,10 @@ function isFixtureEntry(value: unknown): value is DemoChatFixtureEntry {
 
 /**
  * Parse the raw fixture JSON into session summaries + per-session messages.
- * Tolerant by design: malformed entries are skipped (a bad hand-edited entry
- * must not blank the whole chat), and timestamps fall back to 0 so an
- * unparsable date sorts first instead of throwing.
+ * Tolerant by design: malformed entries and messages are skipped (a bad
+ * hand-edited entry must not blank the whole chat), and an unparsable
+ * timestamp falls back to 0 rather than propagating NaN (timestamps are
+ * display-only here; sessions and messages keep their file order).
  */
 export function parseChatFixture(raw: unknown): DemoChatFixture {
   if (!Array.isArray(raw)) return EMPTY_DEMO_CHAT_FIXTURE;
@@ -91,7 +92,12 @@ export function parseChatFixture(raw: unknown): DemoChatFixture {
     messagesById.set(
       session.id,
       messages
-        .filter((m) => typeof m?.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+        .filter(
+          (m) =>
+            typeof m?.id === 'string' &&
+            typeof m?.content === 'string' &&
+            (m.role === 'user' || m.role === 'assistant'),
+        )
         .map((m) => ({
           id: m.id,
           role: m.role,

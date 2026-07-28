@@ -575,6 +575,11 @@ class SnapshotDirectoryInstaller:
 class DuckDBSnapshotExporter:
     """Export selected relational data from the live DuckDB store."""
 
+    # Pruned SAE copies run their window sort per hash bucket of the
+    # partition key instead of over the whole table (bounded peak memory,
+    # identical result set) — see _copy_sae_activation_examples.
+    _PRUNE_HASH_BUCKETS = 16
+
     def __init__(self, source_path: str | Path):
         self.source_path = Path(source_path).expanduser().resolve()
 
@@ -663,6 +668,15 @@ class DuckDBSnapshotExporter:
 
         counts: dict[str, int] = {}
         connection = duckdb.connect(str(destination_path))
+        # The document-activation pruning runs a window sort over tens of
+        # millions of rows; with default settings that peak exceeds the
+        # memory budget on 8 GB hosts (observed live: OOM at 6.3 GiB).
+        # Dropping insertion-order buffering and capping threads keeps the
+        # peak bounded and lets the sort spill — WHICH rows are kept is
+        # still fully determined by the pruning ORDER BY clauses, only the
+        # physical row order in the snapshot file may vary between builds.
+        connection.execute("SET preserve_insertion_order=false")
+        connection.execute("SET threads=2")
         attached = False
         try:
             escaped_source = str(self.source_path).replace("'", "''")
@@ -818,18 +832,32 @@ class DuckDBSnapshotExporter:
                     [selection.model_id, selection.sae_id],
                 )
                 continue
-            # Keep the strongest examples per feature; `id` tiebreak keeps the
-            # copy deterministic so manifest checksums are reproducible.
-            copied += cls._insert_count(
-                connection,
-                "INSERT INTO sae_activations BY NAME "
-                "SELECT * FROM prod.sae_activations WHERE model_id = ? AND sae_id = ? "
-                "QUALIFY row_number() OVER ("
-                "  PARTITION BY feature_index"
-                "  ORDER BY max_value DESC NULLS LAST, id"
-                ") <= ?",
-                [selection.model_id, selection.sae_id, limit],
-            )
+            # Keep the strongest examples per feature; the `id` tiebreak makes
+            # the kept row SET deterministic (file bytes may still vary across
+            # builds — see the export connection settings above; each build's
+            # manifest checksums its own output, so integrity is unaffected).
+            # Hash-bucketed by the window's partition key: one sort over the
+            # full table OOMs 8 GB hosts (DuckDB's window operator does not
+            # spill), and every feature's rows land wholly in one bucket, so
+            # the kept rows are identical to the unbucketed query.
+            for bucket in range(cls._PRUNE_HASH_BUCKETS):
+                copied += cls._insert_count(
+                    connection,
+                    "INSERT INTO sae_activations BY NAME "
+                    "SELECT * FROM prod.sae_activations "
+                    "WHERE model_id = ? AND sae_id = ? AND hash(feature_index) % ? = ? "
+                    "QUALIFY row_number() OVER ("
+                    "  PARTITION BY feature_index"
+                    "  ORDER BY max_value DESC NULLS LAST, id"
+                    ") <= ?",
+                    [
+                        selection.model_id,
+                        selection.sae_id,
+                        cls._PRUNE_HASH_BUCKETS,
+                        bucket,
+                        limit,
+                    ],
+                )
         return copied
 
     @classmethod
@@ -852,18 +880,21 @@ class DuckDBSnapshotExporter:
                     )
                     continue
                 # Keep each document's strongest features; `feature_index`
-                # tiebreak keeps the copy deterministic.
-                copied += cls._insert_count(
-                    connection,
-                    "INSERT INTO sae_document_activations BY NAME "
-                    "SELECT * FROM prod.sae_document_activations "
-                    "WHERE collection_name = ? "
-                    "QUALIFY row_number() OVER ("
-                    "  PARTITION BY item_id"
-                    "  ORDER BY activation DESC, feature_index"
-                    ") <= ?",
-                    [collection_name, limit],
-                )
+                # tiebreak keeps the copy deterministic. Hash-bucketed like
+                # the examples copy above — the EMNLP table is ~56M rows and
+                # a single window sort over it exceeds 8 GB hosts.
+                for bucket in range(cls._PRUNE_HASH_BUCKETS):
+                    copied += cls._insert_count(
+                        connection,
+                        "INSERT INTO sae_document_activations BY NAME "
+                        "SELECT * FROM prod.sae_document_activations "
+                        "WHERE collection_name = ? AND hash(item_id) % ? = ? "
+                        "QUALIFY row_number() OVER ("
+                        "  PARTITION BY item_id"
+                        "  ORDER BY activation DESC, feature_index"
+                        ") <= ?",
+                        [collection_name, cls._PRUNE_HASH_BUCKETS, bucket, limit],
+                    )
         return copied
 
     @staticmethod

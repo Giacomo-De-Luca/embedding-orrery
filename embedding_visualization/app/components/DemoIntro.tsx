@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { Microscope, Compass, Palette, GraduationCap, Telescope } from 'lucide-react';
+import { Microscope, GraduationCap, Telescope, Orbit, FlaskConical } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -16,7 +16,13 @@ import type { SaeModelInfo } from '@/lib/types/types';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { IS_DEMO } from '@/lib/utils/demoMode';
 import { markIntro, warmEmotionSearch, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
-import { TOUR_PRESETS, TOUR_PRESET_ID, SAE_MAP_PRESET_ID } from '@/lib/utils/tourPresets';
+import {
+  TOUR_PRESETS,
+  TOUR_PRESET_ID,
+  SAE_MAP_PRESET_ID,
+  WORDNET_PRESET_ID,
+  PROBE_PRESET_ID,
+} from '@/lib/utils/tourPresets';
 import { SAE_TOUR_MODEL_ID, SAE_TOUR_SAE_ID } from '@/lib/utils/saeTourSteps';
 
 interface DemoIntroProps {
@@ -25,7 +31,10 @@ interface DemoIntroProps {
   onStartTour: () => void;
   /** Starts the "Inspect SAE" tour's Explore segment (the label map). */
   onStartSaeTour: () => void;
-  onApplyPreset: (presetId: string) => void;
+  /** Starts the WordNet-galaxy tour (212k senses; the heavy one). */
+  onStartWordnetTour: () => void;
+  /** Starts the Glasgow embedding-probing tour. */
+  onStartProbeTour: () => void;
   /** Manifest collection names; null while loading. Gates the entry buttons. */
   availableCollections: ReadonlySet<string> | null;
 }
@@ -59,16 +68,19 @@ function EntryButton({
 }
 
 /**
- * First-visit welcome dialog for the demo. Three goal-oriented entry points
- * plus "explore on my own"; reopenable via `?intro=1` and the header Help
- * button. Opening it pre-warms the emotion collection's search model.
+ * First-visit welcome dialog for the demo. Guided-tour entry points plus
+ * "explore on my own"; reopenable via `?intro=1` and the header Help button.
+ * Static preset views stay reachable via `?preset=` deep links only — the
+ * dialog lists guided experiences, not raw views.
+ * Opening it pre-warms the emotion collection's search model.
  */
 export function DemoIntro({
   open,
   onOpenChange,
   onStartTour,
   onStartSaeTour,
-  onApplyPreset,
+  onStartWordnetTour,
+  onStartProbeTour,
   availableCollections,
 }: DemoIntroProps) {
   useEffect(() => {
@@ -103,8 +115,7 @@ export function DemoIntro({
         <DialogHeader>
           <DialogTitle>Welcome to Orrery</DialogTitle>
           <DialogDescription>
-            An observatory for embedding spaces: each point is a document placed by meaning —
-            nearby points say similar things. Pick a starting point:
+            An observatory for embedding spaces: each point is a document, nearby points are semantically similar. Pick a starting point:
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
@@ -112,7 +123,7 @@ export function DemoIntro({
             <EntryButton
               icon={<GraduationCap className="h-4 w-4" />}
               title="Take the 90-second tour"
-              description="A guided walk through the map, topics, search, and analytics."
+              description="A guided walk through the map, topics, search, and analytics, using the EMNLP abstracts dataset."
               disabled={!hasCollection(TOUR_PRESET_ID)}
               onClick={() => {
                 markIntro('completed');
@@ -120,31 +131,23 @@ export function DemoIntro({
               }}
             />
           )}
-          <EntryButton
-            icon={<Compass className="h-4 w-4" />}
-            title={TOUR_PRESETS['emnlp-topics'].label}
-            description={TOUR_PRESETS['emnlp-topics'].description}
-            disabled={!hasCollection('emnlp-topics')}
-            onClick={() => {
-              markIntro('completed');
-              onApplyPreset('emnlp-topics');
-            }}
-          />
-          <EntryButton
-            icon={<Palette className="h-4 w-4" />}
-            title={TOUR_PRESETS['xkcd-manifold'].label}
-            description={TOUR_PRESETS['xkcd-manifold'].description}
-            disabled={!hasCollection('xkcd-manifold')}
-            onClick={() => {
-              markIntro('completed');
-              onApplyPreset('xkcd-manifold');
-            }}
-          />
+          {tourFits && (
+            <EntryButton
+              icon={<FlaskConical className="h-4 w-4" />}
+              title={TOUR_PRESETS[PROBE_PRESET_ID].label}
+              description="Train and visualize probes for concreteness and valence on the embeddings of the Glasgow norms dataset."
+              disabled={!hasCollection(PROBE_PRESET_ID)}
+              onClick={() => {
+                markIntro('completed');
+                onStartProbeTour();
+              }}
+            />
+          )}
           {tourFits && (
             <EntryButton
               icon={<Microscope className="h-4 w-4" />}
               title="Inspect SAE features"
-              description="Peek inside the model: a map of 16k sparse-autoencoder features, then one under the microscope."
+              description="Visualize sparse-autoencoder features as constellations, inspect individual features and steer the model."
               disabled={!hasSaeTourPair || !hasCollection(SAE_MAP_PRESET_ID)}
               onClick={() => {
                 markIntro('completed');
@@ -152,10 +155,22 @@ export function DemoIntro({
               }}
             />
           )}
+          {tourFits && (
+            <EntryButton
+              icon={<Orbit className="h-4 w-4" />}
+              title="Explore in Nebula Mode"
+              description="All WordNet 212,478 dictionary senses as a navigable galaxy with haze; expect higher loading times."
+              disabled={!hasCollection(WORDNET_PRESET_ID)}
+              onClick={() => {
+                markIntro('completed');
+                onStartWordnetTour();
+              }}
+            />
+          )}
           <EntryButton
             icon={<Telescope className="h-4 w-4" />}
             title="Explore on my own"
-            description="Close this and wander — reopen it anytime from the ? button."
+            description="Close and wander; reopen it anytime from the ? button."
             onClick={() => handleOpenChange(false)}
           />
         </div>

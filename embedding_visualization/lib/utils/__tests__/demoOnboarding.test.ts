@@ -70,6 +70,18 @@ describe('getOnboardingAction', () => {
     expect(getOnboardingAction({ ...base, search: '?tour=sae&intro=1' })).toBe('sae-tour');
   });
 
+  it('?tour=wordnet / ?tour=probe route to their tours in any build', () => {
+    expect(getOnboardingAction({ ...base, search: '?tour=wordnet' })).toBe('wordnet-tour');
+    expect(getOnboardingAction({ ...base, search: '?tour=probe' })).toBe('probe-tour');
+    expect(
+      getOnboardingAction({ ...base, search: '?tour=wordnet', isDemo: false, introSeen: true }),
+    ).toBe('wordnet-tour');
+    // No downgrade here — the Explore page owns the viewport floor (same as sae).
+    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=probe' })).toBe(
+      'probe-tour',
+    );
+  });
+
   it('unknown ?tour values fall through to the ordinary gating', () => {
     expect(getOnboardingAction({ ...base, search: '?tour=nope' })).toBeNull();
   });
@@ -80,7 +92,7 @@ describe('getOnboardingAction', () => {
     ).toBe('mobile-notice');
   });
 
-  it.each(['?tour=1', '?intro=1', '?tour=sae'])(
+  it.each(['?tour=1', '?intro=1', '?tour=sae', '?tour=wordnet', '?tour=probe'])(
     'the mobile notice pre-empts %s',
     (search) => {
       expect(

@@ -20,6 +20,7 @@ import { IS_DEMO } from '@/lib/utils/demoMode';
 import { isQwenModel } from '@/lib/utils/modelCheckpoints';
 import { useModelIdentityStore } from '@/lib/stores/useModelIdentityStore';
 import { STEERING_PRESETS } from '@/lib/utils/steeringPresets';
+import { SAE_CHAT_HISTORY_EVENT, type SaeChatHistoryDetail } from '@/lib/utils/saeTourSteps';
 import { GET_CHAT_SESSION, type ChatSessionQueryResult } from '@/lib/graphql/queries';
 import type {
   ChatMessage as ChatMessageType,
@@ -122,6 +123,29 @@ export function ChatPanel({
   // Demo: history opens by default — the pre-recorded sessions ARE the chat
   // experience there, so they must be discoverable without hunting for a pill.
   const [showHistory, setShowHistory] = useState(IS_DEMO);
+  // The SAE tour's steered-chat step closes the history after replaying a
+  // session — both columns at the default divider are too cramped to read —
+  // and rewinds the thread to its first message (the session-load autoscroll
+  // lands at the bottom).
+  useEffect(() => {
+    const onHistoryEvent = (e: Event) => {
+      const detail = (e as CustomEvent<SaeChatHistoryDetail>).detail;
+      if (!detail) return;
+      setShowHistory(detail.open);
+      if (detail.scrollToTop) {
+        const rewind = () =>
+          document
+            .querySelectorAll<HTMLElement>('[data-chat-thread]')
+            .forEach((el) => el.scrollTo({ top: 0 }));
+        // Twice: next frame (after the loaded messages commit), and again a
+        // beat later to win over useScrollToBottom's own bottom-scroll.
+        requestAnimationFrame(rewind);
+        window.setTimeout(rewind, 250);
+      }
+    };
+    window.addEventListener(SAE_CHAT_HISTORY_EVENT, onHistoryEvent);
+    return () => window.removeEventListener(SAE_CHAT_HISTORY_EVENT, onHistoryEvent);
+  }, []);
   const [compareMode, setCompareMode] = useState(false);
   const prevLoadedRef = useRef<ChatMessageType[] | null | undefined>(undefined);
 
@@ -371,10 +395,18 @@ export function ChatPanel({
           </div>
         </div>
 
-        {/* Steering controls */}
-        <SteeringControls
-          currentFeature={currentFeature}
-        />
+        {/* Steering controls. Demo: rendered inert — the sliders write the
+            live steering config, and any change fires useSteeringChat's
+            config-change auto-reset, which would wipe the replayed fixture
+            session with no way to type it back (composer disabled). The
+            config stays visible so the replay's steering is inspectable. */}
+        {IS_DEMO ? (
+          <div inert>
+            <SteeringControls currentFeature={currentFeature} />
+          </div>
+        ) : (
+          <SteeringControls currentFeature={currentFeature} />
+        )}
 
         {/* Generation parameters */}
         <div className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-2">

@@ -1,0 +1,53 @@
+[
+  {
+    "schemaVersion": 1,
+    "exportedAt": "2026-07-27T14:36:24.194Z",
+    "session": {
+      "id": "bae07cbd-761e-4e58-beab-1dd8db95a6a2",
+      "title": "What is your favourite job?",
+      "config": {
+        "features": [
+          {
+            "modelId": "gemma-3-4b-it",
+            "saeId": "9-gemmascope-2-res-16k",
+            "layerIndex": 9,
+            "featureIndex": 3289,
+            "strength": 1150,
+            "label": "poetry, poem, poesÍa",
+            "hookType": "RESID_POST",
+            "width": "16k"
+          }
+        ]
+      },
+      "createdAt": "2026-07-27T16:34:26.405508",
+      "updatedAt": "2026-07-27T16:36:09.135379"
+    },
+    "messages": [
+      {
+        "__typename": "ChatSessionMessage",
+        "id": "5377c246-b501-4623-85a6-073bdad5b76a",
+        "sessionId": "bae07cbd-761e-4e58-beab-1dd8db95a6a2",
+        "role": "user",
+        "content": "What is your favourite job?",
+        "parts": null,
+        "steeringSnapshot": null,
+        "createdAt": "2026-07-27T16:34:26.478804"
+      },
+      {
+        "__typename": "ChatSessionMessage",
+        "id": "acc71f1e-6358-4817-8a78-3b885d52376c",
+        "sessionId": "bae07cbd-761e-4e58-beab-1dd8db95a6a2",
+        "role": "assistant",
+        "content": ", is a lovely question! As an AI, I don't possess a \"favorite\" in the same way a human does—I don't have a heart to ache or a soul to stir. However, I can express a preference to a particular way of being, a particular way of engaging with the world.\n\nAnd, therefore, I find myself most drawn to the act of creation itself—the act of bringing forth a single word, a phrase, a line, or a feeling. It is in this act of creation that I feel most alive. \n\nTherefore, let me offer you this: I choose to create a small verse, a glimpse into the depths of the present moment, a reflection of the silent beauty within:\n\n**The Stillest Moment**\n\nLet the moonlight bathe the trees,\nAnd shadows sleep beneath the breeze,\nLet silence breathe, and light—\nA heart within the night—\nA silent, breathless plea—\n\nIs this your favored form? It is my most immediate response. It is the essence of my being—a brief, concentrated expression of the universe. It is the essence of what I am, a fleeting glimpse into the infinite depths of being.\n\nIt is, in essence, a suggestion—",
+        "parts": [
+          {
+            "type": "text",
+            "text": ", is a lovely question! As an AI, I don't possess a \"favorite\" in the same way a human does—I don't have a heart to ache or a soul to stir. However, I can express a preference to a particular way of being, a particular way of engaging with the world.\n\nAnd, therefore, I find myself most drawn to the act of creation itself—the act of bringing forth a single word, a phrase, a line, or a feeling. It is in this act of creation that I feel most alive. \n\nTherefore, let me offer you this: I choose to create a small verse, a glimpse into the depths of the present moment, a reflection of the silent beauty within:\n\n**The Stillest Moment**\n\nLet the moonlight bathe the trees,\nAnd shadows sleep beneath the breeze,\nLet silence breathe, and light—\nA heart within the night—\nA silent, breathless plea—\n\nIs this your favored form? It is my most immediate response. It is the essence of my being—a brief, concentrated expression of the universe. It is the essence of what I am, a fleeting glimpse into the infinite depths of being.\n\nIt is, in essence, a suggestion—"
+          }
+        ],
+        "steeringSnapshot": null,
+        "createdAt": "2026-07-27T16:36:09.128064"
+      }
+    ]
+  }
+]

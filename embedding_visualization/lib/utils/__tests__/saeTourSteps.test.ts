@@ -6,6 +6,9 @@ import {
   SAE_TOUR_MODEL_ID,
   SAE_TOUR_SAE_ID,
   SAE_TOUR_QUERY,
+  SAE_TOUR_STEP_OFFSET,
+  SAE_TOUR_TOTAL_STEPS,
+  SAE_CHAT_HISTORY_EVENT,
   saeTourPath,
   saeInspectPath,
   type SaeTourRuntime,
@@ -27,6 +30,10 @@ function makeMapRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     applyTemporalWindow: vi.fn().mockReturnValue(false),
     clearTemporalFilter: vi.fn(),
     setDensityView: vi.fn(),
+    setColorBy: vi.fn(),
+    hasColorField: vi.fn().mockReturnValue(true),
+    setNebulaMode: vi.fn(),
+    setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
     setShowLabels: vi.fn(),
     getLoadedCollection: () => SAE_MAP_COLLECTION,
@@ -48,10 +55,17 @@ describe('SAE_MAP_TOUR_STEPS (Explore segment)', () => {
     }
   });
 
-  it('the opening step applies the sae-map preset and waits for its collection', async () => {
+  it('the opening step applies the sae-map preset, then frames the constellation', async () => {
     const runtime = makeMapRuntime();
     await mapStep('sae-label-map').prepare!(runtime);
     expect(runtime.applyPreset).toHaveBeenCalledWith(SAE_MAP_PRESET_ID);
+    // Orbited right (negative — +30 turned the wrong way), tilted slightly
+    // up, panned down: the label map sits off-axis by default.
+    expect(runtime.resetCamera).toHaveBeenCalledWith({
+      azimuthDeg: -50,
+      elevationDeg: 10,
+      panZ: -0.12,
+    });
   });
 
   it('the search step queries the label map with the tour query', async () => {
@@ -73,6 +87,16 @@ describe('SAE_MAP_TOUR_STEPS (Explore segment)', () => {
   it('the right-click step waits for the auto-selected top match', async () => {
     const runtime = makeMapRuntime();
     await expect(mapStep('sae-right-click').prepare!(runtime)).resolves.toBeUndefined();
+  });
+
+  it('the handoff step says Next (not Done) and the counter spans both segments', () => {
+    // Last step of the Explore joyride instance, but the tour continues on
+    // /sae — a "Done" caption would contradict the "press Next" copy.
+    expect(mapStep('sae-right-click').primaryLabel).toBe('Next');
+    expect(SAE_TOUR_STEP_OFFSET).toBe(SAE_MAP_TOUR_STEPS.length);
+    expect(SAE_TOUR_TOTAL_STEPS).toBe(SAE_MAP_TOUR_STEPS.length + SAE_TOUR_STEPS.length);
+    // The real last step keeps the default Done caption.
+    expect(SAE_TOUR_STEPS.at(-1)!.primaryLabel).toBeUndefined();
   });
 
   it('the right-click step tolerates a search that never selected a point', async () => {
@@ -150,6 +174,21 @@ describe('SAE_TOUR_STEPS (/sae segment)', () => {
     await step('steered-chat').prepare!(runtime);
     expect(runtime.openChat).toHaveBeenCalled();
     expect(runtime.loadFirstDemoSession).toHaveBeenCalled();
+  });
+
+  it('the chat step closes the history list after the replay (cramped divider)', async () => {
+    const dispatched: Event[] = [];
+    vi.stubGlobal('window', {
+      dispatchEvent: (e: Event) => (dispatched.push(e), true),
+    });
+    try {
+      await step('steered-chat').prepare!(makeRuntime());
+      expect(dispatched.map((e) => e.type)).toContain(SAE_CHAT_HISTORY_EVENT);
+      const evt = dispatched.find((e) => e.type === SAE_CHAT_HISTORY_EVENT) as CustomEvent;
+      expect(evt.detail).toEqual({ open: false, scrollToTop: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('the chat step tolerates an empty fixture (no recorded sessions)', async () => {

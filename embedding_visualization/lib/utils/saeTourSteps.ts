@@ -1,5 +1,5 @@
 import type { TourAnchor, TourRuntime, TourStepDefinitionBase } from './tourSteps';
-import { waitFor } from './tourSteps';
+import { TOUR_ANCHORS, delay, ensurePresetCollection, waitFor, waitForAnchor } from './tourSteps';
 import { SAE_MAP_COLLECTION, SAE_MAP_PRESET_ID } from './tourPresets';
 
 /**
@@ -52,8 +52,6 @@ export function saeInspectPath(featureIndex?: number | null): string {
 
 export type SaeMapTourStepDefinition = TourStepDefinitionBase<TourAnchor, TourRuntime>;
 
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export const SAE_MAP_TOUR_STEPS: SaeMapTourStepDefinition[] = [
   {
     id: 'sae-label-map',
@@ -61,34 +59,39 @@ export const SAE_MAP_TOUR_STEPS: SaeMapTourStepDefinition[] = [
     // their card mid-screen over the very map they narrate (same convention
     // as the Explore tour's plot steps).
     anchor: 'plotSide',
-    title: 'A map of the model’s own concepts',
+    title: 'A map of the model’s representations',
     body:
-      'This map goes one level deeper than documents: each of these 16,384 points is a ' +
-      'sparse-autoencoder feature from layer 9 of gemma-3-4b-it — a direction its residual ' +
-      'stream uses to represent meaning — placed here by what its auto-generated label says.',
+      'Each of these 15,854 points is a ' +
+      'sparse-autoencoder feature from layer 9 of gemma-3-4b-it, a direction in its residual ' +
+      'stream. The points are displayed using the MiniLM embeddings of the Neuronpedia’s autointerpreter labels.',
     allowInteraction: true,
     placement: 'left',
     prepareTimeoutMs: 30000,
     // The collection switch sits behind the page's own full-screen loader.
     suppressWaitLoader: true,
     prepare: async (runtime) => {
-      // Re-apply while waiting: on a direct `/?tour=sae` cold entry the first
-      // call can beat the collections manifest, in which case it no-ops.
-      runtime.applyPreset(SAE_MAP_PRESET_ID);
-      await waitFor(() => {
-        if (runtime.getLoadedCollection() === SAE_MAP_COLLECTION) return true;
-        runtime.applyPreset(SAE_MAP_PRESET_ID);
-        return false;
-      }, 25000, 1000);
+      const loaded = await ensurePresetCollection(
+        runtime,
+        SAE_MAP_PRESET_ID,
+        SAE_MAP_COLLECTION,
+        25000,
+      );
+      // Prepared steps opt out of joyride's own target polling (see
+      // waitForAnchor): the plot anchor mounts after the collection load.
+      await waitForAnchor(TOUR_ANCHORS.plotSide, 20_000);
+      // The label map's constellation sits off-axis and high at the default
+      // framing: orbit right (negative — live-tuned; +30 turned the wrong
+      // way), tilt slightly up, and pan slightly down to center it.
+      if (loaded) runtime.resetCamera({ azimuthDeg: -50, elevationDeg: 10, panZ: -0.12 });
     },
   },
   {
     id: 'sae-map-search',
     anchor: 'searchInput',
-    title: 'Find a feature by meaning',
+    title: 'Semantically search features',
     body:
-      `We're searching "${SAE_TOUR_QUERY}" — the query is embedded by a model running ` +
-      'inside this Space, so the features whose labels mean something similar light up ' +
+      `We're searching "${SAE_TOUR_QUERY}". The query is embedded by MiniLM running ` +
+      'inside this Space, so the features with similar labels light up ' +
       'and the camera dives to the best match.',
     placement: 'bottom',
     // First search cold-starts the Space's MiniLM slot; generous ceiling.
@@ -105,11 +108,14 @@ export const SAE_MAP_TOUR_STEPS: SaeMapTourStepDefinition[] = [
   {
     id: 'sae-right-click',
     anchor: 'plotSide',
-    title: 'Right-click to open a feature',
+    title: 'Right-click to inspect a feature',
     body:
-      'Every point here can be opened: right-click one and choose "View Feature" to jump ' +
-      'to its page in the SAE explorer. Press Next and we’ll do exactly that with the top ' +
-      `"${SAE_TOUR_QUERY}" match — the tour continues there.`,
+      'Every point here can be inspected: right-click one and choose "View Feature" to jump ' +
+      'to its page in the SAE explorer. Press Next and we’ll do that with the top ' +
+      `"${SAE_TOUR_QUERY}" match. The tour continues in the SAE page.`,
+    // Last step of THIS joyride instance, but not of the tour — the Done
+    // caption would contradict the "press Next" copy and read as the end.
+    primaryLabel: 'Next',
     allowInteraction: true,
     placement: 'left',
     prepareTimeoutMs: 15000,
@@ -121,6 +127,13 @@ export const SAE_MAP_TOUR_STEPS: SaeMapTourStepDefinition[] = [
     },
   },
 ];
+
+/**
+ * Step-counter continuity across the navigation: segment 1 shows steps
+ * 1…3 of the combined total, segment 2 shows 4…7 (TourController's
+ * progressOffset/progressTotal props).
+ */
+export const SAE_TOUR_STEP_OFFSET = SAE_MAP_TOUR_STEPS.length;
 
 // ── Segment 2: the /sae Feature Explorer ───────────────────────────────────
 
@@ -160,6 +173,20 @@ export interface SaeTourRuntime {
 export type SaeTourStepDefinition = TourStepDefinitionBase<SaeTourAnchor, SaeTourRuntime>;
 
 /**
+ * Window event the steered-chat step fires to close ChatPanel's lateral
+ * history list (open by default in demo builds): with both the history and a
+ * replayed conversation showing, the un-resized divider leaves the thread too
+ * cramped to read. An event because `showHistory` is ChatPanel-local state
+ * (same pattern as PROBE_SHOWCASE_EVENT in probeTourSteps.ts).
+ */
+export const SAE_CHAT_HISTORY_EVENT = 'orrery:sae-chat-history';
+export interface SaeChatHistoryDetail {
+  open: boolean;
+  /** Also rewind the thread to its first message (a replayed session opens scrolled to the bottom). */
+  scrollToTop?: boolean;
+}
+
+/**
  * The /sae segment. Arriving from the Explore segment the feature is already
  * deep-linked open; the anatomy step's prepare only runs the search fallback
  * for direct `/sae?tour=sae` entries.
@@ -170,9 +197,9 @@ export const SAE_TOUR_STEPS: SaeTourStepDefinition[] = [
     anchor: 'detail',
     title: 'The anatomy of a feature',
     body:
-      'This is the feature you just opened from the map. Its card shows the label, how ' +
+      'This is the feature we just opened from the map. Its card shows the label, how ' +
       'often it fires (density), and which output tokens it pushes toward or suppresses ' +
-      '(top and bottom logits) — the feature’s fingerprint on the model’s behavior.',
+      '(top and bottom logits).',
     placement: 'left',
     // Cold-start ceiling for the fallback search (local MiniLM embed).
     prepareTimeoutMs: 30000,
@@ -190,21 +217,21 @@ export const SAE_TOUR_STEPS: SaeTourStepDefinition[] = [
   {
     id: 'see-it-fire',
     anchor: 'activations',
-    title: 'See it fire on real text',
+    title: 'What activates the feature',
     body:
-      'These are real passages where this feature activates — the highlight marks where ' +
-      'and how strongly. The interval view samples weaker firings too, sketching the ' +
+      'These are passages from The Pile Uncopyrighted where the feature activates: the highlight marks where ' +
+      'and how strongly. The interval view samples documents by activation-deciles, sketching the ' +
       'feature’s full range.',
     placement: 'left',
   },
   {
     id: 'steered-chat',
     anchor: 'chat',
-    title: 'Steer the model with it',
+    title: 'Steer the model',
     body:
-      'Features aren’t just readouts — amplifying one steers what the model writes. ' +
-      'This conversation was generated by the real engine with steering applied; live ' +
-      'generation is off in the demo, but every saved chat in History replays one.',
+      'Features are vectors in the original model space: amplifying one steers what the model writes. ' +
+      'This conversation was generated by the engine with steering applied; live ' +
+      'generation is off in the demo. Multiple features can be steered at once, compared to baseline, and the conversations are automatically saved and can be exported.',
     placement: 'left',
     prepareTimeoutMs: 15000,
     prepare: async (runtime) => {
@@ -212,6 +239,16 @@ export const SAE_TOUR_STEPS: SaeTourStepDefinition[] = [
       // The fixture fetch resolves fast (static file); tolerate it anyway.
       await waitFor(runtime.isChatReady, 8000);
       await runtime.loadFirstDemoSession();
+      // Close the history list (with it open the conversation column is too
+      // cramped to read unless the user resizes the divider) and rewind the
+      // replayed thread to its opening message.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent<SaeChatHistoryDetail>(SAE_CHAT_HISTORY_EVENT, {
+            detail: { open: false, scrollToTop: true },
+          }),
+        );
+      }
       // Let the sidebar's slide-in transition land before measuring.
       await delay(400);
     },
@@ -219,10 +256,13 @@ export const SAE_TOUR_STEPS: SaeTourStepDefinition[] = [
   {
     id: 'back-to-the-map',
     anchor: 'mapLink',
-    title: 'Back to the map',
+    title: 'Back to the galaxy',
     body:
-      'This link returns to the label map you started on — right-click any point there ' +
-      'to land back here. That’s the tour; the ? button reopens the mission menu.',
+      'This link returns to the label galaxy we started on. Right-click on it ' +
+      'to go back to the 3D exploration. Prompt highlighting and prompt search, available in the full version, are disabled in the CPU-only demo. This concludes the SAE tour; the ? button reopens the mission menu.',
     placement: 'bottom',
   },
 ];
+
+/** Combined length of both segments — the step counter's denominator. */
+export const SAE_TOUR_TOTAL_STEPS = SAE_MAP_TOUR_STEPS.length + SAE_TOUR_STEPS.length;

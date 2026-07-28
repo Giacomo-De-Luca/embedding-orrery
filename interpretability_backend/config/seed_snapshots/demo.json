@@ -17,6 +17,12 @@
     },
     {
       "name": "Gemma_9_16k_embedded"
+    },
+    {
+      "name": "Glasgow_norm_all-gemini-2",
+      "include": {
+        "probes": true
+      }
     }
   ],
   "sae_data": [

@@ -11,8 +11,22 @@ import type { ColorScale, ProjectionMethod, DimensionMode } from '../types/types
  * default > persisted preferences.
  */
 
-/** Bare-URL default collection in demo builds (small, locally searchable). */
-export const DEMO_DEFAULT_COLLECTION = 'emotion';
+/**
+ * Bare-URL default collection in demo builds: the flagship EMNLP research-
+ * topics map (same collection the guided tour opens on). NOTE the trade-off,
+ * accepted deliberately: it is Gemini-embedded, so manual header searches on
+ * a fresh visit now spend metered quota — the previous default (`emotion`)
+ * was chosen precisely because its MiniLM search runs free inside the Space.
+ */
+export const DEMO_DEFAULT_COLLECTION = 'acl_abstracts_emnlp_findings';
+
+/**
+ * The collection whose search model (MiniLM) runs inside the Space — the
+ * warm-up target. Was `DEMO_DEFAULT_COLLECTION` until that default moved to
+ * the Gemini-embedded EMNLP map: a warm-up "query" against Gemini would spend
+ * metered quota on every dialog open.
+ */
+export const SPACE_LOCAL_SEARCH_COLLECTION = 'emotion';
 
 /** The preset the guided tour applies — the flagship research-topics view. */
 export const TOUR_PRESET_ID = 'emnlp-topics';
@@ -34,6 +48,13 @@ export const TOUR_SEARCH_QUERY = 'hallucination in summarization';
  * top-ranked EMNLP abstracts are the computational-humor papers.
  */
 export const TOUR_FEATURE_QUERY = 'humor';
+
+/**
+ * The WordNet tour's search step query (the paper's Figure-1 example). The
+ * collection is MiniLM-embedded — the exact model the demo Space bakes into
+ * its image — so this search runs locally and free, safe to fire per tour.
+ */
+export const WORDNET_TOUR_QUERY = 'geometry';
 
 /** Flags a preset may set (subset of the store's boolean toggles). */
 export type PresetFlagName =
@@ -107,11 +128,48 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     mode: '3d',
     flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
   },
+  'wordnet-pos': {
+    id: 'wordnet-pos',
+    collection: 'wordnet_senses_full',
+    label: 'The whole dictionary',
+    description:
+      'All 212,478 WordNet senses in one map, colored by part of speech — the demo’s heaviest view.',
+    // POS is the deep-link default; the WordNet tour deliberately arrives
+    // uncoloured (its first step nulls the field) and reveals POS in step 2.
+    color: { colorBy: 'pos' },
+    method: 'umap',
+    mode: '3d',
+    // The tour's nebula step flips nebulaMode on; pinned off here so the
+    // static preset (and a tour restart) always opens on the plain field.
+    flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
+  },
+  'glasgow-norms': {
+    id: 'glasgow-norms',
+    collection: 'Glasgow_norm_all-gemini-2',
+    label: 'Psycholinguistic Probes',
+    description:
+      '4,682 words rated by people on nine psychological dimensions — with probes that read the ratings back out of the embedding.',
+    // Explicit scale: without it the recommended-scale path lands on the
+    // sinebow (rainbow) default; managua is this collection's curated look
+    // (it is also its saved default, which colors by imageability instead).
+    color: { colorBy: 'concreteness', scale: { type: 'diverging', scaleName: 'managua' } },
+    method: 'umap',
+    mode: '3d',
+    flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
+  },
 };
 
 /** The "Inspect SAE" tour opens on this preset (the SAE label map). */
 export const SAE_MAP_PRESET_ID = 'sae-map';
 export const SAE_MAP_COLLECTION = TOUR_PRESETS[SAE_MAP_PRESET_ID].collection;
+
+/** The WordNet nebula tour runs entirely on this preset's collection. */
+export const WORDNET_PRESET_ID = 'wordnet-pos';
+export const WORDNET_COLLECTION = TOUR_PRESETS[WORDNET_PRESET_ID].collection;
+
+/** The probing tour runs entirely on this preset's collection. */
+export const PROBE_PRESET_ID = 'glasgow-norms';
+export const PROBE_COLLECTION = TOUR_PRESETS[PROBE_PRESET_ID].collection;
 
 /** The collection the tour lands on; its search step may only query this. */
 export const TOUR_COLLECTION = TOUR_PRESETS[TOUR_PRESET_ID].collection;

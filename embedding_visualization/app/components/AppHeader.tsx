@@ -127,6 +127,7 @@ export function AppHeader({
           onClick={onOpenIntro}
           aria-label="About this demo"
           title="About this demo"
+          data-tour="intro-button"
         >
           <CircleHelp className="h-4 w-4" />
         </Button>

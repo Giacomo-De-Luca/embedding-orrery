@@ -11,6 +11,7 @@ import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColor
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { useCameraFlyTo, animateCameraToRegion } from '../../lib/hooks/cameraAnimation';
+import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import type { DataBounds } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { HazeRenderer } from '../../lib/utils/hazeRenderer';
@@ -161,6 +162,8 @@ interface ScatterPlot3DProps {
    * tour: recovering from a search fly-to; muting refits handle themselves).
    */
   cameraResetSignal?: number;
+  /** Optional orbit/tilt/zoom/pan applied on top of the reset framing. */
+  cameraResetView?: CameraViewAdjustment | null;
 }
 
 interface PlotlyGraphDiv extends HTMLDivElement {
@@ -206,6 +209,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   selectedDimensions,
   onScreenshot,
   cameraResetSignal,
+  cameraResetView,
 }: ScatterPlot3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hoveredPointRef = useRef<Point3D | null>(null);
@@ -754,13 +758,57 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     if (!plotReady || !plotlyLibRef.current || !graphDivRef.current) return;
     lastCameraResetRef.current = cameraResetSignal;
     wasRefittedRef.current = false;
+    // Optional view adjustment riding with the signal: tours open some
+    // collections orbited/tilted/zoomed to the angle where their structure
+    // reads. Spherical about the base center, then a shared z translation.
+    // `relative` swaps the base from the default framing to the LIVE camera —
+    // for moves composing with a search dive ("20% closer than right now"),
+    // where every default-relative target would read as zooming back out.
+    let targetEye = defaultEye;
+    let targetCenter = defaultCenter;
+    if (cameraResetView) {
+      const { azimuthDeg = 0, elevationDeg = 0, zoom = 1, panZ = 0, relative } = cameraResetView;
+      let baseEye = defaultEye;
+      let baseCenter = defaultCenter;
+      if (relative) {
+        // Live glplot camera first (same source startFlyTo trusts — the ref
+        // can trail a user drag), currentCameraRef as the fallback.
+        const glplot = (graphDivRef.current._fullLayout?.scene?._scene?.glplot) as any;
+        const cam = glplot?.camera;
+        if (cam?.eye) {
+          baseEye = Array.isArray(cam.eye)
+            ? { x: cam.eye[0], y: cam.eye[1], z: cam.eye[2] }
+            : { x: cam.eye.x, y: cam.eye.y, z: cam.eye.z };
+          const c = cam.center ?? { x: 0, y: 0, z: 0 };
+          baseCenter = Array.isArray(c) ? { x: c[0], y: c[1], z: c[2] } : { x: c.x, y: c.y, z: c.z };
+        } else {
+          baseEye = { ...currentCameraRef.current.eye };
+          baseCenter = { ...currentCameraRef.current.center };
+        }
+      }
+      const dx = baseEye.x - baseCenter.x;
+      const dy = baseEye.y - baseCenter.y;
+      const dz = baseEye.z - baseCenter.z;
+      const r = Math.sqrt(dx * dx + dy * dy + dz * dz) * zoom;
+      const theta = Math.atan2(dy, dx) + (azimuthDeg * Math.PI) / 180;
+      const phi = Math.min(
+        Math.PI - 0.05,
+        Math.max(0.05, Math.acos(dz / Math.sqrt(dx * dx + dy * dy + dz * dz)) - (elevationDeg * Math.PI) / 180),
+      );
+      targetEye = {
+        x: baseCenter.x + r * Math.sin(phi) * Math.cos(theta),
+        y: baseCenter.y + r * Math.sin(phi) * Math.sin(theta),
+        z: baseCenter.z + r * Math.cos(phi) + panZ,
+      };
+      targetCenter = { ...baseCenter, z: baseCenter.z + panZ };
+    }
     animateCameraToRegion({
-      targetEye: defaultEye, targetCenter: defaultCenter, duration: 1200,
+      targetEye, targetCenter, duration: cameraResetView?.durationMs ?? 1200,
       graphDivRef, currentCameraRef, plotlyLibRef,
       isAnimatingRef, animationFrameRef,
       renderLabelsRef, labelCanvasRef,
     });
-  }, [cameraResetSignal, plotReady, defaultEye, defaultCenter]);
+  }, [cameraResetSignal, cameraResetView, plotReady, defaultEye, defaultCenter]);
 
   // Pre-compute highlighted points via direct index lookup — O(k) not O(n)
   const highlightedPoints = useMemo(() => {

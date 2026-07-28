@@ -31,25 +31,32 @@ import {
   resolveInitialCollection,
   presetStoreOps,
   TOUR_PRESET_ID,
+  WORDNET_PRESET_ID,
+  WORDNET_COLLECTION,
+  PROBE_PRESET_ID,
+  PROBE_COLLECTION,
   type PresetDefinition,
 } from '../lib/utils/tourPresets';
 import {
   getOnboardingAction,
   readIntroSeen,
   readMobileNoticeSeen,
-  markIntro,
   TOUR_STORAGE_KEY,
   SAE_TOUR_STORAGE_KEY,
+  WORDNET_TOUR_STORAGE_KEY,
+  PROBE_TOUR_STORAGE_KEY,
   TOUR_MIN_VIEWPORT,
   type OnboardingAction,
 } from '../lib/utils/demoOnboarding';
 import { IS_DEMO } from '../lib/utils/demoMode';
 import { DemoIntro } from './components/DemoIntro';
 import { MobileNotice } from './components/MobileNotice';
-import { TOUR_ANCHORS, TOUR_STEPS, waitFor, type TourRuntime } from '../lib/utils/tourSteps';
+import { TOUR_ANCHORS, TOUR_STEPS, waitFor, type CameraViewAdjustment, type TourRuntime } from '../lib/utils/tourSteps';
 import { apolloClient } from '../lib/utils/apollo-client';
 import { SEARCH_SAE_FEATURES } from '../lib/graphql/queries';
-import { SAE_MAP_TOUR_STEPS, saeInspectPath } from '../lib/utils/saeTourSteps';
+import { SAE_MAP_TOUR_STEPS, SAE_TOUR_TOTAL_STEPS, saeInspectPath } from '../lib/utils/saeTourSteps';
+import { WORDNET_TOUR_STEPS } from '../lib/utils/wordnetTourSteps';
+import { PROBE_TOUR_STEPS } from '../lib/utils/probeTourSteps';
 import { SAE_FEATURE_INDEX_FIELD } from '../lib/utils/saeCollections';
 import dynamic from 'next/dynamic';
 
@@ -138,7 +145,12 @@ function HomeContent() {
       ? null
       : getOnboardingAction({
           isDemo: IS_DEMO,
-          search: window.location.search,
+          // useSearchParams, NOT window.location.search: on a client-side
+          // router.push from /sae (the mission menu's tour buttons) the
+          // History URL only updates after commit, so location.search still
+          // held the OLD page's query here and every handoff latched null —
+          // "the ? button just goes back to the base page".
+          search: searchParams.toString(),
           introSeen: readIntroSeen(),
           viewportWidth: window.innerWidth,
           mobileNoticeSeen: readMobileNoticeSeen(),
@@ -153,6 +165,19 @@ function HomeContent() {
   const [saeTourRequested, setSaeTourRequested] = useState(
     () =>
       onboarding === 'sae-tour' &&
+      typeof window !== 'undefined' &&
+      window.innerWidth >= TOUR_MIN_VIEWPORT,
+  );
+  // WordNet-galaxy and Glasgow-probing tours: single-page, same viewport gate.
+  const [wordnetTourRequested, setWordnetTourRequested] = useState(
+    () =>
+      onboarding === 'wordnet-tour' &&
+      typeof window !== 'undefined' &&
+      window.innerWidth >= TOUR_MIN_VIEWPORT,
+  );
+  const [probeTourRequested, setProbeTourRequested] = useState(
+    () =>
+      onboarding === 'probe-tour' &&
       typeof window !== 'undefined' &&
       window.innerWidth >= TOUR_MIN_VIEWPORT,
   );
@@ -551,6 +576,18 @@ function HomeContent() {
     setSaeTourRequested(true);
   }, []);
 
+  // WordNet / probing tours: first steps apply their presets themselves
+  // (with a manifest-race retry loop), so only the request is set here too.
+  const startWordnetTour = useCallback(() => {
+    setIntroOpen(false);
+    setWordnetTourRequested(true);
+  }, []);
+
+  const startProbeTour = useCallback(() => {
+    setIntroOpen(false);
+    setProbeTourRequested(true);
+  }, []);
+
   // Imperative surface for the tour's prepare hooks. The runtime MUST be
   // identity-stable AND always-fresh: react-joyride deep-compares steps with
   // function source-text equality, so rebuilt `before` closures are treated
@@ -575,6 +612,10 @@ function HomeContent() {
   featureSearchRef.current = featureSearch;
   const saeInfoRef = useRef(saeInfo);
   saeInfoRef.current = saeInfo;
+  // Includes the async-arriving probe score/residual fields — the probing
+  // tour polls `hasColorField` against this before recoloring.
+  const mergedColorFieldOptionsRef = useRef(mergedColorFieldOptions);
+  mergedColorFieldOptionsRef.current = mergedColorFieldOptions;
   // Source for the tour's temporal window: metadata is identical across
   // modes, so either point set works — prefer whichever is populated.
   const temporalSourceRef = useRef<{
@@ -587,6 +628,9 @@ function HomeContent() {
   };
   // Bumped by the tour to undo a search fly-to (consumed by ScatterPlot3D).
   const [cameraResetTick, setCameraResetTick] = useState(0);
+  // Optional adjustment riding along with the tick — tours open some
+  // collections pre-rotated/panned to the angle where their structure reads.
+  const [cameraResetView, setCameraResetView] = useState<CameraViewAdjustment | null>(null);
   const tourRuntime = useMemo<TourRuntime>(() => ({
     applyPreset: (presetId: string) => applyPresetLiveRef.current(presetId),
     runSearch: async (query: string) => {
@@ -631,7 +675,10 @@ function HomeContent() {
       resetSearchRef.current();
       featureSearchRef.current.clearFeatures();
     },
-    resetCamera: () => setCameraResetTick((t) => t + 1),
+    resetCamera: (view?: CameraViewAdjustment) => {
+      setCameraResetView(view ?? null);
+      setCameraResetTick((t) => t + 1);
+    },
     // Isolation = exactly one selected topic; DashboardPanel derives the
     // muting from `selectedTopicIds` when colouring by topic_label.
     isolateFirstTopic: () => {
@@ -664,6 +711,22 @@ function HomeContent() {
       state.setMode(on ? '2d' : '3d');
       state.setFlag('densityMode', on);
     },
+    setColorBy: (field, scaleType, opts) => {
+      const state = useVisualizationStore.getState();
+      state.setColorByField(field, scaleType);
+      if (opts?.scaleName && (scaleType === 'sequential' || scaleType === 'diverging')) {
+        state.setColorScale({ type: scaleType, scaleName: opts.scaleName });
+      }
+      // Order matters: the store subscription clears customNumericRange on a
+      // colour-field change, so the zero-center pin must land after it (the
+      // same sequence as ProbeSection's Residual button).
+      if (opts?.centerZero) state.setCustomNumericRange({ center: 0 });
+    },
+    hasColorField: (field) =>
+      mergedColorFieldOptionsRef.current.some((o) => o.field === field),
+    setNebulaMode: (on) => useVisualizationStore.getState().setFlag('nebulaMode', on),
+    setShowClusterLabels: (on) =>
+      useVisualizationStore.getState().setFlag('showClusterLabels', on),
     setActivePanel,
     setShowLabels: (value: boolean) =>
       useVisualizationStore.getState().setFlag('showLabels', value),
@@ -781,6 +844,7 @@ function HomeContent() {
                   onSelectAllTopics={topicSearch.selectAll}
                   onClearAllTopics={topicSearch.clearAll}
                   cameraResetSignal={cameraResetTick}
+                  cameraResetView={cameraResetView}
                 />
               {/*<AppFooter
                     timestamp={data.metadata.timestamp}
@@ -798,7 +862,8 @@ function HomeContent() {
           onOpenChange={setIntroOpen}
           onStartTour={startTour}
           onStartSaeTour={startSaeTour}
-          onApplyPreset={applyPresetLive}
+          onStartWordnetTour={startWordnetTour}
+          onStartProbeTour={startProbeTour}
           availableCollections={availableCollections}
         />
         <MobileNotice open={mobileNoticeOpen} onOpenChange={setMobileNoticeOpen} />
@@ -829,6 +894,7 @@ function HomeContent() {
             anchors={TOUR_ANCHORS}
             runtime={tourRuntime}
             storageKey={SAE_TOUR_STORAGE_KEY}
+            progressTotal={SAE_TOUR_TOTAL_STEPS}
             // No onBeforeEnd: it runs before onDone regardless of outcome,
             // and clearing the search there would drop the selected point
             // whose feature index the completed-handoff below still needs.
@@ -843,6 +909,49 @@ function HomeContent() {
                 // Mid-tour skip: drop the tour-applied glow and camera dive.
                 tourRuntime.clearSearch();
                 tourRuntime.resetCamera();
+              }
+            }}
+          />
+        )}
+        {wordnetTourRequested && (
+          <TourController
+            steps={WORDNET_TOUR_STEPS}
+            anchors={TOUR_ANCHORS}
+            runtime={tourRuntime}
+            storageKey={WORDNET_TOUR_STORAGE_KEY}
+            onDone={(outcome) => {
+              setWordnetTourRequested(false);
+              // Completion leaves the nebula parting view untouched. A
+              // mid-tour skip restores the static preset (POS colors, nebula
+              // off) — but only once the collection actually loaded; bailing
+              // during the long initial load must not re-trigger it.
+              if (
+                outcome !== 'completed' &&
+                tourRuntime.getLoadedCollection() === WORDNET_COLLECTION
+              ) {
+                tourRuntime.clearSearch();
+                tourRuntime.resetCamera();
+                tourRuntime.applyPreset(WORDNET_PRESET_ID);
+              }
+            }}
+          />
+        )}
+        {probeTourRequested && (
+          <TourController
+            steps={PROBE_TOUR_STEPS}
+            anchors={TOUR_ANCHORS}
+            runtime={tourRuntime}
+            storageKey={PROBE_TOUR_STORAGE_KEY}
+            onDone={(outcome) => {
+              setProbeTourRequested(false);
+              // Completion parks on the probing bench deliberately. A skip
+              // restores the preset's actual-ratings colouring (the store
+              // subscription drops the residual step's zero-center pin).
+              if (
+                outcome !== 'completed' &&
+                tourRuntime.getLoadedCollection() === PROBE_COLLECTION
+              ) {
+                tourRuntime.applyPreset(PROBE_PRESET_ID);
               }
             }}
           />

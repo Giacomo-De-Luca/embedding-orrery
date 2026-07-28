@@ -51,13 +51,15 @@ describe('parseChatFixture', () => {
     expect(fixture.summaries.map((s) => s.id)).toEqual(['good']);
   });
 
-  it('drops messages with a bad role or missing content, keeps the rest', () => {
+  it('drops messages with a bad role, missing content, or missing id — keeps the rest', () => {
     const fixture = parseChatFixture([
       entry('a', {
         messages: [
           { id: '1', role: 'user', content: 'kept', createdAt: '2026-07-20T10:00:00Z' },
           { id: '2', role: 'system', content: 'dropped', createdAt: '2026-07-20T10:00:00Z' },
           { id: '3', role: 'assistant', createdAt: '2026-07-20T10:00:00Z' },
+          // Missing id → undefined React key downstream; dropped.
+          { role: 'assistant', content: 'dropped too', createdAt: '2026-07-20T10:00:00Z' },
         ],
       }),
     ]);

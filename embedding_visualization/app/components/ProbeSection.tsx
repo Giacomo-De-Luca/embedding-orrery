@@ -42,10 +42,19 @@ import {
   type ProbeParams,
 } from '@/lib/utils/probeParams';
 import type { UseProbesReturn } from '@/lib/hooks/useProbes';
+import { PROBE_SHOWCASE_EVENT, type ProbeShowcaseDetail } from '@/lib/utils/probeTourSteps';
+import { DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
 
 interface ProbeSectionProps {
   probes: UseProbesReturn;
   colorFieldOptions?: ColorFieldOption[];
+  /**
+   * Demo builds: show shipped probes with their recolor buttons (pure
+   * client-side) but no training form or delete — the backend rejects those
+   * mutations anyway (`ORRERY_READ_ONLY`).
+   */
+  readOnly?: boolean;
 }
 
 interface SubscriptionData {
@@ -173,16 +182,21 @@ function ProbeSettingsPopover({
   kind,
   params,
   onChange,
+  open,
+  onOpenChange,
 }: {
   kind: ProbeKind;
   params: ProbeParams;
   onChange: (p: ProbeParams) => void;
+  /** Controlled open state — the probing tour opens the popover to showcase it. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const fields = probeParamFields(kind);
   const set = (patch: Partial<ProbeParams>) => onChange({ ...params, ...patch });
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           size="icon"
@@ -193,7 +207,8 @@ function ProbeSettingsPopover({
           <Settings2 className="size-3.5" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 space-y-2 p-3">
+      {/* data-tour: ring target for the probing tour's settings showcase */}
+      <PopoverContent align="end" className="w-60 space-y-2 p-3" data-tour="probe-settings">
         <p className="text-xs font-medium">Probe parameters</p>
         {fields.includes('alpha') && (
           <ParamNumberRow
@@ -350,7 +365,7 @@ function ProbeSettingsPopover({
  * the shared job subscription; completion is driven by the mutation promise
  * inside useProbes (the subscription is display-only).
  */
-export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
+export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: ProbeSectionProps) {
   const colorByField = useVisualizationStore((s) => s.colorByField);
   const setColorByField = useVisualizationStore((s) => s.setColorByField);
   const setCustomNumericRange = useVisualizationStore((s) => s.setCustomNumericRange);
@@ -359,6 +374,23 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
   const [kind, setKind] = useState<ProbeKind>('ridge');
   const [params, setParams] = useState<ProbeParams>(DEFAULT_PROBE_PARAMS);
   const [progress, setProgress] = useState<JobProgress | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Probing-tour showcase: select the requested kind and open the settings
+  // popover so the demo can show what's configurable even though training
+  // is disabled there. Dispatched by the tour's last step (see
+  // PROBE_SHOWCASE_EVENT in probeTourSteps.ts).
+  useEffect(() => {
+    const onShowcase = (e: Event) => {
+      const detail = (e as CustomEvent<ProbeShowcaseDetail>).detail;
+      if (detail?.kind && PROBE_KIND_OPTIONS.some((k) => k.value === detail.kind)) {
+        setKind(detail.kind as ProbeKind);
+      }
+      setSettingsOpen(true);
+    };
+    window.addEventListener(PROBE_SHOWCASE_EVENT, onShowcase);
+    return () => window.removeEventListener(PROBE_SHOWCASE_EVENT, onShowcase);
+  }, []);
 
   // Numeric fields + binary categorical fields (trained as 0/1) are probe
   // targets; probe-derived fields never are (never probe a probe).
@@ -414,7 +446,8 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
     if (!probes.training) setProgress(null);
   }, [probes.training]);
 
-  if (targetOptions.length === 0 && probes.probes.length === 0) {
+  // Nothing to show: no trained probes and (read-only, or no field to fit).
+  if (probes.probes.length === 0 && (readOnly || targetOptions.length === 0)) {
     return null;
   }
 
@@ -423,11 +456,17 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
       <CardHeader className="gap-1 px-0 pb-3">
         <CardTitle className="text-sm">Direction Probes</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Fit a probe on a numeric field, then color the map by how well the
-          embedding encodes it.
+          {readOnly
+            ? 'Probes fitted on the embedding space, shipped with the demo — ' +
+              'color the map by their predictions. Training new ones needs the full platform.'
+            : 'Fit a probe on a numeric field, then color the map by how well the ' +
+              'embedding encodes it.'}
         </p>
       </CardHeader>
       <CardContent className="space-y-3 px-0">
+        {/* Read-only builds keep the full fit form browsable (target, kind,
+            per-kind settings) so visitors see what the platform can train —
+            only the Fit button itself is disabled. */}
         {targetOptions.length > 0 && (
           <div className="space-y-2">
             {/* value falls back to '' (not undefined) so the Select stays
@@ -464,21 +503,43 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
                   ))}
                 </SelectContent>
               </Select>
-              <ProbeSettingsPopover kind={kind} params={params} onChange={setParams} />
-              <Button
-                size="sm"
-                className="h-7 shrink-0 text-xs"
-                disabled={!effectiveField || probes.training}
-                onClick={() => {
-                  if (effectiveField && probes.collectionName) {
-                    void probes.train(
-                      buildTrainProbeInput(probes.collectionName, effectiveField, kind, params),
-                    );
-                  }
-                }}
-              >
-                {probes.training ? <Spinner className="size-3" /> : 'Fit probe'}
-              </Button>
+              <ProbeSettingsPopover
+                kind={kind}
+                params={params}
+                onChange={setParams}
+                open={settingsOpen}
+                onOpenChange={setSettingsOpen}
+              />
+              {readOnly ? (
+                <Tooltip>
+                  {/* span wrapper: disabled buttons swallow the hover events
+                      the tooltip needs (same pattern as VisualizationControls'
+                      save-default button). */}
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button size="sm" className="h-7 shrink-0 text-xs" disabled>
+                        Fit probe
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{DEMO_DISABLED_MESSAGE}</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Button
+                  size="sm"
+                  className="h-7 shrink-0 text-xs"
+                  disabled={!effectiveField || probes.training}
+                  onClick={() => {
+                    if (effectiveField && probes.collectionName) {
+                      void probes.train(
+                        buildTrainProbeInput(probes.collectionName, effectiveField, kind, params),
+                      );
+                    }
+                  }}
+                >
+                  {probes.training ? <Spinner className="size-3" /> : 'Fit probe'}
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -516,6 +577,9 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
               return (
                 <div
                   key={`${probe.targetField}::${probe.kind}`}
+                  // data-tour: the probing tour circles the row whose field is
+                  // the active colouring (isActive holds for at most one row).
+                  data-tour={isActive ? 'probe-active' : undefined}
                   className="space-y-1 rounded-md border border-border/60 px-2 py-1.5"
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -582,16 +646,18 @@ export function ProbeSection({ probes, colorFieldOptions }: ProbeSectionProps) {
                     {/* Disabled while training: deleting mid-run races the
                         server-side persist (the finished run would resurrect
                         the probe or strand score rows). */}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-6 text-muted-foreground hover:text-destructive"
-                      aria-label={`Delete ${probe.targetField} ${probe.kind} probe`}
-                      disabled={probes.training}
-                      onClick={() => void probes.deleteProbe(probe)}
-                    >
-                      <Trash2 className="size-3" />
-                    </Button>
+                    {!readOnly && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-6 text-muted-foreground hover:text-destructive"
+                        aria-label={`Delete ${probe.targetField} ${probe.kind} probe`}
+                        disabled={probes.training}
+                        onClick={() => void probes.deleteProbe(probe)}
+                      >
+                        <Trash2 className="size-3" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               );

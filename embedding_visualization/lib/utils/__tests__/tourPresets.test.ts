@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   TOUR_PRESETS,
   DEMO_DEFAULT_COLLECTION,
+  SPACE_LOCAL_SEARCH_COLLECTION,
   TOUR_PRESET_ID,
   TOUR_COLLECTION,
   getPreset,
@@ -17,6 +18,8 @@ const DEMO_COLLECTIONS = [
   'xkcd_hilbert_gemini',
   'acl_abstracts_emnlp_findings',
   'Gemma_9_16k_embedded',
+  'wordnet_senses_full',
+  'Glasgow_norm_all-gemini-2',
 ];
 
 describe('TOUR_PRESETS', () => {
@@ -181,8 +184,11 @@ describe('presetStoreOps', () => {
 });
 
 describe('tour constants', () => {
-  it('demo default stays emotion; every preset colors by topics or manifold', () => {
-    expect(DEMO_DEFAULT_COLLECTION).toBe('emotion');
+  it('demo default is the EMNLP map; the warm-up target stays the free MiniLM collection', () => {
+    expect(DEMO_DEFAULT_COLLECTION).toBe('acl_abstracts_emnlp_findings');
+    // The warm-up query fires on every dialog open — it must NEVER follow the
+    // default onto a Gemini-embedded collection (metered quota).
+    expect(SPACE_LOCAL_SEARCH_COLLECTION).toBe('emotion');
     expect(TOUR_PRESETS.emotion.color?.colorBy).toBe('topic_label');
     expect(TOUR_PRESETS['emnlp-topics'].color?.colorBy).toBe('topic_label');
   });

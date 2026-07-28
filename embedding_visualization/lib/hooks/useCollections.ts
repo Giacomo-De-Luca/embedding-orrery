@@ -60,21 +60,22 @@ function parseDefaultColorScheme(metadata: Record<string, unknown>): DefaultColo
   }
 }
 
-export function useCollections() {
+export function useCollections(options?: { skip?: boolean }) {
+  const skip = options?.skip ?? false;
   // notifyOnNetworkStatusChange off so retry polls resolve silently instead
   // of flipping consumers between loading and error state every cycle.
   const { data, loading, error, startPolling, stopPolling } =
-    useQuery<CollectionsData>(GET_COLLECTIONS, { notifyOnNetworkStatusChange: false });
+    useQuery<CollectionsData>(GET_COLLECTIONS, { notifyOnNetworkStatusChange: false, skip });
 
   // An unreachable backend (cold demo Space 502ing behind nginx, or a dev
   // frontend started before the backend) leaves every collection-gated
   // control dead until a manual reload. Retry in every build while in the
   // failed-with-no-data state; stop for good as soon as the manifest lands.
   useEffect(() => {
-    if (data || !error) return;
+    if (skip || data || !error) return;
     startPolling(4000);
     return () => stopPolling();
-  }, [data, error, startPolling, stopPolling]);
+  }, [skip, data, error, startPolling, stopPolling]);
 
   // Transform GraphQL response to CollectionsManifest format. Memoized on `data`
   // so the manifest keeps a stable reference across renders (avoids re-running the

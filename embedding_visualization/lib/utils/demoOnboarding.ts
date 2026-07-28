@@ -1,6 +1,6 @@
 import { SEMANTIC_SEARCH } from '../graphql/queries';
 import { IS_DEMO } from './demoMode';
-import { DEMO_DEFAULT_COLLECTION } from './tourPresets';
+import { SPACE_LOCAL_SEARCH_COLLECTION } from './tourPresets';
 import { stripQueryPrefix } from './urlViewParams';
 
 /**
@@ -13,6 +13,8 @@ import { stripQueryPrefix } from './urlViewParams';
 export const INTRO_STORAGE_KEY = 'orrery.demo-intro.v1';
 export const TOUR_STORAGE_KEY = 'orrery.demo-tour.v1';
 export const SAE_TOUR_STORAGE_KEY = 'orrery.demo-sae-tour.v1';
+export const WORDNET_TOUR_STORAGE_KEY = 'orrery.demo-wordnet-tour.v1';
+export const PROBE_TOUR_STORAGE_KEY = 'orrery.demo-probe-tour.v1';
 export const MOBILE_NOTICE_STORAGE_KEY = 'orrery.demo-mobile-notice.v1';
 
 export type OnboardingMark = 'dismissed' | 'completed';
@@ -24,7 +26,14 @@ export type OnboardingMark = 'dismissed' | 'completed';
  */
 export const TOUR_MIN_VIEWPORT = 768;
 
-export type OnboardingAction = 'intro' | 'tour' | 'sae-tour' | 'mobile-notice' | null;
+export type OnboardingAction =
+  | 'intro'
+  | 'tour'
+  | 'sae-tour'
+  | 'wordnet-tour'
+  | 'probe-tour'
+  | 'mobile-notice'
+  | null;
 
 /**
  * Whether to show the one-time "best viewed on desktop" card. Demo builds only
@@ -54,6 +63,8 @@ const DEEP_LINK_PARAMS = ['collection', 'colorBy', 'preset', 'tour'] as const;
  * - `?tour=sae` is the "Inspect SAE" tour: its first segment runs on the
  *   Explore page's label map (the page owns the viewport downgrade), then
  *   hands off to /sae for the inspection segment.
+ * - `?tour=wordnet` / `?tour=probe` are the single-page WordNet-galaxy and
+ *   Glasgow-probing tours (the page owns the viewport downgrade, same as sae).
  * - `?tour=1` starts the Explore tour in ANY build (dev testing included),
  *   downgraded to the intro on viewports too narrow for a spotlight tour.
  * - `?intro=1` reopens the welcome dialog in any build, ignoring storage.
@@ -74,6 +85,8 @@ export function getOnboardingAction(args: {
   if (shouldShowMobileNotice(args)) return 'mobile-notice';
   const params = new URLSearchParams(stripQueryPrefix(args.search));
   if (params.get('tour') === 'sae') return 'sae-tour';
+  if (params.get('tour') === 'wordnet') return 'wordnet-tour';
+  if (params.get('tour') === 'probe') return 'probe-tour';
   if (params.get('tour') === '1') {
     return args.viewportWidth < TOUR_MIN_VIEWPORT ? 'intro' : 'tour';
   }
@@ -157,7 +170,7 @@ export function warmEmotionSearch(client: QueryClientLike, isDemo: boolean = IS_
   client
     .query({
       query: SEMANTIC_SEARCH,
-      variables: { collectionName: DEMO_DEFAULT_COLLECTION, query: 'warm up', nResults: 1 },
+      variables: { collectionName: SPACE_LOCAL_SEARCH_COLLECTION, query: 'warm up', nResults: 1 },
       fetchPolicy: 'no-cache',
     })
     .catch(() => {
