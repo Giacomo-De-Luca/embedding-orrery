@@ -30,12 +30,14 @@ import {
   seedInitialColorState,
   resolveInitialCollection,
   presetStoreOps,
+  COLLECTION_VIEW_OVERRIDES,
   TOUR_PRESET_ID,
   WORDNET_PRESET_ID,
   WORDNET_COLLECTION,
   PROBE_PRESET_ID,
   PROBE_COLLECTION,
   type PresetDefinition,
+  type PresetFlagName,
 } from '../lib/utils/tourPresets';
 import {
   getOnboardingAction,
@@ -301,6 +303,19 @@ function HomeContent() {
   // Panel state for dual sidebars (controls vs search)
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
 
+  // Default view: open the Controls panel on mount — "how to draw" is
+  // discoverable from the first frame (the 90-sec tour's map step and finale
+  // do the same). Post-mount effect, not initial state: it needs the
+  // viewport (SSR-safe), skips phones (the panel would cover most of the
+  // plot), and skips tour deep-links — the other tours' opening galaxy
+  // shots are tuned with panels closed, and each step manages its own.
+  useEffect(() => {
+    if (onboarding !== null && onboarding !== 'intro') return;
+    if (window.innerWidth < TOUR_MIN_VIEWPORT) return;
+    setActivePanel('controls');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggleControls = useCallback(() => {
     setActivePanel(prev => prev === 'controls' ? null : 'controls');
   }, []);
@@ -506,6 +521,24 @@ function HomeContent() {
     if (defaultsAppliedFor.current === selectedCollection) return;
     defaultsAppliedFor.current = selectedCollection;
 
+    // Per-collection view overrides (e.g. Glasgow: nebula + cluster labels
+    // off; EMNLP: both on + a closer opening frame) — the flags are persisted
+    // global prefs, so a previous collection's view would otherwise leak in
+    // on ANY load path, and first-visit store defaults leave EMNLP bare.
+    const viewOverride = COLLECTION_VIEW_OVERRIDES[selectedCollection];
+    if (viewOverride?.flags) {
+      const state = useVisualizationStore.getState();
+      for (const [flag, value] of Object.entries(viewOverride.flags)) {
+        if (value !== undefined) state.setFlag(flag as PresetFlagName, value);
+      }
+    }
+    if (viewOverride?.camera) {
+      // Through the reset path: a bump landing before the plot is ready is
+      // latched and replayed once it mounts.
+      setCameraResetView(viewOverride.camera);
+      setCameraResetTick((t) => t + 1);
+    }
+
     const wasInitialLoad = isInitialLoad.current;
     isInitialLoad.current = false;
 
@@ -571,8 +604,12 @@ function HomeContent() {
 
   // Welcome-dialog entry for the "Inspect SAE" tour — its first step's
   // prepare applies the sae-map preset itself, so only the request is set.
+  // These three tours' opening galaxy shots are tuned panel-free, so the
+  // default-open Controls panel (mount effect above) is closed on entry;
+  // the 90-sec tour keeps it, its map step opens Controls itself.
   const startSaeTour = useCallback(() => {
     setIntroOpen(false);
+    setActivePanel(null);
     setSaeTourRequested(true);
   }, []);
 
@@ -580,11 +617,13 @@ function HomeContent() {
   // (with a manifest-race retry loop), so only the request is set here too.
   const startWordnetTour = useCallback(() => {
     setIntroOpen(false);
+    setActivePanel(null);
     setWordnetTourRequested(true);
   }, []);
 
   const startProbeTour = useCallback(() => {
     setIntroOpen(false);
+    setActivePanel(null);
     setProbeTourRequested(true);
   }, []);
 
@@ -680,11 +719,18 @@ function HomeContent() {
       setCameraResetTick((t) => t + 1);
     },
     // Isolation = exactly one selected topic; DashboardPanel derives the
-    // muting from `selectedTopicIds` when colouring by topic_label.
-    isolateFirstTopic: () => {
-      const topic = (collectionTopicsRef.current ?? []).find(
+    // muting from `selectedTopicIds` when colouring by topic_label. A
+    // preferred label picks a topic that sits high in the category list
+    // (substring, case-insensitive); the first topic is the fallback so a
+    // re-extraction renaming it never breaks the step.
+    isolateFirstTopic: (preferredLabel?: string) => {
+      const topics = (collectionTopicsRef.current ?? []).filter(
         (t) => t.topicId >= 0 && t.label,
       );
+      const preferred = preferredLabel
+        ? topics.find((t) => t.label!.toLowerCase().includes(preferredLabel.toLowerCase()))
+        : undefined;
+      const topic = preferred ?? topics[0];
       if (!topic) return null;
       topicSearchRef.current.clearAll();
       topicSearchRef.current.toggleTopic(topic.topicId);

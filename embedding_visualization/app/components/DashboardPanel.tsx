@@ -28,6 +28,7 @@ import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
+import { MOBILE_BREAKPOINT } from '../../lib/hooks/use-mobile';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { drawLegendOverlay } from '../../lib/utils/plotCapture';
 import { downloadCanvasPng } from '../../lib/utils/downloadJson';
@@ -576,6 +577,16 @@ export function DashboardPanel({
 
   // Collapse/expand state for the legend
   const [legendCollapsed, setLegendCollapsed] = useState(false);
+
+  // On phone-width viewports the legend card covers most of the plot, so it
+  // starts collapsed to its pill. Latched once at mount rather than bound to
+  // the live width: once the user expands it, a rotation or resize must not
+  // fold it away again. Runs in an effect (not a lazy initializer) so the SSR
+  // markup and the first client render agree — the card shows for one frame.
+  useEffect(() => {
+    if (window.innerWidth < MOBILE_BREAKPOINT) setLegendCollapsed(true);
+  }, []);
+
   const {
     height: legendHeight,
     handleRef: legendDragRef,

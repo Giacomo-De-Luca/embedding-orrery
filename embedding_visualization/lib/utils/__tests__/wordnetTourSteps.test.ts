@@ -109,19 +109,25 @@ describe('WORDNET_TOUR_STEPS', () => {
     expect(search.placement).toBe('left');
   });
 
-  it('wn-finale swaps the search dive for a slow move INTO the galaxy', async () => {
+  it('wn-finale chains two circular orbits around the dive center — never a pan', async () => {
     const runtime = makeRuntime();
-    await runPrepare('wn-finale', runtime, 4000);
+    await runPrepare('wn-finale', runtime, 8000);
     expect(runtime.clearSearch).toHaveBeenCalled();
-    // MUST be relative: the search step's fly-to leaves the camera far closer
-    // than any default-relative target, which read as zooming back out.
-    expect(runtime.resetCamera).toHaveBeenCalledWith({
+    // MUST be relative (the fly-to leaves the camera far closer than any
+    // default-relative target) and MUST NOT pan (panZ drifted the parting
+    // shot off the searched region): a half-turn left, then a rise.
+    // 170°, not 180: the shortest-path interpolation makes an exact half
+    // turn direction-ambiguous; just under keeps "leftward" deterministic.
+    expect(runtime.resetCamera).toHaveBeenNthCalledWith(1, {
       relative: true,
-      azimuthDeg: 30,
-      elevationDeg: -15,
-      zoom: 0.8,
-      panZ: -0.05,
-      durationMs: 2600,
+      azimuthDeg: 170,
+      zoom: 0.85,
+      durationMs: 3200,
+    });
+    expect(runtime.resetCamera).toHaveBeenNthCalledWith(2, {
+      relative: true,
+      elevationDeg: 25,
+      durationMs: 2200,
     });
   });
 

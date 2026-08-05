@@ -103,8 +103,14 @@ export interface TourRuntime {
    * is actually visible.
    */
   resetCamera: (view?: CameraViewAdjustment) => void;
-  /** Isolate the first topic cluster (others mute); returns its label. */
-  isolateFirstTopic: () => string | null;
+  /**
+   * Isolate one topic cluster (others mute); returns its label. Prefers a
+   * topic whose label contains `preferredLabel` (case-insensitive) — used to
+   * pick one that sits high in the Analytics category list, where the
+   * isolation is visible without scrolling — falling back to the first topic
+   * when no label matches (LLM topic names vary between extractions).
+   */
+  isolateFirstTopic: (preferredLabel?: string) => string | null;
   /** Drop any tour-applied topic isolation (tour-end cleanup). */
   clearTopicSelection: () => void;
   /**
@@ -192,6 +198,13 @@ export interface TourStepDefinitionBase<A extends string, R> {
 /** The Explore tour's concrete step type. */
 export type TourStepDefinition = TourStepDefinitionBase<TourAnchor, TourRuntime>;
 
+/**
+ * Preferred topic for the focus step (substring match against topic labels):
+ * one of EMNLP's largest topics, so its row is visible near the top of the
+ * count-sorted Analytics category list without scrolling.
+ */
+export const TOUR_FOCUS_TOPIC = 'machine translation';
+
 /** Poll `predicate` until true or `timeoutMs`; resolves whether it held. */
 export function waitFor(
   predicate: () => boolean,
@@ -237,18 +250,43 @@ export function waitForAnchor(selector: string, timeoutMs: number): Promise<bool
 }
 
 /**
- * Scroll a step's anchor into the middle of its scroll container. Used for
+ * Scroll a step's anchor into view inside its scroll container. Used for
  * anchors below the fold of a panel — joyride only auto-scrolls to the step's
  * own target, and the map-narrating steps deliberately anchor on the plot.
+ * `block: 'start'` suits sections taller than the panel viewport (centering
+ * one leaves its top — often the part being narrated — above the fold).
+ *
+ * The panels scroll inside a Radix ScrollArea viewport, where a smooth
+ * `scrollIntoView` proved unreliable (joyride's own post-prepare scroll pass
+ * and result-render reflows cancel it) — so the viewport's scrollTop is set
+ * directly, and re-asserted once after late reflows settle. `scrollIntoView`
+ * stays as the fallback for anchors outside a ScrollArea.
  */
-export function scrollAnchorIntoView(selector: string): void {
+export function scrollAnchorIntoView(
+  selector: string,
+  block: ScrollLogicalPosition = 'center',
+): void {
   if (typeof document === 'undefined') return;
   const el = document.querySelector(selector);
   if (!el) return;
-  const reducedMotion =
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+  const apply = () => {
+    const viewport = el.closest?.(
+      '[data-radix-scroll-area-viewport]',
+    ) as HTMLElement | null;
+    if (viewport) {
+      const rect = el.getBoundingClientRect();
+      const vpRect = viewport.getBoundingClientRect();
+      const offset =
+        block === 'start'
+          ? rect.top - vpRect.top - 12
+          : rect.top - vpRect.top - Math.max(0, (viewport.clientHeight - rect.height) / 2);
+      viewport.scrollTop += offset;
+    } else {
+      el.scrollIntoView({ behavior: 'auto', block });
+    }
+  };
+  apply();
+  setTimeout(apply, 350);
 }
 
 /**
@@ -312,9 +350,10 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     suppressWaitLoader: true,
     prepareTimeoutMs: 35000,
     prepare: async (runtime) => {
-      // Closing the panel is a no-op going forward (panels start closed); it
-      // matters on Back from the search step, which opens the Search panel.
-      runtime.setActivePanel(null);
+      // Open the Controls panel: the step invites rotating/zooming, and the
+      // panel shows where "how to draw" lives from the very first beat. Also
+      // swaps out the Search panel on Back-nav from the search step.
+      runtime.setActivePanel('controls');
       // MANDATORY, not a nicety: having any prepare at all disables joyride's
       // own target polling (see waitForAnchor), and this step's anchor only
       // mounts once the tour collection has loaded. Without this wait the
@@ -325,7 +364,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
   {
     id: 'search',
     anchor: 'searchInput',
-    title: 'Search by meaning',
+    title: 'Semantic Search',
     body:
       `We're semantically searching "${TOUR_SEARCH_QUERY}". ` +
       'The matching abstracts glow according to similarity in the original space even when they share ' +
@@ -376,7 +415,12 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       // resolves and the panel slides in — wait for it to be measurable.
       await waitForAnchor(TOUR_ANCHORS.featureSearch, 4000);
       await runtime.runFeatureSearch(TOUR_FEATURE_QUERY);
-      await delay(150);
+      // Scroll AFTER the results land — the ranked list grows the section,
+      // and it must land with its top (the "humor" query chips) in view:
+      // block 'start', since centering a section taller than the panel
+      // viewport pushes exactly that top above the fold.
+      scrollAnchorIntoView(TOUR_ANCHORS.featureSearch, 'start');
+      await delay(350);
     },
   },
   {
@@ -401,8 +445,11 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       // Topics arrive via their own query after the collection loads; on a
       // fast path they're long since present and the first call isolates.
       // Otherwise poll until they land (each failed attempt is a no-op).
-      if (runtime.isolateFirstTopic() === null) {
-        await waitFor(() => runtime.isolateFirstTopic() !== null, 5000, 250);
+      // NMT is one of EMNLP's largest topics, so its row sits near the top of
+      // the count-sorted category list — visible without scrolling. Falls
+      // back to the first topic if a re-extraction renames it.
+      if (runtime.isolateFirstTopic(TOUR_FOCUS_TOPIC) === null) {
+        await waitFor(() => runtime.isolateFirstTopic(TOUR_FOCUS_TOPIC) !== null, 5000, 250);
       }
       // The muting auto-refit animates toward the isolated cluster; give it a
       // beat so the spotlight appears over a view already in motion.

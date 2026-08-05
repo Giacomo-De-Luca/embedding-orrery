@@ -135,16 +135,23 @@ export const WORDNET_TOUR_STEPS: WordnetTourStepDefinition[] = [
     prepare: async (runtime) => {
       if (runtime.getLoadedCollection() !== WORDNET_COLLECTION) return;
       runtime.clearSearch();
-      // Parting shot: a slow move deeper in from WHEREVER the camera is —
-      // `relative` composes with the search step's fly-to dive, whose close-in
-      // position made every default-relative target read as zooming back out.
+      // Parting shot, two chained CIRCULAR orbits around the search dive's
+      // center (the "geometry" match stays framed — no pan at any point):
+      // half a turn leftward, then a rise. 170°, not 180: the animation takes
+      // the shortest angular path, and at exactly 180° the direction is a
+      // coin flip — just under keeps "leftward" deterministic. Phase 2 is
+      // deliberately NOT awaited: the card shows while the orbit plays as the
+      // parting animation, and `relative` makes it continue from wherever
+      // phase 1 ended. A skip mid-orbit is safe — tour-end cleanup resets
+      // the camera.
       runtime.resetCamera({
         relative: true,
-        azimuthDeg: 30,
-        elevationDeg: -15,
-        zoom: 0.8,
-        panZ: -0.05,
-        durationMs: 2600,
+        azimuthDeg: 170,
+        zoom: 0.85,
+        durationMs: 3200,
+      });
+      void delay(3400).then(() => {
+        runtime.resetCamera({ relative: true, elevationDeg: 25, durationMs: 2200 });
       });
       await delay(400);
     },

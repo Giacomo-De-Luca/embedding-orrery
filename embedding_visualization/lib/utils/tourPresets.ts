@@ -159,6 +159,45 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
   },
 };
 
+/**
+ * Per-collection view overrides, applied once per collection SWITCH by any
+ * load path (selector, URL, tour). `nebulaMode`/`showClusterLabels` are
+ * persisted GLOBAL preferences, so without this a haze view left on from
+ * WordNet leaks onto collections it obscures — and a first visit's store
+ * defaults (both false) leave the flagship EMNLP map bare. Manual toggles
+ * made afterwards stick for the lifetime of the selection.
+ */
+export interface CollectionViewOverride {
+  flags?: Partial<Record<PresetFlagName, boolean>>;
+  /**
+   * Camera adjustment applied through the reset path once the collection
+   * loads (structurally a `CameraViewAdjustment` — declared inline to keep
+   * tourPresets import-free of tourSteps, which imports from here).
+   */
+  camera?: {
+    azimuthDeg?: number;
+    elevationDeg?: number;
+    zoom?: number;
+    panZ?: number;
+    durationMs?: number;
+  };
+}
+
+export const COLLECTION_VIEW_OVERRIDES: Record<string, CollectionViewOverride> = {
+  // A continuous psycholinguistic gradient — haze blobs and topic labels
+  // only obscure it.
+  'Glasgow_norm_all-gemini-2': {
+    flags: { nebulaMode: false, showClusterLabels: false },
+  },
+  // The flagship research-topics map must open in its full dress (nebula +
+  // cluster labels — first-visit store defaults are both false) and a touch
+  // closer than the point-count default framing.
+  acl_abstracts_emnlp_findings: {
+    flags: { nebulaMode: true, showClusterLabels: true },
+    camera: { zoom: 0.8 },
+  },
+};
+
 /** The "Inspect SAE" tour opens on this preset (the SAE label map). */
 export const SAE_MAP_PRESET_ID = 'sae-map';
 export const SAE_MAP_COLLECTION = TOUR_PRESETS[SAE_MAP_PRESET_ID].collection;

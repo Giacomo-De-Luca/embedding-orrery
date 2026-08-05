@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TOUR_STEPS, TOUR_ANCHORS, FINALE_PRESET_ID, waitFor, type TourRuntime } from '../tourSteps';
+import {
+  TOUR_STEPS,
+  TOUR_ANCHORS,
+  TOUR_FOCUS_TOPIC,
+  FINALE_PRESET_ID,
+  waitFor,
+  type TourRuntime,
+} from '../tourSteps';
 import {
   TOUR_COLLECTION,
   TOUR_PRESET_ID,
@@ -49,10 +56,10 @@ describe('TOUR_STEPS', () => {
     }
   });
 
-  it('the map step closes any open panel (Back from the search step)', async () => {
+  it('the map step opens the Controls panel (how-to-draw visible from beat one)', async () => {
     const runtime = makeRuntime();
     await step('map').prepare!(runtime);
-    expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+    expect(runtime.setActivePanel).toHaveBeenCalledWith('controls');
   });
 
   it('the map step blocks on its plot anchor mounting', async () => {
@@ -130,10 +137,12 @@ describe('TOUR_STEPS', () => {
     expect(runtime.setActivePanel).not.toHaveBeenCalled();
   });
 
-  it('the focus step isolates one topic programmatically in the analytics panel', async () => {
+  it('the focus step isolates the NMT topic in the analytics panel', async () => {
     const runtime = makeRuntime();
     await step('focus-topic').prepare!(runtime);
-    expect(runtime.isolateFirstTopic).toHaveBeenCalled();
+    // Preferred topic: near the top of the count-sorted category list, so the
+    // isolation is visible without scrolling (falls back to the first topic).
+    expect(runtime.isolateFirstTopic).toHaveBeenCalledWith(TOUR_FOCUS_TOPIC);
     expect(runtime.clearSearch).toHaveBeenCalled();
     // The category list makes the isolation legible as data.
     expect(runtime.setActivePanel).toHaveBeenCalledWith('analytics');
@@ -161,7 +170,9 @@ describe('TOUR_STEPS', () => {
     });
     try {
       await step('temporal').prepare!(makeRuntime());
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+      // The stub has no ScrollArea ancestor, so the helper's scrollIntoView
+      // fallback runs (deterministic 'auto' — smooth proved cancellable).
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
     } finally {
       vi.unstubAllGlobals();
     }

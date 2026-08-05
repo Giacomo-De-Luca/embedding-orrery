@@ -253,9 +253,15 @@ export function animateCameraToRegion(opts: {
         z: lerp(startCenter.z, targetCenter.z, ease),
       };
 
-      // Interpolate eye in spherical coordinates for smooth arc
+      // Interpolate eye in spherical coordinates for smooth arc. Theta takes
+      // the SHORTEST angular path: both endpoints come back through atan2's
+      // (−π, π] wrap, so a raw lerp across that boundary would spin the camera
+      // the long way round (and made large tour orbits direction-unstable).
       const curR = lerp(startSpherical.r, targetSpherical.r, ease);
-      const curTheta = lerp(startSpherical.theta, targetSpherical.theta, ease);
+      let dTheta = targetSpherical.theta - startSpherical.theta;
+      if (dTheta > Math.PI) dTheta -= 2 * Math.PI;
+      if (dTheta < -Math.PI) dTheta += 2 * Math.PI;
+      const curTheta = startSpherical.theta + dTheta * ease;
       const curPhi = lerp(startSpherical.phi, targetSpherical.phi, ease);
       const relativeEye = sphericalToCartesian(curR, curTheta, curPhi);
 

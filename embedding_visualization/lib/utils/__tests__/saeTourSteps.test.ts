@@ -59,12 +59,13 @@ describe('SAE_MAP_TOUR_STEPS (Explore segment)', () => {
     const runtime = makeMapRuntime();
     await mapStep('sae-label-map').prepare!(runtime);
     expect(runtime.applyPreset).toHaveBeenCalledWith(SAE_MAP_PRESET_ID);
-    // Orbited right (negative — +30 turned the wrong way), tilted slightly
-    // up, panned down: the label map sits off-axis by default.
+    // Orbited right (negative — +30 turned the wrong way), tilted like an
+    // upward drag (negative elevation — +25 read as dragging down), panned
+    // up (positive): full-view framing. All three signs are live-tuned.
     expect(runtime.resetCamera).toHaveBeenCalledWith({
       azimuthDeg: -50,
-      elevationDeg: 10,
-      panZ: -0.12,
+      elevationDeg: -25,
+      panZ: 0.12,
     });
   });
 

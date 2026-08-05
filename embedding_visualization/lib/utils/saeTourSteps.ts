@@ -79,10 +79,12 @@ export const SAE_MAP_TOUR_STEPS: SaeMapTourStepDefinition[] = [
       // Prepared steps opt out of joyride's own target polling (see
       // waitForAnchor): the plot anchor mounts after the collection load.
       await waitForAnchor(TOUR_ANCHORS.plotSide, 20_000);
-      // The label map's constellation sits off-axis and high at the default
-      // framing: orbit right (negative — live-tuned; +30 turned the wrong
-      // way), tilt slightly up, and pan slightly down to center it.
-      if (loaded) runtime.resetCamera({ azimuthDeg: -50, elevationDeg: 10, panZ: -0.12 });
+      // The label map's constellation sits off-axis at the default framing:
+      // orbit right (negative — live-tuned; +30 turned the wrong way), tilt
+      // like a small upward DRAG (negative elevation — dragging up lowers the
+      // camera; +25 read as dragging down), and pan slightly up (positive)
+      // to center it.
+      if (loaded) runtime.resetCamera({ azimuthDeg: -50, elevationDeg: -25, panZ: 0.12 });
     },
   },
   {
