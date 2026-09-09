@@ -5,9 +5,11 @@ Two pretrained-SAE families are supported, both exposing the same
 ``(d_sae, d_in)`` so that downstream code (HookManager, steering,
 decoder-vector extraction) is family-agnostic:
 
-- ``JumpReLUSAE`` — Gemma-scope architecture: input centring by
-  ``b_dec``, then encoder + JumpReLU mask gated by a learned
-  per-feature ``threshold``.
+- ``JumpReLUSAE`` — Gemma-scope architecture: encoder on the raw input
+  (no ``(x - b_dec)`` centring — Gemma-scope trains with
+  ``apply_b_dec_to_input=False``; ``b_dec`` is a decoder *output* bias
+  only), then JumpReLU mask gated by a learned per-feature
+  ``threshold``.
 - ``TopKSAE`` — Qwen-scope architecture: encoder + hard top-k selection
   on the pre-activations (no centring, no ReLU on the kept values; raw
   top-k values are scattered into the sparse output, mirroring the
@@ -56,7 +58,7 @@ class SAEBase(nn.Module):
 class JumpReLUSAE(SAEBase):
     """JumpReLU SAE for inference on pretrained Gemma-scope weights.
 
-    Architecture: input -> centre -> encode -> JumpReLU -> decode
+    Architecture: input -> encode -> JumpReLU -> decode
     Weights are loaded from Gemma-scope safetensors files.
     """
 
@@ -69,8 +71,13 @@ class JumpReLUSAE(SAEBase):
         self.threshold = nn.Parameter(torch.zeros(d_sae))
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode input to sparse feature activations via JumpReLU."""
-        pre_acts = (x - self.b_dec) @ self.w_enc + self.b_enc
+        """Encode input to sparse feature activations via JumpReLU.
+
+        The input is used directly — Gemma-scope SAEs are trained with
+        ``apply_b_dec_to_input=False`` (SAELens loader config), so
+        ``b_dec`` participates only in ``decode``.
+        """
+        pre_acts = x @ self.w_enc + self.b_enc
         mask = (pre_acts > self.threshold).to(pre_acts.dtype)
         return pre_acts * mask
 
