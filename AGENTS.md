@@ -39,6 +39,7 @@ Embedding analysis platform: embed data from any source (HuggingFace datasets, l
   - `backend/topic_extraction/` — HDBSCAN clustering, c-TF-IDF, LLM labeling, reduction
   - `interpretability_experiments/WordNet/` — WordNet embedding pipeline (153k words)
 - **`embedding_visualization/`** — Next.js 16 frontend. Has its own `AGENTS.md`.
+  - Turbopack's root is pinned to the frontend directory; Tailwind resolution troubleshooting is documented in `documentation/FRONTEND_BUILD_CONFIGURATION.md`.
 - **`embedding-atlas/`** — Reference: Apple's embedding viz framework
 - **`tensorboard/`** — Reference: TensorFlow embedding projector
 

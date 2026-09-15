@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "outputDirectory": "graphs",
+  "sae": {"modelId": "gemma-3-1b", "saeId": "22-gemmascope-2-res-16k", "width": 16384},
+  "source": {
+    "database": "main.duckdb",
+    "collectionName": "acl_abstracts_emnlp_findings",
+    "expectedDocumentCount": 13980,
+    "expectedSparseRowCount": 56465927,
+    "threshold": 0.0,
+    "allowLegacyProvenance": false,
+    "linkedCollectionNames": ["sae_1b_pt_22_res_16k_labels"]
+  },
+  "historicalInference": {
+    "modelCheckpoint": "google/gemma-3-1b-pt",
+    "modelRevision": null,
+    "saeRepository": "google/gemma-scope-2-1b-pt",
+    "saeRevision": null,
+    "layer": 22,
+    "hook": "resid_post",
+    "width": 16384,
+    "l0": null,
+    "dtype": null,
+    "tokenExclusions": null,
+    "tokenTruncation": null,
+    "evidence": "Model and SAE identity from collection metadata. Historical commits, l0, dtype and token processing were not persisted. Current service defaults are not historical evidence."
+  },
+  "variants": [
+    {
+      "graphId": "acl-gemma-1b-l22-document-k8",
+      "title": "ACL abstracts · Gemma 1B layer 22 · document graph (8 neighbors)",
+      "sparsification": {"topK": 8, "minimumJointCount": 20, "minimumScore": 0.1, "method": "mutual_top_k"}
+    },
+    {
+      "graphId": "acl-gemma-1b-l22-document-k16",
+      "title": "ACL abstracts · Gemma 1B layer 22 · document graph (16 neighbors)",
+      "sparsification": {"topK": 16, "minimumJointCount": 20, "minimumScore": 0.1, "method": "mutual_top_k"}
+    }
+  ]
+}

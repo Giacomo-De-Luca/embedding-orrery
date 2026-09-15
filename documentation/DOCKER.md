@@ -25,6 +25,13 @@ normally absent, so `endpointUrls.ts` targets the separately running backend at
 values select the same-origin gateway behavior above. The distinction between
 an absent value and an explicitly empty value is intentional.
 
+`NEXT_PUBLIC_SITE_URL` (frontend build arg, empty by default) is the public
+origin the frontend bakes into its social-preview metadata so that `og:image`
+is an absolute, crawler-fetchable URL — e.g.
+`NEXT_PUBLIC_SITE_URL=https://orrery.example.org docker compose up --build`.
+Leave it empty for localhost use. The HF Space sets it automatically; see
+`documentation/HF_SPACE_DEMO.md` ("Social preview").
+
 ## Published Docker Hub images
 
 Set the Docker Hub user or organization that owns `orrery-backend` and

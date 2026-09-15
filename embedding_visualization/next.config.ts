@@ -62,6 +62,9 @@ const nextConfig: NextConfig = {
   //     factory is not available"), which aborts the entire Plotly load. Alias
   //     the CSS request to an empty JS module (CSS->CSS does not work).
   turbopack: {
+    // Keep dependency resolution in the frontend even when the repository
+    // root contains another package-lock.json.
+    root: __dirname,
     resolveAlias: {
       glslify: "./glslify-runtime-stub.js",
       "maplibre-gl/dist/maplibre-gl.css": "./maplibre-css-stub.js",

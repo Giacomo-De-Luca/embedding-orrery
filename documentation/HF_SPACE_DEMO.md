@@ -10,10 +10,11 @@ norms, pre-trained probes).
 
 ## What was built (implementation summary)
 
-Five independent pieces, each usable on its own:
+Six independent pieces, each usable on its own:
 
 | Piece | Files | What it does |
 |---|---|---|
+| Social preview | `embedding_visualization/app/opengraph-image.jpg` (+ `.alt.txt`), `lib/utils/siteMetadata.ts`, `app/layout.tsx`, `README_SPACE.md` `thumbnail:`, `deploy.py` `ensure_site_url_variable` | Link cards when the demo is shared: the Space card uses the Hub-served image via the README `thumbnail`; the direct `*.hf.space` host emits absolute Open Graph/Twitter tags, with `metadataBase` baked from the Space Variable `NEXT_PUBLIC_SITE_URL`. See "Social preview" below. |
 | Server-side read-only gate | `backend/API/read_only.py`, wired in `backend/API/__init__.py`; upload gating in `backend/main.py`; `generateStream` early-refusal in `backend/API/subscriptions.py` | With `ORRERY_READ_ONLY` truthy, every GraphQL mutation is rejected before execution (never touches resolvers/DB) and `/upload` isn't mounted. This is the actual security boundary — the GraphQL endpoint is public. Tests: `unit_tests/test_read_only.py`. |
 | Frontend demo mode | `lib/utils/demoMode.ts` (`IS_DEMO`), gates in `PageNav`, `next.config.ts` redirects, `VisualizationControls`, `AnalyticsSidebar`, `DashboardPanel` | Cosmetic layer: Explore-only nav, `/collections` + `/sae` redirect to `/`, write-UI hidden. Build-time flag (`NEXT_PUBLIC_DEMO_MODE` Docker ARG). |
 | Demo seed | `config/seed_snapshots/demo.json` + snapshot builder/publisher | The demo collections (plus SAE tables and Glasgow probes) are generated from a validated manifest, checksummed, and published to a private Dataset repository at an immutable revision. |
@@ -108,11 +109,15 @@ uv run python -m interpretability_backend.scripts.publish_seed_snapshot \
 uv run python deploy/hf-space/deploy.py --repo-id <user>/orrery-demo --create
 ```
 
-`deploy.py` uploads the filtered working tree (`upload_folder` +
-`ignore_patterns` keeping out the 23 GB live DuckDB, node_modules, docs, …),
-then overwrites `README.md` with `deploy/hf-space/README_SPACE.md` (Space
-frontmatter: `sdk: docker`, `app_port: 7860`) and uploads the root
-`.dockerignore`. Any legacy `seed_demo/` files are removed from the Space repo.
+`deploy.py` first pins the Space Variable `NEXT_PUBLIC_SITE_URL` to the
+Space's `*.hf.space` origin (see "Social preview" below; skipped with a
+warning if the token cannot write settings), then uploads
+`deploy/hf-space/README_SPACE.md` as `README.md` (Space frontmatter:
+`sdk: docker`, `app_port: 7860`, `thumbnail`; it goes first so a card the Hub
+rejects fails the deploy before the tree is touched), then the filtered
+working tree (`upload_folder` + `ignore_patterns` keeping out the 23 GB live
+DuckDB, node_modules, docs, …), then the root `.dockerignore`. Any legacy
+`seed_demo/` files are removed from the Space repo.
 
 The single root `.dockerignore` excludes `seed_demo/` from every build context.
 The demo Dockerfile downloads the locked private Dataset revision using the
@@ -121,6 +126,56 @@ Space's read-only `HF_SEED_TOKEN` BuildKit secret and verifies its manifest.
 Before the first locked-seed deploy, set the Space **secret** `HF_SEED_TOKEN`
 to a read-scoped token for the private Dataset. Set `GEMINI_API_KEY` separately
 for semantic search on the two Gemini collections.
+
+## Social preview (link cards)
+
+Two different URLs get shared, and their link cards are built by two
+different systems:
+
+| Shared URL | Who builds the card | Where the image comes from |
+|---|---|---|
+| `https://huggingface.co/spaces/<id>` (the Space page) | the Hub, from the README frontmatter | `thumbnail:` in `README_SPACE.md` — the `{{SOCIAL_PREVIEW_URL}}` placeholder, resolved by `deploy.py` to `https://huggingface.co/spaces/<id>/resolve/main/embedding_visualization/app/opengraph-image.jpg`. Hub-served, so the card renders even while the Space sleeps. Without `thumbnail` the Hub generates a gradient card from `emoji` + `colorFrom`/`colorTo`. |
+| `https://<sub>.hf.space` (the "Open fullscreen" direct host; also any self-hosted deployment) | the app's own `<meta>` tags | Next's file-convention image `app/opengraph-image.jpg` (+ `.alt.txt`), emitted by `app/layout.tsx` as `og:image` (`/opengraph-image.jpg?<content-hash>`, with type/width/height/alt) and inherited by the `twitter:*` tags (`summary_large_image`). |
+
+The image is one file, `embedding_visualization/app/opengraph-image.jpg`:
+1200×630 (the 1.91:1 Open Graph size), ~180 KB. It is a crop of the README
+hero `gallery/dimensionality.png` — box `(0, 200, 2780, 1660)` (header row,
+right-edge modebar and bottom-left logo excluded), Lanczos-resized, JPEG q88.
+Regenerate from any gallery screenshot the same way, but keep the file name:
+the README placeholder, the Next route and `deploy.SOCIAL_PREVIEW_PATH` all
+point at it, and `unit_tests/test_hf_space_deploy.py` asserts that the file
+exists and is not filtered out of the Space upload by `IGNORE_PATTERNS`.
+
+`metadataBase` is the load-bearing part for the direct host. Next resolves
+social images against it and, when it is unset, **production builds emit
+`http://localhost:3000/opengraph-image.jpg…`** (Next's documented fallback;
+dev mode always uses localhost regardless, so `next dev` cannot verify this).
+The origin has to be known at *build* time (`NEXT_PUBLIC_*` values are baked
+into the bundle). HF's built-in `SPACE_HOST` is runtime-only, but Space
+**Variables** are passed to Docker builds as build-args — so
+`deploy.py::ensure_site_url_variable` writes
+`NEXT_PUBLIC_SITE_URL=https://<sub>.hf.space` as a Space Variable before every
+deploy (idempotent: rewritten only when missing or stale; a token without
+settings access degrades to a warning and the app still deploys), and the
+root `Dockerfile` declares the matching `ARG`. `lib/utils/siteMetadata.ts`
+turns the value into `metadataBase` (bare hosts get `https://`; anything that
+is not http(s) is ignored). Caveats:
+
+- A **duplicated Space** inherits the original's public Variables, so its
+  direct-host cards point at the original's image until its own `deploy.py`
+  run (or a manual Variable edit + rebuild) resets it.
+- The compose stack takes the same build arg (`NEXT_PUBLIC_SITE_URL` in
+  `docker-compose.yml`, empty by default — see `documentation/DOCKER.md`).
+
+Verify after a deploy (crawlers cache cards aggressively — use the X card
+validator, LinkedIn Post Inspector, or Facebook's Sharing Debugger to force a
+refetch):
+
+```bash
+curl -sL https://huggingface.co/spaces/<id> | grep -oE '<meta[^>]*og:image[^>]*>'
+curl -sL https://<sub>.hf.space/ | grep -oE '<meta[^>]*(og:image|twitter:image)"[^>]*>'
+curl -sI "<the og:image URL printed above>" | head -3       # 200, image/jpeg
+```
 
 ## Local verification
 

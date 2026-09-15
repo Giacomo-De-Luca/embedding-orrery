@@ -4,9 +4,12 @@ Uploads the working tree (filtered) to the Space repo with huggingface_hub. The
 large demo seed lives in a separate private Dataset repository and the Docker
 build downloads the immutable revision recorded in demo.lock.json.
 
-Three commits per deploy:
-  1. the filtered repo tree (Dockerfile, backend, frontend, deploy/)
-  2. deploy/hf-space/README_SPACE.md → README.md  (Space card + frontmatter)
+One settings write plus three commits per deploy:
+  0. the Space Variable NEXT_PUBLIC_SITE_URL (the *.hf.space origin the
+     frontend bakes into its social-preview metadata; HF passes Variables to
+     the Docker build as build-args)
+  1. deploy/hf-space/README_SPACE.md → README.md  (Space card + frontmatter)
+  2. the filtered repo tree (Dockerfile, backend, frontend, deploy/)
   3. the root .dockerignore → .dockerignore
 
 Prerequisites:
@@ -27,9 +30,18 @@ import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi
+from huggingface_hub.errors import HfHubHTTPError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_DIR = REPO_ROOT / "deploy" / "hf-space"
+# The social-preview image, relative to the repo root. It is the Next.js
+# file-convention Open Graph image (served by the app at /opengraph-image.jpg)
+# AND the Space card thumbnail: the README frontmatter points at this file in
+# the Space repo (Hub-served, so the card works even while the Space sleeps).
+SOCIAL_PREVIEW_PATH = "embedding_visualization/app/opengraph-image.jpg"
+# Space Variable carrying the public origin; the root Dockerfile declares a
+# matching ARG so the frontend build can set Next's metadataBase from it.
+SITE_URL_VARIABLE = "NEXT_PUBLIC_SITE_URL"
 # Everything the Dockerfile does not need stays out of the Space repo. The
 # live data stores are the critical ones (main.duckdb is ~23 GB on disk).
 # NOTE: fnmatch patterns match the FULL relative path — "benchmarks/*" does
@@ -105,16 +117,23 @@ def space_direct_url(repo_id: str) -> str:
     return f"https://{subdomain}.hf.space"
 
 
+def social_preview_url(repo_id: str) -> str:
+    """Hub-served URL of the social-preview image inside the Space repo."""
+    return f"https://huggingface.co/spaces/{repo_id}/resolve/main/{SOCIAL_PREVIEW_PATH}"
+
+
 def render_space_readme(repo_id: str) -> bytes:
     """README_SPACE.md with its URL placeholders resolved for this Space.
 
     The repo id lives only in CI variables (HF_SPACE_REPO_ID), so the README
-    keeps {{SPACE_URL}} / {{SPACE_DIRECT_URL}} placeholders and the deploy
-    resolves them — that is what makes the "What to try" preset links work.
+    keeps {{SPACE_URL}} / {{SPACE_DIRECT_URL}} / {{SOCIAL_PREVIEW_URL}}
+    placeholders and the deploy resolves them — that is what makes the "What
+    to try" preset links and the card thumbnail work.
     """
     text = (DEPLOY_DIR / "README_SPACE.md").read_text(encoding="utf-8")
     text = text.replace("{{SPACE_URL}}", f"https://huggingface.co/spaces/{repo_id}")
     text = text.replace("{{SPACE_DIRECT_URL}}", space_direct_url(repo_id))
+    text = text.replace("{{SOCIAL_PREVIEW_URL}}", social_preview_url(repo_id))
     validate_space_readme(text)
     return text.encode("utf-8")
 
@@ -135,6 +154,47 @@ def validate_space_readme(text: str) -> None:
             f"ERROR: short_description is {len(match.group(1))} chars; "
             "the Hub rejects anything over 60."
         )
+    match = re.search(r"^thumbnail:\s*(.+?)\s*$", text, re.MULTILINE)
+    if match and not match.group(1).startswith("https://"):
+        sys.exit(
+            f"ERROR: thumbnail must be an absolute https URL, got {match.group(1)!r} "
+            "(social crawlers do not resolve relative paths or placeholders)."
+        )
+
+
+def ensure_site_url_variable(api: HfApi, repo_id: str) -> None:
+    """Store the Space's public origin as the Space Variable NEXT_PUBLIC_SITE_URL.
+
+    The frontend needs an absolute origin at BUILD time to emit crawler-
+    fetchable og:image URLs (Next's metadataBase; without it production builds
+    resolve social images to http://localhost:3000). HF's built-in SPACE_HOST
+    is runtime-only, but user Variables are passed to the Docker build as
+    build-args — so the deploy pins the origin itself. Runs before the tree
+    upload so the rebuild those commits trigger already sees the value.
+
+    Best-effort: a token without settings access must not block the deploy,
+    so failures are reported as warnings (the app still works, only the
+    direct-host link preview lacks its image).
+    """
+    wanted = space_direct_url(repo_id)
+    try:
+        current = api.get_space_variables(repo_id=repo_id).get(SITE_URL_VARIABLE)
+        if current is not None and current.value == wanted:
+            print(f"[deploy] Space variable {SITE_URL_VARIABLE} already set to {wanted}")
+            return
+        api.add_space_variable(
+            repo_id=repo_id,
+            key=SITE_URL_VARIABLE,
+            value=wanted,
+            description="Public origin baked into the frontend's social-preview metadata (set by deploy.py)",
+        )
+        print(f"[deploy] Space variable {SITE_URL_VARIABLE} = {wanted}")
+    except HfHubHTTPError as exc:
+        print(
+            f"WARNING: could not set Space variable {SITE_URL_VARIABLE} ({exc}); "
+            "set it manually under Settings → Variables and secrets, then rebuild.",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:
@@ -145,11 +205,7 @@ def main() -> int:
     args = parser.parse_args()
 
     lock_path = (
-        REPO_ROOT
-        / "interpretability_backend"
-        / "config"
-        / "seed_snapshots"
-        / "demo.lock.json"
+        REPO_ROOT / "interpretability_backend" / "config" / "seed_snapshots" / "demo.lock.json"
     )
     if not lock_path.exists():
         print(
@@ -170,6 +226,10 @@ def main() -> int:
             exist_ok=True,
         )
         print(f"[deploy] space ensured: {args.repo_id}")
+
+    # Settings before commits: the Variable must exist when the rebuild that
+    # the commits below trigger passes build-args to the Dockerfile.
+    ensure_site_url_variable(api, args.repo_id)
 
     # README goes FIRST: the Hub validates its frontmatter on commit, so a
     # rejected card must fail the deploy before the tree is touched (the tree

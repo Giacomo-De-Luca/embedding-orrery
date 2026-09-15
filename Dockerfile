@@ -125,10 +125,15 @@ ARG NEXT_PUBLIC_GRAPHQL_URL=/graphql
 ARG NEXT_PUBLIC_GRAPHQL_WS_URL=
 ARG NEXT_PUBLIC_API_BASE_URL=
 ARG NEXT_PUBLIC_DEMO_MODE=1
+# Public origin baked into the social-preview metadata (og:image must be an
+# absolute URL). deploy.py stores it as the Space Variable NEXT_PUBLIC_SITE_URL,
+# which HF passes as a build-arg; empty → Next falls back to localhost.
+ARG NEXT_PUBLIC_SITE_URL=
 ENV NEXT_PUBLIC_GRAPHQL_URL=$NEXT_PUBLIC_GRAPHQL_URL
 ENV NEXT_PUBLIC_GRAPHQL_WS_URL=$NEXT_PUBLIC_GRAPHQL_WS_URL
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 
 COPY --from=frontend-deps /fe/node_modules ./node_modules
 COPY embedding_visualization/ .

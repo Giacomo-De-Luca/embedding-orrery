@@ -9,6 +9,7 @@ pinned: false
 header: mini
 fullWidth: true
 short_description: Explore embedding spaces and SAE features — EMNLP, WordNet
+thumbnail: {{SOCIAL_PREVIEW_URL}}
 ---
 
 # Orrery — Embedding Observatory (demo)

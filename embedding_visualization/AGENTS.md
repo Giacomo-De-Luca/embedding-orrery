@@ -3,6 +3,13 @@
 Follow the root `AGENTS.md` rules. Historical frontend notes also live in
 `claude.md`; prefer the root instructions if they conflict.
 
+## Local Build Configuration
+
+- Keep `turbopack.root` set to `__dirname` in `next.config.ts` so a repository-level
+  lockfile cannot move frontend dependency resolution outside this directory.
+- Tailwind import troubleshooting and validation are documented in
+  `../documentation/FRONTEND_BUILD_CONFIGURATION.md`.
+
 ## Production Docker
 
 - `Dockerfile` builds a standalone Next.js production server with Node 22.
