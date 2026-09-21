@@ -4,7 +4,7 @@
 
 **Embedding Orrery** is an open-source platform for interactive 3D visualisation of embedding spaces, with native Sparse Autoencoder (SAE) support. Orrery turns any textual, image, or vector dataset into a 3D searcheable constellation with filtering and in-interface probe training. SAE feature spaces can be visualised as collections, with individual features inspection or injection into the model for causal steering.
 
-**[Try the live demo on Hugging Face Spaces](https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo)** — read-only, with a guided tour and preset views. No install needed.
+**[Try the live demo on Hugging Face Spaces](https://huggingface.co/spaces/GiacomoDeLuca/orrery-demo)** read-only guided tour with some pre-installed datasets. 
 
 > **Beta.** The platform is functional and under active development. If you try it or find bugs, please get in touch, early feedback is very welcome.
 
