@@ -261,8 +261,8 @@ def _create_source_duckdb(path: Path) -> None:
     )
     client._exec(
         """
-        INSERT INTO probe_scores (collection_name, target_field, kind, item_id, score)
-        VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)
+        INSERT INTO probe_scores (collection_name, target_field, kind, item_id, score, predicted, probs)
+        VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
         """,
         [
             "documents",
@@ -270,11 +270,15 @@ def _create_source_duckdb(path: Path) -> None:
             "ridge",
             "item-dataset-a",
             0.5,
+            1,
+            [0.25, 0.75],
             "feature-vectors",
             "density",
             "ridge",
             "item-dataset-a",
             0.7,
+            None,
+            None,
         ],
     )
     client._exec(
@@ -348,6 +352,10 @@ def test_duckdb_export_selects_payloads_and_sae_rows(tmp_path: Path) -> None:
         assert connection.execute("SELECT count(*) FROM topic_extractions").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM probes").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM probe_scores").fetchone() == (1,)
+        assert connection.execute("SELECT predicted, probs FROM probe_scores").fetchone() == (
+            1,
+            [0.25, 0.75],
+        )
         assert connection.execute("SELECT model_id, sae_id FROM sae_features").fetchall() == [
             ("model-a", "sae-a")
         ]

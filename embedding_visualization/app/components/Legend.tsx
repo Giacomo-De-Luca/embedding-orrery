@@ -4,7 +4,6 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Color from 'color';
 import { Card, CardContent, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import {
-  buildCategoryColorMap,
   getCategoryLabel,
   getCategoryDisplayName,
   colorScaleGradientCSS,
@@ -14,6 +13,7 @@ import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 import { Popover, PopoverAnchor, PopoverContent } from '@/lib/ui-primitives/popover';
 import { X, RotateCcw } from 'lucide-react';
 import { useDebounceValue } from '@/lib/hooks/use-debounce-value';
+import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
 import type { NestedColorMap, ColorScale, HistogramBin, CustomNumericRange } from '../../lib/types/types';
 import { NumericRangeChart } from './charts/NumericRangeChart';
 import {
@@ -239,10 +239,9 @@ export function Legend({
     [categoryValues, isPosLegend]
   );
 
-  const colorMap = useMemo(
-    () => buildCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette, categoryColorOverrides),
-    [categoryField, values, categoricalPalette, categoryColorOverrides]
-  );
+  // Overrides come from the store (the categoryColorOverrides prop only marks
+  // overridden swatches); aliased fields share their source field's colors.
+  const colorMap = useCategoryColorMap(categoryField ?? 'pos', values, categoricalPalette);
 
   // Filter flat category values by display label, then sort zero-count items to the bottom when filtered
   const filteredValues = useMemo(() => {
@@ -267,12 +266,13 @@ export function Legend({
     let source = nestedColorMap.hierarchy;
     if (debouncedFilter.trim()) {
       const q = debouncedFilter.toLowerCase();
+      const matches = (value: string) => getCategoryLabel(categoryField ?? null, value).toLowerCase().includes(q);
       const filtered: Record<string, string[]> = {};
       for (const [topic, subtopics] of Object.entries(source)) {
-        if (topic.toLowerCase().includes(q)) {
+        if (matches(topic)) {
           filtered[topic] = subtopics;
         } else {
-          const matchingSubs = subtopics.filter((sub) => sub.toLowerCase().includes(q));
+          const matchingSubs = subtopics.filter(matches);
           if (matchingSubs.length > 0) {
             filtered[topic] = matchingSubs;
           }
@@ -293,7 +293,7 @@ export function Legend({
         : subs;
     }
     return result;
-  }, [nestedColorMap, debouncedFilter, filteredTopicCounts, filteredSubtopicCounts]);
+  }, [nestedColorMap, debouncedFilter, categoryField, filteredTopicCounts, filteredSubtopicCounts]);
 
   // For continuous scales, render histogram range chart or fallback gradient bar
   if (isContinuous && numericRange) {
@@ -453,7 +453,7 @@ export function Legend({
                       isTopicMuted && "line-through"
                     )}
                   >
-                    {topic}
+                    {getCategoryLabel(categoryField ?? null, topic)}
                   </span>
                   {topicCount !== undefined && (
                     <span className="text-xs text-muted-foreground tabular-nums">
@@ -536,7 +536,7 @@ export function Legend({
                           isSubMuted && "line-through"
                         )}
                       >
-                        {sub}
+                        {getCategoryLabel(categoryField ?? null, sub)}
                       </span>
                       {subCount !== undefined && (
                         <span className="text-xs text-muted-foreground tabular-nums">

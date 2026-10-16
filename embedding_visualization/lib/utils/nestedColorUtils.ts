@@ -1,21 +1,26 @@
 import { hsl } from 'd3-color';
-import type { Point2D, Point3D, NestedColorMap } from '../types/types';
-import { generateCategoryColors, UNCLUSTERED_COLOR } from './categoryColors';
+import type { MetadataPoint, NestedColorMap } from '../types/types';
+import { generateCategoryColors, MISSING_CATEGORY_COLOR, UNCLUSTERED_COLOR } from './categoryColors';
+import { CategoryKey } from './categoryKey';
+
+/** Topics with a fixed color, listed in this order after every real topic. */
+const FIXED_TOPIC_COLORS = new Map<string, string>([
+  ['Unclustered', UNCLUSTERED_COLOR],
+  [CategoryKey.MISSING, MISSING_CATEGORY_COLOR],
+]);
+const FIXED_TOPICS = [...FIXED_TOPIC_COLORS.keys()];
 
 /**
  * Check whether nested color mode is available for the current data.
  * Returns true when colorByField is 'topic_label' and subtopic_label exists in points.
  */
 export function isNestedColorAvailable(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   colorByField: string | null | undefined
 ): boolean {
   if (colorByField !== 'topic_label' || points.length === 0) return false;
   // Check if at least one point has a subtopic_label
-  return points.some(p => {
-    const sub = p.metadata?.['subtopic_label'];
-    return sub !== null && sub !== undefined && sub !== '';
-  });
+  return points.some(p => !CategoryKey.isMissing(p.metadata?.['subtopic_label']));
 }
 
 /**
@@ -24,10 +29,10 @@ export function isNestedColorAvailable(
  * 1. Groups subtopic_label values by their co-occurring topic_label
  * 2. Assigns base hues per topic via generateCategoryColors()
  * 3. For each topic's subtopics, generates HSL lightness variations (30%-72%)
- * 4. Noise topic ("Unclustered") stays gray
+ * 4. Noise topic ("Unclustered") and points without a topic (Missing) keep fixed colors
  */
 export function buildNestedColorMap(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   palette?: string,
   topicOverrides?: Record<string, string>,
 ): NestedColorMap {
@@ -37,8 +42,7 @@ export function buildNestedColorMap(
   const subtopicCounts: Record<string, number> = {};
 
   for (const p of points) {
-    const topic = String(p.metadata?.['topic_label'] ?? 'unknown');
-    const subtopic = String(p.metadata?.['subtopic_label'] ?? topic);
+    const { topic, subtopic } = CategoryKey.nested(p.metadata);
 
     if (!hierarchySet[topic]) hierarchySet[topic] = new Set();
     hierarchySet[topic].add(subtopic);
@@ -47,30 +51,28 @@ export function buildNestedColorMap(
     subtopicCounts[subtopic] = (subtopicCounts[subtopic] ?? 0) + 1;
   }
 
-  // Sort topics, but put Unclustered last
-  const topics = Object.keys(hierarchySet).sort((a, b) => {
-    if (a === 'Unclustered') return 1;
-    if (b === 'Unclustered') return -1;
-    return a.localeCompare(b);
-  });
+  // Sort topics, but put the fixed-color topics (Unclustered, Missing) last
+  const fixedRank = (topic: string) => FIXED_TOPICS.indexOf(topic);
+  const topics = Object.keys(hierarchySet).sort((a, b) => fixedRank(a) - fixedRank(b) || a.localeCompare(b));
 
   const hierarchy: Record<string, string[]> = {};
   for (const topic of topics) {
     hierarchy[topic] = Array.from(hierarchySet[topic]).sort();
   }
 
-  // Generate base topic colors (exclude Unclustered from hue assignment)
-  const colorTopics = topics.filter(t => t !== 'Unclustered');
+  // Generate base topic colors (fixed-color topics take no hue)
+  const colorTopics = topics.filter(t => !FIXED_TOPIC_COLORS.has(t));
   const baseColors = generateCategoryColors(colorTopics.length, palette);
 
   const topicColors: Record<string, string> = {};
   const subtopicColors: Record<string, string> = {};
 
-  // Assign Unclustered = fixed blue
-  if (hierarchy['Unclustered']) {
-    topicColors['Unclustered'] = UNCLUSTERED_COLOR;
-    for (const sub of hierarchy['Unclustered']) {
-      subtopicColors[sub] = UNCLUSTERED_COLOR;
+  // Fixed-color topics color all of their subtopics alike
+  for (const [topic, color] of FIXED_TOPIC_COLORS) {
+    if (!hierarchy[topic]) continue;
+    topicColors[topic] = color;
+    for (const sub of hierarchy[topic]) {
+      subtopicColors[sub] = color;
     }
   }
 

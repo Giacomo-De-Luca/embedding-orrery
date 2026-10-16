@@ -9,8 +9,10 @@ import type {
   DistanceMetric,
   TemporalRange,
   TextSearchConfig,
+  HazeRendererKind,
 } from '../types/types';
 import { DEFAULT_COLOR_SCALE, defaultColorScaleForType } from '../types/types';
+import type { CategoryColorAlias } from '../utils/categoryColors';
 import { IS_DEMO } from '../utils/demoMode';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +33,13 @@ export interface VisualizationStoreState {
   nestedColorMode: boolean;
   /** Per-field custom color overrides. Outer key = field name, inner key = category value. */
   categoryColorOverrides: Record<string, Record<string, string>>;
+  /**
+   * Derived categorical fields that borrow another field's colors (a probe's
+   * predicted class uses its target field's). Owned by useProbes, which
+   * replaces the whole map whenever its probes or data change — so it is
+   * deliberately not cleared by resetForCollectionChange. Not persisted.
+   */
+  categoryColorAliases: Record<string, CategoryColorAlias>;
 
   // Search / filter
   searchQuery: string;
@@ -42,9 +51,17 @@ export interface VisualizationStoreState {
   showLabels: boolean;
   showContours: boolean;
   hideUnclustered: boolean;
+  /** Hide points whose colour-by field has no value. */
+  hideMissing: boolean;
   showClusterLabels: boolean;
   showAllClusterLabels: boolean;
   nebulaMode: boolean;
+  /** Haze implementation behind `nebulaMode` (sprites = current, density = experimental). */
+  hazeRenderer: HazeRendererKind;
+  /** Density haze exposure multiplier (1 = default). */
+  hazeStrength: number;
+  /** Density haze cluster-equalisation exponent gamma (0 = raw density, 1 = equalised). */
+  hazeEqualize: number;
   densityMode: boolean;
   /** Brightness multiplier for the 2D density overlay (1 = Apple's tuning). */
   densityIntensity: number;
@@ -54,6 +71,8 @@ export interface VisualizationStoreState {
   mutedCategories: string[];
   hideFilteredPoints: boolean;
   mutedPointOpacity: number;
+  /** 0-1 multiplier on the opacity of points whose colour-by value is missing. */
+  missingPointOpacity: number;
   pointOpacity: number;
   temporalRange: TemporalRange | null;
 
@@ -80,6 +99,7 @@ interface VisualizationStoreActions {
   setCategoryColorOverride: (field: string, category: string, color: string) => void;
   removeCategoryColorOverride: (field: string, category: string) => void;
   clearCategoryColorOverrides: (field?: string) => void;
+  setCategoryColorAliases: (aliases: Record<string, CategoryColorAlias>) => void;
 
   // Search / filter
   setSearchQuery: (query: string) => void;
@@ -89,14 +109,18 @@ interface VisualizationStoreActions {
   // Boolean toggles (generic setter)
   setFlag: (flag: keyof Pick<VisualizationStoreState,
     'showOnlyHighlighted' | 'showLabels' | 'showContours' |
-    'hideUnclustered' | 'showClusterLabels' | 'showAllClusterLabels' | 'nebulaMode' |
+    'hideUnclustered' | 'hideMissing' | 'showClusterLabels' | 'showAllClusterLabels' | 'nebulaMode' |
     'densityMode' | 'showAxes' | 'hideFilteredPoints'
   >, value: boolean) => void;
 
   // Muting / filtering
   setMutedCategories: (categories: string[]) => void;
   setDensityIntensity: (intensity: number) => void;
+  setHazeRenderer: (kind: HazeRendererKind) => void;
+  setHazeStrength: (strength: number) => void;
+  setHazeEqualize: (gamma: number) => void;
   setMutedPointOpacity: (opacity: number) => void;
+  setMissingPointOpacity: (opacity: number) => void;
   setPointOpacity: (opacity: number) => void;
   setTemporalRange: (range: TemporalRange | null) => void;
 
@@ -126,6 +150,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
     categoricalPalette: undefined,
     nestedColorMode: false,
     categoryColorOverrides: {},
+    categoryColorAliases: {},
     searchQuery: '',
     textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
     distanceMetric: 'COSINE',
@@ -135,15 +160,20 @@ export const useVisualizationStore = create<VisualizationStore>()(
     showLabels: IS_DEMO,
     showContours: false,
     hideUnclustered: false,
+    hideMissing: false,
     showClusterLabels: false,
     showAllClusterLabels: false,
     nebulaMode: false,
+    hazeRenderer: 'sprites',
+    hazeStrength: 1.0,
+    hazeEqualize: 0.5,
     densityMode: false,
     densityIntensity: 1.5,
     showAxes: false,
     mutedCategories: [],
     hideFilteredPoints: false,
     mutedPointOpacity: 0.20,
+    missingPointOpacity: 1.0,
     pointOpacity: 1.0,
     temporalRange: null,
     tooltipFields: undefined,
@@ -190,6 +220,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
       delete next[field];
       return { categoryColorOverrides: next };
     }),
+    setCategoryColorAliases: (aliases) => set({ categoryColorAliases: aliases }),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
     setTextSearchConfig: (config) => set({ textSearchConfig: config }),
@@ -199,7 +230,11 @@ export const useVisualizationStore = create<VisualizationStore>()(
 
     setMutedCategories: (categories) => set({ mutedCategories: categories }),
     setDensityIntensity: (intensity) => set({ densityIntensity: intensity }),
+    setHazeRenderer: (kind) => set({ hazeRenderer: kind }),
+    setHazeStrength: (strength) => set({ hazeStrength: strength }),
+    setHazeEqualize: (gamma) => set({ hazeEqualize: gamma }),
     setMutedPointOpacity: (opacity) => set({ mutedPointOpacity: opacity }),
+    setMissingPointOpacity: (opacity) => set({ missingPointOpacity: opacity }),
     setPointOpacity: (opacity) => set({ pointOpacity: opacity }),
     setTemporalRange: (range) => set({ temporalRange: range }),
 
@@ -218,6 +253,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
       temporalRange: null,
       hideFilteredPoints: false,
       mutedPointOpacity: 0.20,
+      missingPointOpacity: 1.0,
       textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
     }),
   }), {
@@ -229,6 +265,9 @@ export const useVisualizationStore = create<VisualizationStore>()(
       method: s.method,
       mode: s.mode,
       nebulaMode: s.nebulaMode,
+      hazeRenderer: s.hazeRenderer,
+      hazeStrength: s.hazeStrength,
+      hazeEqualize: s.hazeEqualize,
       densityMode: s.densityMode,
       densityIntensity: s.densityIntensity,
       showClusterLabels: s.showClusterLabels,
@@ -249,7 +288,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
 useVisualizationStore.subscribe(
   (s) => s.colorByField,
   () => {
-    useVisualizationStore.setState({ mutedCategories: [], hideUnclustered: false, customNumericRange: null });
+    useVisualizationStore.setState({ mutedCategories: [], hideUnclustered: false, hideMissing: false, customNumericRange: null });
   },
 );
 

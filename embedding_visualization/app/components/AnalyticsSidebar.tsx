@@ -16,7 +16,8 @@ import { IS_DEMO } from '@/lib/utils/demoMode';
 import { useTemporalData } from '../../lib/hooks/useTemporalData';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
-import type { Point2D, Point3D, TemporalRange } from '../../lib/types/types';
+import { CategoryKey } from '../../lib/utils/categoryKey';
+import type { MetadataPoint, TemporalRange } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 
 /** Cardinality cap for fields missing from colorFieldOptions — beyond this the
@@ -27,7 +28,7 @@ const NO_CATEGORIES: string[] = [];
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 
 interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  points: (Point2D | Point3D)[];
+  points: MetadataPoint[];
   colorByField: string | null | undefined;
   categoryValues: string[];
   categoryCounts: Record<string, number>;
@@ -107,15 +108,7 @@ export function AnalyticsSidebar({
     if (!isOverridden && sharedFilteredCounts) return sharedFilteredCounts;
     // Otherwise compute locally using combinedMutedIndices (covers both text + temporal filters)
     if (!combinedMutedIndices || combinedMutedIndices.size === 0 || !effectiveAnalysisField) return null;
-    const counts: Record<string, number> = {};
-    for (const p of points) {
-      if (combinedMutedIndices.has(p.index)) continue;
-      const value = p.metadata?.[effectiveAnalysisField];
-      if (value === null || value === undefined || value === '') continue;
-      const key = String(value);
-      counts[key] = (counts[key] ?? 0) + 1;
-    }
-    return counts;
+    return CategoryKey.count(points, effectiveAnalysisField, combinedMutedIndices).categoryCounts;
   }, [isOverridden, sharedFilteredCounts, combinedMutedIndices, effectiveAnalysisField, points]);
 
   // Guard against continuous color fields (sequential/diverging scales) exploding

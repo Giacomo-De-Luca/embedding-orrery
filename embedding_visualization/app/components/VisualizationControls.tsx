@@ -1,13 +1,8 @@
 'use client';
 
 import React from 'react';
-import { IS_DEMO, DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
-import { Save } from 'lucide-react';
-import { Button } from '@/lib/ui-primitives/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/lib/ui-primitives/tooltip';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/lib/ui-primitives/select';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
@@ -23,11 +18,12 @@ import {
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
 import { Slider } from '@/lib/ui-primitives/slider';
-import type { ProjectionMethod, DimensionMode } from '../../lib/types/types';
+import type { ProjectionMethod, DimensionMode, HazeRendererKind } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
-import { ColorScaleSelector } from './ColorScaleSelector';
-import { SaveColorDefaultButton } from './SaveColorDefaultButton';
-import { CATEGORY_PRESETS } from '../../lib/utils/categoryColors';
+import { VisualizationColorControls } from './VisualizationColorControls';
+import { VisualizationPointControls } from './VisualizationPointControls';
+import { SliderRow } from './SliderRow';
+import { isDensityHazeSupported } from '../../lib/utils/densityHaze/support';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -43,6 +39,10 @@ interface VisualizationControlsProps {
   colorFieldOptions?: ColorFieldOption[];
   availableFields?: string[];
   nestedColorAvailable?: boolean;
+  /** Some points have no value for the colour field — gates the missing-value controls. */
+  hasMissingValues?: boolean;
+  /** Those points are drawn as a category group — gates the missing-value opacity slider. */
+  canFadeMissing?: boolean;
   /** Active collection — enables saving the colouring as its default. */
   collectionName?: string | null;
   /** Any points currently muted by search/temporal/category filters — gates the filtered-point controls. */
@@ -57,50 +57,43 @@ export function VisualizationControls({
   colorFieldOptions = [],
   availableFields = [],
   nestedColorAvailable,
+  hasMissingValues,
+  canFadeMissing,
   collectionName,
   hasActiveFilter,
   hasHighlights,
 }: VisualizationControlsProps) {
   const store = useVisualizationStore;
+  // Density haze needs float render targets: probe after mount (SSR-safe) and
+  // reset a persisted 'density' preference so no dead sliders are shown here.
+  const [densityHazeSupported, setDensityHazeSupported] = React.useState(false);
+  React.useEffect(() => {
+    const supported = isDensityHazeSupported();
+    setDensityHazeSupported(supported);
+    if (!supported && store.getState().hazeRenderer === 'density') store.getState().setHazeRenderer('sprites');
+  }, [store]);
   const {
     method, mode, colorByField, selectedDimensions,
-    nebulaMode, densityMode, densityIntensity, hideUnclustered, nestedColorMode, showAxes,
-    showClusterLabels, showAllClusterLabels, hideFilteredPoints, mutedPointOpacity,
-    pointOpacity, tooltipFields, showLabels, showOnlyHighlighted,
+    nebulaMode, hazeRenderer, hazeStrength, hazeEqualize, densityMode, densityIntensity, showAxes,
+    showClusterLabels, showAllClusterLabels,
+    tooltipFields, showLabels,
   } = store(useShallow((s) => ({
     method: s.method,
     mode: s.mode,
     colorByField: s.colorByField,
     selectedDimensions: s.selectedDimensions,
     nebulaMode: s.nebulaMode,
+    hazeRenderer: s.hazeRenderer,
+    hazeStrength: s.hazeStrength,
+    hazeEqualize: s.hazeEqualize,
     densityMode: s.densityMode,
     densityIntensity: s.densityIntensity,
     showAxes: s.showAxes,
-    hideUnclustered: s.hideUnclustered,
-    nestedColorMode: s.nestedColorMode,
     showClusterLabels: s.showClusterLabels,
     showAllClusterLabels: s.showAllClusterLabels,
-    hideFilteredPoints: s.hideFilteredPoints,
-    mutedPointOpacity: s.mutedPointOpacity,
-    pointOpacity: s.pointOpacity,
     tooltipFields: s.tooltipFields,
     showLabels: s.showLabels,
-    showOnlyHighlighted: s.showOnlyHighlighted,
   })));
-
-  // Handle field selection with auto-detection of scale type
-  const handleFieldChange = (value: string) => {
-    if (value === 'none') {
-      store.getState().setColorByField(null);
-      return;
-    }
-
-    const fieldOption = colorFieldOptions.find(f => f.field === value);
-    if (!fieldOption) return;
-
-    // Use the recommended scale from the field analysis
-    store.getState().setColorByField(value, fieldOption.recommendedScale);
-  };
 
   const showLabelsGroup = Boolean(hasHighlights || colorByField);
 
@@ -214,15 +207,73 @@ export function VisualizationControls({
           )}
 
           {mode === '3d' && (
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="nebula-mode"
-                checked={nebulaMode ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('nebulaMode', checked === true)}
-              />
-              <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
-                Nebula effects
-              </Label>
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="nebula-mode"
+                  checked={nebulaMode ?? false}
+                  onCheckedChange={(checked) => store.getState().setFlag('nebulaMode', checked === true)}
+                />
+                <Label htmlFor="nebula-mode" className="font-normal cursor-pointer text-sm">
+                  Nebula effects
+                </Label>
+              </div>
+              {nebulaMode && (
+                <div className="space-y-2 pl-6">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="text-xs text-muted-foreground">Haze renderer</Label>
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      value={hazeRenderer}
+                      onValueChange={(v) => v && store.getState().setHazeRenderer(v as HazeRendererKind)}
+                    >
+                      <ToggleGroupItem
+                        value="sprites"
+                        className={SEGMENT_ITEM}
+                        aria-label="Sprite haze"
+                        title="Feathered sprites at sampled cluster points"
+                      >
+                        Sprites
+                      </ToggleGroupItem>
+                      <ToggleGroupItem
+                        value="density"
+                        className={SEGMENT_ITEM}
+                        aria-label="Density haze"
+                        disabled={!densityHazeSupported}
+                        title={densityHazeSupported
+                          ? 'Per-point density splats (experimental)'
+                          : 'Needs WebGL2 float render targets, unavailable in this browser'}
+                      >
+                        Density
+                      </ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
+                  {hazeRenderer === 'density' && (
+                    <>
+                      <SliderRow
+                        label="Haze strength"
+                        valueLabel={`${hazeStrength.toFixed(2)}×`}
+                        min={25}
+                        max={300}
+                        step={25}
+                        value={Math.round(hazeStrength * 100)}
+                        onChange={(v) => store.getState().setHazeStrength(v / 100)}
+                      />
+                      <SliderRow
+                        label="Equalise clusters"
+                        title="0 = raw density, 1 = every cluster equally bright"
+                        valueLabel={`γ ${hazeEqualize.toFixed(1)}`}
+                        min={0}
+                        max={100}
+                        step={10}
+                        value={Math.round(hazeEqualize * 100)}
+                        onChange={(v) => store.getState().setHazeEqualize(v / 100)}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -261,91 +312,7 @@ export function VisualizationControls({
 
         <Separator />
 
-        {/* Color */}
-        <div className="space-y-3">
-          <Label htmlFor="color-by" className={SECTION_HEADER}>Color</Label>
-          <div className="flex items-center gap-2">
-            <Select
-              value={colorByField ?? 'none'}
-              onValueChange={handleFieldChange}
-            >
-              <SelectTrigger id="color-by" className="flex-1">
-                <SelectValue placeholder="Select coloring" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None (Single Color)</SelectItem>
-                {colorFieldOptions.map((option) => (
-                  <SelectItem key={option.field} value={option.field}>
-                    {option.displayName}
-                    <span className="ml-1 text-muted-foreground text-xs">
-                      ({option.recommendedScale === 'sequential'
-                        ? 'numeric'
-                        : `${option.uniqueCount} values`})
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* Scale selector (override of auto-detected type) + save-as-default, when a field is selected */}
-            {colorByField && <ColorScaleSelector />}
-            {colorByField && (IS_DEMO ? (
-              <Tooltip>
-                {/* span: disabled buttons swallow the hover the tooltip needs */}
-                <TooltipTrigger asChild>
-                  <span tabIndex={0}>
-                    <Button
-                      variant="circularghost"
-                      size="icon"
-                      disabled
-                      aria-label="Save as collection default"
-                    >
-                      <Save className="h-4 w-4" />
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>{DEMO_DISABLED_MESSAGE}</TooltipContent>
-              </Tooltip>
-            ) : (
-              <SaveColorDefaultButton collectionName={collectionName ?? null} />
-            ))}
-          </div>
-
-          {/* Hide Unclustered Checkbox - only show for fields with an Unclustered preset */}
-          {colorByField &&
-            CATEGORY_PRESETS[colorByField.toLowerCase()]?.labels &&
-            Object.values(CATEGORY_PRESETS[colorByField.toLowerCase()].labels!).includes('Unclustered') && (
-            <div className="flex items-center space-x-2 mt-2">
-              <Checkbox
-                id="hide-unclustered"
-                checked={hideUnclustered ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('hideUnclustered', checked === true)}
-              />
-              <Label
-                htmlFor="hide-unclustered"
-                className="font-normal cursor-pointer text-sm"
-              >
-                Hide unclustered points
-              </Label>
-            </div>
-          )}
-
-          {/* Nested subtopic coloring - only when topic_label is selected and subtopics exist */}
-          {nestedColorAvailable && colorByField === 'topic_label' && (
-            <div className="flex items-center space-x-2 mt-2">
-              <Checkbox
-                id="nested-color-mode"
-                checked={nestedColorMode ?? false}
-                onCheckedChange={(checked) => store.getState().setNestedColorMode(checked === true)}
-              />
-              <Label
-                htmlFor="nested-color-mode"
-                className="font-normal cursor-pointer text-sm"
-              >
-                Color by subtopics
-              </Label>
-            </div>
-          )}
-        </div>
+        <VisualizationColorControls colorFieldOptions={colorFieldOptions} collectionName={collectionName} nestedColorAvailable={nestedColorAvailable} hasMissingValues={hasMissingValues} canFadeMissing={canFadeMissing} />
 
         {/* Labels */}
         {showLabelsGroup && (
@@ -403,70 +370,7 @@ export function VisualizationControls({
 
         <Separator />
 
-        {/* Points */}
-        <div className="space-y-3">
-          <Label className={SECTION_HEADER}>Points</Label>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-sm font-normal">Point opacity</Label>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {Math.round((pointOpacity ?? 1.0) * 100)}%
-              </span>
-            </div>
-            <Slider
-              min={5}
-              max={100}
-              step={5}
-              value={[Math.round((pointOpacity ?? 1.0) * 100)]}
-              onValueChange={([v]) => store.getState().setPointOpacity(v / 100)}
-            />
-          </div>
-
-          {hasHighlights && (
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="show-only-highlighted"
-                checked={showOnlyHighlighted ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('showOnlyHighlighted', checked === true)}
-              />
-              <Label htmlFor="show-only-highlighted" className="font-normal cursor-pointer text-sm">
-                Show only highlighted
-              </Label>
-            </div>
-          )}
-
-          {hasActiveFilter && (
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="hide-filtered"
-                checked={hideFilteredPoints ?? false}
-                onCheckedChange={(checked) => store.getState().setFlag('hideFilteredPoints', checked === true)}
-              />
-              <Label htmlFor="hide-filtered" className="font-normal cursor-pointer text-sm">
-                Hide filtered points
-              </Label>
-            </div>
-          )}
-
-          {hasActiveFilter && !hideFilteredPoints && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm font-normal">Filtered point opacity</Label>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {Math.round((mutedPointOpacity ?? 0.20) * 100)}%
-                </span>
-              </div>
-              <Slider
-                min={0}
-                max={100}
-                step={5}
-                value={[Math.round((mutedPointOpacity ?? 0.20) * 100)]}
-                onValueChange={([v]) => store.getState().setMutedPointOpacity(v / 100)}
-              />
-            </div>
-          )}
-        </div>
+        <VisualizationPointControls hasHighlights={hasHighlights} hasActiveFilter={hasActiveFilter} />
 
         {/* Show Contours
         <div className="flex items-center space-x-2">

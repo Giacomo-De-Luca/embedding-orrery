@@ -9,7 +9,13 @@
  * cache; they live in this separate client-side layer.
  */
 
+import { CategoryKey } from './categoryKey';
+import { CORRECTNESS_LABELS, type CategoryColorAlias } from './categoryColors';
 import type { ColorFieldOption } from './fieldAnalysis';
+import { isClassificationKind, probeKindLabel } from './probeParams';
+import { MAX_CATEGORICAL_TARGET_VALUES, canonicalProbeLabel } from './probeTargets';
+
+export type ProbeTask = 'regression' | 'binary' | 'multiclass';
 
 export interface ProbeInfo {
   targetField: string;
@@ -22,35 +28,157 @@ export interface ProbeInfo {
   createdAt: string;
   /** Binary categorical targets only: applied value->0/1 mapping (e.g. {safe: 0, unsafe: 1}). */
   targetMapping?: Record<string, number> | null;
+  /** Derived server-side for probes trained before multiclass support. */
+  task?: ProbeTask;
+  /** Classifiers: kept classes in class-index order (null for legacy binary probes). */
+  classes?: string[] | null;
+  /** Classifiers: classes excluded by the min-class threshold -> item count. */
+  excludedClasses?: Record<string, number> | null;
+  minClassFraction?: number | null;
 }
 
 export interface ProbeScoresData {
   itemIds: string[];
   scores: number[];
   residuals: (number | null)[] | null;
+  /** Multiclass probes: predicted class index (into ProbeInfo.classes). */
+  predicted?: (number | null)[] | null;
+}
+
+/** One class's per-item probabilities (probeClassProbabilities query). */
+export interface ProbeClassProbabilitiesData {
+  itemIds: string[];
+  probabilities: (number | null)[];
 }
 
 export interface ProbeWithScores {
   probe: ProbeInfo;
   scores: ProbeScoresData;
+  /** Lazily loaded class probabilities, keyed by class index. */
+  classProbabilities?: Record<number, ProbeClassProbabilitiesData>;
 }
 
-/** Derived |residual| field name, or null when the probe has no residuals. */
-export function probeAbsErrorField(probe: ProbeInfo): string | null {
-  return probe.residualField ? probe.residualField.replace(/_residual$/, '_abserr') : null;
-}
-
-/** Derived confusion-category field name (logreg probes only). */
-export function probeConfusionField(probe: ProbeInfo): string | null {
-  return probe.kind === 'logreg' ? probe.scoreField.replace(/_score$/, '_confusion') : null;
+/** The probe's task, inferred for responses that predate the `task` field. */
+export function probeTask(probe: ProbeInfo): ProbeTask {
+  if (probe.task) return probe.task;
+  return isClassificationKind(probe.kind) ? 'binary' : 'regression';
 }
 
 /**
- * Build a metadata → binary class (0/1) resolver for a logreg probe's target,
- * mirroring the backend's mapping: the recorded targetMapping for text
- * targets, otherwise the larger of the field's two distinct numeric values
- * maps to 1 (`_binarize_for_logreg`). Returns null when the target is not
- * resolvable as binary (confusion categories are then unavailable).
+ * Names of every metadata field derived from one probe. All are built from
+ * the backend's score field (whose target part is already sanitized), so
+ * matching is by exact name — never by prefix, which would confuse probes on
+ * similarly named fields.
+ */
+export class ProbeFieldNames {
+  private readonly base: string;
+  private readonly task: ProbeTask;
+
+  constructor(private readonly probe: ProbeInfo) {
+    this.base = probe.scoreField.replace(/_score$/, '');
+    this.task = probeTask(probe);
+  }
+
+  /** Regression prediction, binary P(class 1), or multiclass confidence. */
+  get score(): string {
+    return this.probe.scoreField;
+  }
+
+  get residual(): string | null {
+    return this.probe.residualField;
+  }
+
+  /** |residual| (kinds with residuals). */
+  get absError(): string | null {
+    return this.probe.residualField ? `${this.base}_abserr` : null;
+  }
+
+  /** TP/TN/FP/FN at threshold 0.5 (binary classifiers). */
+  get confusion(): string | null {
+    return this.task === 'binary' ? `${this.base}_confusion` : null;
+  }
+
+  /** Predicted class label (multiclass). */
+  get predicted(): string | null {
+    return this.task === 'multiclass' ? `${this.base}_pred` : null;
+  }
+
+  /** Correct / Wrong / Excluded against the actual class (multiclass). */
+  get correct(): string | null {
+    return this.task === 'multiclass' ? `${this.base}_correct` : null;
+  }
+
+  /** P(class `index`) field (multiclass, loaded on demand). */
+  classProbability(index: number): string {
+    return `${this.base}_p${index}`;
+  }
+
+  /** Class index of one of this probe's P(class) fields, else null. */
+  classIndexOf(field: string): number | null {
+    if (this.task !== 'multiclass' || !field.startsWith(`${this.base}_p`)) return null;
+    const suffix = field.slice(this.base.length + 2);
+    return /^\d+$/.test(suffix) ? Number(suffix) : null;
+  }
+
+  /** The fixed derived fields (P(class) fields are matched by classIndexOf). */
+  get fixed(): string[] {
+    return [
+      this.score,
+      this.residual,
+      this.absError,
+      this.confusion,
+      this.predicted,
+      this.correct,
+    ].filter((f): f is string => f !== null);
+  }
+
+  matches(field: string): boolean {
+    return this.fixed.includes(field) || this.classIndexOf(field) !== null;
+  }
+}
+
+/** A recolor queued until its field's values have loaded. */
+export interface PendingRecolor {
+  field: string;
+  scale: 'categorical' | 'sequential';
+  /** colorByField when the recolor was requested. */
+  fromField: string | null;
+}
+
+/**
+ * What to do with a pending recolor: apply it once its field is available,
+ * keep waiting, or drop it because the user picked another color field in
+ * the meantime (a late-landing fetch must not override that choice).
+ */
+export function pendingRecolorAction(
+  pending: PendingRecolor,
+  colorByField: string | null,
+  availableFields: readonly { field: string }[],
+): 'apply' | 'wait' | 'drop' {
+  if (colorByField !== pending.fromField) return 'drop';
+  return availableFields.some((o) => o.field === pending.field) ? 'apply' : 'wait';
+}
+
+/** The probe + class index behind a P(class) colour field, if any. */
+export function parseProbeClassField(
+  field: string,
+  probes: readonly ProbeInfo[],
+): { probe: ProbeInfo; classIndex: number } | null {
+  for (const probe of probes) {
+    const classIndex = new ProbeFieldNames(probe).classIndexOf(field);
+    if (classIndex !== null && classIndex < (probe.classes?.length ?? 0)) {
+      return { probe, classIndex };
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a metadata → binary class (0/1) resolver for a legacy logreg probe's
+ * target, mirroring the backend's old mapping: the recorded targetMapping for
+ * text targets, otherwise the larger of the field's two distinct numeric
+ * values maps to 1. Returns null when the target is not resolvable as binary
+ * (confusion categories are then unavailable).
  */
 export function buildBinaryActualResolver(
   itemMetadata: Record<string, unknown>[],
@@ -85,6 +213,26 @@ export function buildBinaryActualResolver(
 }
 
 /**
+ * Metadata → actual class index of a classifier probe's target, or null when
+ * unlabelled / outside the kept classes. Uses the classes the backend recorded
+ * (every probe trained since multiclass support); legacy binary probes fall
+ * back to {@link buildBinaryActualResolver}.
+ */
+export function buildClassActualResolver(
+  probe: ProbeInfo,
+  itemMetadata: Record<string, unknown>[],
+): ((meta: Record<string, unknown>) => number | null) | null {
+  if (probe.classes && probe.classes.length > 0) {
+    const index = new Map(probe.classes.map((label, i) => [label, i]));
+    return (meta) => {
+      const label = canonicalProbeLabel(meta[probe.targetField]);
+      return label === null ? null : (index.get(label) ?? null);
+    };
+  }
+  return buildBinaryActualResolver(itemMetadata, probe.targetField, probe.targetMapping ?? null);
+}
+
+/**
  * Numeric coercion matching the backend's DuckDB TRY_CAST: numbers pass
  * through, numeric strings ("3", "7.5") coerce, everything else is null.
  */
@@ -97,20 +245,26 @@ function coerceFiniteNumber(v: unknown): number | null {
   return null;
 }
 
-function confusionCategory(predPositive: boolean, actual: 0 | 1): string {
+function confusionCategory(predPositive: boolean, actual: number): string {
   if (predPositive) return actual === 1 ? 'TP' : 'FP';
   return actual === 0 ? 'TN' : 'FN';
 }
 
+/** Correct / Wrong against a kept class; Excluded for any other label. */
+function correctnessCategory(predicted: string, label: string, classes: Set<string>): string {
+  if (!classes.has(label)) return CORRECTNESS_LABELS.excluded;
+  return predicted === label ? CORRECTNESS_LABELS.correct : CORRECTNESS_LABELS.wrong;
+}
+
 /**
- * Merge per-item probe scores/residuals into item metadata.
+ * Merge per-item probe outputs into item metadata.
  *
  * Returns a fresh array of fresh objects (originals untouched). Score item
- * ids missing from `ids` are skipped; null residuals are left absent so the
- * numeric coloring path treats them as missing values. Two derived error
- * fields are added alongside: |residual| (kinds with residuals) and the
- * TP/TN/FP/FN confusion category (logreg, 0.5 threshold, where the actual
- * class is resolvable).
+ * ids missing from `ids` are skipped; null values are left absent so the
+ * coloring paths treat them as missing. Derived fields per probe task:
+ * regression → |residual|; binary → TP/TN/FP/FN confusion at 0.5;
+ * multiclass → predicted label, Correct/Wrong/Excluded against the actual
+ * class, and any loaded P(class) fields.
  */
 export function mergeProbeScores(
   itemMetadata: Record<string, unknown>[],
@@ -120,30 +274,44 @@ export function mergeProbeScores(
   const merged = itemMetadata.map((meta) => ({ ...meta }));
   const idToIndex = new Map(ids.map((id, i) => [id, i]));
 
-  for (const { probe, scores } of probesWithScores) {
-    const { itemIds, scores: values, residuals } = scores;
-    const absErrorField = probeAbsErrorField(probe);
-    const confusionField = probeConfusionField(probe);
-    const resolveActual = confusionField
-      ? buildBinaryActualResolver(itemMetadata, probe.targetField, probe.targetMapping ?? null)
-      : null;
+  for (const { probe, scores, classProbabilities } of probesWithScores) {
+    const names = new ProbeFieldNames(probe);
+    const { itemIds, scores: values, residuals, predicted } = scores;
+    const resolveActual = names.confusion ? buildClassActualResolver(probe, itemMetadata) : null;
+    const classes = probe.classes ?? [];
+    const classSet = new Set(classes);
+
     for (let j = 0; j < itemIds.length; j++) {
       const idx = idToIndex.get(itemIds[j]);
       if (idx === undefined) continue;
-      merged[idx][probe.scoreField] = values[j];
-      if (probe.residualField && residuals) {
+      const row = merged[idx];
+      row[names.score] = values[j];
+      if (names.residual && residuals) {
         const r = residuals[j];
         if (r !== null && r !== undefined) {
-          merged[idx][probe.residualField] = r;
-          if (absErrorField) merged[idx][absErrorField] = Math.abs(r);
+          row[names.residual] = r;
+          if (names.absError) row[names.absError] = Math.abs(r);
         }
       }
-      if (confusionField && resolveActual) {
+      if (names.confusion && resolveActual) {
         const actual = resolveActual(itemMetadata[idx]);
-        if (actual !== null) {
-          merged[idx][confusionField] = confusionCategory(values[j] >= 0.5, actual);
-        }
+        if (actual !== null) row[names.confusion] = confusionCategory(values[j] >= 0.5, actual);
       }
+      const p = predicted?.[j];
+      if (names.predicted && names.correct && p !== null && p !== undefined && classes[p]) {
+        row[names.predicted] = classes[p];
+        const label = canonicalProbeLabel(itemMetadata[idx][probe.targetField]);
+        if (label !== null) row[names.correct] = correctnessCategory(classes[p], label, classSet);
+      }
+    }
+
+    for (const [classIndex, data] of Object.entries(classProbabilities ?? {})) {
+      const field = names.classProbability(Number(classIndex));
+      data.itemIds.forEach((id, i) => {
+        const idx = idToIndex.get(id);
+        const value = data.probabilities[i];
+        if (idx !== undefined && value !== null && value !== undefined) merged[idx][field] = value;
+      });
     }
   }
   return merged;
@@ -152,14 +320,19 @@ export function mergeProbeScores(
 /**
  * Whether a Color By field option is a valid probe target.
  *
- * Numeric fields (except probe-derived ones) train directly; string fields
- * with exactly two distinct values train as binary 0/1 targets (the backend
- * maps them alphabetically and reports the mapping on the probe).
+ * Numeric fields (except probe-derived ones) train directly; text fields
+ * with 2–100 distinct values train as class labels (two values also as 0/1
+ * regression targets). Which kinds apply is decided per target by
+ * ProbeTargetProfile.
  */
 export function isProbeTargetOption(option: ColorFieldOption): boolean {
   if (option.field.startsWith('probe_')) return false;
   if (option.valueType === 'numeric') return true;
-  return option.valueType === 'string' && option.uniqueCount === 2;
+  return (
+    option.valueType === 'string' &&
+    option.uniqueCount >= 2 &&
+    option.uniqueCount <= MAX_CATEGORICAL_TARGET_VALUES
+  );
 }
 
 /**
@@ -204,13 +377,29 @@ function numericRange(values: number[]): { min: number; max: number } {
   return { min, max };
 }
 
+function sequentialOption(field: string, displayName: string, values: number[]): ColorFieldOption {
+  return {
+    field,
+    displayName,
+    valueType: 'numeric',
+    uniqueCount: values.length,
+    recommendedScale: 'sequential',
+    ...numericRange(values),
+  };
+}
+
+function categoricalOption(field: string, displayName: string, uniqueCount: number): ColorFieldOption {
+  return { field, displayName, valueType: 'string', uniqueCount, recommendedScale: 'categorical' };
+}
+
 /**
  * Build Color By dropdown options for trained probes.
  *
- * One sequential numeric option per probe score; residual and |error|
- * options are added only when the probe has a residual field with at least
- * one non-null value; a categorical confusion option is added for logreg
- * probes whose actual class is resolvable from `itemMetadata`.
+ * One sequential option per probe score (a multiclass probe's score is its
+ * confidence); residual and |error| options when the probe has non-null
+ * residuals; a confusion option for binary classifiers whose actual class is
+ * resolvable from `itemMetadata`; predicted-class and correctness options
+ * for multiclass probes, plus a P(class) option per loaded class.
  * (ColorFieldOption's recommendedScale cannot express 'diverging'; the
  * residual button in ProbeSection applies the diverging scale explicitly.)
  */
@@ -219,62 +408,73 @@ export function buildProbeFieldOptions(
   itemMetadata?: Record<string, unknown>[],
 ): ColorFieldOption[] {
   const options: ColorFieldOption[] = [];
-  for (const { probe, scores } of probesWithScores) {
+  for (const { probe, scores, classProbabilities } of probesWithScores) {
     if (scores.scores.length === 0) continue;
-    const { min, max } = numericRange(scores.scores);
-    options.push({
-      field: probe.scoreField,
-      displayName: `${probe.targetField} · ${probe.kind} score`,
-      valueType: 'numeric',
-      uniqueCount: scores.scores.length,
-      recommendedScale: 'sequential',
-      min,
-      max,
-    });
+    const names = new ProbeFieldNames(probe);
+    const prefix = `${probe.targetField} · ${probeKindLabel(probe.kind)}`;
+    const scoreLabel = probeTask(probe) === 'multiclass' ? 'confidence' : 'score';
+    options.push(sequentialOption(names.score, `${prefix} ${scoreLabel}`, scores.scores));
 
     const residualValues = (scores.residuals ?? []).filter(
       (r): r is number => r !== null && r !== undefined,
     );
-    if (probe.residualField && residualValues.length > 0) {
-      const residualRange = numericRange(residualValues);
-      options.push({
-        field: probe.residualField,
-        displayName: `${probe.targetField} · ${probe.kind} residual`,
-        valueType: 'numeric',
-        uniqueCount: residualValues.length,
-        recommendedScale: 'sequential',
-        min: residualRange.min,
-        max: residualRange.max,
-      });
-      const absErrorField = probeAbsErrorField(probe);
-      if (absErrorField) {
-        const absRange = numericRange(residualValues.map(Math.abs));
-        options.push({
-          field: absErrorField,
-          displayName: `${probe.targetField} · ${probe.kind} |error|`,
-          valueType: 'numeric',
-          uniqueCount: residualValues.length,
-          recommendedScale: 'sequential',
-          min: absRange.min,
-          max: absRange.max,
-        });
+    if (names.residual && residualValues.length > 0) {
+      options.push(sequentialOption(names.residual, `${prefix} residual`, residualValues));
+      if (names.absError) {
+        options.push(
+          sequentialOption(names.absError, `${prefix} |error|`, residualValues.map(Math.abs)),
+        );
       }
     }
 
-    const confusionField = probeConfusionField(probe);
-    if (
-      confusionField &&
-      itemMetadata &&
-      buildBinaryActualResolver(itemMetadata, probe.targetField, probe.targetMapping ?? null)
-    ) {
-      options.push({
-        field: confusionField,
-        displayName: `${probe.targetField} · ${probe.kind} confusion`,
-        valueType: 'string',
-        uniqueCount: 4,
-        recommendedScale: 'categorical',
-      });
+    if (names.confusion && itemMetadata && buildClassActualResolver(probe, itemMetadata)) {
+      options.push(categoricalOption(names.confusion, `${prefix} confusion`, 4));
+    }
+
+    const classes = probe.classes ?? [];
+    if (names.predicted && names.correct && scores.predicted) {
+      options.push(categoricalOption(names.predicted, `${prefix} predicted`, classes.length));
+      if (itemMetadata) options.push(categoricalOption(names.correct, `${prefix} correct`, 3));
+    }
+    for (const [classIndex, data] of Object.entries(classProbabilities ?? {})) {
+      const values = data.probabilities.filter((v): v is number => v !== null && v !== undefined);
+      if (values.length === 0) continue;
+      const index = Number(classIndex);
+      options.push(
+        sequentialOption(
+          names.classProbability(index),
+          `${prefix} P(${classes[index] ?? index})`,
+          values,
+        ),
+      );
     }
   }
   return options;
+}
+
+/** Sorted category keys of a field, exactly as the colour pipeline groups them. */
+function categoryDomain(itemMetadata: Record<string, unknown>[], field: string): string[] {
+  return CategoryKey.sort(new Set(itemMetadata.map((meta) => CategoryKey.of(meta[field]))));
+}
+
+/**
+ * Colour aliases for multiclass predicted-class fields: each one takes the
+ * palette slots of its target field's full value domain, so a predicted
+ * label is drawn in the same colour as that label in the target field — even
+ * when some labels are never predicted.
+ */
+export function buildProbeColorAliases(
+  probes: readonly ProbeInfo[],
+  itemMetadata: Record<string, unknown>[],
+): Record<string, CategoryColorAlias> {
+  const aliases: Record<string, CategoryColorAlias> = {};
+  const domains = new Map<string, string[]>();
+  for (const probe of probes) {
+    const predicted = new ProbeFieldNames(probe).predicted;
+    if (!predicted) continue;
+    const field = probe.targetField;
+    if (!domains.has(field)) domains.set(field, categoryDomain(itemMetadata, field));
+    aliases[predicted] = { sourceField: field, domain: domains.get(field)! };
+  }
+  return aliases;
 }

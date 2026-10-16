@@ -117,7 +117,7 @@ export function calculateHighlightScale(pointCount: number): HighlightScale {
 /**
  * Parse hex color to RGB components.
  */
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!result) throw new Error(`Invalid hex color: ${hex}`);
   return {

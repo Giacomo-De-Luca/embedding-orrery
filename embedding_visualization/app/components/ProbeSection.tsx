@@ -24,10 +24,10 @@ import type { JobProgress } from '@/lib/graphql/mutations';
 import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
 import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
 import {
+  ProbeFieldNames,
   formatTargetMapping,
   isProbeTargetOption,
-  probeAbsErrorField,
-  probeConfusionField,
+  probeTask,
   resolveProbeTargetSelection,
   type ProbeInfo,
 } from '@/lib/utils/probeFields';
@@ -36,11 +36,22 @@ import {
   MLP_ACTIVATION_OPTIONS,
   PROBE_KIND_OPTIONS,
   buildTrainProbeInput,
-  isBinaryKind,
+  isClassificationKind,
+  probeKindLabel,
   probeParamFields,
   type ProbeKind,
   type ProbeParams,
+  type TrainedProbeKind,
 } from '@/lib/utils/probeParams';
+import {
+  MAX_PROBE_CLASSES,
+  ProbeTargetProfile,
+  fallbackProbeKind,
+  isProbeKindAvailable,
+  mlpClassifierMode,
+  resolveProbeKind,
+  type ClassPreview,
+} from '@/lib/utils/probeTargets';
 import type { UseProbesReturn } from '@/lib/hooks/useProbes';
 import { PROBE_SHOWCASE_EVENT, type ProbeShowcaseDetail } from '@/lib/utils/probeTourSteps';
 import { DEMO_DISABLED_MESSAGE } from '@/lib/utils/demoMode';
@@ -61,44 +72,78 @@ interface SubscriptionData {
   embeddingProgress: JobProgress;
 }
 
-const fmtMetric = (value: number | null | undefined) =>
-  value === null || value === undefined ? '—' : value.toFixed(2);
+const fmtMetric = (value: unknown) => (typeof value === 'number' ? value.toFixed(2) : '—');
 
-/** Compact badge: classification kinds show AUC + accuracy; regression kinds
- * show validation R² (massmean's is calibrated) + Spearman ρ. */
+/** Compact badge: multiclass probes show accuracy + macro-F1; binary
+ * classifiers AUC + accuracy; regression kinds validation R² (massmean's is
+ * calibrated) + Spearman ρ. */
 function metricsBadge(probe: ProbeInfo): string {
   const m = probe.metrics ?? {};
   const parts: string[] = [];
-  if (m.val_auc !== undefined || m.val_accuracy !== undefined) {
+  const task = probeTask(probe);
+  if (task === 'multiclass') {
+    if (m.val_accuracy !== undefined) parts.push(`acc ${fmtMetric(m.val_accuracy)}`);
+    if (m.val_f1_macro !== undefined) parts.push(`F1 ${fmtMetric(m.val_f1_macro)}`);
+  } else if (task === 'binary') {
     if (m.val_auc !== undefined) parts.push(`AUC ${fmtMetric(m.val_auc)}`);
     if (m.val_accuracy !== undefined) parts.push(`acc ${fmtMetric(m.val_accuracy)}`);
-    return parts.join(' · ');
+  } else {
+    if (m.val_r2 !== undefined) parts.push(`R² ${fmtMetric(m.val_r2)}`);
+    if (m.val_spearman !== undefined) parts.push(`ρ ${fmtMetric(m.val_spearman)}`);
   }
-  if (m.val_r2 !== undefined) parts.push(`R² ${fmtMetric(m.val_r2)}`);
-  if (m.val_spearman !== undefined) parts.push(`ρ ${fmtMetric(m.val_spearman)}`);
   return parts.join(' · ') || 'no metrics';
 }
 
-/** Native tooltip: every stored validation metric + the 0/1 class mapping. */
+const METRIC_LABELS: [string, string][] = [
+  ['val_r2', 'R² (validation)'],
+  ['val_pearson', 'Pearson r (validation)'],
+  ['val_spearman', 'Spearman ρ (validation)'],
+  ['val_mse', 'MSE (validation)'],
+  ['val_mae', 'MAE (validation)'],
+  ['train_r2', 'R² (train)'],
+  ['val_auc', 'ROC-AUC (validation)'],
+  ['val_auc_ovr', 'ROC-AUC one-vs-rest (validation)'],
+  ['val_accuracy', 'Accuracy (validation)'],
+  ['val_balanced_accuracy', 'Balanced accuracy (validation)'],
+  ['val_f1_macro', 'F1 macro (validation)'],
+  ['val_f1_weighted', 'F1 weighted (validation)'],
+  ['train_accuracy', 'Accuracy (train)'],
+  ['val_majority_baseline', 'Majority-class baseline (validation)'],
+];
+
+/** Native tooltip: every stored metric + the classes the probe trained on. */
 function metricsTitle(probe: ProbeInfo): string {
   const m = probe.metrics ?? {};
-  const labels: [string, string][] = [
-    ['val_r2', 'R² (validation)'],
-    ['val_pearson', 'Pearson r (validation)'],
-    ['val_spearman', 'Spearman ρ (validation)'],
-    ['val_mse', 'MSE (validation)'],
-    ['val_mae', 'MAE (validation)'],
-    ['train_r2', 'R² (train)'],
-    ['val_auc', 'ROC-AUC (validation)'],
-    ['val_accuracy', 'Accuracy (validation)'],
-    ['val_f1_weighted', 'F1 weighted (validation)'],
-  ];
-  const lines = labels
-    .filter(([key]) => m[key] !== undefined)
-    .map(([key, label]) => `${label}: ${fmtMetric(m[key])}`);
+  const lines = METRIC_LABELS.filter(([key]) => m[key] !== undefined).map(
+    ([key, label]) => `${label}: ${fmtMetric(m[key])}`,
+  );
   const mapping = formatTargetMapping(probe.targetMapping);
-  if (mapping) lines.push(`Classes: ${mapping}`);
+  if (mapping) {
+    lines.push(`Classes: ${mapping}`);
+  } else if (probe.classes?.length) {
+    lines.push(`Classes (${probe.classes.length}): ${probe.classes.join(', ')}`);
+  }
+  if (typeof probe.minClassFraction === 'number') {
+    lines.push(`Min class: ${probe.minClassFraction * 100}% of labelled items`);
+  }
+  const excluded = Object.entries(probe.excludedClasses ?? {});
+  if (excluded.length > 0) {
+    const list = excluded.map(([label, count]) => `${label} (${count})`).join(', ');
+    lines.push(`Excluded (too few items): ${list}`);
+  }
   return lines.join('\n') || 'No metrics recorded';
+}
+
+/** One-line summary of which classes a classifier would train on. */
+function classPreviewText(preview: ClassPreview): string {
+  if (preview.tooFew) return 'Fewer than 2 classes kept — lower the min class %.';
+  if (preview.tooMany) {
+    return `${preview.kept} classes kept — at most ${MAX_PROBE_CLASSES}; raise the min class %.`;
+  }
+  const excluded = preview.excluded.length;
+  return excluded === 0
+    ? `${preview.kept} classes kept.`
+    : `${preview.kept} classes kept · ${excluded} excluded (< ${preview.threshold} items).`;
 }
 
 /** One compact labeled number input row for the settings popover.
@@ -182,12 +227,19 @@ function ProbeSettingsPopover({
   kind,
   params,
   onChange,
+  classifierMode,
+  classPreview,
   open,
   onOpenChange,
 }: {
-  kind: ProbeKind;
+  /** The kind that will train (the MLP resolves to `mlp_clf` as a classifier). */
+  kind: TrainedProbeKind;
   params: ProbeParams;
   onChange: (p: ProbeParams) => void;
+  /** MLP only: the Classifier switch state allowed by the target; null hides it. */
+  classifierMode: ReturnType<typeof mlpClassifierMode> | null;
+  /** Classifiers on 3+ value targets: classes kept at the current min class %. */
+  classPreview: ClassPreview | null;
   /** Controlled open state — the probing tour opens the popover to showcase it. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -210,6 +262,30 @@ function ProbeSettingsPopover({
       {/* data-tour: ring target for the probing tour's settings showcase */}
       <PopoverContent align="end" className="w-60 space-y-2 p-3" data-tour="probe-settings">
         <p className="text-xs font-medium">Probe parameters</p>
+        {classifierMode !== null && (
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="probe-mlp-classifier"
+              checked={classifierMode === 'forced-on' || (classifierMode === 'free' && params.mlpClassifier)}
+              disabled={classifierMode !== 'free'}
+              onCheckedChange={(c) => set({ mlpClassifier: c === true })}
+              className="size-3.5"
+            />
+            <Label
+              htmlFor="probe-mlp-classifier"
+              className={`text-xs font-normal text-muted-foreground${classifierMode !== 'free' ? ' opacity-60' : ''}`}
+              title={
+                classifierMode === 'forced-on'
+                  ? 'Text targets with 3+ classes can only be classified'
+                  : classifierMode === 'forced-off'
+                    ? 'Continuous targets can only be regressed'
+                    : 'Train on class labels instead of regressing the value'
+              }
+            >
+              Classifier
+            </Label>
+          </div>
+        )}
         {fields.includes('alpha') && (
           <ParamNumberRow
             label="Alpha (L2)"
@@ -323,6 +399,26 @@ function ProbeSettingsPopover({
             onChange={(v) => set({ patience: v })}
           />
         )}
+        {fields.includes('minClassPct') && (
+          <div className="space-y-1">
+            <ParamNumberRow
+              label="Min class %"
+              value={params.minClassPct}
+              step={0.5}
+              min={0}
+              max={49.9}
+              onChange={(v) => set({ minClassPct: v })}
+            />
+            {classPreview && (
+              <p
+                className={`text-[10px] ${classPreview.tooFew || classPreview.tooMany ? 'text-destructive' : 'text-muted-foreground'}`}
+                title={classPreview.excluded.map((e) => `${e.label} (${e.count})`).join('\n') || undefined}
+              >
+                {classPreviewText(classPreview)}
+              </p>
+            )}
+          </div>
+        )}
         {fields.length === 0 && (
           <p className="text-xs text-muted-foreground">
             Mass-mean probes are closed-form — no hyperparameters.
@@ -359,11 +455,14 @@ function ProbeSettingsPopover({
 }
 
 /**
- * "Direction probes" block for the Analytics sidebar: pick a numeric metadata
- * field + probe kind, fit server-side, then color the map by the probe's
- * score (sequential) or residual (diverging). Training progress arrives over
- * the shared job subscription; completion is driven by the mutation promise
- * inside useProbes (the subscription is display-only).
+ * "Direction probes" block for the Analytics sidebar: pick a metadata field +
+ * probe kind, fit server-side, then color the map by the probe's outputs —
+ * score (sequential) / residual (diverging) for regressors, confusion for
+ * binary classifiers, predicted class / correctness / confidence / P(class)
+ * for multiclass classifiers. Which kinds a field allows comes from its
+ * ProbeTargetProfile. Training progress arrives over the shared job
+ * subscription; completion is driven by the mutation promise inside useProbes
+ * (the subscription is display-only).
  */
 export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: ProbeSectionProps) {
   const colorByField = useVisualizationStore((s) => s.colorByField);
@@ -392,8 +491,8 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
     return () => window.removeEventListener(PROBE_SHOWCASE_EVENT, onShowcase);
   }, []);
 
-  // Numeric fields + binary categorical fields (trained as 0/1) are probe
-  // targets; probe-derived fields never are (never probe a probe).
+  // Numeric fields + categorical fields (class labels; two-value fields also
+  // regress as 0/1) are probe targets; probe-derived fields never are.
   const targetOptions = useMemo(
     () => (colorFieldOptions ?? []).filter(isProbeTargetOption),
     [colorFieldOptions],
@@ -421,14 +520,29 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
     );
   }, [colorByField]);
 
-  // Binary-only kinds (logreg) need a two-class target; a numeric field with
-  // exactly two distinct values qualifies too. Fall back to ridge when the
-  // selected target stops being binary.
-  const selectedOption = targetOptions.find((o) => o.field === effectiveField);
-  const isBinaryTarget = selectedOption?.uniqueCount === 2;
+  // What the selected target can train: regressors need numbers (or two
+  // values), classifiers need class labels. A kind the target can't train
+  // falls back to ridge (regression) or logistic (classes only).
+  const profile = useMemo(
+    () =>
+      effectiveField && probes.itemMetadata
+        ? ProbeTargetProfile.fromMetadata(probes.itemMetadata, effectiveField)
+        : null,
+    [effectiveField, probes.itemMetadata],
+  );
   useEffect(() => {
-    if (isBinaryKind(kind) && !isBinaryTarget) setKind('ridge');
-  }, [kind, isBinaryTarget]);
+    const next = fallbackProbeKind(kind, profile);
+    if (next !== kind) setKind(next);
+  }, [kind, profile]);
+  const trainedKind = resolveProbeKind(kind, params.mlpClassifier, profile);
+  const classPreview =
+    profile && isClassificationKind(trainedKind) && profile.nDistinct > 2
+      ? profile.preview(params.minClassPct / 100)
+      : null;
+  const classesUnfit = classPreview !== null && (classPreview.tooFew || classPreview.tooMany);
+  // e.g. a single-valued field: every kind is disabled, so is Fit.
+  const noKindFits =
+    profile !== null && !profile.supportsRegression && !profile.supportsClassification;
 
   const { data: progressData } = useSubscription<SubscriptionData>(
     EMBEDDING_PROGRESS_SUBSCRIPTION,
@@ -459,8 +573,8 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
           {readOnly
             ? 'Probes fitted on the embedding space, shipped with the demo — ' +
               'color the map by their predictions. Training new ones needs the full platform.'
-            : 'Fit a probe on a numeric field, then color the map by how well the ' +
-              'embedding encodes it.'}
+            : 'Fit a probe on a numeric or categorical field, then color the map by ' +
+              'how well the embedding encodes it.'}
         </p>
       </CardHeader>
       <CardContent className="space-y-3 px-0">
@@ -476,7 +590,7 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
               onValueChange={(val) => setSelectedField(val)}
             >
               <SelectTrigger size="sm" className="h-7 w-full text-xs">
-                <SelectValue placeholder="Select numeric field..." />
+                <SelectValue placeholder="Select target field..." />
               </SelectTrigger>
               <SelectContent>
                 {targetOptions.map((opt) => (
@@ -496,7 +610,7 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                     <SelectItem
                       key={k.value}
                       value={k.value}
-                      disabled={isBinaryKind(k.value) && !isBinaryTarget}
+                      disabled={!isProbeKindAvailable(k.value, profile)}
                     >
                       <span className="text-xs">{k.label}</span>
                     </SelectItem>
@@ -504,9 +618,11 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                 </SelectContent>
               </Select>
               <ProbeSettingsPopover
-                kind={kind}
+                kind={trainedKind}
                 params={params}
                 onChange={setParams}
+                classifierMode={kind === 'mlp' ? mlpClassifierMode(profile) : null}
+                classPreview={classPreview}
                 open={settingsOpen}
                 onOpenChange={setSettingsOpen}
               />
@@ -528,11 +644,17 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                 <Button
                   size="sm"
                   className="h-7 shrink-0 text-xs"
-                  disabled={!effectiveField || probes.training}
+                  disabled={!effectiveField || probes.training || classesUnfit || noKindFits}
+                  title={classesUnfit && classPreview ? classPreviewText(classPreview) : undefined}
                   onClick={() => {
                     if (effectiveField && probes.collectionName) {
                       void probes.train(
-                        buildTrainProbeInput(probes.collectionName, effectiveField, kind, params),
+                        buildTrainProbeInput(
+                          probes.collectionName,
+                          effectiveField,
+                          trainedKind,
+                          params,
+                        ),
                       );
                     }
                   }}
@@ -558,22 +680,21 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
         {probes.probes.length > 0 && (
           <div className="space-y-2">
             {probes.probes.map((probe) => {
-              const absErrorField = probeAbsErrorField(probe);
-              const confusionField = probeConfusionField(probe);
+              const names = new ProbeFieldNames(probe);
+              const multiclass = probeTask(probe) === 'multiclass';
               // Derived views only render when their field option exists —
               // residuals can be absent despite a residualField (degenerate
-              // mass-mean calibration persists all-null residuals), and
-              // confusion needs a client-resolvable actual class.
+              // mass-mean calibration persists all-null residuals), confusion
+              // and correctness need a client-resolvable actual class.
               const hasField = (field: string | null) =>
                 field !== null && probes.fieldOptions.some((o) => o.field === field);
-              const hasResidual = hasField(probe.residualField);
-              const hasAbsError = hasField(absErrorField);
-              const hasConfusion = hasField(confusionField);
-              const isActive =
-                colorByField !== null &&
-                [probe.scoreField, probe.residualField, absErrorField, confusionField].includes(
-                  colorByField,
-                );
+              const hasResidual = hasField(names.residual);
+              const hasAbsError = hasField(names.absError);
+              const hasConfusion = hasField(names.confusion);
+              const hasPredicted = hasField(names.predicted);
+              const hasCorrect = hasField(names.correct);
+              const isActive = colorByField !== null && names.matches(colorByField);
+              const activeClass = colorByField !== null ? names.classIndexOf(colorByField) : null;
               return (
                 <div
                   key={`${probe.targetField}::${probe.kind}`}
@@ -584,7 +705,7 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="min-w-0 truncate text-xs font-medium">
-                      {probe.targetField} · {probe.kind}
+                      {probe.targetField} · {probeKindLabel(probe.kind)}
                     </span>
                     <Badge
                       variant={isActive ? 'default' : 'secondary'}
@@ -595,13 +716,34 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                     </Badge>
                   </div>
                   <div className="flex items-center gap-1">
+                    {hasPredicted && (
+                      <Button
+                        size="sm"
+                        variant={colorByField === names.predicted ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => setColorByField(names.predicted!, 'categorical')}
+                      >
+                        Predicted
+                      </Button>
+                    )}
+                    {hasCorrect && (
+                      <Button
+                        size="sm"
+                        variant={colorByField === names.correct ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => setColorByField(names.correct!, 'categorical')}
+                      >
+                        Correct
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant={colorByField === probe.scoreField ? 'secondary' : 'ghost'}
                       className="h-6 px-2 text-[11px]"
+                      title={multiclass ? 'Highest class probability' : undefined}
                       onClick={() => setColorByField(probe.scoreField, 'sequential')}
                     >
-                      Score
+                      {multiclass ? 'Confidence' : 'Score'}
                     </Button>
                     {hasResidual && (
                       <Button
@@ -623,9 +765,9 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                     {hasAbsError && (
                       <Button
                         size="sm"
-                        variant={colorByField === absErrorField ? 'secondary' : 'ghost'}
+                        variant={colorByField === names.absError ? 'secondary' : 'ghost'}
                         className="h-6 px-2 text-[11px]"
-                        onClick={() => setColorByField(absErrorField!, 'sequential')}
+                        onClick={() => setColorByField(names.absError!, 'sequential')}
                       >
                         |Err|
                       </Button>
@@ -633,9 +775,9 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                     {hasConfusion && (
                       <Button
                         size="sm"
-                        variant={colorByField === confusionField ? 'secondary' : 'ghost'}
+                        variant={colorByField === names.confusion ? 'secondary' : 'ghost'}
                         className="h-6 px-2 text-[11px]"
-                        onClick={() => setColorByField(confusionField!, 'categorical')}
+                        onClick={() => setColorByField(names.confusion!, 'categorical')}
                       >
                         Confusion
                       </Button>
@@ -659,6 +801,24 @@ export function ProbeSection({ probes, colorFieldOptions, readOnly = false }: Pr
                       </Button>
                     )}
                   </div>
+                  {multiclass && probe.classes && probe.classes.length > 0 && (
+                    // P(class) values load on demand, one class per request.
+                    <Select
+                      value={activeClass !== null ? String(activeClass) : ''}
+                      onValueChange={(v) => probes.showClassProbability(probe, Number(v))}
+                    >
+                      <SelectTrigger size="sm" className="h-6 w-full text-[11px]">
+                        <SelectValue placeholder="Color by class probability…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {probe.classes.map((label, index) => (
+                          <SelectItem key={label} value={String(index)}>
+                            <span className="text-xs">P({label})</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               );
             })}

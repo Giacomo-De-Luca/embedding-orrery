@@ -3,8 +3,9 @@
  * Used by the TemporalChart to detect year/date fields and cross-tabulate with categories.
  */
 
-import type { Point2D, Point3D } from '../types/types';
+import type { MetadataPoint } from '../types/types';
 import { analyzeField, type FieldAnalysisResult } from './fieldAnalysis';
+import { CategoryKey } from './categoryKey';
 
 export interface TemporalCrossTabRow {
   period: string;
@@ -106,7 +107,7 @@ export function sortPeriods(periods: string[]): string[] {
  * Compute simple period -> count for standalone temporal chart (no category breakdown).
  */
 export function computeTemporalCounts(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   temporalField: string
 ): TemporalCountRow[] {
   const counts = new Map<string, number>();
@@ -149,7 +150,7 @@ export function windowPeriodsByFraction(
  * Produces recharts-compatible data: [{ period: "2020", "Topic A": 12, "Topic B": 8 }, ...]
  */
 export function computeTemporalCrossTab(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   categoryField: string,
   temporalField: string,
   categoryValues: string[]
@@ -159,12 +160,10 @@ export function computeTemporalCrossTab(
 
   for (const point of points) {
     const period = point.metadata?.[temporalField];
-    const category = point.metadata?.[categoryField];
     if (period === null || period === undefined || period === '') continue;
-    if (category === null || category === undefined || category === '') continue;
 
     const periodKey = String(period);
-    const categoryKey = String(category);
+    const categoryKey = CategoryKey.of(point.metadata?.[categoryField]);
 
     if (!crossTab.has(periodKey)) {
       crossTab.set(periodKey, {});

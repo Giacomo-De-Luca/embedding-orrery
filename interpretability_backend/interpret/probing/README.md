@@ -124,7 +124,8 @@ probing/
 │   │                            computed feature vectors from manifest
 │   │                            DataFrame columns. No model inference.
 │   ├── probe.py                 MLPProbeSpec, SklearnProbeSpec
-│   │                            (incl. class_weight, kind="svc").
+│   │                            (incl. class_weight, kind="svc",
+│   │                            probability for svc predict_proba).
 │   ├── sae_analysis.py          CorrelationMapConfig, TopFeaturesConfig.
 │   └── cache.py                 (placeholder for future cache helpers)
 │
@@ -273,6 +274,10 @@ probes:
   - type: sklearn
     kind: logreg
     classification_bins: 5
+  - type: sklearn
+    kind: svc                 # RBF classifier; save_models persists the estimator
+    probability: true         # Platt-scaled predict_proba (~5x slower fit, seeded)
+    save_models: true
   - type: sklearn
     kind: massmean            # closed-form: mu_high - mu_low direction
   - type: mlp

@@ -34,6 +34,9 @@ const PASSES = ['3d', '2d', '3d-nebula', '3d-topics'];
 const PASS = PASSES.includes(process.argv[2]) ? process.argv[2] : '3d';
 const MODE = PASS === '2d' ? '2d' : '3d';
 const NEBULA = PASS === '3d-nebula';
+// Haze implementation for the 3d-nebula pass: BENCH_HAZE=density selects the
+// experimental density renderer (persisted store flag `hazeRenderer`).
+const HAZE = process.env.BENCH_HAZE === 'density' ? 'density' : 'sprites';
 const COLOR_TOPICS = NEBULA || PASS === '3d-topics';
 // Opt-in renderer heap raise (MB), e.g. BENCH_HEAP_MB=7168 for 1M attempts on big machines.
 const HEAP_MB = Number(process.env.BENCH_HEAP_MB) || 0;
@@ -80,7 +83,7 @@ function parseTargets() {
 
 const VIZ_PREFS = JSON.stringify({
   state: {
-    method: 'umap', mode: MODE, nebulaMode: NEBULA,
+    method: 'umap', mode: MODE, nebulaMode: NEBULA, hazeRenderer: HAZE,
     showClusterLabels: false, showAllClusterLabels: false,
     showAxes: false, pointOpacity: 1.0, distanceMetric: 'COSINE',
   },

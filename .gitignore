@@ -129,3 +129,6 @@ interpretability_backend/interpret/experiments/poetry_directions/
 gallery_local/
 
 embedding_visualization/tmp/*
+
+# SAE graph bundles built on the sae-graph branch: never commit them
+interpretability_backend/resources/graphs/

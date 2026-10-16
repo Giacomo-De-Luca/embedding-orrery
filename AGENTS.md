@@ -152,3 +152,10 @@ Data Sources → Embedding Providers → DuckDB (docs/metadata) + ChromaDB (vect
 - `/` — Visualization dashboard (2D/3D scatter plots, semantic search, topic search/filter)
 - `/features` — SAE Feature Explorer (token-strip heatmaps, logit charts, feature search, cross-linked from scatter plot via right-click)
 - `/test-embed` — Dataset embedding interface (HuggingFace, local files, collection management, topic extraction)
+
+## Gallery
+
+The transparent EMNLP gallery variant and its pixel-preservation checks are
+documented in `documentation/GALLERY_TRANSPARENCY.md`; `gallery/README.md`
+describes the gallery assets. The original image and documentation-site asset
+remain unchanged.

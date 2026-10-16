@@ -52,6 +52,7 @@ from .types import (
     ModelStatus,
     PortionInput,
     PortionStrategyEnum,
+    ProbeClassProbabilities,
     ProbeInfo,
     ProbeScores,
     ProjectionData,
@@ -167,5 +168,6 @@ __all__ = [
     "TrainProbeResult",
     "ProbeInfo",
     "ProbeScores",
+    "ProbeClassProbabilities",
     "CollectionProbesResult",
 ]

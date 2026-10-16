@@ -8,6 +8,7 @@
  * backend applies its own default (one source of truth).
  */
 
+/** Kinds offered in the kind select (the MLP's Classifier switch picks its trained kind). */
 export type ProbeKind =
   | 'ridge'
   | 'lasso'
@@ -15,7 +16,11 @@ export type ProbeKind =
   | 'massmean_cov'
   | 'svr'
   | 'logreg'
+  | 'svc'
   | 'mlp';
+
+/** Kinds the backend trains and stores: the select kinds plus the MLP classifier. */
+export type TrainedProbeKind = ProbeKind | 'mlp_clf';
 
 export type MlpActivation = 'relu' | 'gelu' | 'tanh' | 'silu';
 
@@ -23,9 +28,9 @@ export const MLP_ACTIVATION_OPTIONS: MlpActivation[] = ['relu', 'gelu', 'tanh', 
 
 export interface ProbeParams {
   alpha: number; // ridge / lasso L2/L1
-  c: number; // svr / logreg inverse-regularisation
-  kernel: 'rbf' | 'linear'; // svr
-  classWeight: 'none' | 'balanced'; // logreg
+  c: number; // svr / logreg / svc inverse-regularisation
+  kernel: 'rbf' | 'linear'; // svr / svc
+  classWeight: 'none' | 'balanced'; // classifiers
   hiddenSize: number; // mlp single hidden layer width
   epochs: number; // mlp
   activation: MlpActivation; // mlp hidden-layer nonlinearity
@@ -34,6 +39,8 @@ export interface ProbeParams {
   devSplitEnabled: boolean; // mlp: unchecked -> devSplit 0 sent (early stopping off)
   seed: number; // shared
   trainSplit: number; // shared (train fraction)
+  minClassPct: number; // classifiers: min class size, % of labelled items
+  mlpClassifier: boolean; // mlp: train as a classifier (mlp_clf) where the target allows
 }
 
 export const DEFAULT_PROBE_PARAMS: ProbeParams = {
@@ -49,6 +56,8 @@ export const DEFAULT_PROBE_PARAMS: ProbeParams = {
   devSplitEnabled: true,
   seed: 7, // mirrors the backend ProbeConfig default — displayed = trained
   trainSplit: 0.8,
+  minClassPct: 1, // mirrors the backend's DEFAULT_MIN_CLASS_FRACTION (0.01)
+  mlpClassifier: false,
 };
 
 export const PROBE_KIND_OPTIONS: { value: ProbeKind; label: string }[] = [
@@ -57,19 +66,24 @@ export const PROBE_KIND_OPTIONS: { value: ProbeKind; label: string }[] = [
   { value: 'massmean', label: 'Mass-mean' },
   { value: 'massmean_cov', label: 'Mass-mean (cov-corrected)' },
   { value: 'svr', label: 'SVR (RBF)' },
-  { value: 'logreg', label: 'Logistic (binary)' },
+  { value: 'logreg', label: 'Logistic' },
+  { value: 'svc', label: 'SVC (RBF)' },
   { value: 'mlp', label: 'MLP (nonlinear)' },
 ];
 
-/** Kinds that require a binary (two-class) target. */
-export function isBinaryKind(kind: ProbeKind): boolean {
-  return kind === 'logreg';
+/** Classifier kinds: binary or multiclass targets, probability scores. */
+export const CLASSIFICATION_KINDS: readonly TrainedProbeKind[] = ['logreg', 'svc', 'mlp_clf'];
+
+export function isClassificationKind(kind: string): boolean {
+  return (CLASSIFICATION_KINDS as readonly string[]).includes(kind);
 }
 
-/** Which parameter controls the settings popover should show for a kind. */
-export function probeParamFields(
-  kind: ProbeKind,
-): Array<
+/** Short label for a stored probe kind (probe rows, color field names). */
+export function probeKindLabel(kind: string): string {
+  return kind === 'mlp_clf' ? 'mlp classifier' : kind;
+}
+
+type ProbeParamField =
   | 'alpha'
   | 'c'
   | 'kernel'
@@ -79,7 +93,18 @@ export function probeParamFields(
   | 'activation'
   | 'devSplit'
   | 'patience'
-> {
+  | 'minClassPct';
+
+const MLP_PARAM_FIELDS: ProbeParamField[] = [
+  'hiddenSize',
+  'epochs',
+  'activation',
+  'devSplit',
+  'patience',
+];
+
+/** Which parameter controls the settings popover should show for a kind. */
+export function probeParamFields(kind: TrainedProbeKind): ProbeParamField[] {
   switch (kind) {
     case 'ridge':
     case 'lasso':
@@ -87,9 +112,13 @@ export function probeParamFields(
     case 'svr':
       return ['c', 'kernel'];
     case 'logreg':
-      return ['c', 'classWeight'];
+      return ['c', 'classWeight', 'minClassPct'];
+    case 'svc':
+      return ['c', 'kernel', 'classWeight', 'minClassPct'];
     case 'mlp':
-      return ['hiddenSize', 'epochs', 'activation', 'devSplit', 'patience'];
+      return MLP_PARAM_FIELDS;
+    case 'mlp_clf':
+      return [...MLP_PARAM_FIELDS, 'classWeight', 'minClassPct'];
     case 'massmean':
     case 'massmean_cov':
     default:
@@ -100,7 +129,7 @@ export function probeParamFields(
 export interface TrainProbeInputVars {
   collectionName: string;
   targetField: string;
-  kind: ProbeKind;
+  kind: TrainedProbeKind;
   alpha?: number;
   c?: number;
   kernel?: string;
@@ -112,6 +141,7 @@ export interface TrainProbeInputVars {
   devSplit?: number;
   seed?: number;
   trainSplit?: number;
+  minClassFraction?: number;
 }
 
 /**
@@ -124,7 +154,7 @@ export interface TrainProbeInputVars {
 export function buildTrainProbeInput(
   collectionName: string,
   targetField: string,
-  kind: ProbeKind,
+  kind: TrainedProbeKind,
   params: ProbeParams,
 ): TrainProbeInputVars {
   const d = DEFAULT_PROBE_PARAMS;
@@ -155,6 +185,9 @@ export function buildTrainProbeInput(
   // Patience only matters while early stopping is on.
   if (fields.has('patience') && params.devSplitEnabled && params.patience !== d.patience) {
     vars.patience = params.patience;
+  }
+  if (fields.has('minClassPct') && params.minClassPct !== d.minClassPct) {
+    vars.minClassFraction = params.minClassPct / 100;
   }
 
   if (params.seed !== d.seed) vars.seed = params.seed;

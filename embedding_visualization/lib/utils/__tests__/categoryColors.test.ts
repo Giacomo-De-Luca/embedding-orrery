@@ -14,7 +14,12 @@ import {
   getUnclusteredValues,
   POS_PRESET,
   CATEGORY_PRESETS,
+  MISSING_CATEGORY_COLOR,
+  CORRECTNESS_PRESET,
+  CORRECTNESS_LABELS,
+  buildAliasedCategoryColorMap,
 } from '../categoryColors';
+import { CategoryKey } from '../categoryKey';
 import { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, getPaletteColors } from '../categoryPalettes';
 
 describe('generateCategoryColors', () => {
@@ -135,6 +140,31 @@ describe('buildCategoryColorMap', () => {
       expect(Object.keys(colorMap)).toHaveLength(0);
     });
   });
+
+  describe('with missing values', () => {
+    it('gives Missing the fixed neutral color without taking a palette slot', () => {
+      const withMissing = buildCategoryColorMap('category', ['a', 'b', CategoryKey.MISSING]);
+      const withoutMissing = buildCategoryColorMap('category', ['a', 'b']);
+
+      expect(withMissing[CategoryKey.MISSING]).toBe(MISSING_CATEGORY_COLOR);
+      expect(withMissing.a).toBe(withoutMissing.a);
+      expect(withMissing.b).toBe(withoutMissing.b);
+    });
+
+    it('leaves preset fields unchanged', () => {
+      const colorMap = buildCategoryColorMap('pos', ['n', 'x', CategoryKey.MISSING]);
+
+      expect(colorMap.n).toBe('#1f77b4');
+      expect(colorMap.x).toBe(buildCategoryColorMap('pos', ['n', 'x']).x);
+      expect(colorMap[CategoryKey.MISSING]).toBe(MISSING_CATEGORY_COLOR);
+    });
+
+    it('lets a custom override recolor Missing', () => {
+      const colorMap = buildCategoryColorMap('category', ['a', CategoryKey.MISSING], undefined, { [CategoryKey.MISSING]: '#123456' });
+
+      expect(colorMap[CategoryKey.MISSING]).toBe('#123456');
+    });
+  });
 });
 
 describe('getCategoryLabel', () => {
@@ -158,6 +188,13 @@ describe('getCategoryLabel', () => {
 
   it('should handle null field name', () => {
     expect(getCategoryLabel(null, 'value')).toBe('value');
+  });
+
+  it('should label the Missing key "Missing values" for any field', () => {
+    expect(getCategoryLabel('category', CategoryKey.MISSING)).toBe('Missing values');
+    expect(getCategoryLabel('pos', CategoryKey.MISSING)).toBe('Missing values');
+    expect(getCategoryLabel('topic_label', CategoryKey.MISSING)).toBe('Missing values');
+    expect(getCategoryLabel(null, CategoryKey.MISSING)).toBe('Missing values');
   });
 });
 
@@ -295,5 +332,65 @@ describe('categoryPalettes registry', () => {
 
   it('should return undefined for unknown palette names', () => {
     expect(getPaletteColors('nonexistent')).toBeUndefined();
+  });
+});
+
+describe('probe correctness preset', () => {
+  it('colours probe_*_correct fields by suffix', () => {
+    const field = 'probe_category_logreg_correct';
+    const values = [CORRECTNESS_LABELS.correct, CORRECTNESS_LABELS.wrong, CORRECTNESS_LABELS.excluded];
+    const colorMap = buildCategoryColorMap(field, values);
+    for (const value of values) expect(colorMap[value]).toBe(CORRECTNESS_PRESET.colors[value]);
+    expect(getCategoryLabel(field, CORRECTNESS_LABELS.excluded)).toBe(
+      CORRECTNESS_PRESET.labels![CORRECTNESS_LABELS.excluded],
+    );
+  });
+});
+
+describe('buildAliasedCategoryColorMap', () => {
+  const alias = {
+    sourceField: 'category',
+    domain: ['ANALOGY', 'EUPHEMISM', 'HYPERBOLE', 'RARE', CategoryKey.MISSING],
+  };
+  const sourceMap = buildCategoryColorMap('category', alias.domain);
+
+  it("draws each predicted label in the target field's colour", () => {
+    // EUPHEMISM is never predicted and there are no missing predictions, yet
+    // HYPERBOLE keeps the target field's palette slot.
+    const colorMap = buildAliasedCategoryColorMap(alias, ['ANALOGY', 'HYPERBOLE']);
+    expect(colorMap).toEqual({
+      ANALOGY: sourceMap.ANALOGY,
+      HYPERBOLE: sourceMap.HYPERBOLE,
+    });
+    expect(buildCategoryColorMap('pred', ['ANALOGY', 'HYPERBOLE']).HYPERBOLE).not.toBe(
+      sourceMap.HYPERBOLE,
+    );
+  });
+
+  it('keeps Missing grey and gives unknown labels fresh slots', () => {
+    const colorMap = buildAliasedCategoryColorMap(alias, ['ANALOGY', 'NEW', CategoryKey.MISSING]);
+    expect(colorMap[CategoryKey.MISSING]).toBe(MISSING_CATEGORY_COLOR);
+    expect(colorMap.NEW).toBe(generateCategoryColors(5)[4]);
+  });
+
+  it("applies the target field's overrides, then the field's own", () => {
+    const colorMap = buildAliasedCategoryColorMap(
+      alias,
+      ['ANALOGY', 'HYPERBOLE'],
+      undefined,
+      { ANALOGY: '#111111', HYPERBOLE: '#222222' },
+      { HYPERBOLE: '#333333' },
+    );
+    expect(colorMap).toEqual({ ANALOGY: '#111111', HYPERBOLE: '#333333' });
+  });
+
+  it('follows a preset-backed target field', () => {
+    const colorMap = buildAliasedCategoryColorMap({ sourceField: 'pos', domain: ['n', 'v'] }, ['v']);
+    expect(colorMap.v).toBe(POS_PRESET.colors.v);
+  });
+
+  it('follows the chosen palette', () => {
+    const colorMap = buildAliasedCategoryColorMap(alias, ['HYPERBOLE'], 'emberGalaxy');
+    expect(colorMap.HYPERBOLE).toBe(buildCategoryColorMap('category', alias.domain, 'emberGalaxy').HYPERBOLE);
   });
 });

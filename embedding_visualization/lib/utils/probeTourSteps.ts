@@ -165,8 +165,8 @@ export const PROBE_TOUR_STEPS: ProbeTourStepDefinition[] = [
     body:
       'The bottom of the Analytics panel is where probing lives. The probes you just ' +
       'saw were pre-fitted and shipped with the demo; training is switched ' +
-      'off here because the public demo is read-only. Open are the settings of the MLP probe, one of seven ' +
-      'configurable probes (linear and nonlinear). This concludes the probing tour; the ? ' +
+      'off here because the public demo is read-only. Open are the settings of the MLP probe, one of eight ' +
+      'configurable probes (linear and nonlinear regressors and classifiers). This concludes the probing tour; the ? ' +
       'button up top has the other missions.',
     // No overlay: the settings popover the showcase opens renders below
     // joyride's overlay z-index and would be dimmed under a spotlight.

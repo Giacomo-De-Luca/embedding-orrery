@@ -15,8 +15,8 @@ from ..clients.local_data_client import (
     get_local_file_preview as get_local_preview,
 )
 from ..services.job_state import JobStatus, get_job_state_service
-from ..services.probing_types import score_field_names as probe_score_field_names
 from .chromadb_instance import get_chromadb_client
+from .converters import probe_info_from_record
 from .duckdb_instance import get_duckdb_client
 from .interpret_instance import get_interpret_service
 from .types import (
@@ -44,7 +44,7 @@ from .types import (
     LocalFilePreview,
     # Interpret types
     ModelStatus,
-    ProbeInfo,
+    ProbeClassProbabilities,
     ProbeScores,
     ProjectionData,
     SaeActivation,
@@ -467,22 +467,7 @@ class Query:
     def collection_probes(self, collection_name: str, info=None) -> CollectionProbesResult:
         """List trained embedding-space probes for a collection."""
         db = get_duckdb_client()
-        probes = []
-        for p in db.list_probes(collection_name):
-            score_field, residual_field = probe_score_field_names(p["target_field"], p["kind"])
-            probes.append(
-                ProbeInfo(
-                    target_field=p["target_field"],
-                    kind=p["kind"],
-                    score_field=score_field,
-                    residual_field=residual_field,
-                    metrics=p["metrics"],
-                    n_train=p["n_train"] or 0,
-                    n_val=p["n_val"] or 0,
-                    created_at=p["created_at"],
-                    target_mapping=(p["config"] or {}).get("target_mapping"),
-                )
-            )
+        probes = [probe_info_from_record(p) for p in db.list_probes(collection_name)]
         return CollectionProbesResult(collection_name=collection_name, probes=probes)
 
     @strawberry.field
@@ -501,10 +486,35 @@ class Query:
         residuals = data["residuals"]
         if all(r is None for r in residuals):
             residuals = None
+        predicted = data["predicted"]
+        if all(p is None for p in predicted):
+            predicted = None
         return ProbeScores(
             item_ids=data["item_ids"],
             scores=data["scores"],
             residuals=residuals,
+            predicted=predicted,
+        )
+
+    @strawberry.field
+    async def probe_class_probabilities(
+        self, collection_name: str, target_field: str, kind: str, class_index: int, info=None
+    ) -> ProbeClassProbabilities | None:
+        """One class's per-item probabilities for a multiclass probe, or None.
+
+        Fetched lazily by the UI when a class is picked (all C classes at once
+        would multiply the score payload by C). Rounded to 4 decimals —
+        float32 values otherwise serialise to ~17 digits each.
+        """
+        db = get_duckdb_client()
+        data = await asyncio.to_thread(
+            db.get_probe_class_probabilities, collection_name, target_field, kind, class_index
+        )
+        if data is None:
+            return None
+        return ProbeClassProbabilities(
+            item_ids=data["item_ids"],
+            probabilities=[None if p is None else round(p, 4) for p in data["probabilities"]],
         )
 
     @strawberry.field

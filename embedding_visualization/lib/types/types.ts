@@ -222,6 +222,9 @@ export interface CategoryFieldOption {
  * - category: optional categorical value for coloring
  * - metadata: all raw metadata for the item
  */
+/** Which nebula haze implementation ScatterPlot3D uses (see lib/utils/hazeRendering.ts). */
+export type HazeRendererKind = 'sprites' | 'density';
+
 export interface Point3D {
   x: number;
   y: number;
@@ -244,6 +247,10 @@ export interface Point2D {
   index: number;
   metadata: Record<string, unknown>;
 }
+
+/** Metadata-only UI surfaces do not need projection or simulation coordinates. */
+export type MetadataPoint = Pick<Point2D, 'index' | 'metadata'>;
+export type SearchablePoint = Pick<Point2D, 'id' | 'index' | 'label' | 'document' | 'category' | 'metadata'>;
 
 /**
  * Semantic search result with flexible metadata.
@@ -394,4 +401,3 @@ export interface ChatSessionSummary {
   createdAt: string;
   updatedAt: string;
 }
-

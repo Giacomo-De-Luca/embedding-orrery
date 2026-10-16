@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from ..utils.resource_paths import DUCKDB_PATH
 
@@ -342,9 +344,27 @@ class DuckDBClient:
                 item_id         VARCHAR NOT NULL,
                 score           FLOAT NOT NULL,
                 residual        FLOAT,
+                predicted       INTEGER,
+                probs           FLOAT[],
                 PRIMARY KEY (collection_name, target_field, kind, item_id)
             )
         """)
+
+        # Migration for DBs created before multiclass probes (predicted class
+        # index + per-class probabilities, NULL for other probe kinds). Same
+        # guarded ALTER + CHECKPOINT pattern as quality_metrics; columns are
+        # appended, matching the CREATE above.
+        added_probe_columns = False
+        for column, column_type in (("predicted", "INTEGER"), ("probs", "FLOAT[]")):
+            has_column = self._exec(
+                "SELECT count(*) FROM pragma_table_info('probe_scores') WHERE name = ?",
+                [column],
+            ).fetchone()[0]
+            if not has_column:
+                self._exec(f"ALTER TABLE probe_scores ADD COLUMN {column} {column_type}")
+                added_probe_columns = True
+        if added_probe_columns:
+            self._exec("CHECKPOINT")
 
         # -- Chat history tables --
 
@@ -2055,40 +2075,57 @@ class DuckDBClient:
             ],
         )
 
+    _PROBE_COLUMNS = """
+        collection_name, target_field, kind, config, metrics,
+        direction, scaler_mean, scaler_scale, intercept,
+        artifact_path, n_train, n_val, created_at
+    """
+
+    @staticmethod
+    def _probe_row_to_dict(r) -> dict:
+        """Map a ``_PROBE_COLUMNS`` row to a dict with JSON fields parsed."""
+
+        def _parse_json(value):
+            return json.loads(value) if isinstance(value, str) else value
+
+        return {
+            "collection_name": r[0],
+            "target_field": r[1],
+            "kind": r[2],
+            "config": _parse_json(r[3]),
+            "metrics": _parse_json(r[4]),
+            "direction": list(r[5]) if r[5] is not None else None,
+            "scaler_mean": list(r[6]) if r[6] is not None else None,
+            "scaler_scale": list(r[7]) if r[7] is not None else None,
+            "intercept": r[8],
+            "artifact_path": r[9],
+            "n_train": r[10],
+            "n_val": r[11],
+            "created_at": str(r[12]) if r[12] is not None else "",
+        }
+
     def list_probes(self, collection_name: str) -> list[dict]:
         """Return all probes for a collection, JSON fields parsed, oldest first."""
         rows = self._exec(
-            """
-            SELECT collection_name, target_field, kind, config, metrics,
-                   direction, scaler_mean, scaler_scale, intercept,
-                   artifact_path, n_train, n_val, created_at
+            f"""
+            SELECT {self._PROBE_COLUMNS}
             FROM probes WHERE collection_name = ?
             ORDER BY created_at, target_field, kind
             """,
             [collection_name],
         ).fetchall()
+        return [self._probe_row_to_dict(r) for r in rows]
 
-        def _parse_json(value):
-            return json.loads(value) if isinstance(value, str) else value
-
-        return [
-            {
-                "collection_name": r[0],
-                "target_field": r[1],
-                "kind": r[2],
-                "config": _parse_json(r[3]),
-                "metrics": _parse_json(r[4]),
-                "direction": list(r[5]) if r[5] is not None else None,
-                "scaler_mean": list(r[6]) if r[6] is not None else None,
-                "scaler_scale": list(r[7]) if r[7] is not None else None,
-                "intercept": r[8],
-                "artifact_path": r[9],
-                "n_train": r[10],
-                "n_val": r[11],
-                "created_at": str(r[12]) if r[12] is not None else "",
-            }
-            for r in rows
-        ]
+    def get_probe(self, collection_name: str, target_field: str, kind: str) -> dict | None:
+        """Return one probe (same shape as ``list_probes`` rows), or None."""
+        row = self._exec(
+            f"""
+            SELECT {self._PROBE_COLUMNS}
+            FROM probes WHERE collection_name = ? AND target_field = ? AND kind = ?
+            """,
+            [collection_name, target_field, kind],
+        ).fetchone()
+        return self._probe_row_to_dict(row) if row is not None else None
 
     def insert_probe_scores_bulk(
         self,
@@ -2096,10 +2133,14 @@ class DuckDBClient:
         target_field: str,
         kind: str,
         scores_df: pd.DataFrame,
+        *,
+        probs: np.ndarray | None = None,
     ) -> int:
         """Replace all scores for a probe key with the given rows.
 
-        Expected columns: item_id, score, residual (residual may hold None).
+        Expected columns: item_id, score; optional residual (may hold None)
+        and predicted (multiclass class index). ``probs`` is the optional
+        [n_rows, n_classes] probability matrix aligned to ``scores_df`` rows.
         Existing rows for the key are deleted first so a retrain with fewer
         valid items never leaves strays.
         """
@@ -2110,26 +2151,39 @@ class DuckDBClient:
         if scores_df.empty:
             return 0
         n = len(scores_df)
-        residual = (
-            scores_df["residual"] if "residual" in scores_df.columns else pd.Series([None] * n)
-        )
-        # Nullable Float64 keeps None as SQL NULL (plain float64 would coerce
-        # None to NaN, which DuckDB stores as NaN, not NULL).
-        insert_df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
+
+        def _nullable(column: str, arrow_type: pa.DataType, cast) -> pa.Array:
+            # Arrow nulls stay SQL NULL (pandas float64 would turn None into
+            # NaN, which DuckDB stores as NaN, not NULL).
+            if column not in scores_df.columns:
+                return pa.nulls(n, type=arrow_type)
+            values = [None if pd.isna(v) else cast(v) for v in scores_df[column]]
+            return pa.array(values, type=arrow_type)
+
+        if probs is None:
+            probs_array = pa.nulls(n, type=pa.list_(pa.float32()))
+        else:
+            matrix = np.ascontiguousarray(probs, dtype=np.float32)
+            if matrix.shape[0] != n:
+                raise ValueError(f"probs has {matrix.shape[0]} rows for {n} scores")
+            width = matrix.shape[1]
+            offsets = pa.array(np.arange(0, n * width + 1, width, dtype=np.int32))
+            probs_array = pa.ListArray.from_arrays(offsets, pa.array(matrix.ravel()))
+
+        insert_tbl = pa.table(  # noqa: F841  # DuckDB reads this table by name in the SQL below
             {
-                "collection_name": [collection_name] * n,
-                "target_field": [target_field] * n,
-                "kind": [kind] * n,
-                "item_id": scores_df["item_id"].astype(str),
-                "score": scores_df["score"].astype("float64"),
-                "residual": pd.array(
-                    [None if pd.isna(v) else float(v) for v in residual],
-                    dtype="Float64",
-                ),
+                "collection_name": pa.array([collection_name] * n, type=pa.string()),
+                "target_field": pa.array([target_field] * n, type=pa.string()),
+                "kind": pa.array([kind] * n, type=pa.string()),
+                "item_id": pa.array(scores_df["item_id"].astype(str), type=pa.string()),
+                "score": pa.array(scores_df["score"].astype("float64"), type=pa.float64()),
+                "residual": _nullable("residual", pa.float64(), float),
+                "predicted": _nullable("predicted", pa.int32(), int),
+                "probs": probs_array,
             }
         )
         with self._write_lock:
-            self._conn.execute("INSERT INTO probe_scores SELECT * FROM insert_df")
+            self._conn.execute("INSERT INTO probe_scores BY NAME SELECT * FROM insert_tbl")
         return n
 
     def get_probe_scores(self, collection_name: str, target_field: str, kind: str) -> dict | None:
@@ -2142,7 +2196,7 @@ class DuckDBClient:
             return None
         rows = self._exec(
             """
-            SELECT item_id, score, residual FROM probe_scores
+            SELECT item_id, score, residual, predicted FROM probe_scores
             WHERE collection_name = ? AND target_field = ? AND kind = ?
             ORDER BY item_id
             """,
@@ -2158,6 +2212,38 @@ class DuckDBClient:
             "item_ids": [r[0] for r in rows],
             "scores": [float(r[1]) for r in rows],
             "residuals": [_clean(r[2]) for r in rows],
+            "predicted": [r[3] for r in rows],
+        }
+
+    def get_probe_class_probabilities(
+        self, collection_name: str, target_field: str, kind: str, class_index: int
+    ) -> dict | None:
+        """Return {"item_ids", "probabilities"} for one class of a multiclass probe.
+
+        ``class_index`` is 0-based (the probe's class order). Returns None when
+        the probe has no stored probabilities or the index is out of range.
+        """
+        key = [collection_name, target_field, kind]
+        n_classes = self._exec(
+            """
+            SELECT max(len(probs)) FROM probe_scores
+            WHERE collection_name = ? AND target_field = ? AND kind = ?
+            """,
+            key,
+        ).fetchone()[0]
+        if n_classes is None or not 0 <= class_index < n_classes:
+            return None
+        rows = self._exec(
+            """
+            SELECT item_id, list_extract(probs, ?) FROM probe_scores
+            WHERE collection_name = ? AND target_field = ? AND kind = ?
+            ORDER BY item_id
+            """,
+            [class_index + 1, *key],  # DuckDB lists are 1-based
+        ).fetchall()
+        return {
+            "item_ids": [r[0] for r in rows],
+            "probabilities": [float(r[1]) if r[1] is not None else None for r in rows],
         }
 
     def delete_probe(self, collection_name: str, target_field: str, kind: str) -> bool:
@@ -2189,8 +2275,7 @@ class DuckDBClient:
         """
         if not self.get_dataset(dataset_name):
             return []
-        escaped = field.replace("\\", "\\\\").replace('"', '\\"')
-        json_path = f'$."{escaped}"'
+        json_path = self._metadata_json_path(field)
         table = self._items_table(dataset_name)
         rows = self._exec(
             f"""
@@ -2208,30 +2293,36 @@ class DuckDBClient:
 
         return [(r[0], _clean(r[1])) for r in rows]
 
-    def get_text_metadata_field(
+    def get_categorical_metadata_field(
         self, dataset_name: str, field: str
-    ) -> list[tuple[str, str | None]]:
-        """Read one metadata field as raw strings for all items, ordered by row_index.
+    ) -> list[tuple[str, str | None, str | None]]:
+        """Read one metadata field as (id, text, json_type), ordered by row_index.
 
-        Same quoted-JSONPath handling as ``get_numeric_metadata_field``; used
-        as the fallback for binary categorical probe targets (e.g.
-        "safe"/"unsafe"). Missing keys and JSON nulls come back as None;
-        scalar non-strings come back in their JSON string form.
+        Used for categorical probe targets. ``text`` is the JSON value's
+        string form (numbers keep DuckDB's rendering, e.g. 3.0 -> "3.0");
+        ``json_type`` (VARCHAR / UBIGINT / BIGINT / DOUBLE / BOOLEAN / ARRAY /
+        OBJECT / NULL) lets the caller canonicalise labels the way the
+        browser renders them. Missing keys give (id, None, None).
         """
         if not self.get_dataset(dataset_name):
             return []
-        escaped = field.replace("\\", "\\\\").replace('"', '\\"')
-        json_path = f'$."{escaped}"'
+        json_path = self._metadata_json_path(field)
         table = self._items_table(dataset_name)
         rows = self._exec(
             f"""
-            SELECT id, json_extract_string(metadata, ?)
+            SELECT id, json_extract_string(metadata, ?), json_type(metadata, ?)
             FROM {table}
             ORDER BY row_index
             """,
-            [json_path],
+            [json_path, json_path],
         ).fetchall()
-        return [(r[0], r[1]) for r in rows]
+        return [(r[0], r[1], r[2]) for r in rows]
+
+    @staticmethod
+    def _metadata_json_path(field: str) -> str:
+        """Quoted JSONPath so dotted names (e.g. "Conc.M") stay literal keys."""
+        escaped = field.replace("\\", "\\\\").replace('"', '\\"')
+        return f'$."{escaped}"'
 
     def search_documents_by_feature_labels(
         self,

@@ -19,6 +19,7 @@ import {
   type ChannelAssignment,
 } from '../utils/densityRenderer/densityMath';
 import { plotAreaFromFullLayout, type AxisRanges } from '../../app/utils/labelPlacement2D';
+import { CategoryKey } from '../utils/categoryKey';
 
 const GAMMA = 2.2;
 
@@ -199,8 +200,7 @@ export function useDensityOverlay({
       category = new Uint8Array(n);
       const channelOf = channelAssignment.channelOf;
       for (let i = 0; i < n; i++) {
-        const raw = visiblePoints[i].metadata?.[categoryField];
-        const cat = raw !== null && raw !== undefined && raw !== '' ? String(raw) : 'unknown';
+        const cat = CategoryKey.of(visiblePoints[i].metadata?.[categoryField]);
         category[i] = channelOf.get(cat) ?? 0;
       }
     } else if (channelAssignment.mode === 'meanColor' && categoryField && channelAssignment.colorOfCategory) {
@@ -212,8 +212,7 @@ export function useDensityOverlay({
       const fallback = linearizedColorBytes('#7f7f7f', GAMMA);
       colors = new Uint8Array(n * 3);
       for (let i = 0; i < n; i++) {
-        const raw = visiblePoints[i].metadata?.[categoryField];
-        const cat = raw !== null && raw !== undefined && raw !== '' ? String(raw) : 'unknown';
+        const cat = CategoryKey.of(visiblePoints[i].metadata?.[categoryField]);
         const rgb = byteLut.get(cat) ?? fallback;
         colors[i * 3] = rgb[0];
         colors[i * 3 + 1] = rgb[1];

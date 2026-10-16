@@ -21,8 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/lib/ui-primitives/select';
-import { buildCategoryColorMap, getCategoryLabel, getCategoryDisplayName } from '@/lib/utils/categoryColors';
-import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
+import { getCategoryLabel, getCategoryDisplayName } from '@/lib/utils/categoryColors';
+import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
 import { fieldToDisplayName } from '@/lib/utils/fieldAnalysis';
 import type { TemporalCrossTabRow, TemporalCountRow } from '@/lib/utils/temporalAnalysis';
 
@@ -112,9 +112,7 @@ export function TemporalFilterChart({
     if (brushEndIndex === undefined) setRangeEnd(allPeriods.length - 1);
   }, [allPeriods.length, brushStartIndex, brushEndIndex]);
 
-  const colorOverrides = useVisualizationStore(
-    (s) => categoryField ? s.categoryColorOverrides[categoryField] : undefined
-  );
+  const categoryColorMap = useCategoryColorMap(categoryField ?? null, categoryValues, categoricalPalette);
 
   const visibleCategories = useMemo(() => {
     if (!categoryField || categoryValues.length === 0) return [];
@@ -127,8 +125,8 @@ export function TemporalFilterChart({
 
   // --- Stacked mode computations ---
   const colorMap = useMemo(
-    () => isStackedMode ? buildCategoryColorMap(categoryField!, categoryValues, categoricalPalette, colorOverrides) : {},
-    [isStackedMode, categoryField, categoryValues, categoricalPalette, colorOverrides]
+    () => (isStackedMode ? categoryColorMap : {}),
+    [isStackedMode, categoryColorMap]
   );
 
   const topCategories = useMemo(() => {

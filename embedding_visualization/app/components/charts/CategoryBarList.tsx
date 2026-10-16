@@ -19,14 +19,14 @@ import {
 import { Input } from '@/lib/ui-primitives/input';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
-import { buildCategoryColorMap, getCategoryLabel, getCategoryDisplayName } from '@/lib/utils/categoryColors';
+import { getCategoryLabel, getCategoryDisplayName } from '@/lib/utils/categoryColors';
 import {
   buildCategoryRows,
   isCategoryFilterActive,
   resolveSortMode,
   type CategorySortMode,
 } from '@/lib/utils/categoryRowData';
-import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
+import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
 import { cn } from '@/lib/utils/utils';
 import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
 
@@ -81,13 +81,7 @@ export function CategoryBarList({
     setSortMode('count');
   }, [categoryField]);
 
-  const colorOverrides = useVisualizationStore(
-    (s) => categoryField ? s.categoryColorOverrides[categoryField] : undefined
-  );
-  const colorMap = useMemo(
-    () => buildCategoryColorMap(categoryField, categoryValues, categoricalPalette, colorOverrides),
-    [categoryField, categoryValues, categoricalPalette, colorOverrides]
-  );
+  const colorMap = useCategoryColorMap(categoryField, categoryValues, categoricalPalette);
 
   const filterActive = isCategoryFilterActive(filteredCounts);
   const effectiveSort = resolveSortMode(sortMode, filterActive);

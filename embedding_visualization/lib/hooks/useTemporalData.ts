@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Point2D, Point3D } from '../types/types';
+import type { MetadataPoint } from '../types/types';
 import {
   detectTemporalFields,
   computeTemporalCrossTab,
@@ -25,7 +25,7 @@ interface TemporalData {
  * @param temporalFieldOverride - When set, uses this field instead of auto-detection.
  */
 export function useTemporalData(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   categoryField: string | null | undefined,
   categoryValues: string[],
   availableFields: string[],

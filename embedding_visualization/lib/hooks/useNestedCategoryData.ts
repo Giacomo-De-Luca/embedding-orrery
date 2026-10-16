@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Point2D, Point3D, NestedColorMap } from '../types/types';
+import type { MetadataPoint, NestedColorMap } from '../types/types';
 import { isNestedColorAvailable, buildNestedColorMap } from '../utils/nestedColorUtils';
 import { useVisualizationStore } from '../stores/useVisualizationStore';
 
@@ -13,7 +13,7 @@ interface NestedCategoryResult {
  * Returns availability flag and the color map (only computed when mode is active).
  */
 export function useNestedCategoryData(
-  points: (Point2D | Point3D)[],
+  points: MetadataPoint[],
   colorByField: string | null | undefined,
   nestedColorMode: boolean | undefined,
   palette?: string

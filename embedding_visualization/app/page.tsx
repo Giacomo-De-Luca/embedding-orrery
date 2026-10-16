@@ -22,6 +22,7 @@ import { detectTemporalFields, computeTemporalCounts, windowPeriodsByFraction } 
 import { useVisualizationStore } from '../lib/stores/useVisualizationStore';
 import type { HighlightMap, ColorScale, ColorScaleType, Point2D, Point3D } from '../lib/types/types';
 import { getSaeInfo, getSaeInfoFromMetadata, isSaeFeatureCollection } from '../lib/utils/saeCollections';
+import { useExplorePanelShortcuts } from '../lib/hooks/useExplorePanelShortcuts';
 import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
 import { mergeViewSearch, shouldDropPreset, type OwnedViewParams } from '../lib/utils/urlViewParams';
 import { useHfSpaceUrlSync } from '../lib/hooks/useHfSpaceUrlSync';
@@ -328,24 +329,7 @@ function HomeContent() {
     setActivePanel(prev => prev === 'analytics' ? null : 'analytics');
   }, []);
 
-  // Keyboard shortcuts: ⌘B for controls, ⌘K for search
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
-        e.preventDefault();
-        toggleControls();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        toggleSearch();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
-        e.preventDefault();
-        toggleAnalytics();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleControls, toggleSearch, toggleAnalytics]);
+  useExplorePanelShortcuts(setActivePanel);
 
   // Topic search hook (instantiated before useAppSearch so topicFilters is available)
   const topicSearch = useTopicSearch(

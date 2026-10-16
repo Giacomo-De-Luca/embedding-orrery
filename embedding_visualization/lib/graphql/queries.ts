@@ -663,20 +663,32 @@ export interface ChatSessionQueryResult {
 
 // ========== Embedding-space probes ==========
 
+/** ProbeInfo selection shared by the probe list query and the trainProbe mutation. */
+export const PROBE_INFO_FIELDS = gql`
+  fragment ProbeInfoFields on ProbeInfo {
+    targetField
+    kind
+    scoreField
+    residualField
+    metrics
+    nTrain
+    nVal
+    createdAt
+    targetMapping
+    task
+    classes
+    excludedClasses
+    minClassFraction
+  }
+`;
+
 export const GET_COLLECTION_PROBES = gql`
+  ${PROBE_INFO_FIELDS}
   query GetCollectionProbes($collectionName: String!) {
     collectionProbes(collectionName: $collectionName) {
       collectionName
       probes {
-        targetField
-        kind
-        scoreField
-        residualField
-        metrics
-        nTrain
-        nVal
-        createdAt
-        targetMapping
+        ...ProbeInfoFields
       }
     }
   }
@@ -688,6 +700,27 @@ export const GET_PROBE_SCORES = gql`
       itemIds
       scores
       residuals
+      predicted
+    }
+  }
+`;
+
+/** One class's per-item probabilities for a multiclass probe (fetched on demand). */
+export const GET_PROBE_CLASS_PROBABILITIES = gql`
+  query GetProbeClassProbabilities(
+    $collectionName: String!
+    $targetField: String!
+    $kind: String!
+    $classIndex: Int!
+  ) {
+    probeClassProbabilities(
+      collectionName: $collectionName
+      targetField: $targetField
+      kind: $kind
+      classIndex: $classIndex
+    ) {
+      itemIds
+      probabilities
     }
   }
 `;

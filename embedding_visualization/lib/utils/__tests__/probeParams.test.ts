@@ -6,9 +6,11 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  CLASSIFICATION_KINDS,
   DEFAULT_PROBE_PARAMS,
   probeParamFields,
-  isBinaryKind,
+  isClassificationKind,
+  probeKindLabel,
   buildTrainProbeInput,
   type ProbeParams,
 } from '../probeParams';
@@ -18,7 +20,8 @@ describe('probeParamFields', () => {
     expect(probeParamFields('ridge')).toEqual(['alpha']);
     expect(probeParamFields('lasso')).toEqual(['alpha']);
     expect(probeParamFields('svr')).toEqual(['c', 'kernel']);
-    expect(probeParamFields('logreg')).toEqual(['c', 'classWeight']);
+    expect(probeParamFields('logreg')).toEqual(['c', 'classWeight', 'minClassPct']);
+    expect(probeParamFields('svc')).toEqual(['c', 'kernel', 'classWeight', 'minClassPct']);
     expect(probeParamFields('mlp')).toEqual([
       'hiddenSize',
       'epochs',
@@ -26,16 +29,38 @@ describe('probeParamFields', () => {
       'devSplit',
       'patience',
     ]);
+    expect(probeParamFields('mlp_clf')).toEqual([
+      'hiddenSize',
+      'epochs',
+      'activation',
+      'devSplit',
+      'patience',
+      'classWeight',
+      'minClassPct',
+    ]);
     expect(probeParamFields('massmean')).toEqual([]);
     expect(probeParamFields('massmean_cov')).toEqual([]);
   });
 });
 
-describe('isBinaryKind', () => {
-  it('is true only for logreg', () => {
-    expect(isBinaryKind('logreg')).toBe(true);
-    expect(isBinaryKind('ridge')).toBe(false);
-    expect(isBinaryKind('svr')).toBe(false);
+describe('isClassificationKind', () => {
+  it('is true for the classifier kinds only', () => {
+    expect(isClassificationKind('logreg')).toBe(true);
+    expect(isClassificationKind('svc')).toBe(true);
+    expect(isClassificationKind('mlp_clf')).toBe(true);
+    expect(isClassificationKind('mlp')).toBe(false);
+    expect(isClassificationKind('ridge')).toBe(false);
+    expect(isClassificationKind('svr')).toBe(false);
+    expect([...CLASSIFICATION_KINDS]).toEqual(['logreg', 'svc', 'mlp_clf']);
+  });
+});
+
+describe('probeKindLabel', () => {
+  it('shows stored kinds as-is, spelling out the MLP classifier', () => {
+    expect(probeKindLabel('mlp_clf')).toBe('mlp classifier');
+    expect(probeKindLabel('svc')).toBe('svc');
+    expect(probeKindLabel('logreg')).toBe('logreg');
+    expect(probeKindLabel('ridge')).toBe('ridge');
   });
 });
 
@@ -158,5 +183,45 @@ describe('buildTrainProbeInput', () => {
     expect(
       buildTrainProbeInput('col', 'f', 'ridge', { ...base, activation: 'gelu' }).activation,
     ).toBeUndefined();
+  });
+
+  it('sends the min class % as a fraction, only for classifiers, only when changed', () => {
+    expect(buildTrainProbeInput('col', 'f', 'logreg', base).minClassFraction).toBeUndefined();
+    expect(
+      buildTrainProbeInput('col', 'f', 'logreg', { ...base, minClassPct: 2.5 }).minClassFraction,
+    ).toBe(0.025);
+    expect(
+      buildTrainProbeInput('col', 'f', 'mlp_clf', { ...base, minClassPct: 0 }).minClassFraction,
+    ).toBe(0);
+    expect(
+      buildTrainProbeInput('col', 'f', 'ridge', { ...base, minClassPct: 5 }).minClassFraction,
+    ).toBeUndefined();
+    expect(
+      buildTrainProbeInput('col', 'f', 'mlp', { ...base, minClassPct: 5 }).minClassFraction,
+    ).toBeUndefined();
+  });
+
+  it('sends svc C, kernel and class weight', () => {
+    const v = buildTrainProbeInput('col', 'f', 'svc', {
+      ...base,
+      c: 2,
+      kernel: 'linear',
+      classWeight: 'balanced',
+    });
+    expect(v).toMatchObject({ kind: 'svc', c: 2, kernel: 'linear', classWeight: 'balanced' });
+  });
+
+  it('sends MLP-classifier hidden dims and class weight', () => {
+    const v = buildTrainProbeInput('col', 'f', 'mlp_clf', {
+      ...base,
+      hiddenSize: 64,
+      classWeight: 'balanced',
+    });
+    expect(v).toMatchObject({ kind: 'mlp_clf', hiddenDims: [64], classWeight: 'balanced' });
+  });
+
+  it('never sends the MLP classifier switch itself', () => {
+    const v = buildTrainProbeInput('col', 'f', 'mlp', { ...base, mlpClassifier: true });
+    expect(v).toEqual({ collectionName: 'col', targetField: 'f', kind: 'mlp' });
   });
 });

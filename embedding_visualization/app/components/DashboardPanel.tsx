@@ -36,27 +36,9 @@ import { toast } from 'sonner';
 
 export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
-/**
- * Shared chrome for the three left-hand panels. They are always mounted and
- * slid off-canvas by class, so this is the single source of truth for their
- * geometry — `-left-[400px]` parks them fully offscreen, which holds at every
- * viewport because the width is capped below 400px.
- *
- * The panels pass `mobileSheet={false}` to the Sidebar primitive so this
- * className drives visibility on mobile too; the primitive's default Sheet
- * branch discards `className` and binds to a provider flag nothing here sets.
- */
-const panelClass = (active: boolean) =>
-  cn(
-    'pointer-events-auto absolute bottom-2 z-40 shadow-2xl transition-all duration-300 ease-in-out',
-    // Below `sm` the header wraps (AppHeader), growing from 112px to 128px and
-    // moving its right-aligned cluster over the panel's column — start below it.
-    // At `sm+` the cluster is right-aligned again and 80px is clear.
-    'top-34 sm:top-20',
-    // 20rem on desktop; on a 390px phone a fixed w-80 would leave ~54px of plot.
-    'w-[min(20rem,calc(100vw-2rem))]',
-    active ? 'left-4' : '-left-[400px] opacity-0',
-  );
+import { CategorySelection } from '@/lib/utils/categorySelection';
+import { CategoryKey } from '@/lib/utils/categoryKey';
+import { explorePanelClass as panelClass } from '@/lib/utils/explorePanel';
 
 interface DashboardPanelProps {
   // Data
@@ -372,13 +354,12 @@ export function DashboardPanel({
     const isNested = !!nestedColorMap;
     for (const p of points) {
       if (combinedMutedIndices.has(p.index)) continue;
-      const val = p.metadata?.[colorByField];
-      if (val != null && val !== '') catCounts[String(val)] = (catCounts[String(val)] ?? 0) + 1;
+      const key = CategoryKey.of(p.metadata?.[colorByField]);
+      catCounts[key] = (catCounts[key] ?? 0) + 1;
       if (isNested) {
-        const t = p.metadata?.['topic_label'];
-        const s = p.metadata?.['subtopic_label'];
-        if (t != null && t !== '') topCounts[String(t)] = (topCounts[String(t)] ?? 0) + 1;
-        if (s != null && s !== '') subCounts[String(s)] = (subCounts[String(s)] ?? 0) + 1;
+        const { topic, subtopic } = CategoryKey.nested(p.metadata);
+        topCounts[topic] = (topCounts[topic] ?? 0) + 1;
+        subCounts[subtopic] = (subCounts[subtopic] ?? 0) + 1;
       }
     }
     return {
@@ -414,6 +395,10 @@ export function DashboardPanel({
     }
     return undefined;
   }, [isContinuousScale, colorByField, points]);
+
+  // The plots draw category traces (where the Missing group can be faded) unless a
+  // continuous scale has a numeric range to map, matching their numericData rule
+  const drawsCategoryTraces = !numericRange || numericRange.min === numericRange.max;
 
   // Compute histogram bins for continuous scale legend
   const isLogScale = customNumericRange?.logScale === true;
@@ -475,64 +460,16 @@ export function DashboardPanel({
           .find(([, subs]) => subs.includes(category))?.[0];
         if (parentLabel) topicId = topicLabelToIdMap.get(parentLabel);
       }
-      if (topicId !== undefined) onToggleTopic(topicId);
-      return;
+      if (topicId !== undefined) {
+        onToggleTopic(topicId);
+        return;
+      }
+      // Not a topic (e.g. the Missing entry): drop the topic selection so the category muting below applies
+      if (selectedTopicIds?.size) onClearAllTopics?.();
     }
 
-    // Non-topic mode: existing mutedCategories behavior
-    const muted = mutedCategories ?? [];
-    const subtopics = nestedColorMap?.hierarchy?.[category];
-
-    // In nested mode, allCategories must include both topics and subtopics
-    const allCategories = nestedColorMap
-      ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
-      : categoryValues;
-
-    if (shiftKey) {
-      // Shift+click: toggle individual category (add/remove from muted)
-      if (subtopics && subtopics.length > 0) {
-        const allRelated = [category, ...subtopics];
-        const isCurrentlyMuted = muted.includes(category);
-        if (isCurrentlyMuted) {
-          setMutedCategories(muted.filter(c => !allRelated.includes(c)));
-        } else {
-          setMutedCategories([...new Set([...muted, ...allRelated])]);
-        }
-      } else {
-        const newMuted = muted.includes(category)
-          ? muted.filter(c => c !== category)
-          : [...muted, category];
-        setMutedCategories(newMuted);
-      }
-    } else {
-      // Normal click: select only this category (mute all others)
-      // Determine what should stay unmuted
-      let keepUnmuted: Set<string>;
-      if (subtopics && subtopics.length > 0) {
-        // Clicked a topic header: keep topic + all its subtopics
-        keepUnmuted = new Set([category, ...subtopics]);
-      } else if (nestedColorMap) {
-        // Clicked a subtopic: keep it + its parent topic (so subtopics stay visible in legend)
-        const parentTopic = Object.entries(nestedColorMap.hierarchy)
-          .find(([, subs]) => subs.includes(category))?.[0];
-        keepUnmuted = parentTopic
-          ? new Set([category, parentTopic])
-          : new Set([category]);
-      } else {
-        keepUnmuted = new Set([category]);
-      }
-
-      // If already isolated on this exact selection, toggle back to show all
-      const selected = allCategories.filter(c => !muted.includes(c));
-      const isAlreadyIsolated = selected.length > 0 && selected.every(c => keepUnmuted.has(c));
-
-      if (isAlreadyIsolated) {
-        setMutedCategories([]);
-      } else {
-        setMutedCategories(allCategories.filter(c => !keepUnmuted.has(c)));
-      }
-    }
-  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, nestedColorMap, mutedCategories, setMutedCategories, categoryValues]);
+    setMutedCategories(CategorySelection.toggle(category, shiftKey, mutedCategories ?? [], categoryValues, nestedColorMap));
+  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, selectedTopicIds, onClearAllTopics, nestedColorMap, mutedCategories, setMutedCategories, categoryValues]);
 
   // Temporal range change handler
   const handleTemporalRangeChange = useCallback((range: TemporalRange | null) => {
@@ -541,11 +478,9 @@ export function DashboardPanel({
 
   // Double-click reset: show all categories
   const handleCategoryReset = useCallback(() => {
-    if (isTopicColorField && onClearAllTopics) {
-      onClearAllTopics();
-    } else {
-      setMutedCategories([]);
-    }
+    if (isTopicColorField && onClearAllTopics) onClearAllTopics();
+    // Topic mode can also hold category muting from non-topic entries (Missing)
+    setMutedCategories([]);
   }, [isTopicColorField, onClearAllTopics, setMutedCategories]);
 
   const handleColorOverride = useCallback((category: string, color: string) => {
@@ -851,6 +786,8 @@ export function DashboardPanel({
           colorFieldOptions={colorFieldOptions}
           availableFields={availableFields}
           nestedColorAvailable={nestedColorAvailable}
+          hasMissingValues={categoryValues.includes(CategoryKey.MISSING)}
+          canFadeMissing={drawsCategoryTraces}
           collectionName={collectionName}
           hasActiveFilter={hasActiveFilter}
           hasHighlights={hasHighlights}

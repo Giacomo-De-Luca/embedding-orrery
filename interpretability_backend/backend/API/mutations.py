@@ -36,6 +36,7 @@ from .converters import (
     build_probe_config,
     build_topic_extraction_config,
     convert_topic_infos,
+    probe_info_from_record,
 )
 from .duckdb_instance import get_duckdb_client
 from .interpret_instance import get_interpret_service
@@ -66,7 +67,6 @@ from .types import (
     ModelStatus,
     PrepareSaeInput,
     PrepareSaeResult,
-    ProbeInfo,
     PromptActivationsResponse,
     PromptDocumentSearchResponse,
     PromptDocumentSearchResult,
@@ -296,7 +296,7 @@ class Mutation:
 
     @strawberry.mutation
     async def train_probe(self, input: TrainProbeInput, info=None) -> TrainProbeResult:
-        """Train an embedding-space probe on a numeric metadata field.
+        """Train an embedding-space probe on a numeric or categorical metadata field.
 
         Progress is emitted under job id "{collection_name}_probe"; the
         mutation resolves when the run finishes (service never raises).
@@ -319,17 +319,14 @@ class Mutation:
 
         probe = None
         if result.error is None:
-            probe = ProbeInfo(
-                target_field=result.target_field,
-                kind=result.kind,
-                score_field=result.score_field,
-                residual_field=result.residual_field,
-                metrics=result.metrics,
-                n_train=result.n_train,
-                n_val=result.n_val,
-                created_at="",
-                target_mapping=result.target_mapping,
+            # Read the persisted row back so the result matches collectionProbes.
+            record = await asyncio.to_thread(
+                get_duckdb_client().get_probe,
+                result.collection_name,
+                result.target_field,
+                result.kind,
             )
+            probe = probe_info_from_record(record) if record is not None else None
         return TrainProbeResult(
             collection_name=result.collection_name,
             probe=probe,

@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { windowPeriodsByFraction } from '../temporalAnalysis';
+import { computeTemporalCrossTab, windowPeriodsByFraction } from '../temporalAnalysis';
+import { CategoryKey } from '../categoryKey';
+
+describe('computeTemporalCrossTab', () => {
+  it('stacks points with a missing category under the Missing key', () => {
+    const { MISSING } = CategoryKey;
+    const points = [
+      { index: 0, metadata: { year: 2020, category: 'a' } },
+      { index: 1, metadata: { year: 2020 } },
+      { index: 2, metadata: { year: 2021, category: '' } },
+      { index: 3, metadata: { category: 'a' } },
+    ];
+    expect(computeTemporalCrossTab(points, 'category', 'year', ['a', MISSING])).toEqual([
+      { period: '2020', a: 1, [MISSING]: 1 },
+      { period: '2021', a: 0, [MISSING]: 1 },
+    ]);
+  });
+});
 
 describe('windowPeriodsByFraction', () => {
   // A 12-period span, e.g. EMNLP years 2014–2025.

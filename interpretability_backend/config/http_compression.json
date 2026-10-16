@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "level": 4,
+  "minimum_size": 1024,
+  "thread_threshold_bytes": 1048576,
+  "content_types": ["application/json", "application/graphql-response+json"]
+}

@@ -4,7 +4,9 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, NestedColorMap, ColorScale, CustomNumericRange } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex } from '../../lib/utils/categoryColors';
+import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex } from '../../lib/utils/categoryColors';
+import { CategoryKey } from '../../lib/utils/categoryKey';
+import { HiddenPoints } from '../../lib/utils/hiddenPoints';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { useColorScaleReady } from '../../lib/hooks/useColorScaleReady';
 import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
@@ -14,12 +16,13 @@ import { useCameraFlyTo, animateCameraToRegion } from '../../lib/hooks/cameraAni
 import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import type { DataBounds } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
-import { HazeRenderer } from '../../lib/utils/hazeRenderer';
+import { createHazeRenderer, hazeTuningFromPrefs, type HazeRendererLike } from '../../lib/utils/hazeRendering';
 import { computeMVP, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
 import { buildDataToSceneMatrix, getSceneNormalization } from '../utils/rendeding';
 import { computeOverlayLayout, overlayLayoutEqual, type OverlayLayout } from '../../lib/utils/overlayLayout';
 import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
+import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
 import { capture3DPlot } from '../../lib/utils/plotCapture';
 import { PointTraceColumns3D } from '../../lib/utils/pointTraceColumns3D';
@@ -355,12 +358,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     }
   }, []);
 
-  const colorOverrides = useVisualizationStore(
-    (s) => categoryField ? s.categoryColorOverrides[categoryField] : undefined
-  );
-  const colorMap = useMemo(() => {
-    return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette, colorOverrides);
-  }, [categoryField, categoryValues, categoricalPalette, colorOverrides]);
+  const colorMap = useCategoryColorMap(categoryField, categoryValues, categoricalPalette);
 
   // --- 1. OPTIMIZED DATA EXTRACTION (Raw Numbers) ---
   const numericData = useMemo(() => {
@@ -469,17 +467,19 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const markerStyle = useMemo(() => calculateMarkerStyle(points.length), [points.length]);
   const highlightScale = useMemo(() => calculateHighlightScale(points.length), [points.length]);
 
+  const hideMissing = useVisualizationStore((s) => s.hideMissing);
+  const missingPointOpacity = useVisualizationStore((s) => s.missingPointOpacity);
+  // Nebula haze implementation + density-haze tuning (see lib/utils/hazeRendering.ts)
+  const hazeRendererKind = useVisualizationStore((s) => s.hazeRenderer);
+  const hazeStrength = useVisualizationStore((s) => s.hazeStrength);
+  const hazeEqualize = useVisualizationStore((s) => s.hazeEqualize);
+  const hazePrefsRef = useRef({ strength: hazeStrength, equalize: hazeEqualize });
+  hazePrefsRef.current = { strength: hazeStrength, equalize: hazeEqualize };
   // Shared filtered points: used by both baseTraces and clusterDataMap
-  const displayPoints = useMemo(() => {
-    if (!hideUnclustered) return points;
-    return points.filter(p => {
-      const topicId = p.metadata?.['topic_id'];
-      if (topicId === '-1' || topicId === -1) return false;
-      const topicLabel = p.metadata?.['topic_label'];
-      if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-      return true;
-    });
-  }, [points, hideUnclustered]);
+  const displayPoints = useMemo(
+    () => HiddenPoints.filter(points, categoryField, { hideUnclustered, hideMissing }),
+    [points, categoryField, hideUnclustered, hideMissing],
+  );
 
   // --- OPTIMIZED TRACES ---
   const baseTraces = useMemo((): PlotlyData[] => {
@@ -502,11 +502,11 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       return { active, muted };
     };
 
-    // Helper: push active + muted traces for a categorical group
-    const pushCategoricalTraces = (pts: Point3D[], name: string, color: string, isMuted: boolean) => {
+    // Helper: push active + muted traces for a categorical group (`fade` scales every opacity of the group)
+    const pushCategoricalTraces = (pts: Point3D[], name: string, color: string, isMuted: boolean, fade = 1) => {
       if (hideFilteredPoints && isMuted) return;
       const catColor = isMuted ? '#9ca3af' : color;
-      const catOpacity = isMuted ? mutedOp : dimOpacity;
+      const catOpacity = (isMuted ? mutedOp : dimOpacity) * fade;
 
       if (combinedMutedIndices) {
         const { active, muted } = splitByMuted(pts, combinedMutedIndices);
@@ -514,7 +514,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
           traces.push(buildScatter3dTrace(active, { name, size: dimSize, color: catColor, opacity: catOpacity }));
         }
         if (muted.length > 0 && !hideFilteredPoints) {
-          traces.push(buildScatter3dTrace(muted, { name, size: dimSize, color: '#9ca3af', opacity: mutedOp }));
+          traces.push(buildScatter3dTrace(muted, { name, size: dimSize, color: '#9ca3af', opacity: mutedOp * fade }));
         }
       } else {
         traces.push(buildScatter3dTrace(pts, { name, size: dimSize, color: catColor, opacity: catOpacity }));
@@ -574,25 +574,26 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         // --- MODE: NESTED CATEGORICAL ---
         const pointsBySub: Record<string, Point3D[]> = {};
         for (const point of displayPoints) {
-          const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+          const sub = CategoryKey.nested(point.metadata).subtopic;
           (pointsBySub[sub] ??= []).push(point);
         }
         for (const [sub, subPoints] of Object.entries(pointsBySub)) {
-          const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+          const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
           const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
-          pushCategoricalTraces(subPoints, sub, nestedColorMap.subtopicColors[sub] || '#7f7f7f', isMuted);
+          const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
+          pushCategoricalTraces(subPoints, sub, nestedColorMap.subtopicColors[sub] || '#7f7f7f', isMuted, fade);
         }
       } else {
         // --- MODE: CATEGORICAL (Standard) ---
         const pointsByCategory: Record<string, Point3D[]> = {};
         for (const point of displayPoints) {
-          const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-          const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+          const cat = CategoryKey.of(categoryField ? point.metadata?.[categoryField] : undefined);
           (pointsByCategory[cat] ??= []).push(point);
         }
         for (const [cat, catPoints] of Object.entries(pointsByCategory)) {
           const isMuted = mutedCategories.includes(cat);
-          pushCategoricalTraces(catPoints, getCategoryLabel(categoryField, cat), colorMap[cat] || '#7f7f7f', isMuted);
+          const fade = CategoryKey.missingFade(cat, missingPointOpacity);
+          pushCategoricalTraces(catPoints, getCategoryLabel(categoryField, cat), colorMap[cat] || '#7f7f7f', isMuted, fade);
         }
       }
     } else {
@@ -640,7 +641,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [
     displayPoints, markerStyle, showOnlyHighlighted,
     categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, categoryField,
-    mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, pointOpacity, isDark,
+    mutedCategories, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, missingPointOpacity, pointOpacity, isDark,
     showAxes, bounds, selectedDimensions
   ]);
 
@@ -659,12 +660,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       if (combinedMutedIndices?.has(p.index)) continue;
       if (mutedCategories.length > 0) {
         if (nestedColorMap) {
-          const sub = String(p.metadata?.['subtopic_label'] ?? p.metadata?.['topic_label'] ?? 'unknown');
-          const parent = String(p.metadata?.['topic_label'] ?? 'unknown');
-          if (mutedCategories.includes(sub) || mutedCategories.includes(parent)) continue;
+          const { topic, subtopic } = CategoryKey.nested(p.metadata);
+          if (mutedCategories.includes(subtopic) || mutedCategories.includes(topic)) continue;
         } else if (categoryField) {
-          const cat = String(p.metadata?.[categoryField] ?? 'unknown');
-          if (mutedCategories.includes(cat)) continue;
+          if (mutedCategories.includes(CategoryKey.of(p.metadata?.[categoryField]))) continue;
         }
       }
       hasData = true;
@@ -952,10 +951,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     let clusterPoints = displayPoints;
     if (mutedCategories.length > 0) {
       const mutedSet = new Set(mutedCategories);
-      clusterPoints = displayPoints.filter(p => {
-        const category = p.metadata?.[categoryField];
-        return category == null || !mutedSet.has(String(category));
-      });
+      clusterPoints = displayPoints.filter(p => !mutedSet.has(CategoryKey.of(p.metadata?.[categoryField])));
     }
 
     // Exclude points muted by text search / temporal filters, so haze and
@@ -1544,7 +1540,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [plotReady, tooltipFields, handleClick, handleRelayout]);
 
   // --- NEBULA: Haze sprites (separate overlay canvas) ---
-  const hazeRendererRef = useRef<HazeRenderer | null>(null);
+  const hazeRendererRef = useRef<HazeRendererLike | null>(null);
   // Set by the lifecycle effect; lets the cluster-update effect force a single
   // repaint after new sprites are built, so muting/filtering updates the haze
   // immediately without waiting for Plotly's next GL render.
@@ -1609,7 +1605,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
     syncCanvasLayout();
 
-    const haze = new HazeRenderer(canvas, isDark);
+    const haze = createHazeRenderer(hazeRendererKind, canvas, isDark, hazePrefsRef.current);
     hazeRendererRef.current = haze;
     haze.resize(canvas.clientWidth, canvas.clientHeight);
     haze.updateClusters(clusterDataMap, pointsRef.current.length);
@@ -1646,7 +1642,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       appliedClusterMapRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nebulaMode, plotReady, isDark, hasNebulaClusters]);
+  }, [nebulaMode, plotReady, isDark, hasNebulaClusters, hazeRendererKind]);
 
   // 2. Cluster-content updates: rebuild only the sprite set on the existing
   //    renderer (no GL teardown), then force a single repaint so the change is
@@ -1659,6 +1655,14 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     appliedClusterMapRef.current = clusterDataMap;
     renderHazeOnceRef.current?.();
   }, [clusterDataMap]);
+
+  // 3. Live tuning (density renderer only): retune in place, then repaint once.
+  useEffect(() => {
+    const haze = hazeRendererRef.current;
+    if (!haze?.setTuning) return;
+    haze.setTuning(hazeTuningFromPrefs({ strength: hazeStrength, equalize: hazeEqualize }));
+    renderHazeOnceRef.current?.();
+  }, [hazeStrength, hazeEqualize]);
 
   return (
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}

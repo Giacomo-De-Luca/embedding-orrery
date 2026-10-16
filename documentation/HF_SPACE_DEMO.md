@@ -41,6 +41,10 @@ nginx :7860 ── /graphql, /health ──▶ uvicorn :8000  (FastAPI + Strawbe
   compressing proxied requests without it): the full-collection GraphQL JSON
   compresses ~5–8×, which is what makes large collections shippable at all.
   Next's node server gzips its own pages/chunks; nginx passes those through.
+  The backend also gzips JSON itself (`JsonGzipMiddleware`, for local dev),
+  so `/graphql` sets `proxy_set_header Accept-Encoding ""` —
+  uvicorn then answers uncompressed and compression stays in nginx's worker
+  instead of the 2-vCPU Python process (see `MULTICLASS_PROBES.md`).
 - HF Spaces runs containers as uid 1000: the image creates `user`, points
   `ORRERY_RESOURCE_DIR=/home/user/data` and `HF_HOME=/home/user/hf` at
   writable paths. Space restarts wipe `/home/user/data` → the seed bootstrap

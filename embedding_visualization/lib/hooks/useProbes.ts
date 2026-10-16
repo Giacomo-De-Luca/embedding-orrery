@@ -1,18 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 
-import { GET_COLLECTION_PROBES, GET_PROBE_SCORES } from '../graphql/queries';
+import {
+  GET_COLLECTION_PROBES,
+  GET_PROBE_CLASS_PROBABILITIES,
+  GET_PROBE_SCORES,
+} from '../graphql/queries';
 import { DELETE_PROBE, TRAIN_PROBE, type TrainProbeResult } from '../graphql/mutations';
 import { useVisualizationStore } from '../stores/useVisualizationStore';
 import type { EmbeddingData } from '../types/types';
 import type { ColorFieldOption } from '../utils/fieldAnalysis';
 import {
+  ProbeFieldNames,
+  buildProbeColorAliases,
   buildProbeFieldOptions,
   mergeProbeScores,
-  probeAbsErrorField,
-  probeConfusionField,
+  parseProbeClassField,
+  pendingRecolorAction,
+  type PendingRecolor,
+  type ProbeClassProbabilitiesData,
   type ProbeInfo,
   type ProbeScoresData,
   type ProbeWithScores,
@@ -30,7 +38,19 @@ interface ProbeScoresQueryData {
   probeScores: ProbeScoresData | null;
 }
 
+interface ProbeClassProbabilitiesQueryData {
+  probeClassProbabilities: ProbeClassProbabilitiesData | null;
+}
+
 const probeKey = (targetField: string, kind: string) => `${targetField}::${kind}`;
+
+/** Drop one probe's entry from a per-probe state map (retrain / delete). */
+function withoutKey<T>(prev: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in prev)) return prev;
+  const next = { ...prev };
+  delete next[key];
+  return next;
+}
 
 export interface UseProbesReturn {
   /** The collection these probes belong to (null when none loaded). */
@@ -44,10 +64,17 @@ export interface UseProbesReturn {
    * seeing the server-side fields.
    */
   augmentedData: EmbeddingData | null;
-  /** ColorFieldOption entries for probe score/residual fields. */
+  /** ColorFieldOption entries for probe-derived fields. */
   fieldOptions: ColorFieldOption[];
+  /** The collection's server-side item metadata (profiles probe targets). */
+  itemMetadata: Record<string, unknown>[] | null;
   train: (input: TrainProbeInputVars) => Promise<void>;
   deleteProbe: (probe: ProbeInfo) => Promise<void>;
+  /**
+   * Color the map by P(class) of a multiclass probe, fetching that class's
+   * probabilities first if they aren't loaded (one class per request).
+   */
+  showClassProbability: (probe: ProbeInfo, classIndex: number) => void;
   training: boolean;
   trainingError: string | null;
   /** Progress-subscription job id, set while a training run is in flight. */
@@ -58,20 +85,31 @@ export interface UseProbesReturn {
  * Owns probe state for the visualization dashboard: the trained-probes list,
  * per-probe score arrays (merged client-side into item metadata — the
  * persisted field_analysis cache is deliberately bypassed), training and
- * deletion. Auto-recolors to the new score field once its scores are loaded.
+ * deletion. Auto-recolors to the new score field (multiclass: predicted
+ * class) once its scores are loaded. Multiclass class probabilities are
+ * fetched lazily, one class at a time, when a P(class) field is requested —
+ * from the probe row or from a colorBy URL param.
  */
 export function useProbes(
   collectionName: string | null,
   data: EmbeddingData | null,
 ): UseProbesReturn {
   const [scoresByKey, setScoresByKey] = useState<Record<string, ProbeScoresData>>({});
+  // Lazily loaded class probabilities: probe key -> class index -> values.
+  const [classProbsByKey, setClassProbsByKey] = useState<
+    Record<string, Record<number, ProbeClassProbabilitiesData>>
+  >({});
+  const classFetchesRef = useRef(new Set<string>());
+  // Per-probe generation, bumped on retrain/delete: a class-probability fetch
+  // that started before must not write the old model's values back.
+  const generationRef = useRef<Record<string, number>>({});
   const [training, setTraining] = useState(false);
   const [trainingError, setTrainingError] = useState<string | null>(null);
   // Progress-subscription job id for the in-flight run, pinned to the
   // collection the run started for (not the live one).
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  // Score field to auto-recolor to once its scores have landed.
-  const pendingRecolorRef = useRef<string | null>(null);
+  // Field (and scale) to auto-recolor to once its values have landed.
+  const pendingRecolorRef = useRef<PendingRecolor | null>(null);
   // Live collection, so a train that settles after a collection switch can
   // tell it no longer owns the hook state (field names are collection-
   // agnostic, so acting on a stale result would recolor/clobber the new
@@ -115,6 +153,9 @@ export function useProbes(
   // Reset per-collection state when the collection changes.
   useEffect(() => {
     setScoresByKey({});
+    setClassProbsByKey({});
+    classFetchesRef.current.clear();
+    generationRef.current = {};
     setTrainingError(null);
     pendingRecolorRef.current = null;
   }, [collectionName]);
@@ -162,10 +203,11 @@ export function useProbes(
   const probesWithScores: ProbeWithScores[] = useMemo(
     () =>
       probes.flatMap((probe) => {
-        const scores = scoresByKey[probeKey(probe.targetField, probe.kind)];
-        return scores ? [{ probe, scores }] : [];
+        const key = probeKey(probe.targetField, probe.kind);
+        const scores = scoresByKey[key];
+        return scores ? [{ probe, scores, classProbabilities: classProbsByKey[key] }] : [];
       }),
-    [probes, scoresByKey],
+    [probes, scoresByKey, classProbsByKey],
   );
 
   const augmentedData = useMemo(() => {
@@ -181,14 +223,97 @@ export function useProbes(
     [probesWithScores, data],
   );
 
-  // Auto-recolor once the freshly trained probe's scores are merged.
+  // Predicted-class fields borrow their target field's colors. Published
+  // before paint so the first frame colored by a predicted field is right.
+  const itemMetadata = data?.itemMetadata;
+  const colorAliases = useMemo(
+    () => (itemMetadata ? buildProbeColorAliases(probes, itemMetadata) : {}),
+    [probes, itemMetadata],
+  );
+  useLayoutEffect(() => {
+    useVisualizationStore.getState().setCategoryColorAliases(colorAliases);
+  }, [colorAliases]);
+
+  // Auto-recolor once the pending field's values are merged — unless the
+  // user picked another color field while they were loading.
+  const colorByField = useVisualizationStore((s) => s.colorByField);
   useEffect(() => {
-    const field = pendingRecolorRef.current;
-    if (!field) return;
-    if (!fieldOptions.some((o) => o.field === field)) return;
+    const pending = pendingRecolorRef.current;
+    if (!pending) return;
+    const action = pendingRecolorAction(pending, colorByField, fieldOptions);
+    if (action === 'wait') return;
     pendingRecolorRef.current = null;
-    useVisualizationStore.getState().setColorByField(field, 'sequential');
-  }, [fieldOptions]);
+    if (action === 'apply') {
+      useVisualizationStore.getState().setColorByField(pending.field, pending.scale);
+    }
+  }, [fieldOptions, colorByField]);
+
+  /** Queue a recolor to `field` for when its values land. */
+  const queueRecolor = useCallback((field: string, scale: PendingRecolor['scale']) => {
+    pendingRecolorRef.current = {
+      field,
+      scale,
+      fromField: useVisualizationStore.getState().colorByField,
+    };
+  }, []);
+
+  const ensureClassProbabilities = useCallback(
+    async (probe: ProbeInfo, classIndex: number) => {
+      if (!collectionName) return;
+      const key = probeKey(probe.targetField, probe.kind);
+      const generation = generationRef.current[key] ?? 0;
+      const fetchKey = `${key}::${generation}::${classIndex}`;
+      if (classProbsByKey[key]?.[classIndex] || classFetchesRef.current.has(fetchKey)) return;
+      classFetchesRef.current.add(fetchKey);
+      const startedFor = collectionName;
+      try {
+        const result = await client.query<ProbeClassProbabilitiesQueryData>({
+          query: GET_PROBE_CLASS_PROBABILITIES,
+          variables: {
+            collectionName,
+            targetField: probe.targetField,
+            kind: probe.kind,
+            classIndex,
+          },
+          fetchPolicy: 'no-cache',
+        });
+        const values = result.data?.probeClassProbabilities;
+        const stale =
+          collectionRef.current !== startedFor || (generationRef.current[key] ?? 0) !== generation;
+        if (!values || stale) return;
+        setClassProbsByKey((prev) => ({
+          ...prev,
+          [key]: { ...prev[key], [classIndex]: values },
+        }));
+      } catch {
+        // The probe stays usable; picking the class again retries.
+      } finally {
+        classFetchesRef.current.delete(fetchKey);
+      }
+    },
+    [client, collectionName, classProbsByKey],
+  );
+
+  const showClassProbability = useCallback(
+    (probe: ProbeInfo, classIndex: number) => {
+      const field = new ProbeFieldNames(probe).classProbability(classIndex);
+      if (classProbsByKey[probeKey(probe.targetField, probe.kind)]?.[classIndex]) {
+        useVisualizationStore.getState().setColorByField(field, 'sequential');
+        return;
+      }
+      queueRecolor(field, 'sequential');
+      void ensureClassProbabilities(probe, classIndex);
+    },
+    [classProbsByKey, ensureClassProbabilities, queueRecolor],
+  );
+
+  // A P(class) color field can arrive without a click (shared URL, preset):
+  // fetch its class probabilities so it doesn't render as all-missing.
+  useEffect(() => {
+    if (!colorByField) return;
+    const parsed = parseProbeClassField(colorByField, probes);
+    if (parsed) void ensureClassProbabilities(parsed.probe, parsed.classIndex);
+  }, [colorByField, probes, ensureClassProbabilities]);
 
   const train = useCallback(
     async (input: TrainProbeInputVars) => {
@@ -212,13 +337,15 @@ export function useProbes(
         } else if (result?.error) {
           setTrainingError(result.error);
         } else if (result?.probe) {
-          pendingRecolorRef.current = result.probe.scoreField;
+          // Multiclass probes open on their predicted class; others on the score.
+          const names = new ProbeFieldNames(result.probe);
+          if (names.predicted) queueRecolor(names.predicted, 'categorical');
+          else queueRecolor(names.score, 'sequential');
           // Force a fresh score fetch for this key (retrain replaces scores).
-          setScoresByKey((prev) => {
-            const next = { ...prev };
-            delete next[probeKey(targetField, kind)];
-            return next;
-          });
+          const key = probeKey(targetField, kind);
+          generationRef.current[key] = (generationRef.current[key] ?? 0) + 1;
+          setScoresByKey((prev) => withoutKey(prev, key));
+          setClassProbsByKey((prev) => withoutKey(prev, key));
         }
       } catch (err) {
         if (stillCurrent()) {
@@ -235,7 +362,7 @@ export function useProbes(
         setActiveJobId(null);
       }
     },
-    [collectionName, trainProbeMutation, refetchProbes],
+    [collectionName, trainProbeMutation, refetchProbes, queueRecolor],
   );
 
   const deleteProbe = useCallback(
@@ -243,13 +370,7 @@ export function useProbes(
       if (!collectionName) return;
       const store = useVisualizationStore.getState();
       // Clear a dangling color field before its data disappears.
-      const probeFields = [
-        probe.scoreField,
-        probe.residualField,
-        probeAbsErrorField(probe),
-        probeConfusionField(probe),
-      ];
-      if (store.colorByField && probeFields.includes(store.colorByField)) {
+      if (store.colorByField && new ProbeFieldNames(probe).matches(store.colorByField)) {
         store.setColorByField(null);
       }
       try {
@@ -261,11 +382,10 @@ export function useProbes(
           },
         });
       } finally {
-        setScoresByKey((prev) => {
-          const next = { ...prev };
-          delete next[probeKey(probe.targetField, probe.kind)];
-          return next;
-        });
+        const key = probeKey(probe.targetField, probe.kind);
+        generationRef.current[key] = (generationRef.current[key] ?? 0) + 1;
+        setScoresByKey((prev) => withoutKey(prev, key));
+        setClassProbsByKey((prev) => withoutKey(prev, key));
         await refetchProbes().catch(() => {});
       }
     },
@@ -277,8 +397,10 @@ export function useProbes(
     probes,
     augmentedData,
     fieldOptions,
+    itemMetadata: data?.itemMetadata ?? null,
     train,
     deleteProbe,
+    showClassProbability,
     training,
     trainingError,
     jobId: activeJobId,

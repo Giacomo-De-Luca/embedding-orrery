@@ -22,6 +22,7 @@ import { color } from 'd3-color';
 import { makeCrameriInterpolator, getCrameriColors, isCrameriScale, crameriGradientCSS } from '../colorMaps/crameriScales';
 import type { ColorScale } from '../types/types';
 import { CATEGORY_PALETTES, DEFAULT_PALETTE_KEY, getPaletteColors } from './categoryPalettes';
+import { CategoryKey } from './categoryKey';
 
 
 /**
@@ -285,6 +286,12 @@ export const POS_PRESET: CategoryColorPreset = {
  */
 export const UNCLUSTERED_COLOR = '#e416be';
 
+/**
+ * Fixed neutral color for points whose category value is missing
+ * ({@link CategoryKey.MISSING}). It never takes a palette slot.
+ */
+export const MISSING_CATEGORY_COLOR = '#7f7f7f';
+
 /* 
 
 PURPLE 
@@ -349,6 +356,32 @@ export const CONFUSION_PRESET: CategoryColorPreset = {
   },
 };
 
+/** Values of a multiclass probe's correctness field (`probe_<field>_<kind>_correct`). */
+export const CORRECTNESS_LABELS = {
+  correct: 'Correct',
+  wrong: 'Wrong',
+  excluded: 'Excluded',
+} as const;
+
+/**
+ * Multiclass probe correctness colors: correct cool (green), wrong warm
+ * (magenta), items of classes excluded from training amber — the same
+ * CVD-validated slots as {@link CONFUSION_PRESET}.
+ */
+export const CORRECTNESS_PRESET: CategoryColorPreset = {
+  name: 'Correctness',
+  colors: {
+    [CORRECTNESS_LABELS.correct]: '#008300',
+    [CORRECTNESS_LABELS.wrong]: '#d55181',
+    [CORRECTNESS_LABELS.excluded]: '#c98500',
+  },
+  labels: {
+    [CORRECTNESS_LABELS.correct]: 'Correct',
+    [CORRECTNESS_LABELS.wrong]: 'Wrong',
+    [CORRECTNESS_LABELS.excluded]: 'Excluded class (not trained)',
+  },
+};
+
 /**
  * All known presets, keyed by category field name.
  */
@@ -362,14 +395,15 @@ export const CATEGORY_PRESETS: Record<string, CategoryColorPreset> = {
 
 /**
  * Resolve the preset for a category field: exact name first, then dynamic
- * probe-derived fields by suffix (confusion fields embed the probed field
- * name, so they can't be static keys).
+ * probe-derived fields by suffix (confusion and correctness fields embed the
+ * probed field name, so they can't be static keys).
  */
 function resolveCategoryPreset(categoryField: string | null): CategoryColorPreset | null {
   if (!categoryField) return null;
   const key = categoryField.toLowerCase();
   if (CATEGORY_PRESETS[key]) return CATEGORY_PRESETS[key];
   if (key.startsWith('probe_') && key.endsWith('_confusion')) return CONFUSION_PRESET;
+  if (key.startsWith('probe_') && key.endsWith('_correct')) return CORRECTNESS_PRESET;
   return null;
 }
 
@@ -450,7 +484,8 @@ export function generateCategoryColors(count: number, palette?: string): string[
  * Build a color map for a set of category values.
  *
  * If a preset exists for the category field, use it.
- * Otherwise, generate colors dynamically.
+ * Otherwise, generate colors dynamically. The Missing key gets
+ * {@link MISSING_CATEGORY_COLOR} and leaves the other values' colors unchanged.
  *
  * @param categoryField - The name of the category field (e.g., "pos", "topic")
  * @param values - Array of unique category values
@@ -465,6 +500,11 @@ export function buildCategoryColorMap(
 ): Record<string, string> {
   const colorMap: Record<string, string> = {};
 
+  const paletteValues = values.filter(value => value !== CategoryKey.MISSING);
+  if (paletteValues.length !== values.length) {
+    colorMap[CategoryKey.MISSING] = MISSING_CATEGORY_COLOR;
+  }
+
   // Check for preset
   const preset = resolveCategoryPreset(categoryField);
 
@@ -472,7 +512,7 @@ export function buildCategoryColorMap(
     // Separate values into those with preset colors and those without
     const valuesWithoutPreset: string[] = [];
 
-    for (const value of values) {
+    for (const value of paletteValues) {
       if (preset.colors[value]) {
         // Use preset color if available
         colorMap[value] = preset.colors[value];
@@ -491,9 +531,9 @@ export function buildCategoryColorMap(
     }
   } else {
     // Generate colors dynamically
-    const colors = generateCategoryColors(values.length, palette);
-    for (let i = 0; i < values.length; i++) {
-      colorMap[values[i]] = colors[i];
+    const colors = generateCategoryColors(paletteValues.length, palette);
+    for (let i = 0; i < paletteValues.length; i++) {
+      colorMap[paletteValues[i]] = colors[i];
     }
   }
 
@@ -508,6 +548,51 @@ export function buildCategoryColorMap(
 }
 
 /**
+ * A derived categorical field that borrows another field's colors: its
+ * values take the palette slots they have in `sourceField`'s full value
+ * `domain` (e.g. a probe's predicted class shares its target field's colors).
+ */
+export interface CategoryColorAlias {
+  sourceField: string;
+  domain: string[];
+}
+
+/**
+ * Color map for an aliased field: each value gets the color it has in the
+ * alias source field (computed over the source's full domain, honouring its
+ * preset and `sourceOverrides`), so values the aliased field never contains
+ * don't shift the others. Values outside the domain get fresh palette slots;
+ * the aliased field's own `overrides` win last.
+ */
+export function buildAliasedCategoryColorMap(
+  alias: CategoryColorAlias,
+  values: string[],
+  palette?: string,
+  sourceOverrides?: Record<string, string>,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  const sourceMap = buildCategoryColorMap(alias.sourceField, alias.domain, palette, sourceOverrides);
+  const unknown = values.filter((v) => !(v in sourceMap) && v !== CategoryKey.MISSING);
+  const used = alias.domain.filter((v) => v !== CategoryKey.MISSING).length;
+  const extra = unknown.length
+    ? generateCategoryColors(used + unknown.length, palette).slice(used)
+    : [];
+
+  const colorMap: Record<string, string> = {};
+  for (const value of values) {
+    if (value in sourceMap) colorMap[value] = sourceMap[value];
+    else if (value === CategoryKey.MISSING) colorMap[value] = MISSING_CATEGORY_COLOR;
+    else colorMap[value] = extra[unknown.indexOf(value)];
+  }
+  if (overrides) {
+    for (const [k, v] of Object.entries(overrides)) {
+      if (k in colorMap) colorMap[k] = v;
+    }
+  }
+  return colorMap;
+}
+
+/**
  * Get human-readable label for a category value.
  *
  * @param categoryField - The name of the category field
@@ -515,6 +600,7 @@ export function buildCategoryColorMap(
  * @returns Human-readable label or the original value
  */
 export function getCategoryLabel(categoryField: string | null, value: string): string {
+  if (value === CategoryKey.MISSING) return CategoryKey.MISSING_LABEL;
   const preset = resolveCategoryPreset(categoryField);
   return preset?.labels?.[value] ?? value;
 }

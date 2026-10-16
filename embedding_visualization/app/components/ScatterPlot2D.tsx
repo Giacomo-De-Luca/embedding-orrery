@@ -13,7 +13,9 @@ import type {
   PlotRelayoutEvent,
 } from 'plotly.js';
 import type { Point2D, HighlightMap, NestedColorMap, ColorScale, CustomNumericRange } from '../../lib/types/types';
-import { buildCategoryColorMap, getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { CategoryKey } from '../../lib/utils/categoryKey';
+import { HiddenPoints } from '../../lib/utils/hiddenPoints';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { useColorScaleReady } from '../../lib/hooks/useColorScaleReady';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
@@ -22,6 +24,7 @@ import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
+import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import {
   computeClusterLabelPlacements,
   computeCurrentScale,
@@ -204,38 +207,25 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const paperBg = isDark ? 'rgba(0,0,0,0)' : '#ffffff';
   const legendBg = isDark ? 'rgba(2,6,23,0.85)' : 'rgba(255,255,255,0.85)';
 
-  // Build color map based on category values (with custom overrides)
-  const colorOverrides = useVisualizationStore(
-    (s) => categoryField ? s.categoryColorOverrides[categoryField] : undefined
-  );
-  const colorMap = useMemo(() => {
-    return buildCategoryColorMap(categoryField, categoryValues, categoricalPalette, colorOverrides);
-  }, [categoryField, categoryValues, categoricalPalette, colorOverrides]);
+  // Build color map based on category values (with custom overrides / aliases)
+  const colorMap = useCategoryColorMap(categoryField, categoryValues, categoricalPalette);
 
   const densityMode = useVisualizationStore((s) => s.densityMode);
   const densityIntensity = useVisualizationStore((s) => s.densityIntensity);
+  const hideMissing = useVisualizationStore((s) => s.hideMissing);
+  const missingPointOpacity = useVisualizationStore((s) => s.missingPointOpacity);
+  const hiddenOptions = useMemo(() => ({ hideUnclustered, hideMissing }), [hideUnclustered, hideMissing]);
 
   // --- Visibly active points: shared input for cluster labels and the density
   // overlay, so both track the same filters (mirrors the 3D clusterDataMap).
   const visiblePoints = useMemo(() => {
     if (!showClusterLabels && !densityMode) return [] as Point2D[];
 
-    let displayPoints: Point2D[] = hideUnclustered
-      ? points.filter(p => {
-          const topicId = p.metadata?.['topic_id'];
-          if (topicId === '-1' || topicId === -1) return false;
-          const topicLabel = p.metadata?.['topic_label'];
-          if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-          return true;
-        })
-      : points;
+    let displayPoints = HiddenPoints.filter(points, categoryField, hiddenOptions);
 
     if (categoryField && mutedCategories.length > 0) {
       const mutedSet = new Set(mutedCategories);
-      displayPoints = displayPoints.filter(p => {
-        const category = p.metadata?.[categoryField];
-        return category == null || !mutedSet.has(String(category));
-      });
+      displayPoints = displayPoints.filter(p => !mutedSet.has(CategoryKey.of(p.metadata?.[categoryField])));
     }
 
     // Exclude points muted by text search / temporal filters.
@@ -244,7 +234,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
 
     return displayPoints;
-  }, [showClusterLabels, densityMode, points, categoryField, hideUnclustered, mutedCategories, combinedMutedIndices]);
+  }, [showClusterLabels, densityMode, points, categoryField, hiddenOptions, mutedCategories, combinedMutedIndices]);
 
   // --- Cluster label data (shared with 3D pattern via groupPointsByCluster) ---
   const clusterDataMap = useMemo(() => {
@@ -262,8 +252,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (densityMode && isCategoricalField && categoryField) {
       const counts = new Map<string, number>();
       for (const p of visiblePoints) {
-        const raw = p.metadata?.[categoryField];
-        const cat = raw !== null && raw !== undefined && raw !== '' ? String(raw) : 'unknown';
+        const cat = CategoryKey.of(p.metadata?.[categoryField]);
         counts.set(cat, (counts.get(cat) ?? 0) + 1);
       }
       active = Array.from(counts, ([name, count]) => ({
@@ -628,17 +617,8 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (highlightedIndices && highlightedIndices.size > 0) {
       const unhighlightedPoints = points.filter(p => !highlightedIndices.has(p.index));
 
-      // Apply hideUnclustered filter to background points
-      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
-      const filteredUnhighlightedPoints = hideUnclustered
-        ? unhighlightedPoints.filter(p => {
-            const topicId = p.metadata?.['topic_id'];
-            if (topicId === '-1' || topicId === -1) return false;
-            const topicLabel = p.metadata?.['topic_label'];
-            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-            return true;
-          })
-        : unhighlightedPoints;
+      // Apply the hide toggles (unclustered noise, missing values) to background points
+      const filteredUnhighlightedPoints = HiddenPoints.filter(unhighlightedPoints, categoryField, hiddenOptions);
 
       const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
 
@@ -678,15 +658,16 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             // NESTED: group by subtopic_label, color from nestedColorMap
             const pointsBySub: Record<string, Point2D[]> = {};
             filteredUnhighlightedPoints.forEach(point => {
-              const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+              const sub = CategoryKey.nested(point.metadata).subtopic;
               if (!pointsBySub[sub]) pointsBySub[sub] = [];
               pointsBySub[sub].push(point);
             });
 
             Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
               // Check if subtopic or its parent topic is muted
-              const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+              const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
               const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
+              const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
               if (hideFilteredPoints && isMuted) return;
               if (combinedMutedIndices && combinedMutedIndices.size > 0) {
                 const activePoints = subPoints.filter(p => !combinedMutedIndices.has(p.index));
@@ -701,7 +682,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                     marker: {
                       size: markerStyle.size,
                       color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                      opacity: isMuted ? mutedOp : dimOpacity,
+                      opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                     },
                     text: activePoints.map(formatHoverText),
                     hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -719,7 +700,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                     marker: {
                       size: markerStyle.size,
                       color: '#9ca3af',
-                      opacity: mutedOp,
+                      opacity: mutedOp * fade,
                     },
                     text: mutedPts.map(formatHoverText),
                     hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -737,7 +718,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                    opacity: isMuted ? mutedOp : dimOpacity,
+                    opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                   },
                   text: subPoints.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -749,8 +730,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
           } else {
             const pointsByCategory: Record<string, Point2D[]> = {};
             filteredUnhighlightedPoints.forEach(point => {
-              const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-              const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+              const cat = CategoryKey.of(categoryField ? point.metadata?.[categoryField] : undefined);
               if (!pointsByCategory[cat]) {
                 pointsByCategory[cat] = [];
               }
@@ -759,6 +739,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
             Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
               const isMuted = mutedCategories.includes(cat);
+              const fade = CategoryKey.missingFade(cat, missingPointOpacity);
               if (hideFilteredPoints && isMuted) return;
               if (combinedMutedIndices && combinedMutedIndices.size > 0) {
                 const activePoints = catPoints.filter(p => !combinedMutedIndices.has(p.index));
@@ -773,7 +754,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                     marker: {
                       size: markerStyle.size,
                       color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                      opacity: isMuted ? mutedOp : dimOpacity,
+                      opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                     },
                     text: activePoints.map(formatHoverText),
                     hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -791,7 +772,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                     marker: {
                       size: markerStyle.size,
                       color: '#9ca3af',
-                      opacity: mutedOp,
+                      opacity: mutedOp * fade,
                     },
                     text: mutedPts.map(formatHoverText),
                     hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -809,7 +790,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                    opacity: isMuted ? mutedOp : dimOpacity,
+                    opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                   },
                   text: catPoints.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1069,17 +1050,8 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
     // No highlighting - render normally
     else {
-      // Apply hideUnclustered filter
-      // Check topic_id for -1 OR topic_label for "Unclustered" to handle all dataset shapes
-      const displayPoints = hideUnclustered
-        ? points.filter(p => {
-            const topicId = p.metadata?.['topic_id'];
-            if (topicId === '-1' || topicId === -1) return false;
-            const topicLabel = p.metadata?.['topic_label'];
-            if (topicLabel === 'Unclustered' || topicLabel === 'unclustered') return false;
-            return true;
-          })
-        : points;
+      // Apply the hide toggles (unclustered noise, missing values)
+      const displayPoints = HiddenPoints.filter(points, categoryField, hiddenOptions);
 
       const mutedOp = markerStyle.opacity * (mutedPointOpacity ?? 0.20);
 
@@ -1153,14 +1125,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
           // NESTED: group by subtopic_label
           const pointsBySub: Record<string, Point2D[]> = {};
           displayPoints.forEach(point => {
-            const sub = String(point.metadata?.['subtopic_label'] ?? point.metadata?.['topic_label'] ?? 'unknown');
+            const sub = CategoryKey.nested(point.metadata).subtopic;
             if (!pointsBySub[sub]) pointsBySub[sub] = [];
             pointsBySub[sub].push(point);
           });
 
           Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
-            const parentTopic = String(subPoints[0]?.metadata?.['topic_label'] ?? 'unknown');
+            const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
             const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
+            const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
             if (hideFilteredPoints && isMuted) return;
             if (combinedMutedIndices && combinedMutedIndices.size > 0) {
               const activePoints = subPoints.filter(p => !combinedMutedIndices.has(p.index));
@@ -1175,7 +1148,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                    opacity: isMuted ? mutedOp : markerStyle.opacity,
+                    opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                   },
                   text: activePoints.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1192,7 +1165,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: '#9ca3af',
-                    opacity: mutedOp,
+                    opacity: mutedOp * fade,
                   },
                   text: mutedPts.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1210,7 +1183,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                 marker: {
                   size: markerStyle.size,
                   color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
-                  opacity: isMuted ? mutedOp : markerStyle.opacity,
+                  opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                 },
                 text: subPoints.map(formatHoverText),
                 hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1221,8 +1194,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         } else {
           const pointsByCategory: Record<string, Point2D[]> = {};
           displayPoints.forEach(point => {
-            const raw = categoryField ? point.metadata?.[categoryField] : undefined;
-            const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+            const cat = CategoryKey.of(categoryField ? point.metadata?.[categoryField] : undefined);
             if (!pointsByCategory[cat]) {
               pointsByCategory[cat] = [];
             }
@@ -1231,6 +1203,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
           Object.entries(pointsByCategory).forEach(([cat, catPoints]) => {
             const isMuted = mutedCategories.includes(cat);
+            const fade = CategoryKey.missingFade(cat, missingPointOpacity);
             if (hideFilteredPoints && isMuted) return;
             if (combinedMutedIndices && combinedMutedIndices.size > 0) {
               const activePoints = catPoints.filter(p => !combinedMutedIndices.has(p.index));
@@ -1245,7 +1218,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                    opacity: isMuted ? mutedOp : markerStyle.opacity,
+                    opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                   },
                   text: activePoints.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1262,7 +1235,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   marker: {
                     size: markerStyle.size,
                     color: '#9ca3af',
-                    opacity: mutedOp,
+                    opacity: mutedOp * fade,
                   },
                   text: mutedPts.map(formatHoverText),
                   hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1280,7 +1253,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                 marker: {
                   size: markerStyle.size,
                   color: isMuted ? '#9ca3af' : (colorMap[cat] || '#7f7f7f'),
-                  opacity: isMuted ? mutedOp : markerStyle.opacity,
+                  opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                 },
                 text: catPoints.map(formatHoverText),
                 hovertemplate: '<b>%{text}</b><extra></extra>',
@@ -1367,7 +1340,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     }
 
     return traces;
-  }, [points, categoryField, categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hideUnclustered, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity]);
+  }, [points, categoryField, categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hiddenOptions, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, missingPointOpacity]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({

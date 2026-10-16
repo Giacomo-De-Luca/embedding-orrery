@@ -23,6 +23,8 @@ interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   colorFieldOptions?: ColorFieldOption[];
   availableFields?: string[];
   nestedColorAvailable?: boolean;
+  hasMissingValues?: boolean;
+  canFadeMissing?: boolean;
   collectionName?: string | null;
   hasActiveFilter?: boolean;
   hasHighlights?: boolean;
@@ -35,6 +37,8 @@ export function EmbeddingSidebar({
   colorFieldOptions = [],
   availableFields = [],
   nestedColorAvailable,
+  hasMissingValues,
+  canFadeMissing,
   collectionName,
   hasActiveFilter,
   hasHighlights,
@@ -65,6 +69,8 @@ export function EmbeddingSidebar({
             colorFieldOptions={colorFieldOptions}
             availableFields={availableFields}
             nestedColorAvailable={nestedColorAvailable}
+            hasMissingValues={hasMissingValues}
+            canFadeMissing={canFadeMissing}
             collectionName={collectionName}
             hasActiveFilter={hasActiveFilter}
             hasHighlights={hasHighlights}

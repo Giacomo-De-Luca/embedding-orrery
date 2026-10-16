@@ -3,29 +3,29 @@
 import type { CSSProperties } from 'react';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
-import type { Point2D, Point3D } from '../../lib/types/types';
+import type { Point2D, Point3D, SearchablePoint } from '../../lib/types/types';
 import { HighlightedText } from '../utils/highlightedText';
 
 // Max result rows rendered — an uncapped list can mean thousands of DOM nodes
 const RESULTS_PREVIEW_LIMIT = 100;
 
-interface TextSearchResultsListProps {
-  results: (Point2D | Point3D)[];
+interface TextSearchResultsListProps<T extends SearchablePoint> {
+  results: T[];
   selectedPointId?: string | null;
-  onResultClick?: (point: Point2D | Point3D) => void;
+  onResultClick?: (point: T) => void;
   maxHeight?: number;
   categoryField?: string | null;
   searchQuery?: string;
 }
 
-export function TextSearchResultsList({
+export function TextSearchResultsList<T extends SearchablePoint = Point2D | Point3D>({
   results,
   selectedPointId,
   onResultClick,
   maxHeight = 300,
   categoryField,
   searchQuery,
-}: TextSearchResultsListProps) {
+}: TextSearchResultsListProps<T>) {
   if (results.length === 0) {
     return null;
   }

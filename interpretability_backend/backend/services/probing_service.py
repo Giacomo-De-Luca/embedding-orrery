@@ -1,11 +1,18 @@
 """Embedding-space probing service.
 
 Bridges the `interpret/probing` toolkit to stored collections: X is the
-collection's ChromaDB vectors, y is a numeric metadata field from DuckDB.
-Training reuses the toolkit trainers (`train_sklearn_probe` for ridge and
-massmean, `train_mlp_probes` for the MLP) on an in-memory ActivationDataset;
+collection's ChromaDB vectors, y is a metadata field from DuckDB — numeric
+for the regression kinds, categorical labels for the classifier kinds
+(logreg / svc / mlp_clf; binary or multiclass, see ``probe_targets.py``).
+Training reuses the toolkit trainers (`train_sklearn_probe` for the sklearn
+kinds, `train_mlp_probes` for both MLPs) on an in-memory ActivationDataset;
 this module only assembles data, scores all items with the trained probe, and
 persists metrics + direction + per-item scores to DuckDB.
+
+Classifier probes score every item with class probabilities: binary targets
+persist P(class 1) as the score; multiclass targets persist the confidence
+(max probability) as the score plus the predicted class index and the full
+probability vector (fetched per class, lazily, by the UI).
 
 Toolkit artifacts (probe_results.csv, summary.json, directions/, checkpoints/)
 are written under ``PROBING_RESULTS_DIR/collections/<collection>/<field>/<kind>/``
@@ -22,6 +29,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
+from scipy.special import expit, softmax
 
 from interpret.probing.activation_dataset import ActivationDataset
 from interpret.probing.configs.probe import MLPProbeSpec, SklearnProbeSpec
@@ -29,16 +37,20 @@ from interpret.probing.probes.mlp_probe import ProbeModel, train_mlp_probes
 from interpret.probing.probes.sklearn_probes import train_sklearn_probe
 from interpret.probing.utils.enums import TaskType
 
+from ..utils.classification_metrics import ClassificationMetrics
 from ..utils.duckdb_sync import _get_db as _get_duckdb
 from ..utils.embedding_loader import load_embeddings_for_ids
+from ..utils.probe_split import ProbeSplitter
 from ..utils.resource_paths import PROBING_RESULTS_DIR
+from .probe_targets import CategoricalLabel, CategoricalTarget, ProbeTargetError
 from .probing_types import (
-    _BINARY_KINDS,
     _CALIBRATED_KINDS,
     _PREDICTIVE_KINDS,
+    CLASSIFICATION_KINDS,
+    MIN_CLASS_COUNT_FLOOR,
     PROBE_KINDS,
     ProbeConfig,
-    binary_target_mapping,
+    ProbeTask,
     sanitize_field_key,
     score_field_names,
 )
@@ -51,8 +63,12 @@ MIN_VALID_SAMPLES = 50
 _MLP_SCORING_BATCH = 8192
 # RBF SVR training is O(n^2); cap its training pool well below the linear cap.
 _SVR_MAX_TRAIN = 10_000
+# RBF SVC is O(n^2) too, and Platt scaling refits it ~5 more times (internal
+# CV) — keep it well inside the UI's 10-minute mutation timeout.
+_SVC_MAX_TRAIN = 5_000
 
-# Score bundle for kinds with no persisted linear direction (mlp, svr).
+# Score bundle for kinds with no persisted linear direction (mlp, svr, svc,
+# multinomial logreg — whose [C, D] coefficients stay in the .npz artifact).
 _EMPTY_BUNDLE = {
     "direction": None,
     "scaler_mean": None,
@@ -81,6 +97,12 @@ class ProbeCoreOutput:
     # Mass-mean family only: the univariate readout {"slope", "intercept"}
     # mapping projection scores to target units; None for other kinds.
     calibration: dict | None = None
+    task: str = ProbeTask.REGRESSION
+    # Classifier kinds: the categorical target the probe was trained on.
+    target: CategoricalTarget | None = None
+    # Multiclass only: predicted class index [N] and probabilities [N, C].
+    predicted: np.ndarray | None = None
+    probs: np.ndarray | None = None
 
 
 @dataclass
@@ -129,8 +151,8 @@ def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
             train_split=config.train_split,
         )
     if config.kind == "logreg":
-        # Binary classifier; the saved direction is the separating hyperplane
-        # normal, and scores are P(class 1) recomputed from it.
+        # Binary or multinomial classifier; the saved direction file holds
+        # the hyperplane normal(s), and scores are recomputed from it.
         return SklearnProbeSpec(
             kind="logreg",
             C=config.c,
@@ -140,17 +162,41 @@ def _build_spec(config: ProbeConfig) -> SklearnProbeSpec | MLPProbeSpec:
             seed=config.seed,
             train_split=config.train_split,
         )
-    if config.kind == "mlp":
+    if config.kind == "svc":
+        # RBF classifier: no coef_, so persist the estimator; seeded Platt
+        # scaling gives the class probabilities every item is scored with.
+        return SklearnProbeSpec(
+            kind="svc",
+            C=config.c,
+            kernel=config.kernel,
+            class_weight=config.class_weight,
+            standardise=True,
+            save_models=True,
+            probability=True,
+            seed=config.seed,
+            train_split=config.train_split,
+        )
+    if config.kind in ("mlp", "mlp_clf"):
         return MLPProbeSpec(
             hidden_dims=list(config.hidden_dims) if config.hidden_dims else [256],
             epochs=config.epochs,
             patience=config.patience,
             dev_split=config.dev_split,
             activation=config.activation,
+            class_weight=config.class_weight if config.kind == "mlp_clf" else None,
             seed=config.seed,
             train_split=config.train_split,
         )
     raise ValueError(f"Unknown probe kind {config.kind!r}. Expected one of {PROBE_KINDS}.")
+
+
+def _artifact_path(spec: SklearnProbeSpec | MLPProbeSpec, output_dir: Path) -> Path:
+    """The trained-probe file the toolkit writes for this spec (single fold)."""
+    if isinstance(spec, MLPProbeSpec):
+        return output_dir / "checkpoints" / "layer_0_embedding.pt"
+    if spec.save_models:
+        return output_dir / "models" / f"L0_embedding_{spec.kind}.joblib"
+    return output_dir / "directions" / f"L0_embedding_{spec.kind}.npz"
 
 
 def _clean_number(value) -> float | None:
@@ -181,34 +227,73 @@ def _parse_metrics(output_dir: Path) -> dict:
     }
 
 
-def _score_linear(X: np.ndarray, npz_path: Path, kind: str) -> tuple[np.ndarray, dict]:
-    """Score all rows with a saved linear direction; return (scores, bundle).
-
-    Scoring is chunked (like ``_score_mlp``) so the float64 standardization
-    never materializes a second full-size copy of X.
-    """
-    data = np.load(npz_path)
-    coef = np.asarray(data["coef"], dtype=np.float64).ravel()
-    intercept = float(np.asarray(data["intercept"]).ravel()[0])
-    scaler_mean = np.asarray(data["scaler_mean"], dtype=np.float64)
-    scaler_scale = (
-        np.asarray(data["scaler_scale"], dtype=np.float64)
-        if "scaler_scale" in data
-        else np.ones_like(scaler_mean)
-    )
-    scores = np.empty(X.shape[0], dtype=np.float64)
+def _standardize_chunks(X: np.ndarray, mean: np.ndarray, scale: np.ndarray | None):
+    """Yield standardized float64 chunks of X without a full second copy."""
+    denom = scale if scale is not None else 1.0
     for start in range(0, X.shape[0], _MLP_SCORING_BATCH):
         chunk = X[start : start + _MLP_SCORING_BATCH].astype(np.float64)
-        scores[start : start + _MLP_SCORING_BATCH] = ((chunk - scaler_mean) / scaler_scale) @ coef
+        yield (chunk - mean) / denom
+
+
+class LinearProbeArtifact:
+    """A toolkit direction file (.npz): coef [K, D], intercept [K], scaler params.
+
+    K is 1 for the regression kinds, mass-mean and binary logreg, and C for
+    multinomial logreg.
+    """
+
+    def __init__(self, npz_path: Path):
+        data = np.load(npz_path)
+        self.coef = np.atleast_2d(np.asarray(data["coef"], dtype=np.float64))
+        self.intercept = np.asarray(data["intercept"], dtype=np.float64).ravel()
+        self.scaler_mean = np.asarray(data["scaler_mean"], dtype=np.float64)
+        self.scaler_scale = (
+            np.asarray(data["scaler_scale"], dtype=np.float64) if "scaler_scale" in data else None
+        )
+
+    def project(self, X: np.ndarray) -> np.ndarray:
+        """Standardised projections [N, K] (no intercept), scored in chunks."""
+        out = np.empty((X.shape[0], self.coef.shape[0]), dtype=np.float64)
+        pos = 0
+        for chunk in _standardize_chunks(X, self.scaler_mean, self.scaler_scale):
+            out[pos : pos + len(chunk)] = chunk @ self.coef.T
+            pos += len(chunk)
+        return out
+
+    def bundle(self) -> dict:
+        """The single persisted direction + scaler params (K == 1 only)."""
+        return {
+            "direction": [float(v) for v in self.coef[0]],
+            "scaler_mean": [float(v) for v in self.scaler_mean],
+            "scaler_scale": (
+                [float(v) for v in self.scaler_scale] if self.scaler_scale is not None else None
+            ),
+            "intercept": float(self.intercept[0]),
+        }
+
+
+def _score_linear(X: np.ndarray, npz_path: Path, kind: str) -> tuple[np.ndarray, dict]:
+    """Score all rows with a saved linear direction; return (scores, bundle)."""
+    artifact = LinearProbeArtifact(npz_path)
+    scores = artifact.project(X)[:, 0]
     if kind in _PREDICTIVE_KINDS:
-        scores += intercept
-    bundle = {
-        "direction": [float(v) for v in coef],
-        "scaler_mean": [float(v) for v in scaler_mean],
-        "scaler_scale": [float(v) for v in scaler_scale],
-        "intercept": intercept,
-    }
-    return scores, bundle
+        scores = scores + artifact.intercept[0]
+    return scores, artifact.bundle()
+
+
+def _logreg_probs(X: np.ndarray, npz_path: Path) -> tuple[np.ndarray, dict]:
+    """Class probabilities [N, C] from a saved logreg hyperplane file.
+
+    Binary files hold one hyperplane (sigmoid -> [1 - p, p]) whose normal is
+    persisted as the probe direction; multinomial files hold C rows (softmax)
+    that don't fit the 1-D direction column, so no direction is persisted.
+    """
+    artifact = LinearProbeArtifact(npz_path)
+    logits = artifact.project(X) + artifact.intercept
+    if logits.shape[1] == 1:
+        p1 = expit(logits[:, 0])
+        return np.column_stack([1.0 - p1, p1]), artifact.bundle()
+    return softmax(logits, axis=1), dict(_EMPTY_BUNDLE)
 
 
 def _calibrated_readout(
@@ -242,12 +327,14 @@ def _calibrated_readout(
     return metrics, {"slope": float(slope), "intercept": float(intercept)}
 
 
-def _score_mlp(X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec) -> np.ndarray:
-    """Score all rows with the best MLP checkpoint (batched, no grad)."""
+def _score_mlp(
+    X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec, output_dim: int = 1
+) -> np.ndarray:
+    """Raw MLP outputs [N, output_dim] from the best checkpoint (batched, no grad)."""
     state = torch.load(checkpoint_path, weights_only=True)
     model = ProbeModel(
         input_dim=X.shape[1],
-        output_dim=1,
+        output_dim=output_dim,
         hidden_dims=spec.hidden_dims,
         dropout=spec.dropout,
         # Must match training: activation layers are parameterless, so a
@@ -260,7 +347,7 @@ def _score_mlp(X: np.ndarray, checkpoint_path: Path, spec: MLPProbeSpec) -> np.n
     with torch.no_grad():
         for start in range(0, X.shape[0], _MLP_SCORING_BATCH):
             batch = torch.from_numpy(X[start : start + _MLP_SCORING_BATCH]).float()
-            chunks.append(model(batch).numpy().ravel())
+            chunks.append(model(batch).numpy())
     return np.concatenate(chunks).astype(np.float64)
 
 
@@ -275,66 +362,37 @@ def _load_sklearn_model(model_path: Path) -> tuple[object, np.ndarray, np.ndarra
     )
 
 
-def _standardize_chunks(X: np.ndarray, mean: np.ndarray, scale: np.ndarray | None):
-    """Yield standardized float64 chunks of X without a full second copy."""
-    denom = scale if scale is not None else 1.0
-    for start in range(0, X.shape[0], _MLP_SCORING_BATCH):
-        chunk = X[start : start + _MLP_SCORING_BATCH].astype(np.float64)
-        yield (chunk - mean) / denom
+def _score_sklearn_model(
+    X: np.ndarray, model_path: Path, n_classes: int | None = None
+) -> np.ndarray:
+    """Score all rows with a persisted estimator, batched.
 
-
-def _score_svr(X: np.ndarray, model_path: Path) -> np.ndarray:
-    """Score all rows with a persisted (rbf) SVR estimator, batched."""
+    Regression (``n_classes`` None): predictions [N]. Classification:
+    ``predict_proba`` [N, n_classes], columns placed via ``classes_``.
+    """
     estimator, mean, scale = _load_sklearn_model(model_path)
-    chunks = [estimator.predict(c) for c in _standardize_chunks(X, mean, scale)]
-    return np.concatenate(chunks).astype(np.float64)
-
-
-def _score_logreg(X: np.ndarray, npz_path: Path) -> tuple[np.ndarray, dict]:
-    """Score all rows as P(class 1) from a saved logreg hyperplane, batched.
-
-    The toolkit saves the standardised coef/intercept; P(class 1) is the
-    sigmoid of the linear logit. Returns (scores, direction bundle).
-    """
-    data = np.load(npz_path)
-    coef = np.asarray(data["coef"], dtype=np.float64).ravel()
-    intercept = float(np.asarray(data["intercept"]).ravel()[0])
-    mean = np.asarray(data["scaler_mean"], dtype=np.float64)
-    scale = np.asarray(data["scaler_scale"], dtype=np.float64) if "scaler_scale" in data else None
-    scores = np.empty(X.shape[0], dtype=np.float64)
+    if n_classes is None:
+        chunks = [estimator.predict(c) for c in _standardize_chunks(X, mean, scale)]
+        return np.concatenate(chunks).astype(np.float64)
+    columns = np.asarray(estimator.classes_, dtype=np.int64)
+    probs = np.zeros((X.shape[0], n_classes), dtype=np.float64)
     pos = 0
-    # exp overflow at extreme logits saturates cleanly to 0/1; silence the warning.
-    with np.errstate(over="ignore"):
-        for chunk in _standardize_chunks(X, mean, scale):
-            logits = chunk @ coef + intercept
-            scores[pos : pos + len(logits)] = 1.0 / (1.0 + np.exp(-logits))
-            pos += len(logits)
-    bundle = {
-        "direction": [float(v) for v in coef],
-        "scaler_mean": [float(v) for v in mean],
-        "scaler_scale": [float(v) for v in scale] if scale is not None else None,
-        "intercept": intercept,
-    }
-    return scores, bundle
+    for chunk in _standardize_chunks(X, mean, scale):
+        probs[pos : pos + len(chunk), columns] = estimator.predict_proba(chunk)
+        pos += len(chunk)
+    return probs
 
 
-def _binarize_for_logreg(y: np.ndarray, valid_idx: np.ndarray) -> np.ndarray:
-    """Validate a binary target and remap the two classes to {0, 1}.
-
-    Returns a float64 copy of y with valid rows in {0.0, 1.0} (larger source
-    value -> 1) and NaN elsewhere. Raises if not exactly two classes.
-    """
-    distinct = np.unique(y[valid_idx])
-    if len(distinct) != 2:
-        raise ProbeTrainingError(
-            "Logistic regression requires a binary target (exactly two distinct "
-            f"values); {len(distinct)} found. Use ridge, SVR, or MLP for "
-            "continuous or multi-class fields."
-        )
-    out = np.full_like(y, np.nan)
-    out[y == distinct[1]] = 1.0
-    out[y == distinct[0]] = 0.0
-    return out
+def _classification_target(
+    y: np.ndarray, config: ProbeConfig, target: CategoricalTarget | None
+) -> CategoricalTarget:
+    """The categorical target for a classifier kind (derived from numeric y if absent)."""
+    if target is not None:
+        return target
+    try:
+        return CategoricalTarget.from_numeric(y, config.min_class_fraction)
+    except ProbeTargetError as exc:
+        raise ProbeTrainingError(str(exc)) from exc
 
 
 def run_probe_core(
@@ -343,6 +401,7 @@ def run_probe_core(
     ids: list[str],
     config: ProbeConfig,
     output_dir: Path,
+    target: CategoricalTarget | None = None,
 ) -> ProbeCoreOutput:
     """Train one probe and score every row.
 
@@ -353,57 +412,65 @@ def run_probe_core(
         ids: Item ids aligned to X/y rows.
         config: Probe configuration; ``kind`` selects the trainer.
         output_dir: Toolkit artifact directory for this probe.
+        target: Classifier kinds only — the categorical target (built by the
+            orchestrator from the field's labels). When None it is derived
+            from numeric ``y``; either way ``y`` becomes its class codes.
 
     Raises:
-        ProbeTrainingError: fewer than MIN_VALID_SAMPLES valid targets.
+        ProbeTrainingError: fewer than MIN_VALID_SAMPLES valid targets, or a
+            target the kind cannot train on.
     """
     spec = _build_spec(config)
     output_dir = Path(output_dir)
-    is_classification = config.kind in _BINARY_KINDS
+    is_classification = config.kind in CLASSIFICATION_KINDS
+    if is_classification:
+        target = _classification_target(y, config, target)
+        y = target.codes
+        task = target.task
+    else:
+        target = None
+        task = ProbeTask.REGRESSION
+    multiclass = task == ProbeTask.MULTICLASS
 
     valid_idx = np.flatnonzero(np.isfinite(y))
     if len(valid_idx) < MIN_VALID_SAMPLES:
         raise ProbeTrainingError(
-            f"Field {config.target_field!r} has {len(valid_idx)} usable numeric "
+            f"Field {config.target_field!r} has {len(valid_idx)} usable "
             f"values; at least {MIN_VALID_SAMPLES} are required."
         )
 
-    if config.kind in _BINARY_KINDS:
-        # Validate + remap the two classes to {0, 1} before splitting.
-        y = _binarize_for_logreg(y, valid_idx)
-
-    # RBF SVR is O(n^2); cap its training pool tighter than the linear cap.
+    # RBF SVR/SVC are O(n^2); cap their training pool tighter than the linear cap.
     train_cap = config.max_train_samples
     if config.kind == "svr":
         train_cap = min(train_cap, _SVR_MAX_TRAIN)
+    elif config.kind == "svc":
+        train_cap = min(train_cap, _SVC_MAX_TRAIN)
 
-    rng = np.random.default_rng(config.seed)
-    if len(valid_idx) > train_cap:
-        pool_idx = rng.choice(valid_idx, size=train_cap, replace=False)
-        pool_idx.sort()
-    else:
-        pool_idx = valid_idx
-
-    perm = rng.permutation(len(pool_idx))
-    cut = int(len(pool_idx) * config.train_split)
-    indices_override = (perm[:cut], perm[cut:])
-    n_train, n_val = len(perm[:cut]), len(perm[cut:])
+    # Multiclass splits are stratified (every class on both sides, rare
+    # classes survive the cap); everything else keeps the original random
+    # split, so kinds on the same field share it and metrics compare.
+    splitter = ProbeSplitter(config.seed, config.train_split, min_per_class=MIN_CLASS_COUNT_FLOOR)
+    pool_idx, train_rel, val_rel = splitter.split(
+        valid_idx, train_cap, labels=y[valid_idx] if multiclass else None
+    )
+    indices_override = (train_rel, val_rel)
+    n_train, n_val = len(train_rel), len(val_rel)
 
     X_pool = np.ascontiguousarray(X[pool_idx], dtype=np.float32)
     # Classification kinds need integer class labels; the toolkit passes an
     # integer target through verbatim (a float 0/1 would be percentile-binned).
     y_pool = y[pool_idx].astype(np.int64 if is_classification else np.float64)
 
-    if is_classification:
-        # The shared split is not stratified; near the sample floor a random
-        # 80/20 cut can strand one class entirely, which sklearn reports as an
-        # opaque fit failure. Fail with a targeted message instead.
-        for part, name in ((indices_override[0], "train"), (indices_override[1], "validation")):
+    if is_classification and not multiclass:
+        # The shared binary split is not stratified; near the sample floor a
+        # random 80/20 cut can strand one class entirely, which sklearn
+        # reports as an opaque fit failure. Fail with a targeted message.
+        for part, name in ((train_rel, "train"), (val_rel, "validation")):
             if len(np.unique(y_pool[part])) < 2:
                 raise ProbeTrainingError(
                     f"The random split left only one class in the {name} set — "
-                    "the target is too imbalanced or too small for logistic "
-                    "regression. Try another seed, more data, or ridge/SVR."
+                    "the target is too imbalanced or too small for a classifier. "
+                    "Try another seed, more data, or ridge/SVR."
                 )
     dataset = ActivationDataset(
         activations={(0, "embedding"): torch.from_numpy(X_pool)},
@@ -413,15 +480,21 @@ def run_probe_core(
     # The toolkit trainers swallow per-fit failures into an error CSV row, so
     # a failed retrain would otherwise silently reuse the previous run's
     # artifact. Remove it up front and require the trainer to recreate it.
-    if isinstance(spec, MLPProbeSpec):
-        artifact_path = output_dir / "checkpoints" / "layer_0_embedding.pt"
-    elif config.kind == "svr":
-        artifact_path = output_dir / "models" / f"L0_embedding_{spec.kind}.joblib"
-    else:
-        artifact_path = output_dir / "directions" / f"L0_embedding_{spec.kind}.npz"
+    artifact_path = _artifact_path(spec, output_dir)
     artifact_path.unlink(missing_ok=True)
 
-    if isinstance(spec, MLPProbeSpec):
+    if isinstance(spec, MLPProbeSpec) and is_classification:
+        train_mlp_probes(
+            dataset,
+            spec,
+            torch.from_numpy(y_pool).long(),
+            output_dir,
+            task_type=TaskType.CLASSIFICATION,
+            num_classes=len(target.classes),
+            target_columns=[config.target_field],
+            indices_override=indices_override,
+        )
+    elif isinstance(spec, MLPProbeSpec):
         train_mlp_probes(
             dataset,
             spec,
@@ -445,14 +518,18 @@ def run_probe_core(
             "see the server logs for the underlying error."
         )
 
+    train_rows, val_rows = pool_idx[train_rel], pool_idx[val_rel]
+    if is_classification:
+        return _classifier_output(
+            X, y, spec, artifact_path, target, train_rows, val_rows, n_train, n_val
+        )
+
     if isinstance(spec, MLPProbeSpec):
-        scores = _score_mlp(X.astype(np.float32, copy=False), artifact_path, spec)
+        scores = _score_mlp(X.astype(np.float32, copy=False), artifact_path, spec).ravel()
         bundle = dict(_EMPTY_BUNDLE)
     elif config.kind == "svr":
-        scores = _score_svr(X, artifact_path)
+        scores = _score_sklearn_model(X, artifact_path)
         bundle = dict(_EMPTY_BUNDLE)
-    elif config.kind == "logreg":
-        scores, bundle = _score_logreg(X, artifact_path)
     else:
         scores, bundle = _score_linear(X, artifact_path, config.kind)
 
@@ -477,10 +554,7 @@ def run_probe_core(
         # on the train split) gives it a comparable validation R² and
         # predictions in target units for residuals.
         cal_metrics, calibration = _calibrated_readout(
-            np.asarray(scores),
-            y,
-            train_rows=pool_idx[indices_override[0]],
-            val_rows=pool_idx[indices_override[1]],
+            np.asarray(scores), y, train_rows=train_rows, val_rows=val_rows
         )
         metrics.update(cal_metrics)
 
@@ -513,6 +587,125 @@ def run_probe_core(
         n_val=n_val,
         calibration=calibration,
     )
+
+
+def _classifier_output(
+    X: np.ndarray,
+    y: np.ndarray,
+    spec: SklearnProbeSpec | MLPProbeSpec,
+    artifact_path: Path,
+    target: CategoricalTarget,
+    train_rows: np.ndarray,
+    val_rows: np.ndarray,
+    n_train: int,
+    n_val: int,
+) -> ProbeCoreOutput:
+    """Score every item with class probabilities and compute classifier metrics.
+
+    The predicted class is always argmax(probabilities) — for every kind —
+    and the metrics are computed from the same probabilities, so what the UI
+    shows and what the badge reports agree.
+    """
+    n_classes = len(target.classes)
+    if isinstance(spec, MLPProbeSpec):
+        logits = _score_mlp(X.astype(np.float32, copy=False), artifact_path, spec, n_classes)
+        probs, bundle = softmax(logits, axis=1), dict(_EMPTY_BUNDLE)
+    elif spec.kind == "svc":
+        probs, bundle = _score_sklearn_model(X, artifact_path, n_classes), dict(_EMPTY_BUNDLE)
+    else:
+        probs, bundle = _logreg_probs(X, artifact_path)
+
+    if probs.shape[1] != n_classes:
+        raise ProbeTrainingError(
+            f"Probe produced {probs.shape[1]} class probabilities for {n_classes} classes — "
+            "a class was missing from training."
+        )
+    if not np.all(np.isfinite(probs)):
+        raise ProbeTrainingError(
+            "Probe produced non-finite probabilities — the target may be degenerate."
+        )
+    # Unlabelled rows (NaN codes) are never in train/val; -1 keeps the cast clean.
+    labels = np.where(np.isfinite(y), y, -1.0)
+    metrics = ClassificationMetrics(probs, labels, train_rows, val_rows).compute()
+
+    multiclass = target.task == ProbeTask.MULTICLASS
+    scores = probs.max(axis=1) if multiclass else probs[:, 1]
+    return ProbeCoreOutput(
+        metrics=metrics,
+        scores=[float(s) for s in scores],
+        residuals=None,
+        direction=bundle["direction"],
+        scaler_mean=bundle["scaler_mean"],
+        scaler_scale=bundle["scaler_scale"],
+        intercept=bundle["intercept"],
+        n_train=n_train,
+        n_val=n_val,
+        task=target.task,
+        target=target,
+        predicted=probs.argmax(axis=1) if multiclass else None,
+        probs=probs if multiclass else None,
+    )
+
+
+def _load_categorical_target(
+    db, dataset_name: str, config: ProbeConfig
+) -> tuple[list[str], CategoricalTarget]:
+    """Item ids + the categorical target built from the field's canonical labels.
+
+    Raises ProbeTargetError when the field can't serve as a categorical target.
+    """
+    rows = db.get_categorical_metadata_field(dataset_name, config.target_field)
+    if not rows:
+        raise ProbeTrainingError(f"Dataset {dataset_name!r} has no items to probe.")
+    labels = [CategoricalLabel.canonical(text, json_type) for _, text, json_type in rows]
+    target = CategoricalTarget.from_labels(labels, config.min_class_fraction)
+    return [r[0] for r in rows], target
+
+
+def _load_target(
+    db, dataset_name: str, config: ProbeConfig
+) -> tuple[list[str], np.ndarray, CategoricalTarget | None]:
+    """Item ids, float targets (NaN = unusable) and the categorical target if any.
+
+    Classifier kinds always read the field as categorical labels. Regression
+    kinds read numbers, falling back to a binary categorical column (e.g.
+    "safe"/"unsafe" -> 0/1, alphabetical) when the field isn't numeric.
+    """
+    if config.kind in CLASSIFICATION_KINDS:
+        ids, target = _load_categorical_target(db, dataset_name, config)
+        return ids, target.codes, target
+
+    rows = db.get_numeric_metadata_field(dataset_name, config.target_field)
+    if not rows:
+        raise ProbeTrainingError(f"Dataset {dataset_name!r} has no items to probe.")
+    ids = [r[0] for r in rows]
+    y = np.array([np.nan if r[1] is None else float(r[1]) for r in rows], dtype=np.float64)
+    n_valid = int(np.isfinite(y).sum())
+    if n_valid >= MIN_VALID_SAMPLES:
+        return ids, y, None
+
+    # A numeric field that is merely too small must report that, not be
+    # reinterpreted as categorical (whose classifier would hit the same floor).
+    target = None
+    if n_valid == 0:
+        try:
+            ids, target = _load_categorical_target(db, dataset_name, config)
+        except ProbeTargetError:
+            target = None
+    if target is not None and (target.task != ProbeTask.BINARY or target.excluded):
+        n_classes = len(target.classes) + len(target.excluded)
+        raise ProbeTrainingError(
+            f"Field {config.target_field!r} is categorical with {n_classes} classes; "
+            "regression probes need a numeric or two-class target. Use a classifier: "
+            "Logistic, SVC, or MLP (classifier)."
+        )
+    if target is None:
+        raise ProbeTrainingError(
+            f"Field {config.target_field!r} has {n_valid} usable values; at least "
+            f"{MIN_VALID_SAMPLES} are required. Targets must be numeric or a binary "
+            "categorical column (exactly two distinct values)."
+        )
+    return ids, target.codes, target
 
 
 def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
@@ -554,33 +747,8 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             raise ProbeTrainingError(f"No dataset found for collection {config.collection_name!r}.")
 
         _progress(0, f"Loading targets for '{config.target_field}'...")
-        rows = db.get_numeric_metadata_field(dataset_name, config.target_field)
-        if not rows:
-            raise ProbeTrainingError(f"Dataset {dataset_name!r} has no items to probe.")
-        ids = [r[0] for r in rows]
-        y = np.array([np.nan if r[1] is None else float(r[1]) for r in rows], dtype=np.float64)
+        ids, y, target = _load_target(db, dataset_name, config)
         n_valid = int(np.isfinite(y).sum())
-        target_mapping: dict[str, float] | None = None
-        if n_valid < MIN_VALID_SAMPLES:
-            # Not usable as numbers — try a binary categorical column
-            # (e.g. "safe"/"unsafe" -> 0/1). Mapping is deterministic
-            # (alphabetical: first value -> 0) and surfaced in the UI.
-            text_rows = db.get_text_metadata_field(dataset_name, config.target_field)
-            values = [r[1] for r in text_rows]
-            target_mapping = binary_target_mapping(values)
-            if target_mapping is not None:
-                ids = [r[0] for r in text_rows]
-                y = np.array(
-                    [np.nan if v is None else target_mapping[v] for v in values],
-                    dtype=np.float64,
-                )
-                n_valid = int(np.isfinite(y).sum())
-        if n_valid < MIN_VALID_SAMPLES:
-            raise ProbeTrainingError(
-                f"Field {config.target_field!r} has {n_valid} usable values; at least "
-                f"{MIN_VALID_SAMPLES} are required. Targets must be numeric or a binary "
-                "categorical column (exactly two distinct values)."
-            )
 
         _progress(1, f"Loading {len(ids)} embedding vectors...")
         X = load_embeddings_for_ids(config.collection_name, ids)
@@ -590,7 +758,10 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             )
         X = X.astype(np.float32)
 
-        _progress(2, f"Training {config.kind} probe on {n_valid} samples...")
+        message = f"Training {config.kind} probe on {n_valid} samples..."
+        if config.kind == "svc":
+            message += " (SVC calibrates class probabilities — this can take a few minutes)"
+        _progress(2, message)
         output_dir = (
             Path(PROBING_RESULTS_DIR)
             / "collections"
@@ -598,7 +769,8 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             / sanitize_field_key(config.target_field)
             / config.kind
         )
-        core = run_probe_core(X, y, ids, config, output_dir)
+        core = run_probe_core(X, y, ids, config, output_dir, target=target)
+        target_mapping = target.target_mapping if target is not None else None
 
         _progress(3, "Saving probe and scores...")
         db.upsert_probe(
@@ -607,8 +779,12 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             config.kind,
             config={
                 **asdict(config),
+                "task": core.task,
                 "target_mapping": target_mapping,
                 "calibration": core.calibration,
+                "classes": core.target.classes if core.target else None,
+                "excluded_classes": (core.target.excluded or None) if core.target else None,
+                "class_threshold": core.target.threshold if core.target else None,
             },
             metrics=core.metrics,
             direction=core.direction,
@@ -626,8 +802,10 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
                 "residual": core.residuals if core.residuals is not None else [None] * len(ids),
             }
         )
+        if core.predicted is not None:
+            scores_df["predicted"] = core.predicted
         db.insert_probe_scores_bulk(
-            config.collection_name, config.target_field, config.kind, scores_df
+            config.collection_name, config.target_field, config.kind, scores_df, probs=core.probs
         )
 
         result.metrics = core.metrics

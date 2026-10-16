@@ -1,4 +1,5 @@
 import type { Point3D, NestedColorMap } from '../types/types';
+import { CategoryKey } from './categoryKey';
 
 /**
  * Cluster geometry utilities for nebula haze effects and cluster labels.
@@ -14,7 +15,8 @@ export interface ClusterData {
 
 /**
  * Group points by cluster (category field value), computing centroid + std per cluster.
- * Skips noise cluster (topic_id = -1 / "Unclustered").
+ * Skips noise cluster (topic_id = -1 / "Unclustered") and points whose value is
+ * missing: neither forms a spatial cluster worth a haze or a label.
  * Returns a Map from cluster label to ClusterData.
  */
 export function groupPointsByCluster(
@@ -28,11 +30,10 @@ export function groupPointsByCluster(
   // Group points by category
   const groups = new Map<string, Point3D[]>();
   for (const p of points) {
-    const raw = p.metadata?.[categoryField];
-    const cat = (raw !== null && raw !== undefined && raw !== '') ? String(raw) : 'unknown';
+    const cat = CategoryKey.of(p.metadata?.[categoryField]);
 
-    // Skip noise cluster
-    if (cat === '-1' || cat === 'Unclustered' || cat === 'unclustered') continue;
+    // Skip missing values and the noise cluster
+    if (cat === CategoryKey.MISSING || cat === '-1' || cat === 'Unclustered' || cat === 'unclustered') continue;
 
     if (!groups.has(cat)) groups.set(cat, []);
     groups.get(cat)!.push(p);

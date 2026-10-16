@@ -36,7 +36,7 @@ import { DebouncedSearchInput } from './DebouncedSearchInput';
 import { TextSearchResultsList } from './TextSearchResultsList';
 import { TopicSearchSection } from './TopicSearchSection';
 import { MetadataFilters } from './MetadataFilters';
-import type { Point2D, Point3D, TopicInfo, TextSearchConfig, DistanceMetric } from '../../lib/types/types';
+import type { Point2D, Point3D, SearchablePoint, TopicInfo, TextSearchConfig, DistanceMetric } from '../../lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopicSearch';
 import type { UseDocumentFeatureSearchReturn, SelectedFeature, DocumentRankingMode } from '../../lib/hooks/useDocumentFeatureSearch';
 import { fieldToDisplayName } from '../../lib/utils/fieldAnalysis';
@@ -49,12 +49,12 @@ const DOCUMENT_SENTINEL = '__document__';
 // Max feature-search result rows rendered in the sidebar preview list
 const FEATURE_RESULTS_PREVIEW_LIMIT = 50;
 
-interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
+interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentProps<typeof Sidebar> {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  textSearchResults?: (Point2D | Point3D)[];
+  textSearchResults?: T[];
   selectedPointId?: string | null;
-  onResultClick?: (point: Point2D | Point3D) => void;
+  onResultClick?: (point: T) => void;
   categoryField?: string | null;
   // Query prompt configuration
   queryPromptName?: string | null;
@@ -94,7 +94,7 @@ interface SearchSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onFeatureSearchResultClick?: (rowIndex: number) => void;
 }
 
-export function SearchSidebar({
+export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
   searchQuery,
   onSearchChange,
   textSearchResults,
@@ -137,7 +137,7 @@ export function SearchSidebar({
   onFeatureSearchResultClick,
   className,
   ...props
-}: SearchSidebarProps) {
+}: SearchSidebarProps<T>) {
   const hasSearch = Boolean(searchQuery && searchQuery.trim().length > 0);
   const showResults = hasSearch && textSearchResults && textSearchResults.length > 0;
 
@@ -240,7 +240,7 @@ export function SearchSidebar({
           {/* Search Input */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <Label htmlFor="sidebar-search" className="text-base">Search</Label>
+              <Label htmlFor="sidebar-search" className="text-base">Exact Search</Label>
               {textSearchLoading && (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
               )}

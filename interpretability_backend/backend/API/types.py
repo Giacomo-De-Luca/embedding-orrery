@@ -807,11 +807,13 @@ class TrainProbeInput:
 
     collection_name: str
     target_field: str
-    kind: str = "ridge"  # ridge | lasso | massmean | massmean_cov | svr | logreg | mlp
+    # ridge | lasso | massmean | massmean_cov | svr | mlp (regression)
+    # logreg | svc | mlp_clf (classifiers: binary or multiclass targets)
+    kind: str = "ridge"
     alpha: float | None = None  # ridge / lasso
-    c: float | None = None  # svr / logreg
-    kernel: str | None = None  # svr
-    class_weight: str | None = None  # logreg: null | "balanced"
+    c: float | None = None  # svr / logreg / svc
+    kernel: str | None = None  # svr / svc
+    class_weight: str | None = None  # classifiers: null | "balanced"
     epochs: int | None = None  # mlp
     hidden_dims: list[int] | None = None  # mlp
     patience: int | None = None  # mlp early-stopping patience (dev-set based)
@@ -820,6 +822,9 @@ class TrainProbeInput:
     seed: int | None = None
     train_split: float | None = None
     max_train_samples: int | None = None
+    # Classifiers, 3+ class targets: classes with fewer than
+    # max(5, ceil(fraction * labelled items)) items are excluded from training.
+    min_class_fraction: float | None = None
 
 
 @strawberry.type
@@ -837,6 +842,14 @@ class ProbeInfo:
     # Binary categorical targets only: the applied value->0/1 mapping
     # (e.g. {"safe": 0, "unsafe": 1}); null for numeric targets.
     target_mapping: JSON | None = None
+    # "regression" | "binary" | "multiclass" (derived for pre-multiclass rows).
+    task: str = "regression"
+    # Classifiers: kept classes in class-index order (predicted / classIndex
+    # refer to positions here); null for regression and legacy binary probes.
+    classes: list[str] | None = None
+    # Classifiers: classes excluded by the min-class threshold -> item count.
+    excluded_classes: JSON | None = None
+    min_class_fraction: float | None = None
 
 
 @strawberry.type
@@ -864,6 +877,16 @@ class ProbeScores:
     item_ids: list[str]
     scores: list[float]
     residuals: list[float | None] | None
+    # Multiclass probes: predicted class index (into ProbeInfo.classes).
+    predicted: list[int | None] | None = None
+
+
+@strawberry.type
+class ProbeClassProbabilities:
+    """One class's per-item probabilities for a multiclass probe (lazy fetch)."""
+
+    item_ids: list[str]
+    probabilities: list[float | None]
 
 
 @strawberry.input

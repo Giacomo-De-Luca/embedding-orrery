@@ -9,12 +9,20 @@ from ..embed_dataset import (
     PortionConfig,
     PortionStrategy,
 )
-from ..services.probing_types import MLP_ACTIVATIONS, PROBE_KINDS, ProbeConfig
+from ..services.probing_types import (
+    MLP_ACTIVATIONS,
+    PROBE_KINDS,
+    ProbeConfig,
+    ProbeTask,
+    derive_probe_task,
+    score_field_names,
+)
 from ..services.topic_extraction_service import TopicExtractionConfig
 from .types import (
     DataTypeEnum,
     EmbeddingProviderEnum,
     PortionStrategyEnum,
+    ProbeInfo,
     TopicInfo,
     TopicKeyword,
 )
@@ -193,6 +201,8 @@ def build_probe_config(input) -> ProbeConfig:
         raise ValueError(f"epochs must be >= 1, got {input.epochs}.")
     if input.hidden_dims and any(h < 1 for h in input.hidden_dims):
         raise ValueError(f"hidden_dims entries must be >= 1, got {input.hidden_dims}.")
+    if input.min_class_fraction is not None and not (0.0 <= input.min_class_fraction < 0.5):
+        raise ValueError(f"min_class_fraction must be in [0, 0.5), got {input.min_class_fraction}.")
 
     return ProbeConfig(
         collection_name=input.collection_name,
@@ -210,6 +220,32 @@ def build_probe_config(input) -> ProbeConfig:
         seed=_or(input.seed, defaults.seed),
         train_split=_or(input.train_split, defaults.train_split),
         max_train_samples=_or(input.max_train_samples, defaults.max_train_samples),
+        min_class_fraction=_or(input.min_class_fraction, defaults.min_class_fraction),
+    )
+
+
+def probe_info_from_record(record: dict) -> ProbeInfo:
+    """Map a stored probe row (``DuckDBClient.list_probes`` shape) to ProbeInfo."""
+    config = record.get("config") or {}
+    score_field, residual_field = score_field_names(record["target_field"], record["kind"])
+    task = derive_probe_task(record["kind"], config)
+    return ProbeInfo(
+        target_field=record["target_field"],
+        kind=record["kind"],
+        score_field=score_field,
+        residual_field=residual_field,
+        metrics=record["metrics"],
+        n_train=record["n_train"] or 0,
+        n_val=record["n_val"] or 0,
+        created_at=record["created_at"],
+        target_mapping=config.get("target_mapping"),
+        task=task,
+        classes=config.get("classes"),
+        excluded_classes=config.get("excluded_classes"),
+        # Every snapshot records it; it only applies to classifiers.
+        min_class_fraction=(
+            config.get("min_class_fraction") if task != ProbeTask.REGRESSION else None
+        ),
     )
 
 

@@ -33,6 +33,7 @@ node bench.mjs 3d emotion synthetic_1m   # specific targets only
 npm run bench:all                        # all four passes back to back
 BENCH_HEAP_MB=7168 node bench.mjs 3d synthetic_1m   # raise Chrome's renderer heap cap (big machines)
 BENCH_RESULT_LABEL=experiment-b node bench.mjs 3d emotion  # custom output label
+BENCH_HAZE=density BENCH_RESULT_LABEL=density node bench.mjs 3d-nebula wordnet_senses_full  # density haze renderer instead of sprites
 npm test                                 # helper tests; does not launch Chrome
 ```
 

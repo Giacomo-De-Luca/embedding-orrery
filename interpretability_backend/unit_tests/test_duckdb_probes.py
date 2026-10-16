@@ -1,10 +1,14 @@
 """Unit tests for probe persistence (probes + probe_scores tables).
 
 Covers upsert replace semantics, score round-trips (incl. NULL residuals and
-retrain leaving no stray rows), delete paths (probe-level and dataset-level),
-and numeric metadata extraction including dotted field names like "Conc.M".
+retrain leaving no stray rows), multiclass predicted/probability columns and
+their migration onto pre-existing databases, delete paths (probe-level and
+dataset-level), and numeric/categorical metadata extraction including dotted
+field names like "Conc.M".
 """
 
+import duckdb
+import numpy as np
 import pandas as pd
 
 from backend.clients.duckdb_client import DuckDBClient
@@ -72,6 +76,66 @@ class TestProbeSchema:
         assert "probes" in table_names
         assert "probe_scores" in table_names
 
+    def test_probe_scores_has_multiclass_columns_last(self, db: DuckDBClient):
+        columns = db._conn.execute(
+            "SELECT name, type FROM pragma_table_info('probe_scores') ORDER BY cid"
+        ).fetchall()
+        assert columns[-2:] == [("predicted", "INTEGER"), ("probs", "FLOAT[]")]
+
+
+_LEGACY_PROBE_SCORES_DDL = """
+    CREATE TABLE probe_scores (
+        collection_name VARCHAR NOT NULL,
+        target_field    VARCHAR NOT NULL,
+        kind            VARCHAR NOT NULL,
+        item_id         VARCHAR NOT NULL,
+        score           FLOAT NOT NULL,
+        residual        FLOAT,
+        PRIMARY KEY (collection_name, target_field, kind, item_id)
+    )
+"""
+
+
+class TestProbeScoresMigration:
+    """Databases created before multiclass support gain the new columns."""
+
+    def _legacy_db(self, tmp_path):
+        path = tmp_path / "legacy.duckdb"
+        conn = duckdb.connect(str(path))
+        conn.execute(_LEGACY_PROBE_SCORES_DDL)
+        conn.execute("INSERT INTO probe_scores VALUES ('c', 'rating', 'ridge', 'item_0', 1.5, 0.1)")
+        conn.close()
+        return path
+
+    def test_columns_added_and_legacy_rows_null(self, tmp_path):
+        client = DuckDBClient(db_path=str(self._legacy_db(tmp_path)))
+        try:
+            names = [
+                r[0]
+                for r in client._conn.execute(
+                    "SELECT name FROM pragma_table_info('probe_scores') ORDER BY cid"
+                ).fetchall()
+            ]
+            assert names[-2:] == ["predicted", "probs"]
+            row = client._conn.execute(
+                "SELECT score, predicted, probs FROM probe_scores"
+            ).fetchone()
+            assert row == (1.5, None, None)
+        finally:
+            client.close()
+
+    def test_reopening_is_idempotent(self, tmp_path):
+        path = self._legacy_db(tmp_path)
+        DuckDBClient(db_path=str(path)).close()
+        client = DuckDBClient(db_path=str(path))
+        try:
+            count = client._conn.execute(
+                "SELECT count(*) FROM pragma_table_info('probe_scores') WHERE name = 'probs'"
+            ).fetchone()[0]
+            assert count == 1
+        finally:
+            client.close()
+
 
 class TestUpsertProbe:
     def test_insert_and_list(self, db: DuckDBClient):
@@ -133,6 +197,15 @@ class TestUpsertProbe:
         assert [round(v, 4) for v in p["direction"]] == [0.1, 0.2, 0.3]
         assert p["intercept"] == 0.5
 
+    def test_get_probe_matches_list_row(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_probe(db)
+        assert db.get_probe(COLLECTION, "rating", "ridge") == db.list_probes(COLLECTION)[0]
+
+    def test_get_probe_missing_returns_none(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        assert db.get_probe(COLLECTION, "rating", "ridge") is None
+
 
 class TestProbeScores:
     def test_round_trip_with_null_residuals(self, db: DuckDBClient):
@@ -176,6 +249,70 @@ class TestProbeScores:
     def test_missing_probe_returns_none(self, db: DuckDBClient):
         _seed_dataset_and_collection(db)
         assert db.get_probe_scores(COLLECTION, "nope", "ridge") is None
+
+    def test_legacy_rows_have_no_predictions(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_probe(db)
+        db.insert_probe_scores_bulk(
+            COLLECTION, "rating", "ridge", _scores_df(["item_0"], [1.0], [0.0])
+        )
+        result = db.get_probe_scores(COLLECTION, "rating", "ridge")
+        assert result["predicted"] == [None]
+
+
+PROBS = np.array([[0.7, 0.2, 0.1], [0.1, 0.3, 0.6], [0.2, 0.5, 0.3]])
+
+
+def _insert_multiclass(db: DuckDBClient, probs: np.ndarray = PROBS):
+    db.upsert_probe(COLLECTION, "category", "logreg", config={"task": "multiclass"})
+    df = pd.DataFrame(
+        {
+            "item_id": ["item_0", "item_1", "item_2"],
+            "score": probs.max(axis=1),
+            "predicted": probs.argmax(axis=1),
+        }
+    )
+    return db.insert_probe_scores_bulk(COLLECTION, "category", "logreg", df, probs=probs)
+
+
+class TestMulticlassScores:
+    def test_round_trip_predicted_and_confidence(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        assert _insert_multiclass(db) == 3
+        result = db.get_probe_scores(COLLECTION, "category", "logreg")
+        assert result["predicted"] == [0, 2, 1]
+        assert [round(s, 4) for s in result["scores"]] == [0.7, 0.6, 0.5]
+        assert result["residuals"] == [None, None, None]
+
+    def test_class_probabilities_use_zero_based_index(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_multiclass(db)
+        for k in range(3):
+            result = db.get_probe_class_probabilities(COLLECTION, "category", "logreg", k)
+            assert result["item_ids"] == ["item_0", "item_1", "item_2"]
+            np.testing.assert_allclose(result["probabilities"], PROBS[:, k], atol=1e-6)
+
+    def test_out_of_range_class_returns_none(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_multiclass(db)
+        assert db.get_probe_class_probabilities(COLLECTION, "category", "logreg", 3) is None
+        assert db.get_probe_class_probabilities(COLLECTION, "category", "logreg", -1) is None
+
+    def test_probe_without_probabilities_returns_none(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_probe(db)
+        db.insert_probe_scores_bulk(
+            COLLECTION, "rating", "ridge", _scores_df(["item_0"], [1.0], [0.0])
+        )
+        assert db.get_probe_class_probabilities(COLLECTION, "rating", "ridge", 0) is None
+        assert db.get_probe_class_probabilities(COLLECTION, "missing", "ridge", 0) is None
+
+    def test_retrain_replaces_probabilities(self, db: DuckDBClient):
+        _seed_dataset_and_collection(db)
+        _insert_multiclass(db)
+        _insert_multiclass(db, probs=PROBS[:, ::-1].copy())
+        result = db.get_probe_class_probabilities(COLLECTION, "category", "logreg", 0)
+        np.testing.assert_allclose(result["probabilities"], PROBS[:, 2], atol=1e-6)
 
 
 class TestProbeDeletion:
@@ -244,31 +381,44 @@ class TestNumericMetadataField:
         assert db.get_numeric_metadata_field("no_such_dataset", "rating") == []
 
 
-class TestTextMetadataField:
+class TestCategoricalMetadataField:
     def test_strings_ordered_by_row_index(self, db: DuckDBClient):
         _seed_dataset_and_collection(
             db, metadatas=[{"label": "unsafe"}, {"label": "safe"}, {"label": "safe"}]
         )
-        rows = db.get_text_metadata_field(DATASET, "label")
+        rows = db.get_categorical_metadata_field(DATASET, "label")
         assert [r[0] for r in rows] == ["item_0", "item_1", "item_2"]
         assert [r[1] for r in rows] == ["unsafe", "safe", "safe"]
+        assert {r[2] for r in rows} == {"VARCHAR"}
 
-    def test_nulls_and_missing_return_none(self, db: DuckDBClient):
+    def test_json_types_are_reported(self, db: DuckDBClient):
         _seed_dataset_and_collection(
-            db, metadatas=[{"label": "safe"}, {"label": None}, {"other": 1}]
+            db,
+            metadatas=[
+                {"label": 3},
+                {"label": -2},
+                {"label": 3.0},
+                {"label": True},
+                {"label": [1, 2]},
+                {"label": None},
+                {"other": 1},
+            ],
         )
-        rows = db.get_text_metadata_field(DATASET, "label")
-        assert [r[1] for r in rows] == ["safe", None, None]
-
-    def test_numbers_come_back_as_strings(self, db: DuckDBClient):
-        _seed_dataset_and_collection(db, metadatas=[{"label": 1}, {"label": 0}])
-        rows = db.get_text_metadata_field(DATASET, "label")
-        assert [r[1] for r in rows] == ["1", "0"]
+        rows = db.get_categorical_metadata_field(DATASET, "label")
+        assert [(r[1], r[2]) for r in rows] == [
+            ("3", "UBIGINT"),
+            ("-2", "BIGINT"),
+            ("3.0", "DOUBLE"),
+            ("true", "BOOLEAN"),
+            ("[1,2]", "ARRAY"),
+            (None, "NULL"),
+            (None, None),
+        ]
 
     def test_dotted_field_name(self, db: DuckDBClient):
         _seed_dataset_and_collection(db, metadatas=[{"a.b": "x"}, {"a.b": "y"}])
-        rows = db.get_text_metadata_field(DATASET, "a.b")
+        rows = db.get_categorical_metadata_field(DATASET, "a.b")
         assert [r[1] for r in rows] == ["x", "y"]
 
     def test_missing_dataset_returns_empty(self, db: DuckDBClient):
-        assert db.get_text_metadata_field("no_such_dataset", "label") == []
+        assert db.get_categorical_metadata_field("no_such_dataset", "label") == []

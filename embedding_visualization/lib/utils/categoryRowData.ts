@@ -8,6 +8,7 @@
  */
 
 import { sortPeriods } from './temporalAnalysis';
+import { CategoryKey } from './categoryKey';
 
 export type CategorySortMode = 'count' | 'rate' | 'natural';
 
@@ -113,7 +114,8 @@ export function buildCategoryRows(input: BuildCategoryRowsInput): {
 
   const sorted = [...visible].sort((a, b) => {
     if (effectiveSort === 'natural') {
-      return rankOf(a) - rankOf(b);
+      // "Missing" is not a name, so name order lists it last (count/rate rank it like any row).
+      return CategoryKey.missingLast(a.value, b.value) || rankOf(a) - rankOf(b);
     }
     if (effectiveSort === 'rate') {
       return (

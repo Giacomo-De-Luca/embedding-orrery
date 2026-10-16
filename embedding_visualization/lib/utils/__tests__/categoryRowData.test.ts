@@ -12,6 +12,8 @@ import {
   buildCategoryRows,
   type CategorySortMode,
 } from '../categoryRowData';
+import { CategoryKey } from '../categoryKey';
+import { getCategoryLabel } from '../categoryColors';
 
 /** Shorthand: build rows with sensible defaults. */
 function build(overrides: {
@@ -217,6 +219,32 @@ describe('buildCategoryRows — sorting', () => {
       getLabel: () => 'Same Label',
     });
     expect(rows.map(r => r.value)).toEqual(['first', 'second']);
+  });
+});
+
+describe('buildCategoryRows — missing values', () => {
+  const { MISSING } = CategoryKey;
+  const missingInput = {
+    categoryValues: ['Alpha', 'Zulu', MISSING],
+    categoryCounts: { Alpha: 2, Zulu: 1, [MISSING]: 7 },
+    getLabel: (value: string) => getCategoryLabel('category', value),
+  };
+
+  it('pins Missing last in natural (name) order', () => {
+    const { rows } = build({ ...missingInput, sortMode: 'natural' });
+    expect(rows.map(r => r.label)).toEqual(['Alpha', 'Zulu', 'Missing values']);
+  });
+
+  it('ranks Missing by its count like any other row in count mode', () => {
+    const { rows } = build({ ...missingInput, sortMode: 'count' });
+    expect(rows.map(r => r.value)).toEqual([MISSING, 'Alpha', 'Zulu']);
+  });
+
+  it('includes Missing in the total, so percentages are of all points', () => {
+    const { rows, summary } = build({ ...missingInput, sortMode: 'count' });
+    expect(summary.totalCount).toBe(10);
+    expect(rows.find(r => r.value === 'Alpha')?.pctOfTotal).toBeCloseTo(0.2);
+    expect(rows.find(r => r.value === MISSING)?.pctOfTotal).toBeCloseTo(0.7);
   });
 });
 

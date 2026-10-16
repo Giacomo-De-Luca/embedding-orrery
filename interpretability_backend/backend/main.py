@@ -16,6 +16,8 @@ from strawberry.subscriptions import GRAPHQL_TRANSPORT_WS_PROTOCOL, GRAPHQL_WS_P
 from .API import schema
 from .API.read_only import is_read_only
 from .API.upload import router as upload_router
+from .utils.http_compression import CompressionSettings, JsonGzipMiddleware
+from .utils.resource_paths import PACKAGE_ROOT
 from .utils.seed_bootstrap import ensure_seed_loaded
 
 
@@ -46,6 +48,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Gzip JSON responses (local dev talks to uvicorn directly, without nginx)
+app.add_middleware(
+    JsonGzipMiddleware,
+    settings=CompressionSettings.from_file(PACKAGE_ROOT / "config" / "http_compression.json"),
 )
 
 # Create GraphQL router with WebSocket subscription support

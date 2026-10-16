@@ -11,17 +11,18 @@ import numpy as np
 import pytest
 
 from backend.services import probing_service
+from backend.services.probe_targets import CategoricalTarget
 from backend.services.probing_service import (
     MIN_VALID_SAMPLES,
     ProbeConfig,
     ProbeTrainingError,
     _build_spec,
-    binary_target_mapping,
     run_probe_core,
     sanitize_field_key,
     score_field_names,
     train_probe_for_collection,
 )
+from backend.services.probing_types import ProbeTask
 from interpret.probing.configs.probe import MLPProbeSpec, SklearnProbeSpec
 from interpret.probing.probes.sklearn_probes import _mass_mean_cov_direction
 
@@ -53,6 +54,16 @@ def _anisotropic_data(n: int = 600, seed: int = 0):
 
 def _ids(n: int) -> list[str]:
     return [f"item_{i}" for i in range(n)]
+
+
+def _multiclass_data(counts=(100, 100, 100, 100), d: int = 16, seed: int = 4, sep: float = 3.0):
+    """Gaussian blobs, one per class; y holds class indices as floats."""
+    rng = np.random.default_rng(seed)
+    y = np.concatenate([np.full(n, k) for k, n in enumerate(counts)])
+    y = y[rng.permutation(len(y))]
+    centers = rng.normal(size=(len(counts), d)) * sep
+    X = (centers[y] + rng.normal(size=(len(y), d))).astype(np.float32)
+    return X, y.astype(np.float64)
 
 
 # ------------------------------------------------------------------
@@ -167,6 +178,45 @@ class TestBuildSpec:
         assert spec.class_weight == "balanced"
         assert spec.save_directions is True  # hyperplane normal for scoring
 
+    def test_svc_spec_fits_seeded_probabilities(self):
+        spec = _build_spec(
+            ProbeConfig(
+                collection_name="c",
+                target_field="f",
+                kind="svc",
+                c=2.0,
+                class_weight="balanced",
+                seed=11,
+            )
+        )
+        assert isinstance(spec, SklearnProbeSpec)
+        assert spec.kind == "svc"
+        assert spec.C == 2.0
+        assert spec.class_weight == "balanced"
+        assert spec.probability is True
+        assert spec.save_models is True
+        assert spec.seed == 11
+
+    def test_mlp_clf_spec_threads_class_weight(self):
+        spec = _build_spec(
+            ProbeConfig(
+                collection_name="c",
+                target_field="f",
+                kind="mlp_clf",
+                hidden_dims=[8],
+                class_weight="balanced",
+            )
+        )
+        assert isinstance(spec, MLPProbeSpec)
+        assert spec.hidden_dims == [8]
+        assert spec.class_weight == "balanced"
+
+    def test_regression_mlp_ignores_class_weight(self):
+        spec = _build_spec(
+            ProbeConfig(collection_name="c", target_field="f", kind="mlp", class_weight="balanced")
+        )
+        assert spec.class_weight is None
+
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError, match="kind"):
             _build_spec(ProbeConfig(collection_name="c", target_field="f", kind="svm"))
@@ -220,6 +270,26 @@ class TestRunProbeCoreRidge:
         run_probe_core(X, y, _ids(len(y)), config, tmp_path)
         assert (tmp_path / "probe_results.csv").exists()
         assert (tmp_path / "directions" / "L0_embedding_ridge.npz").exists()
+
+
+class TestLinearScoring:
+    """Chunked scoring must equal the unchunked standardised projection."""
+
+    @pytest.mark.parametrize(("kind", "adds_intercept"), [("ridge", True), ("massmean", False)])
+    def test_chunked_scores_match_unchunked(self, tmp_path, monkeypatch, kind, adds_intercept):
+        monkeypatch.setattr(probing_service, "_MLP_SCORING_BATCH", 7)  # force many chunks
+        X, y = _linear_data(n=120, d=8)
+        config = ProbeConfig(collection_name="c", target_field="rating", kind=kind)
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+
+        data = np.load(tmp_path / "directions" / f"L0_embedding_{kind}.npz")
+        coef = np.asarray(data["coef"], dtype=np.float64).ravel()
+        mean = np.asarray(data["scaler_mean"], dtype=np.float64)
+        scale = np.asarray(data["scaler_scale"], dtype=np.float64)
+        expected = ((X.astype(np.float64) - mean) / scale) @ coef
+        if adds_intercept:
+            expected += float(np.asarray(data["intercept"]).ravel()[0])
+        np.testing.assert_allclose(out.scores, expected, rtol=1e-9, atol=1e-9)
 
 
 # ------------------------------------------------------------------
@@ -471,12 +541,13 @@ class TestGuardrails:
 
 
 class FakeDB:
-    def __init__(self, field_rows, dataset_name="ds", text_rows=None):
+    def __init__(self, field_rows, dataset_name="ds", categorical_rows=None):
         self._field_rows = field_rows
-        self._text_rows = text_rows
+        self._categorical_rows = categorical_rows
         self._dataset_name = dataset_name
         self.upserted = []
         self.score_inserts = []
+        self.prob_inserts = []
 
     def get_dataset_name_for_collection(self, collection_name):
         return self._dataset_name
@@ -484,17 +555,21 @@ class FakeDB:
     def get_numeric_metadata_field(self, dataset_name, field):
         return self._field_rows
 
-    def get_text_metadata_field(self, dataset_name, field):
-        if self._text_rows is not None:
-            return self._text_rows
-        # Default: what the numeric rows look like as raw JSON strings.
-        return [(i, None if v is None else str(v)) for i, v in self._field_rows]
+    def get_categorical_metadata_field(self, dataset_name, field):
+        if self._categorical_rows is not None:
+            return self._categorical_rows
+        # Default: what the numeric rows look like as (text, json_type).
+        return [
+            (i, None, None) if v is None else (i, repr(float(v)), "DOUBLE")
+            for i, v in self._field_rows
+        ]
 
     def upsert_probe(self, *args, **kwargs):
         self.upserted.append((args, kwargs))
 
-    def insert_probe_scores_bulk(self, collection_name, target_field, kind, df):
+    def insert_probe_scores_bulk(self, collection_name, target_field, kind, df, *, probs=None):
         self.score_inserts.append(df)
+        self.prob_inserts.append(probs)
         return len(df)
 
 
@@ -559,8 +634,8 @@ class TestOrchestrator:
         labels = np.where(X.astype(np.float64) @ w > 0, "unsafe", "safe")
         ids = _ids(n)
         numeric_rows = [(ids[i], None) for i in range(n)]  # TRY_CAST all-null
-        text_rows = [(ids[i], str(labels[i])) for i in range(n)]
-        fake_db = FakeDB(numeric_rows, text_rows=text_rows)
+        categorical_rows = [(ids[i], str(labels[i]), "VARCHAR") for i in range(n)]
+        fake_db = FakeDB(numeric_rows, categorical_rows=categorical_rows)
         monkeypatch.setattr(probing_service, "_get_duckdb", lambda: fake_db)
         monkeypatch.setattr(probing_service, "load_embeddings_for_ids", lambda c, i: X)
         monkeypatch.setattr(probing_service, "PROBING_RESULTS_DIR", tmp_path)
@@ -603,22 +678,7 @@ class TestOrchestrator:
 # ------------------------------------------------------------------
 
 
-class TestBinaryTargetMapping:
-    def test_two_classes_map_sorted(self):
-        vals = ["unsafe", "safe", None, "safe", "unsafe"]
-        assert binary_target_mapping(vals) == {"safe": 0.0, "unsafe": 1.0}
-
-    def test_non_binary_returns_none(self):
-        assert binary_target_mapping(["a", "b", "c"]) is None  # 3 classes
-        assert binary_target_mapping(["a", "a", None]) is None  # 1 class
-        assert binary_target_mapping([None, None]) is None  # no values
-        assert binary_target_mapping([]) is None
-
-    def test_case_sensitive_classes(self):
-        # "Safe" and "safe" are distinct values; with a third value this
-        # is not binary.
-        assert binary_target_mapping(["Safe", "safe", "unsafe"]) is None
-
+class TestBinaryTargets:
     def test_massmean_imbalanced_binary_fails_cleanly(self, tmp_path):
         """Majority-0 binary targets degenerate massmean's median split.
 
@@ -709,16 +769,16 @@ class TestRunProbeCoreLogreg:
     def test_rejects_continuous_target(self, tmp_path):
         X, y = _linear_data(n=200, d=8)  # continuous
         config = ProbeConfig(collection_name="c", target_field="rating", kind="logreg")
-        with pytest.raises(ProbeTrainingError, match="binary"):
+        with pytest.raises(ProbeTrainingError, match="continuous"):
             run_probe_core(X, y, _ids(len(y)), config, tmp_path)
 
-    def test_rejects_three_classes(self, tmp_path):
-        rng = np.random.default_rng(5)
-        X = rng.normal(size=(200, 8)).astype(np.float32)
-        y = rng.integers(0, 3, size=200).astype(np.float64)  # 3 classes
+    def test_binary_keeps_legacy_outputs(self, tmp_path):
+        X, y = _binary_data()
         config = ProbeConfig(collection_name="c", target_field="label", kind="logreg")
-        with pytest.raises(ProbeTrainingError, match="binary"):
-            run_probe_core(X, y, _ids(200), config, tmp_path)
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert out.task == ProbeTask.BINARY
+        assert out.predicted is None and out.probs is None  # only P(class 1) persisted
+        assert out.target.classes == ["0", "1"]
 
     def test_arbitrary_two_values_remapped(self, tmp_path):
         """Two distinct non-0/1 numeric values still train (remapped to 0/1)."""
@@ -753,3 +813,253 @@ class TestRunProbeCoreLogreg:
         )
         norm = lambda d: float(np.linalg.norm(np.array(d)))  # noqa: E731
         assert norm(strong.direction) < norm(weak.direction) * 0.1
+
+
+# ------------------------------------------------------------------
+# Multiclass classifiers (logreg / svc / mlp_clf)
+# ------------------------------------------------------------------
+
+_MULTICLASS_METRICS = {
+    "val_accuracy",
+    "val_balanced_accuracy",
+    "val_f1_macro",
+    "val_f1_weighted",
+    "val_auc_ovr",
+    "train_accuracy",
+    "val_majority_baseline",
+}
+
+
+def _assert_multiclass_output(out, n_items: int, n_classes: int):
+    assert out.task == ProbeTask.MULTICLASS
+    assert out.probs.shape == (n_items, n_classes)
+    np.testing.assert_allclose(out.probs.sum(axis=1), 1.0, atol=1e-5)
+    np.testing.assert_array_equal(out.predicted, out.probs.argmax(axis=1))
+    np.testing.assert_allclose(out.scores, out.probs.max(axis=1), atol=1e-12)
+    assert out.residuals is None
+    assert out.direction is None
+    assert _MULTICLASS_METRICS <= set(out.metrics)
+    assert "val_auc" not in out.metrics
+    assert json.dumps(out.metrics)
+
+
+class TestMulticlassLogreg:
+    def test_three_classes_train_multinomial(self, tmp_path):
+        X, y = _multiclass_data(counts=(80, 80, 80))
+        config = ProbeConfig(collection_name="c", target_field="label", kind="logreg")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        _assert_multiclass_output(out, len(y), 3)
+        assert out.metrics["val_accuracy"] > 0.8
+        assert out.metrics["val_accuracy"] > out.metrics["val_majority_baseline"]
+
+    def test_string_target_with_excluded_class(self, tmp_path):
+        X, codes = _multiclass_data(counts=(60, 60, 60, 3))
+        names = np.array(["ANALOGY", "EUPHEMISM", "HYPERBOLE", "RARE"])
+        labels = [str(names[int(c)]) for c in codes]
+        labels[:10] = [None] * 10  # unlabelled items
+        target = CategoricalTarget.from_labels(labels, min_class_fraction=0.0)
+        assert target.excluded == {"RARE": sum(1 for lab in labels if lab == "RARE")}
+        config = ProbeConfig(collection_name="c", target_field="category", kind="logreg")
+        out = run_probe_core(X, target.codes, _ids(len(labels)), config, tmp_path, target=target)
+
+        _assert_multiclass_output(out, len(labels), 3)
+        assert out.n_train + out.n_val == int(np.isfinite(target.codes).sum())
+        assert out.target is target
+
+    def test_every_class_in_validation(self, tmp_path, monkeypatch):
+        captured = {}
+        original = probing_service.ClassificationMetrics
+
+        def _spy(probs, labels, train_rows, val_rows):
+            captured["val"] = labels[val_rows]
+            captured["train"] = labels[train_rows]
+            return original(probs, labels, train_rows, val_rows)
+
+        monkeypatch.setattr(probing_service, "ClassificationMetrics", _spy)
+        X, y = _multiclass_data(counts=(200, 6, 6, 50))
+        config = ProbeConfig(collection_name="c", target_field="label", kind="logreg")
+        run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert set(captured["val"].astype(int)) == {0, 1, 2, 3}
+        assert set(captured["train"].astype(int)) == {0, 1, 2, 3}
+
+    def test_regression_kinds_still_regress_integer_targets(self, tmp_path):
+        X, y = _multiclass_data(counts=(80, 80, 80))
+        config = ProbeConfig(collection_name="c", target_field="label", kind="ridge")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert out.task == ProbeTask.REGRESSION
+        assert "val_r2" in out.metrics
+        assert out.probs is None
+
+
+class TestRunProbeCoreSVC:
+    def test_multiclass(self, tmp_path):
+        X, y = _multiclass_data(counts=(60, 60, 60), d=8)
+        config = ProbeConfig(collection_name="c", target_field="label", kind="svc")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        _assert_multiclass_output(out, len(y), 3)
+        assert out.metrics["val_accuracy"] > 0.8
+        assert (tmp_path / "models" / "L0_embedding_svc.joblib").exists()
+
+    def test_binary_scores_probability_of_class_one(self, tmp_path):
+        X, y = _binary_data(n=200, d=8)
+        config = ProbeConfig(collection_name="c", target_field="label", kind="svc")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert out.task == ProbeTask.BINARY
+        assert out.metrics["val_auc"] > 0.7
+        assert all(0.0 <= s <= 1.0 for s in out.scores)
+        assert out.probs is None
+
+    def test_seeded_scores_are_deterministic(self, tmp_path):
+        X, y = _multiclass_data(counts=(40, 40, 40), d=8)
+        config = ProbeConfig(collection_name="c", target_field="label", kind="svc")
+        a = run_probe_core(X, y, _ids(len(y)), config, tmp_path / "a")
+        b = run_probe_core(X, y, _ids(len(y)), config, tmp_path / "b")
+        np.testing.assert_array_equal(a.probs, b.probs)
+
+    def test_training_cap_keeps_rare_classes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(probing_service, "_SVC_MAX_TRAIN", 60)
+        X, y = _multiclass_data(counts=(300, 8, 7), d=8)
+        config = ProbeConfig(collection_name="c", target_field="label", kind="svc")
+        out = run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+        assert out.n_train + out.n_val <= 60
+        _assert_multiclass_output(out, len(y), 3)
+        assert out.metrics["val_auc_ovr"] is not None  # every class reached validation
+
+
+class TestRunProbeCoreMlpClf:
+    def _config(self, **overrides):
+        base = dict(
+            collection_name="c",
+            target_field="label",
+            kind="mlp_clf",
+            hidden_dims=[16],
+            epochs=30,
+            patience=5,
+        )
+        return ProbeConfig(**{**base, **overrides})
+
+    def test_multiclass_softmax_outputs(self, tmp_path):
+        X, y = _multiclass_data(counts=(80, 80, 80))
+        out = run_probe_core(X, y, _ids(len(y)), self._config(), tmp_path)
+        _assert_multiclass_output(out, len(y), 3)
+        assert out.metrics["val_accuracy"] > 0.7
+        assert (tmp_path / "checkpoints" / "layer_0_embedding.pt").exists()
+
+    def test_balanced_weights_with_rare_class(self, tmp_path):
+        X, y = _multiclass_data(counts=(150, 150, 150, 6))
+        out = run_probe_core(X, y, _ids(len(y)), self._config(class_weight="balanced"), tmp_path)
+        _assert_multiclass_output(out, len(y), 4)
+
+    def test_binary(self, tmp_path):
+        X, y = _binary_data(n=200, d=8)
+        out = run_probe_core(X, y, _ids(len(y)), self._config(), tmp_path)
+        assert out.task == ProbeTask.BINARY
+        assert "val_auc" in out.metrics
+        assert all(0.0 <= s <= 1.0 for s in out.scores)
+
+
+class TestMulticlassOrchestrator:
+    def _setup(self, tmp_path, monkeypatch, categorical_rows, X, numeric_rows=None):
+        ids = [r[0] for r in categorical_rows]
+        fake_db = FakeDB(
+            numeric_rows if numeric_rows is not None else [(i, None) for i in ids],
+            categorical_rows=categorical_rows,
+        )
+        monkeypatch.setattr(probing_service, "_get_duckdb", lambda: fake_db)
+        monkeypatch.setattr(probing_service, "load_embeddings_for_ids", lambda c, i: X)
+        monkeypatch.setattr(probing_service, "PROBING_RESULTS_DIR", tmp_path)
+        return fake_db
+
+    def _string_rows(self, counts=(60, 60, 60, 3), n_missing=20):
+        X, codes = _multiclass_data(counts=counts, d=8)
+        names = ["ANALOGY", "EUPHEMISM", "HYPERBOLE", "RARE"]
+        rows = [(f"item_{i}", names[int(c)], "VARCHAR") for i, c in enumerate(codes)]
+        for i in range(n_missing):
+            rows[i] = (rows[i][0], None, None)
+        return X, rows
+
+    def test_string_target_end_to_end(self, tmp_path, monkeypatch):
+        X, rows = self._string_rows()
+        fake_db = self._setup(tmp_path, monkeypatch, rows, X)
+        config = ProbeConfig(collection_name="col", target_field="category", kind="logreg")
+        result = train_probe_for_collection(config)
+
+        assert result.error is None
+        _, kwargs = fake_db.upserted[0]
+        snapshot = kwargs["config"]
+        assert snapshot["task"] == ProbeTask.MULTICLASS
+        assert snapshot["classes"] == ["ANALOGY", "EUPHEMISM", "HYPERBOLE"]
+        assert set(snapshot["excluded_classes"]) == {"RARE"}
+        assert snapshot["min_class_fraction"] == 0.01
+        assert snapshot["target_mapping"] is None
+        assert kwargs["direction"] is None
+
+        df, probs = fake_db.score_inserts[0], fake_db.prob_inserts[0]
+        assert len(df) == len(rows)
+        assert set(df["predicted"]) <= {0, 1, 2}
+        assert probs.shape == (len(rows), 3)
+
+    def test_ridge_rejects_multiclass_string_target(self, tmp_path, monkeypatch):
+        X, rows = self._string_rows()
+        fake_db = self._setup(tmp_path, monkeypatch, rows, X)
+        config = ProbeConfig(collection_name="col", target_field="category", kind="ridge")
+        result = train_probe_for_collection(config)
+        assert result.error is not None
+        assert "classes" in result.error and "Logistic" in result.error
+        assert fake_db.upserted == []
+
+    def test_integer_labels_stored_as_doubles(self, tmp_path, monkeypatch):
+        X, codes = _multiclass_data(counts=(50, 50, 50), d=8)
+        rows = [(f"item_{i}", f"{int(c)}.0", "DOUBLE") for i, c in enumerate(codes)]
+        fake_db = self._setup(tmp_path, monkeypatch, rows, X)
+        config = ProbeConfig(collection_name="col", target_field="label", kind="logreg")
+        result = train_probe_for_collection(config)
+        assert result.error is None
+        _, kwargs = fake_db.upserted[0]
+        assert kwargs["config"]["classes"] == ["0", "1", "2"]
+
+    def test_numeric_binary_logreg_matches_legacy(self, tmp_path, monkeypatch):
+        X, y = _binary_data(n=120, d=8)
+        rows = [(f"item_{i}", str(int(v)), "UBIGINT") for i, v in enumerate(y)]
+        numeric_rows = [(f"item_{i}", float(v)) for i, v in enumerate(y)]
+        fake_db = self._setup(tmp_path, monkeypatch, rows, X, numeric_rows=numeric_rows)
+        config = ProbeConfig(collection_name="col", target_field="label", kind="logreg")
+        result = train_probe_for_collection(config)
+        assert result.error is None
+        assert result.target_mapping is None
+        _, kwargs = fake_db.upserted[0]
+        assert kwargs["config"]["task"] == ProbeTask.BINARY
+        assert kwargs["config"]["classes"] == ["0", "1"]
+        assert kwargs["direction"] is not None
+        assert "predicted" not in fake_db.score_inserts[0]
+        assert fake_db.prob_inserts[0] is None
+
+    def test_small_numeric_field_reports_usable_values(self, tmp_path, monkeypatch):
+        # 40 integer values in {1, 2, 3}: too few to train anything, so the
+        # error must say so — not send the user to a classifier that would
+        # fail on the same sample floor.
+        rows = [(f"item_{i}", float(i % 3 + 1) if i < 40 else None) for i in range(100)]
+        categorical_rows = [(r[0], None, None) for r in rows]
+        fake_db = self._setup(tmp_path, monkeypatch, categorical_rows, None, rows)
+        config = ProbeConfig(collection_name="col", target_field="label", kind="ridge")
+        result = train_probe_for_collection(config)
+        assert "40 usable values" in result.error
+        assert "classifier" not in result.error
+        assert fake_db.upserted == []
+
+
+class TestClassifierOutputGuards:
+    def test_probability_width_must_match_classes(self, tmp_path, monkeypatch):
+        """A class missing from training would shift probability columns silently."""
+        real = probing_service._logreg_probs
+
+        def _drop_last_class(X, path):
+            probs, bundle = real(X, path)
+            return probs[:, :-1], bundle
+
+        monkeypatch.setattr(probing_service, "_logreg_probs", _drop_last_class)
+        X, y = _multiclass_data(counts=(60, 60, 60))
+        config = ProbeConfig(collection_name="c", target_field="label", kind="logreg")
+        with pytest.raises(ProbeTrainingError, match="classes"):
+            run_probe_core(X, y, _ids(len(y)), config, tmp_path)
+

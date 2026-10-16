@@ -5,6 +5,7 @@
 import { gql } from '@apollo/client';
 
 import type { ProbeInfo } from '../utils/probeFields';
+import { PROBE_INFO_FIELDS } from './queries';
 
 // ========== HuggingFace Dataset Queries ==========
 
@@ -713,19 +714,12 @@ export interface ComputeDocumentActivationsResult {
 // ========== Embedding-space probes ==========
 
 export const TRAIN_PROBE = gql`
+  ${PROBE_INFO_FIELDS}
   mutation TrainProbe($input: TrainProbeInput!) {
     trainProbe(input: $input) {
       collectionName
       probe {
-        targetField
-        kind
-        scoreField
-        residualField
-        metrics
-        nTrain
-        nVal
-        createdAt
-        targetMapping
+        ...ProbeInfoFields
       }
       durationSeconds
       error

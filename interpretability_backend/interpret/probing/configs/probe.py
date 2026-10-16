@@ -143,6 +143,10 @@ class SklearnProbeSpec:
     # frequency reweighting. None → uniform. Ignored by regression kinds.
     class_weight: Literal["balanced"] | None = None
 
+    # svc only: fit Platt-scaled class probabilities (predict_proba). Runs an
+    # internal 5-fold CV, so fitting is ~5x slower; seeded with `seed`.
+    probability: bool = False
+
     # K-fold cross-validation. When set, the ablation runner trains
     # this probe once per fold instead of once per `ablation_seeds`
     # entry. See MLPProbeSpec.n_folds for the same field.

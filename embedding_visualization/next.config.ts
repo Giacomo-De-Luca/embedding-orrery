@@ -7,6 +7,8 @@ const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 const nextConfig: NextConfig = {
   /* config options here */
   output: "standalone",
+  // Separate test/build output from an already-running local development server.
+  distDir: process.env.ORRERY_NEXT_DIST_DIR || ".next",
   typescript: {
     ignoreBuildErrors: isDockerBuild,
   },

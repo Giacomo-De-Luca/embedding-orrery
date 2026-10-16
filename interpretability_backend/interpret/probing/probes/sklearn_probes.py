@@ -328,6 +328,9 @@ def _build_estimator(spec: SklearnProbeSpec) -> tuple[BaseEstimator, bool]:
             C=spec.C,
             kernel=spec.kernel,
             class_weight=spec.class_weight,
+            probability=spec.probability,
+            # Platt scaling's internal CV is random; seed it for reproducibility.
+            random_state=spec.seed if spec.probability else None,
         ), True
     if kind == "linear_svc":
         # One-vs-rest linear max-margin classifier: coef_ is [C, d] like

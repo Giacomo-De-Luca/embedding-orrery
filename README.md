@@ -63,7 +63,7 @@ See [`documentation/DOCKER.md`](documentation/DOCKER.md) for the SAE cache warm-
 
 **SAE Feature Analysis** — Live inference on two model families: Gemma 3 (Gemma Scope 2, with Neuronpedia labels) and Qwen (Qwen-Scope, label-free), with JumpReLU/TopK SAE implementations in plain PyTorch. Capture per-token activations, apply additive steering (ActAdd), and chat with the steered model side-by-side against the baseline. Visualise the SAE feature space itself as a galaxy — right-click any feature to inspect and steer.
 
-**Probing** — Train probes directly in the interface on the stored embeddings: any metadata field serves as target, fitted with mass-mean, ridge, logistic regression, SVR, or a small MLP. Linear probes double as directions — the learned vector is stored with the collection, and points can be coloured by their projection onto it.
+**Probing** — Train probes directly in the interface on the stored embeddings: any metadata field serves as target — numeric fields fitted with mass-mean, ridge, lasso, SVR, or a small MLP; categorical fields (two classes or many) classified with logistic regression, an RBF SVC, or an MLP classifier, colouring every point by its predicted class, correctness, confidence, or per-class probability. Linear probes double as directions — the learned vector is stored with the collection, and points can be coloured by their projection onto it.
 
 **Density & Analytics** — 2D density contours coloured by category (ported from Embedding Atlas), an analytics panel with topic distribution and category filtering, and a draggable temporal histogram for diachronic analysis.
 
