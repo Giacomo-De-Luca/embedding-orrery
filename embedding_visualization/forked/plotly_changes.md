@@ -29,6 +29,18 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 
 **Reason:** Prevents the user from zooming out so far that the 3D scatter plot becomes a tiny dot. The default of 100 allowed excessive zoom-out; 2 keeps the data filling the viewport at maximum zoom-out.
 
+### 3. GL3D markers: no outline vertices when the line width is 0
+
+**File:** `stackgl_modules/index.js`, gl-scatter3d `proto.update` (module 8418, search for `[fork]`)
+
+**Problem:** every scatter3d marker is a filled glyph (triangles) plus a glyph outline (line segments), packed into the same four vertex buffers at 40 bytes per vertex. The outline is only drawn when `lineWidth > 0` (`drawProject` / `drawFull`), and plotly defaults `marker.line.width` to 0 (1 only for bubble charts with array sizes). `update()` still built and uploaded the outline for every point: about 40% of all marker vertices, never drawn.
+
+**Fix:** after the count pass, `drawOutlines = this.lineWidth > 0`. When false, the outline vertex count is zeroed, so the allocations and uploads cover triangles only, and the outline-writing loop is skipped. The fill pass keeps its original gate (`hasGeometry`, fill + outline count before zeroing), so bounds and `hasAlpha` are computed exactly as before. A translucent `lineColor` still marks the trace transparent even at width 0, so render-pass selection is unchanged. The draw code is untouched.
+
+**Contract:** outline geometry is built only by `update()`. Setting `lineWidth` directly on the object without calling `update()` would draw 0 outline vertices. Plotly never does that: it always passes `lineWidth` through `update(scatterOptions)` (`src/traces/scatter3d/convert.js`).
+
+**Tests:** `forked/__tests__/glScatter3dOutline.test.ts`.
+
 ---
 
 ## react-plotly.js
@@ -40,6 +52,12 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 **Change:** `require("plotly.js/dist/plotly")` → `require("plotly.js")`
 
 **Reason:** The original entry point hardcodes the pre-built `dist/plotly.js` bundle (11 MB), which is a standalone IIFE that bypasses the source tree entirely — meaning none of the patches above would take effect for the 2D Plot component. By importing `plotly.js` (which resolves to `lib/index.js` → `src/`), both 2D and 3D components use the same patched source build. This also allowed us to drop the entire `dist/` directory (90 MB) from the fork.
+
+---
+
+## Editing `stackgl_modules/index.js`
+
+The bundle has **mixed line endings**: about 900 lines in a few vendored modules end in CRLF, the rest in LF. Editors and tools that normalise line endings rewrite all of them, which buries a small patch in a ~1,800-line whitespace diff. Edit it with a byte-preserving tool, and check that `git diff --stat` only shows the lines you meant to change. Mark every patched spot with a `[fork]` comment.
 
 ---
 

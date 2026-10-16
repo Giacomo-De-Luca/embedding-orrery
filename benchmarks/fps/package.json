@@ -4,11 +4,13 @@
   "type": "module",
   "description": "FPS + RAM benchmark harness for the embedding visualization frontend",
   "scripts": {
-    "test": "node --test benchmarkContract.test.mjs",
+    "test": "node --test benchmarkContract.test.mjs glSceneStats.test.mjs",
     "bench:3d": "node bench.mjs 3d",
     "bench:topics": "node bench.mjs 3d-topics",
     "bench:nebula": "node bench.mjs 3d-nebula",
     "bench:2d": "node bench.mjs 2d",
+    "bench:2d-topics": "node bench.mjs 2d-topics",
+    "bench:2d-density": "node bench.mjs 2d-density",
     "bench:all": "node bench.mjs 3d; node bench.mjs 3d-topics; node bench.mjs 3d-nebula; node bench.mjs 2d"
   },
   "dependencies": {

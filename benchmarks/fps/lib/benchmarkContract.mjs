@@ -7,6 +7,34 @@ const PROJECTION_FIELDS = {
   umap_3d: 'umap3d',
 };
 
+/** A benchmark pass: which view the harness loads and what it switches on. */
+export class BenchPass {
+  static NAMES = ['3d', '2d', '3d-nebula', '3d-topics', '2d-topics', '2d-density'];
+
+  static parse(name) {
+    const pass = BenchPass.NAMES.includes(name) ? name : '3d';
+    const nebula = pass === '3d-nebula';
+    return {
+      name: pass,
+      mode: pass.startsWith('2d') ? '2d' : '3d',
+      nebula,
+      colorTopics: nebula || pass.endsWith('-topics'),
+      densityMode: pass === '2d-density',
+    };
+  }
+
+  /** Playwright deviceScaleFactor from a BENCH_DPR value; 1 unless a positive number. */
+  static deviceScaleFactor(value) {
+    const dpr = Number(value);
+    return Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  }
+
+  /** Result label for a run; non-1 ratios get their own files instead of merging into DPR-1 results. */
+  static resultLabel(label, dpr) {
+    return dpr === 1 ? label : `${label}-dpr${dpr}`;
+  }
+}
+
 /** Builds memory-conscious synthetic GraphQL responses matching the live schema. */
 export class SyntheticCollectionPayload {
   constructor({ pointCount, clusters, projectionType, includeCore }) {

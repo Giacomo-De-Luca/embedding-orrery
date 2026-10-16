@@ -10,8 +10,9 @@ synthetic points. Standalone Node harness — not part of the app, has its own
 | File | Purpose |
 |------|---------|
 | `bench.mjs` | Chrome automation, FPS capture, memory and GraphQL-payload telemetry |
-| `lib/benchmarkContract.mjs` | Synthetic GraphQL contract, membership signatures, telemetry, safe artifact names |
-| `benchmarkContract.test.mjs` | Node tests for the benchmark-only helpers |
+| `lib/benchmarkContract.mjs` | Pass definitions (`BenchPass`), synthetic GraphQL contract, membership signatures, telemetry, safe artifact names |
+| `lib/glSceneStats.mjs` | `GlSceneStats`: in-page WebGL scene readout (trace count, marker vertices, pick stats, canvas backing ratio) |
+| `benchmarkContract.test.mjs`, `glSceneStats.test.mjs` | Node tests for the benchmark-only helpers |
 | `results/` (gitignored) | Labeled result JSON and screenshots; historical baselines are retained |
 
 ## Prerequisites
@@ -29,11 +30,14 @@ node bench.mjs 3d                        # 3D orbit pass, full ladder
 node bench.mjs 3d-topics                 # 3D colored by topic_label (per-category trace splitting)
 node bench.mjs 3d-nebula                 # 3D topic-colored + nebula haze on
 node bench.mjs 2d                        # 2D pan pass (scattergl path)
+node bench.mjs 2d-topics                 # 2D colored by topic_label (per-category trace splitting)
+node bench.mjs 2d-density                # 2D with the density overlay on
 node bench.mjs 3d emotion synthetic_1m   # specific targets only
 npm run bench:all                        # all four passes back to back
 BENCH_HEAP_MB=7168 node bench.mjs 3d synthetic_1m   # raise Chrome's renderer heap cap (big machines)
 BENCH_RESULT_LABEL=experiment-b node bench.mjs 3d emotion  # custom output label
 BENCH_HAZE=density BENCH_RESULT_LABEL=density node bench.mjs 3d-nebula wordnet_senses_full  # density haze renderer instead of sprites
+BENCH_DPR=2 node bench.mjs 3d-topics wordnet_senses_full  # page devicePixelRatio 2 (Retina); default 1
 npm test                                 # helper tests; does not launch Chrome
 ```
 
@@ -59,7 +63,28 @@ artificially inflated.
 
 Pass design: `3d` (uncolored, single trace) is the raw scaling baseline;
 `3d-topics` − `3d` isolates the cost of per-category trace splitting;
-`3d-nebula` − `3d-topics` isolates the haze overlay cost.
+`3d-nebula` − `3d-topics` isolates the haze overlay cost. `2d-topics` − `2d`
+does the same for the scattergl path, and `2d-density` − `2d` isolates the
+density overlay.
+
+**Device pixel ratio.** Runs default to a page `devicePixelRatio` of 1, like
+the historical results. Plotly's GL plots render at a fixed 2× regardless
+(`plotGlPixelRatio`), but the density overlay and anything else that reads
+`window.devicePixelRatio` follows the page ratio. `BENCH_DPR=2` reproduces a
+Retina screen. A non-1 ratio is appended to the result label
+(`baseline` → `baseline-dpr2`), so it never merges into DPR-1 results.
+
+**GL scene stats.** Each run records `glStatsPostLoad` and `glStatsPostDrag`
+(see `lib/glSceneStats.mjs`):
+
+- `traceCount`
+- 3D only: `glObjects`, `pointClouds`, `fillVertices`, `outlineVertices` and
+  `vertexMB` (marker vertex buffers at 40 B per vertex)
+- `pickStats`, once the fork exposes them
+- `canvas`, the GL canvas backing size vs CSS size and their ratio
+
+Pick counters accumulate over the page's life, so post-drag minus post-load
+is the drag.
 
 Results **merge per pass and label**: re-running a subset of targets updates
 only those entries in the labeled result file, so a crashed target can be

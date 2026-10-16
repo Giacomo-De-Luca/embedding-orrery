@@ -10,7 +10,7 @@
 // clusters, so everything downstream of the network — Apollo parsing,
 // point transforms, Plotly WebGL — is the real platform code path.
 //
-// Usage: node bench.mjs [3d|2d|3d-nebula] [collection ...]
+// Usage: node bench.mjs [3d|2d|3d-nebula|3d-topics|2d-topics|2d-density] [collection ...]
 //   node bench.mjs 3d                       # full ladder (real + synthetic)
 //   node bench.mjs 2d emotion synthetic_1m  # specific targets
 //
@@ -23,28 +23,33 @@ import fs from 'node:fs';
 
 import {
   BenchmarkResultFile,
+  BenchPass,
   GraphqlPayloadTelemetry,
   SyntheticCollectionPayload,
 } from './lib/benchmarkContract.mjs';
+import { GlSceneStats } from './lib/glSceneStats.mjs';
 
 const pExecFile = promisify(execFile);
 
 const BASE = 'http://localhost:3000';
-const PASSES = ['3d', '2d', '3d-nebula', '3d-topics'];
-const PASS = PASSES.includes(process.argv[2]) ? process.argv[2] : '3d';
-const MODE = PASS === '2d' ? '2d' : '3d';
-const NEBULA = PASS === '3d-nebula';
+const BENCH_PASS = BenchPass.parse(process.argv[2]);
+const PASS = BENCH_PASS.name;
+const MODE = BENCH_PASS.mode;
+const NEBULA = BENCH_PASS.nebula;
 // Haze implementation for the 3d-nebula pass: BENCH_HAZE=density selects the
 // experimental density renderer (persisted store flag `hazeRenderer`).
 const HAZE = process.env.BENCH_HAZE === 'density' ? 'density' : 'sprites';
-const COLOR_TOPICS = NEBULA || PASS === '3d-topics';
+const COLOR_TOPICS = BENCH_PASS.colorTopics;
+// Page devicePixelRatio (Playwright deviceScaleFactor). Default 1 matches the
+// historical runs; BENCH_DPR=2 reproduces a Retina screen.
+const DPR = BenchPass.deviceScaleFactor(process.env.BENCH_DPR);
 // Opt-in renderer heap raise (MB), e.g. BENCH_HEAP_MB=7168 for 1M attempts on big machines.
 const HEAP_MB = Number(process.env.BENCH_HEAP_MB) || 0;
 const DRAG_MS = 8000;
 const SETTLE_MS = 4000;
 const SYN_CLUSTERS = Number(process.env.BENCH_SYN_CLUSTERS) || 50;
 const RESULTS_DIR = new URL('./results/', import.meta.url).pathname;
-const RESULT_LABEL = process.env.BENCH_RESULT_LABEL || 'current';
+const RESULT_LABEL = BenchPass.resultLabel(process.env.BENCH_RESULT_LABEL || 'current', DPR);
 const RESULTS_PATH = BenchmarkResultFile.path(RESULTS_DIR, PASS, RESULT_LABEL);
 const BENCH_MARKER = '--bench-run-id=fpsbench';
 
@@ -84,6 +89,7 @@ function parseTargets() {
 const VIZ_PREFS = JSON.stringify({
   state: {
     method: 'umap', mode: MODE, nebulaMode: NEBULA, hazeRenderer: HAZE,
+    densityMode: BENCH_PASS.densityMode,
     showClusterLabels: false, showAllClusterLabels: false,
     showAxes: false, pointOpacity: 1.0, distanceMetric: 'COSINE',
   },
@@ -328,11 +334,11 @@ const countPoints = ({ mode }) => {
 async function runOne(browser, rootPid, target) {
   const { name, expected } = target;
   const pageErrors = [];
-  const result = { collection: name, expected, pass: PASS, synthetic: !!target.synthetic };
+  const result = { collection: name, expected, pass: PASS, synthetic: !!target.synthetic, dpr: DPR };
   const payloadTelemetry = new GraphqlPayloadTelemetry();
   let context = null;
   try {
-    context = await browser.newContext({ viewport: { width: 1600, height: 950 } });
+    context = await browser.newContext({ viewport: { width: 1600, height: 950 }, deviceScaleFactor: DPR });
     await context.addInitScript((prefs) => {
       window.localStorage.setItem('viz-preferences', prefs);
     }, VIZ_PREFS);
@@ -398,6 +404,9 @@ async function runOne(browser, rootPid, target) {
     }
     await page.waitForTimeout(SETTLE_MS);
     result.renderedPoints = await page.evaluate(countPoints, { mode: MODE });
+    result.glStatsPostLoad = await page.evaluate(GlSceneStats.collectInPage, {
+      mode: MODE, bytesPerVertex: GlSceneStats.BYTES_PER_SCATTER3D_VERTEX,
+    }).catch(() => null);
     result.memPostLoad = await memSnapshot(page, rootPid, cdp);
 
     // Locate the WebGL canvas to drag on.
@@ -445,6 +454,10 @@ async function runOne(browser, rootPid, target) {
       return window.__bench.deltas;
     });
     result.stats = stats(deltas);
+    // Pick counters accumulate over the run: post-drag minus post-load = the drag.
+    result.glStatsPostDrag = await page.evaluate(GlSceneStats.collectInPage, {
+      mode: MODE, bytesPerVertex: GlSceneStats.BYTES_PER_SCATTER3D_VERTEX,
+    }).catch(() => null);
     result.memMidDrag = midMemPromise ? await midMemPromise : null;
     result.memPostDrag = await memSnapshot(page, rootPid, cdp);
     result.pageErrors = pageErrors.slice(0, 5);
@@ -524,7 +537,7 @@ const idleRefresh = await measureIdleRefresh(calPage);
 await calPage.close();
 
 const sysBaseline = await systemMem();
-console.log(`display refresh ceiling ≈ ${idleRefresh.toFixed(0)} Hz`);
+console.log(`display refresh ceiling ≈ ${idleRefresh.toFixed(0)} Hz | page devicePixelRatio ${DPR}`);
 console.log(`system RAM baseline: ${sysBaseline.freeGB} GB free / ${sysBaseline.availableGB} GB available of ${sysBaseline.totalGB} GB`);
 
 // Merge with any existing results for this pass: re-running a subset of
@@ -536,6 +549,7 @@ const runsByName = new Map(existingRuns.map((r) => [r.collection, r]));
 const results = {
   pass: PASS,
   runLabel: RESULT_LABEL,
+  dpr: DPR,
   idleRefreshHz: +idleRefresh.toFixed(1),
   sysBaseline,
   runs: [],
@@ -583,6 +597,7 @@ for (const target of targets) {
       `  collection GraphQL ${(r.graphqlPayload?.totalResponseMB ?? 0).toFixed(2)} MB ` +
       `across ${r.graphqlPayload?.requests?.length ?? 0} request(s)`,
     );
+    console.log(`  gl post-drag: ${GlSceneStats.summarize(r.glStatsPostDrag)}`);
   }
 }
 

@@ -1,5 +1,5 @@
 ---
-title: Orrery — Embedding Observatory
+title: Embedding Orrery
 emoji: 🪐
 colorFrom: indigo
 colorTo: purple
@@ -8,11 +8,11 @@ app_port: 7860
 pinned: false
 header: mini
 fullWidth: true
-short_description: Explore embedding spaces and SAE features — EMNLP, WordNet
+short_description: Explore Embedding & SAE Feature Spaces as 3D Constellations
 thumbnail: {{SOCIAL_PREVIEW_URL}}
 ---
 
-# Orrery — Embedding Observatory (demo)
+# Embedding Orrery (demo)
 
 Interactive exploration of embedding spaces: 2D/3D scatter plots with topic
 clustering, semantic search, text filtering, and temporal analytics.
@@ -57,7 +57,7 @@ new datasets, topic extraction, probe training, and label editing
 (`ORRERY_READ_ONLY=1` blocks all GraphQL mutations server-side).
 
 **Want to embed your own data?** Run the full application from the
-[Orrery GitHub repository](https://github.com/Giacomo-De-Luca/orrery) with its
+[Orrery GitHub repository](https://github.com/Giacomo-De-Luca/embedding-orrery) with its
 published backend/frontend images or local Docker build. Duplicated Spaces do
 not inherit this Space's secrets, including the read token for its private demo
 seed, and are therefore not the supported installation path.

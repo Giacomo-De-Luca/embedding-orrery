@@ -33852,6 +33852,14 @@ proto.update = function(options) {
     }
   }
 
+  // [fork] Glyph outlines are only drawn when lineWidth > 0 (drawProject /
+  // drawFull), so skip building and uploading their vertices otherwise.
+  // hasGeometry keeps the original gate for the fill pass, which also
+  // computes bounds and hasAlpha.
+  var drawOutlines = this.lineWidth > 0
+  var hasGeometry  = triVertexCount + lineVertexCount > 0
+  if(!drawOutlines) lineVertexCount = 0
+
   var vertexCount   = triVertexCount + lineVertexCount
 
   //Preallocate data
@@ -33860,7 +33868,7 @@ proto.update = function(options) {
   var glyphArray    = pool.mallocFloat(2*vertexCount)
   var idArray       = pool.mallocUint32(vertexCount)
 
-  if(vertexCount > 0) {
+  if(hasGeometry) {
     var triOffset  = 0
     var lineOffset = triVertexCount
     var color      = [0,0,0,1]
@@ -34044,23 +34052,26 @@ proto.update = function(options) {
         }
       }
 
-      var cells = glyphLines.edges
-      var verts = glyphLines.positions
+      //Write out marker outline ([fork] only when it will be drawn)
+      if(drawOutlines) {
+        var cells = glyphLines.edges
+        var verts = glyphLines.positions
 
-      for(var j=0; j<cells.length; ++j) {
-        var cell = cells[j]
-        for(var k=0; k<2; ++k) {
-          for(var l=0; l<3; ++l) {
-            positionArray[3*lineOffset+l] = x[l]
+        for(var j=0; j<cells.length; ++j) {
+          var cell = cells[j]
+          for(var k=0; k<2; ++k) {
+            for(var l=0; l<3; ++l) {
+              positionArray[3*lineOffset+l] = x[l]
+            }
+            for(var l=0; l<4; ++l) {
+              colorArray[4*lineOffset+l] = lineColor[l]
+            }
+            idArray[lineOffset] = pickCounter
+            var p = verts[cell[k]]
+            glyphArray[2*lineOffset]   = size * (cos*p[0] - sin*p[1] + textOffset[0])
+            glyphArray[2*lineOffset+1] = size * (sin*p[0] + cos*p[1] + textOffset[1])
+            lineOffset += 1
           }
-          for(var l=0; l<4; ++l) {
-            colorArray[4*lineOffset+l] = lineColor[l]
-          }
-          idArray[lineOffset] = pickCounter
-          var p = verts[cell[k]]
-          glyphArray[2*lineOffset]   = size * (cos*p[0] - sin*p[1] + textOffset[0])
-          glyphArray[2*lineOffset+1] = size * (sin*p[0] + cos*p[1] + textOffset[1])
-          lineOffset += 1
         }
       }
 
