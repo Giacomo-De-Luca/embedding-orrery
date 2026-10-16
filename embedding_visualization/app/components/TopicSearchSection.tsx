@@ -4,7 +4,6 @@ import React, { useCallback } from 'react';
 import { Search, CheckSquare, XSquare, ChevronDown } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Input } from '@/lib/ui-primitives/input';
-import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
@@ -15,8 +14,6 @@ import {
 } from '@/lib/ui-primitives/collapsible';
 import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
-import { buildCategoryColorMap } from '@/lib/utils/categoryColors';
-import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 import type { TopicInfo } from '@/lib/types/types';
 import type { TopicSearchMode, TopicSearchResult } from '@/lib/hooks/useTopicSearch';
@@ -42,8 +39,17 @@ interface TopicSearchSectionProps {
   onToggleTopic: (topicId: number) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
-  // Optional: palette for color dots
-  categoricalPalette?: string;
+  /**
+   * Topic label → colour, resolved exactly as the scatter plots and legend
+   * resolve topic_label colours (see DashboardPanel), so each dot matches its points.
+   */
+  topicColorMap: Record<string, string>;
+}
+
+const FALLBACK_TOPIC_COLOR = '#888';
+
+function topicColor(topicColorMap: Record<string, string>, topic: TopicInfo): string {
+  return (topic.label && topicColorMap[topic.label]) || FALLBACK_TOPIC_COLOR;
 }
 
 export function TopicSearchSection({
@@ -63,19 +69,8 @@ export function TopicSearchSection({
   onToggleTopic,
   onSelectAll,
   onClearAll,
-  categoricalPalette,
+  topicColorMap,
 }: TopicSearchSectionProps) {
-  // Build color map for topic labels (with custom overrides)
-  const topicColorOverrides = useVisualizationStore(
-    (s) => s.categoryColorOverrides['topic_id']
-  );
-  const topicColorMap = React.useMemo(() => {
-    const values = topics
-      .filter(t => t.topicId !== -1)
-      .map(t => String(t.topicId));
-    return buildCategoryColorMap('topic_id', ['-1', ...values], categoricalPalette, topicColorOverrides);
-  }, [topics, categoricalPalette, topicColorOverrides]);
-
   const handleSemanticKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -224,7 +219,7 @@ function TopicList({
             topic={topic}
             selected={selectedTopicIds.has(topic.topicId)}
             onToggle={() => onToggleTopic(topic.topicId)}
-            color={topicColorMap[String(topic.topicId)] ?? '#888'}
+            color={topicColor(topicColorMap, topic)}
           />
         ))}
         {topics.length === 0 && (
@@ -259,11 +254,25 @@ function TopicRow({
         "flex items-center gap-2 px-2 py-1.5 rounded-sm hover:bg-accent/50 cursor-pointer transition-colors",
         selected && "bg-accent"
       )}>
-        <Checkbox
-          checked={selected}
-          onCheckedChange={() => onToggle()}
-          className="h-3.5 w-3.5"
-        />
+        {/* Selection dot: small empty ring, filled green when selected; the
+            padding keeps a comfortable hit area around the 8px dot */}
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={`Select topic ${topic.label || topic.topicId}`}
+          onClick={onToggle}
+          className="group/dot -m-1 flex-shrink-0 rounded-full p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span
+            className={cn(
+              "block h-2 w-2 rounded-full border transition-colors",
+              selected
+                ? "border-emerald-500 bg-emerald-500"
+                : "border-muted-foreground/60 group-hover/dot:border-emerald-500/70"
+            )}
+          />
+        </button>
         <div
           className="w-2.5 h-2.5 rounded-full flex-shrink-0"
           style={{ backgroundColor: color }}
@@ -349,7 +358,7 @@ function TopicResultsList({
             topic={r.topic}
             selected={selectedTopicIds.has(r.topic.topicId)}
             onToggle={() => onToggleTopic(r.topic.topicId)}
-            color={topicColorMap[String(r.topic.topicId)] ?? '#888'}
+            color={topicColor(topicColorMap, r.topic)}
             relevanceBar={r.relevance}
             matchedSubtopicLabel={r.matchedSubtopicLabel}
           />

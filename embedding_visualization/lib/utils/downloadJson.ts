@@ -17,13 +17,16 @@ export function downloadJson(data: unknown, filename: string): void {
   downloadBlob(blob, filename);
 }
 
-/** Trigger a browser download of a canvas as a PNG file. */
-export function downloadCanvasPng(canvas: HTMLCanvasElement, filename: string): void {
-  canvas.toBlob((blob) => {
-    if (blob) {
-      downloadBlob(blob, filename);
-    } else {
-      console.error(`Canvas PNG encoding failed for ${filename} (${canvas.width}x${canvas.height})`);
-    }
-  }, 'image/png');
+/** Trigger a PNG download, resolving false if the browser cannot encode the canvas. */
+export function downloadCanvasPng(canvas: HTMLCanvasElement, filename: string): Promise<boolean> {
+  return new Promise(resolve => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        downloadBlob(blob, filename);
+      } else {
+        console.error(`Canvas PNG encoding failed for ${filename} (${canvas.width}x${canvas.height})`);
+      }
+      resolve(blob !== null);
+    }, 'image/png');
+  });
 }

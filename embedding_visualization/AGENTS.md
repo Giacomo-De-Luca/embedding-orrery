@@ -51,3 +51,18 @@ Full behavior, tests, and remaining limitations are documented in
 `../documentation/FRONTEND_HEAP_REDUCTION.md`.
 The headed-Chrome heap/FPS regression harness and safe baseline-comparison
 workflow are documented in `../benchmarks/fps/README.md`.
+
+## 2D Density Labels
+
+- `ScatterPlot2D` passes the selected categorical field to `useDensityClusterLabels`.
+- `app/utils/densityClusterLabels.ts` resolves the majority field value per blob;
+  `categoryLabel` drives color and only `topic_label` sets a topic-click identity.
+- Field changes clear old placements while the debounced pipeline rebuilds.
+
+Fallback behavior and tests are documented in `../documentation/DENSITY_LABELS.md`.
+
+## Field Association PNG Export
+
+`FieldAssociationDialog` uses `lib/utils/heatmapCapture.ts` to capture the heading,
+legend and full inner grid at 2× resolution, preserving the current view and
+cancelling if the dialog closes. See `../documentation/FIELD_ASSOCIATIONS.md`.

@@ -28,7 +28,7 @@ import {
 } from '@/lib/utils/categoryRowData';
 import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
 import { cn } from '@/lib/utils/utils';
-import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
+import { CategoricalFields, type ColorFieldOption } from '@/lib/utils/fieldAnalysis';
 
 const FOLLOW_COLOR_FIELD = '__follow__';
 const NAME_FILTER_THRESHOLD = 15;
@@ -105,10 +105,7 @@ export function CategoryBarList({
 
   const mutedSet = useMemo(() => new Set(mutedCategories), [mutedCategories]);
 
-  const categoricalOptions = useMemo(() => {
-    if (!colorFieldOptions) return [];
-    return colorFieldOptions.filter(o => o.recommendedScale === 'categorical');
-  }, [colorFieldOptions]);
+  const categoricalOptions = useMemo(() => CategoricalFields.options(colorFieldOptions), [colorFieldOptions]);
 
   const hasData = categoryValues.length > 0;
   const displayName = getCategoryDisplayName(categoryField);

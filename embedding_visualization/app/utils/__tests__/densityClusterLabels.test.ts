@@ -115,7 +115,9 @@ describe('resolveClusterLabelTexts', () => {
       { x: 100, y: 100, text: 'f' },
     ];
     const topics = ['Poetry', 'Poetry', 'Prose', 'Chemistry', 'Chemistry', 'Physics'];
-    const result = resolveClusterLabelTexts(clusters, points, (i) => topics[i]);
+    const result = resolveClusterLabelTexts(clusters, points.map((p, i) => ({
+      ...p, metadata: { topic_label: topics[i] },
+    })), 'topic_label');
     expect(result[0].text).toBe('Poetry');
     expect(result[0].topicLabel).toBe('Poetry');
     expect(result[1].text).toBe('Chemistry');
@@ -128,7 +130,9 @@ describe('resolveClusterLabelTexts', () => {
       { x: 3, y: 3, text: 'c' }, { x: 4, y: 4, text: 'd' },
     ];
     const topics = ['Zebra', 'Apple', 'Zebra', 'Apple'];
-    const result = resolveClusterLabelTexts(clusters, points, (i) => topics[i]);
+    const result = resolveClusterLabelTexts(clusters, points.map((p, i) => ({
+      ...p, metadata: { topic_label: topics[i] },
+    })), 'topic_label');
     expect(result[0].text).toBe('Apple');
   });
 
@@ -149,14 +153,16 @@ describe('resolveClusterLabelTexts', () => {
     const poetryDocs = repeatDocs(20, ['medieval poetry analysis', 'medieval poetry manuscripts'], 12);
     const points = [...quantumDocs, ...poetryDocs];
     // Topics only for cluster 1's points; cluster 0 members have none
-    const result = resolveClusterLabelTexts(clusters, points, (i) => (i >= quantumDocs.length ? 'Poetry' : null));
+    const result = resolveClusterLabelTexts(clusters, points.map((p, i) => ({
+      ...p, metadata: { topic_label: i >= quantumDocs.length ? 'Poetry' : null },
+    })), 'topic_label');
     expect(result[1].text).toBe('Poetry');
     expect(result[0].topicLabel).toBeNull();
     expect(result[0].text.length).toBeGreaterThan(0);
     expect(result[0].text).toMatch(/quantum|research|computing|entanglement/i);
   });
 
-  it('uses the summarizer for every cluster when no topic accessor is given', () => {
+  it('uses the summarizer for every cluster when no metadata field is selected', () => {
     const clusters = [clusterAt(0, 10, 0, 10), clusterAt(20, 30, 0, 10)];
     const points = [
       ...repeatDocs(0, ['neural network training', 'neural network inference'], 12),
@@ -168,6 +174,54 @@ describe('resolveClusterLabelTexts', () => {
     expect(result[0].text).toMatch(/neural|network/i);
     expect(result[1].text).toMatch(/baroque|concerto/i);
   });
+
+  it('follows source instead of topics and switches back when the selected field changes', () => {
+    const clusters = [clusterAt(0, 10, 0, 10)];
+    const points = [
+      { x: 1, y: 1, text: 'a', metadata: { source: 'EMNLP', topic_label: 'Poetry' } },
+      { x: 2, y: 2, text: 'b', metadata: { source: 'EMNLP', topic_label: 'Poetry' } },
+      { x: 3, y: 3, text: 'c', metadata: { source: 'ACL', topic_label: 'Prose' } },
+    ];
+
+    expect(resolveClusterLabelTexts(clusters, points, 'source')).toEqual([
+      { text: 'EMNLP', categoryLabel: 'EMNLP', topicLabel: null },
+    ]);
+    expect(resolveClusterLabelTexts(clusters, points, 'topic_label')).toEqual([
+      { text: 'Poetry', categoryLabel: 'Poetry', topicLabel: 'Poetry' },
+    ]);
+  });
+
+  it('does not assign topic-click identity to a source with the same name as a topic', () => {
+    const points = [{ x: 1, y: 1, text: 'a', metadata: { source: 'Poetry', topic_label: 'Poetry' } }];
+    const [label] = resolveClusterLabelTexts([clusterAt(0, 10, 0, 10)], points, 'source');
+    expect(label.text).toBe('Poetry');
+    expect(label.topicLabel).toBeNull();
+  });
+
+  it('uses the selected subtopic field without treating it as a parent topic', () => {
+    const points = [{ x: 1, y: 1, text: 'a', metadata: { subtopic_label: 'Sonnets', topic_label: 'Poetry' } }];
+    expect(resolveClusterLabelTexts([clusterAt(0, 10, 0, 10)], points, 'subtopic_label')).toEqual([
+      { text: 'Sonnets', categoryLabel: 'Sonnets', topicLabel: null },
+    ]);
+  });
+
+  it('skips missing selected-field values and preserves zero as a category', () => {
+    const points = [undefined, null, '', 0].map((source, i) => ({
+      x: i + 1, y: 1, text: 'a', metadata: { source, topic_label: 'Poetry' },
+    }));
+    expect(resolveClusterLabelTexts([clusterAt(0, 10, 0, 10)], points, 'source')).toEqual([
+      { text: '0', categoryLabel: '0', topicLabel: null },
+    ]);
+  });
+
+  it('summarizes missing source values without falling back to unrelated topic names', () => {
+    const points = repeatDocs(0, ['quantum computing research', 'quantum entanglement research'], 12)
+      .map((p) => ({ ...p, metadata: { topic_label: 'Poetry' } }));
+    const [label] = resolveClusterLabelTexts([clusterAt(0, 10, 0, 10)], points, 'source');
+    expect(label.text).toMatch(/quantum|research|computing|entanglement/i);
+    expect(label.categoryLabel).toBeNull();
+    expect(label.topicLabel).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -177,7 +231,7 @@ describe('resolveClusterLabelTexts', () => {
 const labeledCluster = (
   text: string, sumDensity: number, topicLabel: string | null = text, level: 0 | 1 = 0,
 ): LabeledDensityCluster => ({
-  x: 0, y: 0, sumDensity, rects: [], level, text, topicLabel,
+  x: 0, y: 0, sumDensity, rects: [], level, text, categoryLabel: topicLabel, topicLabel,
 });
 
 describe('dedupeLabeledClusters', () => {
@@ -234,6 +288,7 @@ const labeled = (
   rects: [],
   level: 0,
   text: 'Label',
+  categoryLabel: null,
   topicLabel: null,
   ...overrides,
 });
@@ -271,7 +326,7 @@ describe('computeDensityLabelPlacements', () => {
   it('sets per-level font sizes and carries text/color/priority through', () => {
     const placements = computeDensityLabelPlacements(
       [
-        labeled({ x: 20, y: 20, level: 0, sumDensity: 500, topicLabel: 'Poetry', text: 'Poetry' }),
+        labeled({ x: 20, y: 20, level: 0, sumDensity: 500, categoryLabel: 'Poetry', topicLabel: 'Poetry', text: 'Poetry' }),
         labeled({ x: 80, y: 80, level: 1, sumDensity: 50, text: 'fine words' }),
       ],
       fakeCtx, ranges, plotArea, (topic) => (topic === 'Poetry' ? '#ff0000' : '#888888'),
@@ -285,5 +340,15 @@ describe('computeDensityLabelPlacements', () => {
     expect(fine.color).toBe('#888888');
     expect(coarse.label).toBe('Poetry');
     expect(coarse.topicLabel).toBe('Poetry');
+  });
+
+  it('colors a source label by its category while leaving topic clicks disabled', () => {
+    const [placement] = computeDensityLabelPlacements(
+      [labeled({ x: 20, y: 20, text: 'EMNLP', categoryLabel: 'EMNLP', topicLabel: null })],
+      fakeCtx, ranges, plotArea, (category) => category === 'EMNLP' ? '#00ff00' : '#888888',
+    );
+    expect(placement.label).toBe('EMNLP');
+    expect(placement.color).toBe('#00ff00');
+    expect(placement.topicLabel).toBeNull();
   });
 });

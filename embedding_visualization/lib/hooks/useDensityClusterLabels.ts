@@ -2,7 +2,7 @@
  * Async pipeline driver for density-based cluster labels (see
  * app/utils/densityClusterLabels.ts). Debounced and generation-token
  * cancelled; on any failure (e.g. WASM fetch) it warns once, permanently
- * falls back, and the caller keeps using topic-centroid placements.
+ * falls back, and the caller keeps using category-centroid placements.
  */
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -22,8 +22,8 @@ interface UseDensityClusterLabelsArgs {
   /** densityMode && showClusterLabels && plot ready. */
   enabled: boolean;
   visiblePoints: Point2D[];
-  /** Metadata field holding topic labels, or null when the collection has none. */
-  topicLabelField: string | null;
+  /** Selected categorical field, topic fallback, or null for keyword summaries. */
+  labelField: string | null;
   colorMap: Record<string, string>;
   nestedColorMap?: NestedColorMap | null;
   isDark: boolean;
@@ -36,7 +36,7 @@ interface UseDensityClusterLabelsArgs {
 export function useDensityClusterLabels({
   enabled,
   visiblePoints,
-  topicLabelField,
+  labelField,
   colorMap,
   nestedColorMap,
   isDark,
@@ -49,7 +49,7 @@ export function useDensityClusterLabels({
   const generationRef = useRef(0);
   const failedRef = useRef(false);
 
-  // Neutral color for summarizer-derived (non-topic) labels.
+  // Neutral color for summarizer-derived labels.
   const neutralColor = isDark ? '#94a3b8' : '#475569';
 
   // Latest lookup values via refs so the async effect doesn't re-fire on
@@ -70,6 +70,9 @@ export function useDensityClusterLabels({
       return;
     }
 
+    // Do not keep the previous field's titles during the debounced rebuild.
+    setPlacements(null);
+
     const timer = setTimeout(async () => {
       try {
         const clusters = await generateDensityClusters(visiblePoints);
@@ -79,15 +82,10 @@ export function useDensityClusterLabels({
           x: p.x,
           y: p.y,
           text: p.document || p.label || '',
+          metadata: p.metadata,
         }));
-        const topicOf = topicLabelField
-          ? (i: number) => {
-              const v = visiblePoints[i].metadata?.[topicLabelField];
-              return v === null || v === undefined || v === '' ? null : String(v);
-            }
-          : null;
-        const texts = resolveClusterLabelTexts(clusters, textPoints, topicOf);
-        // Blobs sharing a resolved title (same topic surfaced at both
+        const texts = resolveClusterLabelTexts(clusters, textPoints, labelField);
+        // Blobs sharing a resolved title (same category surfaced at both
         // bandwidths or across a multimodal region) collapse to their densest.
         const labeled = dedupeLabeledClusters(clusters.map((c, i) => ({ ...c, ...texts[i] })));
 
@@ -98,17 +96,19 @@ export function useDensityClusterLabels({
           measureCtx,
           initialRanges,
           plotArea,
-          (topicLabel) =>
-            topicLabel
-              ? (ncm?.topicColors?.[topicLabel] ?? cm[topicLabel]) || neutral
-              : neutral,
+          (category) => {
+            if (category === null) return neutral;
+            const nestedColors = labelField === 'topic_label' ? ncm?.topicColors
+              : labelField === 'subtopic_label' ? ncm?.subtopicColors : undefined;
+            return nestedColors?.[category] ?? cm[category] ?? neutral;
+          },
         );
         if (generationRef.current !== generation) return;
         setPlacements(result);
       } catch (err) {
         if (!failedRef.current) {
           failedRef.current = true;
-          console.warn('Density cluster labels unavailable, falling back to topic centroids:', err);
+          console.warn('Density cluster labels unavailable, falling back to category centroids:', err);
         }
         if (generationRef.current === generation) setPlacements(null);
       }
@@ -117,7 +117,7 @@ export function useDensityClusterLabels({
     return () => clearTimeout(timer);
     // graphDivRef is a ref; width/height changes only affect screen-space
     // measurement, which the debounce re-run covers.
-  }, [enabled, visiblePoints, topicLabelField, initialRanges, measureCtx, graphDivRef, width, height]);
+  }, [enabled, visiblePoints, labelField, initialRanges, measureCtx, graphDivRef, width, height]);
 
   return placements;
 }

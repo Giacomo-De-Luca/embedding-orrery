@@ -25,6 +25,7 @@ import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import { cn } from '@/lib/utils/utils';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
+import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
 import { MOBILE_BREAKPOINT } from '../../lib/hooks/use-mobile';
@@ -37,6 +38,7 @@ export type ActivePanel = 'controls' | 'search' | 'analytics' | null;
 
 import { CategorySelection } from '@/lib/utils/categorySelection';
 import { CategoryKey } from '@/lib/utils/categoryKey';
+import { MutedIndices } from '@/lib/utils/mutedIndices';
 import { explorePanelClass as panelClass } from '@/lib/utils/explorePanel';
 
 interface DashboardPanelProps {
@@ -238,6 +240,18 @@ export function DashboardPanel({
   // Topic-mode detection: when coloring by topic_label, selectedTopicIds drives everything
   const isTopicColorField = colorByField === 'topic_label';
 
+  // Colour dots of the Search panel's topic rows: resolved exactly as the plots
+  // and legend colour topic_label (same values, palette and overrides; nested
+  // mode's topic hues when active), so each dot matches its topic's points —
+  // also while the plot is coloured by another field.
+  const { categoryValues: otherFieldTopicValues } = useCategoryData(
+    points, isTopicColorField ? null : 'topic_label'
+  );
+  const flatTopicColorMap = useCategoryColorMap(
+    'topic_label', isTopicColorField ? categoryValues : otherFieldTopicValues, categoricalPalette
+  );
+  const topicColorMap = nestedColorMap?.topicColors ?? flatTopicColorMap;
+
   // Maps between topic labels and topic IDs for legend ↔ topic selection sync
   const topicLabelToIdMap = useMemo(() => {
     if (!isTopicColorField || !topics?.length) return null;
@@ -319,15 +333,11 @@ export function DashboardPanel({
   }, [textSearchHighlights, points]);
 
   // Combine temporal and search muting into a single set for scatter plots
-  const combinedMutedIndices = useMemo(() => {
-    if (!temporallyMutedIndices && !searchMutedIndices) return null;
-    if (temporallyMutedIndices && !searchMutedIndices) return temporallyMutedIndices;
-    if (!temporallyMutedIndices && searchMutedIndices) return searchMutedIndices;
-    const set = new Set<number>();
-    for (const i of temporallyMutedIndices!) set.add(i);
-    for (const i of searchMutedIndices!) set.add(i);
-    return set.size > 0 ? set : null;
-  }, [temporallyMutedIndices, searchMutedIndices]);
+  // (topic selection mutes categories instead: effectiveMutedCategories)
+  const combinedMutedIndices = useMemo(
+    () => MutedIndices.union([temporallyMutedIndices, searchMutedIndices]),
+    [temporallyMutedIndices, searchMutedIndices],
+  );
 
   // Signals for the Controls sidebar: gate the filtered-point and highlight-dependent controls
   const hasActiveFilter = combinedMutedIndices !== null || effectiveMutedCategories.length > 0;
@@ -819,7 +829,7 @@ export function DashboardPanel({
           onToggleTopic={onToggleTopic}
           onSelectAllTopics={onSelectAllTopics}
           onClearAllTopics={onClearAllTopics}
-          categoricalPalette={categoricalPalette}
+          topicColorMap={topicColorMap}
           textSearchLoading={textSearchLoading}
           availableFields={availableFields}
           itemMetadata={itemMetadata}
@@ -842,6 +852,7 @@ export function DashboardPanel({
         {/* Analytics Sidebar */}
         <AnalyticsSidebar
           points={points}
+          collectionName={collectionName}
           colorByField={colorByField}
           categoryValues={categoryValues}
           categoryCounts={categoryCounts}

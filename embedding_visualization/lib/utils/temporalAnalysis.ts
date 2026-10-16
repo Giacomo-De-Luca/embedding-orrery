@@ -6,6 +6,7 @@
 import type { MetadataPoint } from '../types/types';
 import { analyzeField, type FieldAnalysisResult } from './fieldAnalysis';
 import { CategoryKey } from './categoryKey';
+import { ContingencyTable } from './contingencyTable';
 
 export interface TemporalCrossTabRow {
   period: string;
@@ -92,15 +93,21 @@ export function detectTemporalField(
 }
 
 /**
+ * Compare period strings: numerically when both parse as numbers, otherwise
+ * lexicographically. Also the "name" order of category lists and heatmap axes.
+ */
+export function comparePeriods(a: string, b: string): number {
+  const numA = parseFloat(a);
+  const numB = parseFloat(b);
+  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+  return a.localeCompare(b);
+}
+
+/**
  * Sort period strings: numerically if possible, otherwise lexicographically.
  */
 export function sortPeriods(periods: string[]): string[] {
-  return [...periods].sort((a, b) => {
-    const numA = parseFloat(a);
-    const numB = parseFloat(b);
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-    return a.localeCompare(b);
-  });
+  return [...periods].sort(comparePeriods);
 }
 
 /**
@@ -155,31 +162,14 @@ export function computeTemporalCrossTab(
   temporalField: string,
   categoryValues: string[]
 ): TemporalCrossTabRow[] {
-  // Build a map: period -> category -> count
-  const crossTab = new Map<string, Record<string, number>>();
-
-  for (const point of points) {
-    const period = point.metadata?.[temporalField];
-    if (period === null || period === undefined || period === '') continue;
-
-    const periodKey = String(period);
-    const categoryKey = CategoryKey.of(point.metadata?.[categoryField]);
-
-    if (!crossTab.has(periodKey)) {
-      crossTab.set(periodKey, {});
-    }
-    const counts = crossTab.get(periodKey)!;
-    counts[categoryKey] = (counts[categoryKey] ?? 0) + 1;
-  }
-
-  // Convert to recharts format, sorted by period
-  const periods = sortPeriods(Array.from(crossTab.keys()));
+  // Points without a period are not on the time axis; a missing category is still stacked.
+  const table = ContingencyTable.fromPoints(points, temporalField, categoryField);
+  const periods = sortPeriods(table.rows.filter(period => period !== CategoryKey.MISSING));
 
   return periods.map(period => {
-    const counts = crossTab.get(period)!;
     const row: TemporalCrossTabRow = { period };
     for (const cat of categoryValues) {
-      row[cat] = counts[cat] ?? 0;
+      row[cat] = table.countOf(period, cat);
     }
     return row;
   });

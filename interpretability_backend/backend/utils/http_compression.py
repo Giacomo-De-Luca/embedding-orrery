@@ -19,18 +19,22 @@ compression in nginx's worker instead (see deploy/hf-space/nginx.conf).
 
 import functools
 import gzip
-import json
-from dataclasses import dataclass, fields
-from pathlib import Path
+from dataclasses import dataclass
+from typing import ClassVar
 
 from anyio import to_thread
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .json_settings import JsonFileSettings
+
 
 @dataclass(frozen=True)
-class CompressionSettings:
+class CompressionSettings(JsonFileSettings):
     """Tunables for ``JsonGzipMiddleware`` (all optional in the config file)."""
+
+    SETTINGS_LABEL: ClassVar[str] = "compression settings"
+    TUPLE_FIELDS: ClassVar[tuple[str, ...]] = ("content_types",)
 
     enabled: bool = True
     level: int = 4
@@ -54,22 +58,6 @@ class CompressionSettings:
         # Media types compare case-insensitively.
         object.__setattr__(self, "content_types", tuple(t.lower() for t in self.content_types))
 
-    @classmethod
-    def from_file(cls, path: Path) -> "CompressionSettings":
-        """Load settings from JSON; a missing file means defaults."""
-        if not path.exists():
-            return cls()
-        raw = json.loads(path.read_text())
-        unknown = set(raw) - {f.name for f in fields(cls)}
-        if unknown:
-            raise ValueError(f"Unknown compression settings: {sorted(unknown)}")
-        if isinstance(raw.get("content_types"), list):
-            raw["content_types"] = tuple(raw["content_types"])
-        try:
-            return cls(**raw)
-        except TypeError as exc:  # wrong JSON types reaching the range checks
-            raise ValueError(f"Invalid compression settings: {exc}") from exc
-
 
 class JsonGzipMiddleware:
     """ASGI middleware gzipping eligible JSON responses (see module docstring)."""
@@ -82,14 +70,14 @@ class JsonGzipMiddleware:
         if (
             scope["type"] != "http"
             or not self.settings.enabled
-            or not _accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
+            or not accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
         ):
             await self.app(scope, receive, send)
             return
         await self.app(scope, receive, _GzipResponder(self.settings, send))
 
 
-def _accepts_gzip(accept_encoding: str) -> bool:
+def accepts_gzip(accept_encoding: str) -> bool:
     """Whether an Accept-Encoding header allows gzip (``gzip;q=0`` refuses it)."""
     for part in accept_encoding.split(","):
         coding, *params = (piece.strip() for piece in part.split(";"))

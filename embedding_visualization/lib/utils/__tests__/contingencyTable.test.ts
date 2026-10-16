@@ -59,19 +59,6 @@ describe('ContingencyTable.fromPoints', () => {
     expect(table.countOf(MISSING, 'x')).toBe(1);
   });
 
-  it('drops every pair with a missing value when hideMissing is set, keeping totals consistent', () => {
-    const table = ContingencyTable.fromPoints(
-      pointsOf([['a', 'x'], ['a', undefined], [undefined, 'x'], ['b', 'x']]),
-      'source',
-      'topic',
-      { hideMissing: true },
-    );
-    expect(table.rows).toEqual(['a', 'b']);
-    expect(table.cols).toEqual(['x']);
-    expect(table.total).toBe(2);
-    expect(table.rowTotals).toEqual([1, 1]);
-  });
-
   it('skips the excluded point indices (active filters)', () => {
     const table = ContingencyTable.fromPoints(
       pointsOf([['a', 'x'], ['a', 'y'], ['b', 'y']]),

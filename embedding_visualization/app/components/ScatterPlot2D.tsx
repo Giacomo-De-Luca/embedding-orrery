@@ -168,7 +168,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const initialRangesRef = useRef<AxisRanges | null>(null);
   const currentRangesRef = useRef<AxisRanges | null>(null);
   // Store drawn label bounding boxes for click hit-testing
-  const drawnLabelBoxesRef = useRef<{ loX: number; loY: number; hiX: number; hiY: number; label: string }[]>([]);
+  const drawnLabelBoxesRef = useRef<{ loX: number; loY: number; hiX: number; hiY: number; label: string | null }[]>([]);
 
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme ?? 'light';
@@ -293,7 +293,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   });
 
   // Density-blob cluster labels (hybrid text): only attempted in density mode;
-  // null falls back to the topic-centroid placements below.
+  // null falls back to the category-centroid placements below.
   const hasTopicLabels = useMemo(
     () => points.some(p => p.metadata?.['topic_label'] != null),
     [points],
@@ -301,7 +301,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const densityPlacements = useDensityClusterLabels({
     enabled: densityMode && showClusterLabels && plotReady,
     visiblePoints,
-    topicLabelField: hasTopicLabels ? 'topic_label' : null,
+    labelField: colorScale.type === 'categorical' && categoryField
+      ? categoryField
+      : hasTopicLabels ? 'topic_label' : null,
     colorMap,
     nestedColorMap,
     isDark,
@@ -399,7 +401,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
 
-    const boxes: { loX: number; loY: number; hiX: number; hiY: number; label: string }[] = [];
+    const boxes: { loX: number; loY: number; hiX: number; hiY: number; label: string | null }[] = [];
 
     for (const cl of placements) {
       // Check Apple visibility: placement must exist and current scale must be in range
@@ -424,9 +426,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         loY: screen.y - fontSize * 0.6 - pad,
         hiX: screen.x + textWidth / 2 + pad,
         hiY: screen.y + fontSize * 0.6 + pad,
-        // Topic-backed density labels stay clickable via topicLabelToIdMap;
-        // summarizer labels miss the lookup (no-op click).
-        label: cl.topicLabel ?? cl.label,
+        // Explicit null disables topic clicks for other fields and summaries,
+        // even when their text happens to match a topic name.
+        label: cl.topicLabel === undefined ? cl.label : cl.topicLabel,
       };
 
       // Draw label with stroke outline for readability (same style as 3D)
@@ -482,6 +484,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     const y = e.clientY - rect.top;
 
     for (const box of drawnLabelBoxesRef.current) {
+      if (box.label === null) continue;
       if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
         const topicId = topicLabelToIdMap.get(box.label);
         if (topicId !== undefined) {

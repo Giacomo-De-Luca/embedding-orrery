@@ -640,6 +640,28 @@ function HomeContent() {
   // tour polls `hasColorField` against this before recoloring.
   const mergedColorFieldOptionsRef = useRef(mergedColorFieldOptions);
   mergedColorFieldOptionsRef.current = mergedColorFieldOptions;
+
+  // Topic-section selections highlight exactly like legend / Analytics clicks:
+  // selected topics keep their topic colours and the rest is muted, through
+  // the topic_label category muting DashboardPanel derives from
+  // selectedTopicIds. That path only runs while the plot is coloured by topic,
+  // so selecting a topic switches to topic colouring first (deselecting never
+  // recolours).
+  const ensureTopicColoring = useCallback(() => {
+    const state = useVisualizationStore.getState();
+    if (state.colorByField === 'topic_label') return;
+    if (!mergedColorFieldOptionsRef.current.some((o) => o.field === 'topic_label')) return;
+    state.setColorByField('topic_label', 'categorical');
+  }, []);
+  const { toggleTopic, selectAll: selectAllTopics, selectedTopicIds } = topicSearch;
+  const handleToggleTopic = useCallback((topicId: number) => {
+    if (!selectedTopicIds.has(topicId)) ensureTopicColoring();
+    toggleTopic(topicId);
+  }, [ensureTopicColoring, selectedTopicIds, toggleTopic]);
+  const handleSelectAllTopics = useCallback(() => {
+    ensureTopicColoring();
+    selectAllTopics();
+  }, [ensureTopicColoring, selectAllTopics]);
   // Source for the tour's temporal window: metadata is identical across
   // modes, so either point set works — prefer whichever is populated.
   const temporalSourceRef = useRef<{
@@ -878,8 +900,8 @@ function HomeContent() {
                   topicSemanticLoading={topicSearch.semanticLoading}
                   topicSemanticError={topicSearch.semanticError}
                   selectedTopicIds={topicSearch.selectedTopicIds}
-                  onToggleTopic={topicSearch.toggleTopic}
-                  onSelectAllTopics={topicSearch.selectAll}
+                  onToggleTopic={handleToggleTopic}
+                  onSelectAllTopics={handleSelectAllTopics}
                   onClearAllTopics={topicSearch.clearAll}
                   cameraResetSignal={cameraResetTick}
                   cameraResetView={cameraResetView}

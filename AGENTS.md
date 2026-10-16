@@ -161,3 +161,15 @@ The transparent EMNLP gallery variant and its pixel-preservation checks are
 documented in `documentation/GALLERY_TRANSPARENCY.md`; `gallery/README.md`
 describes the gallery assets. The original image and documentation-site asset
 remain unchanged.
+
+## 2D Density Labels
+
+Density titles follow the selected categorical color field (including `source`)
+and carry separate category-color and topic-click identities. Fallback rules
+and regression coverage are documented in `documentation/DENSITY_LABELS.md`.
+
+## Field Association PNG Export
+
+The heatmap dialog's **Export PNG** saves the complete grid with its title,
+legend, current mode, axis order, values and theme at 2× resolution. Capture
+behavior and validation are documented in `documentation/FIELD_ASSOCIATIONS.md`.

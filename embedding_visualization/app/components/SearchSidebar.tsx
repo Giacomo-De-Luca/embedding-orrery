@@ -48,6 +48,7 @@ const DOCUMENT_SENTINEL = '__document__';
 
 // Max feature-search result rows rendered in the sidebar preview list
 const FEATURE_RESULTS_PREVIEW_LIMIT = 50;
+const EMPTY_COLOR_MAP: Record<string, string> = {};
 
 interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentProps<typeof Sidebar> {
   searchQuery: string;
@@ -80,7 +81,8 @@ interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentP
   onToggleTopic?: (id: number) => void;
   onSelectAllTopics?: () => void;
   onClearAllTopics?: () => void;
-  categoricalPalette?: string;
+  /** Topic label → colour, from the same resolver as the plots and legend. */
+  topicColorMap?: Record<string, string>;
   // SAE prompt highlight
   saeInfo?: { modelId: string; saeId: string } | null;
   promptHighlightStatus?: 'idle' | 'loading_model' | 'running' | 'error';
@@ -120,11 +122,11 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
   topicSemanticResults,
   topicSemanticLoading,
   topicSemanticError,
+  topicColorMap,
   selectedTopicIds,
   onToggleTopic,
   onSelectAllTopics,
   onClearAllTopics,
-  categoricalPalette,
   // SAE prompt highlight
   saeInfo,
   promptHighlightStatus,
@@ -642,7 +644,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
               onToggleTopic={onToggleTopic ?? (() => {})}
               onSelectAll={onSelectAllTopics ?? (() => {})}
               onClearAll={onClearAllTopics ?? (() => {})}
-              categoricalPalette={categoricalPalette}
+              topicColorMap={topicColorMap ?? EMPTY_COLOR_MAP}
             />
           )}
         </div>

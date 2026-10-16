@@ -3,8 +3,8 @@
  * embedding-atlas's auto-label pipeline (EmbeddingViewImpl.svelte
  * generateClusters/generateLabels + labels.ts layoutLabels, Apple MIT),
  * adapted to Plotly axis ranges and this app's hybrid label-text rule:
- * majority topic_label of the cluster's member points when the collection
- * has topics, else client-side c-TF-IDF via TextSummarizer.
+ * majority value of the selected categorical field, with topic/keyword
+ * fallback when no categorical field is selected.
  *
  * Pipeline (once per data change, in useDensityClusterLabels):
  *   computeDensityMap (CPU, 500², σ 5 / 2.5 → levels 0 / 1)
@@ -16,6 +16,7 @@
 
 import { computeDensityMap, type DensityMapResult } from './densityUtils';
 import { findClusters, type Cluster } from '../../lib/density-clustering';
+import { CategoryKey } from '../../lib/utils/categoryKey';
 import { TextSummarizer, type Rectangle } from './text_summarizer';
 import { dynamicLabelPlacement, type Label } from './dynamicMapPlacement';
 import {
@@ -36,11 +37,15 @@ export interface DensityCluster {
   level: 0 | 1;
 }
 
-export type LabeledDensityCluster = DensityCluster & {
+interface DensityLabelText {
   text: string;
+  /** Selected-field value used for coloring, or null for keyword summaries. */
+  categoryLabel: string | null;
   /** Set when the text came from a topic label (keeps labels clickable). */
   topicLabel: string | null;
-};
+}
+
+export type LabeledDensityCluster = DensityCluster & DensityLabelText;
 
 export type DensityLabelPlacement = ClusterLabelPlacement & {
   fontSize: number;
@@ -187,44 +192,44 @@ class ClusterMembership {
 }
 
 /**
- * Hybrid text resolution. With `topicOf`, each cluster gets the majority
- * topic_label among its member points (ties break lexicographically); clusters
- * with no topic-labeled members fall back to the c-TF-IDF summarizer. Without
- * `topicOf`, every cluster is summarized.
+ * Each cluster gets the majority value of `labelField` among its members
+ * (ties break lexicographically). Clusters with no values for that field fall
+ * back to the c-TF-IDF summarizer. With no field, every cluster is summarized.
+ * Only the topic_label field produces a topic-click identity.
  */
 export function resolveClusterLabelTexts(
   clusters: DensityCluster[],
-  points: { x: number; y: number; text: string }[],
-  topicOf: ((pointIndex: number) => string | null) | null,
-): { text: string; topicLabel: string | null }[] {
-  const results: { text: string; topicLabel: string | null }[] =
-    clusters.map(() => ({ text: '', topicLabel: null }));
+  points: { x: number; y: number; text: string; metadata?: Record<string, unknown> }[],
+  labelField: string | null,
+): DensityLabelText[] {
+  const results: DensityLabelText[] =
+    clusters.map(() => ({ text: '', categoryLabel: null, topicLabel: null }));
   if (clusters.length === 0) return results;
 
   const needsSummary = new Set<number>();
 
-  if (topicOf) {
+  if (labelField) {
     const membership = new ClusterMembership(clusters);
-    const topicCounts: Map<string, number>[] = clusters.map(() => new Map());
+    const categoryCounts: Map<string, number>[] = clusters.map(() => new Map());
     for (let i = 0; i < points.length; i++) {
-      const topic = topicOf(i);
-      if (topic == null || topic === '') continue;
+      const category = CategoryKey.of(points[i].metadata?.[labelField]);
+      if (category === CategoryKey.MISSING) continue;
       for (const ci of membership.clustersAt(points[i].x, points[i].y)) {
-        const counts = topicCounts[ci];
-        counts.set(topic, (counts.get(topic) ?? 0) + 1);
+        const counts = categoryCounts[ci];
+        counts.set(category, (counts.get(category) ?? 0) + 1);
       }
     }
     for (let ci = 0; ci < clusters.length; ci++) {
       let best: string | null = null;
       let bestCount = 0;
-      for (const [topic, count] of topicCounts[ci]) {
-        if (count > bestCount || (count === bestCount && best !== null && topic < best)) {
-          best = topic;
+      for (const [category, count] of categoryCounts[ci]) {
+        if (count > bestCount || (count === bestCount && best !== null && category < best)) {
+          best = category;
           bestCount = count;
         }
       }
       if (best !== null) {
-        results[ci] = { text: best, topicLabel: best };
+        results[ci] = { text: best, categoryLabel: best, topicLabel: labelField === 'topic_label' ? best : null };
       } else {
         needsSummary.add(ci);
       }
@@ -243,7 +248,7 @@ export function resolveClusterLabelTexts(
     const summaries = summarizer.summarize(4);
     for (const ci of needsSummary) {
       // Single-line canvas labels: top 3 keywords, dash-joined like the atlas.
-      results[ci] = { text: summaries[ci].slice(0, 3).join('-'), topicLabel: null };
+      results[ci] = { text: summaries[ci].slice(0, 3).join('-'), categoryLabel: null, topicLabel: null };
     }
   }
 
@@ -254,10 +259,10 @@ export function resolveClusterLabelTexts(
  * Collapse labeled clusters that resolve to the same text, keeping the densest
  * (highest sumDensity) blob per unique label.
  *
- * The pipeline finds blobs *by density* at two bandwidths, so one topic can
+ * The pipeline finds blobs *by density* at two bandwidths, so one category can
  * yield several blobs — surfaced at both the coarse and fine level, or split
  * across a spatially multimodal region. In the hybrid path those all take the
- * same majority topic_label, so without this step the same title is drawn more
+ * same majority category value, so without this step the same title is drawn more
  * than once. c-TF-IDF (no-topic) labels differ per region, so only genuine
  * duplicates collapse. Because coarse blobs integrate more mass, the surviving
  * blob is usually the coarse (level-0) one, which also keeps the label visible
@@ -301,7 +306,7 @@ export function computeDensityLabelPlacements(
   ctx: CanvasRenderingContext2D,
   initialRanges: AxisRanges,
   plotArea: PlotArea,
-  colorFor: (topicLabel: string | null) => string,
+  colorFor: (categoryLabel: string | null) => string,
 ): DensityLabelPlacement[] {
   const visible = labeled.filter((c) => c.text.length > 0);
   if (visible.length === 0) return [];
@@ -320,7 +325,7 @@ export function computeDensityLabelPlacements(
 
     entries.push({
       label: cluster.text,
-      color: colorFor(cluster.topicLabel),
+      color: colorFor(cluster.categoryLabel),
       dataX: cluster.x,
       dataY: cluster.y,
       textWidth,

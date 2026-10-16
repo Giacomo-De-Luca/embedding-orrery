@@ -10,6 +10,7 @@ import {
 } from '@/lib/ui-primitives/sidebar';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { CategoryBarList } from './charts/CategoryBarList';
+import { FieldAssociationSection } from './charts/FieldAssociationSection';
 import { TemporalFilterChart } from './charts/TemporalFilterChart';
 import { ProbeSection } from './ProbeSection';
 import { IS_DEMO } from '@/lib/utils/demoMode';
@@ -18,11 +19,8 @@ import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { getUnclusteredValues } from '../../lib/utils/categoryColors';
 import { CategoryKey } from '../../lib/utils/categoryKey';
 import type { MetadataPoint, TemporalRange } from '../../lib/types/types';
-import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import { CategoricalFields, type ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 
-/** Cardinality cap for fields missing from colorFieldOptions — beyond this the
- * distribution list is hidden (continuous fields would render one row per value). */
-const MAX_ANALYTICS_CATEGORIES = 300;
 /** Stable empty array so useTemporalData memo deps don't churn. */
 const NO_CATEGORIES: string[] = [];
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
@@ -44,6 +42,8 @@ interface AnalyticsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   colorFieldOptions?: ColorFieldOption[];
   probes?: UseProbesReturn | null;
   onCategoryToggle?: (category: string, shiftKey: boolean) => void;
+  /** Active collection, for the field-association heatmap's topic-similarity sort. */
+  collectionName?: string | null;
 }
 
 export function AnalyticsSidebar({
@@ -61,6 +61,7 @@ export function AnalyticsSidebar({
   colorFieldOptions,
   probes,
   onCategoryToggle,
+  collectionName,
   className,
   ...props
 }: AnalyticsSidebarProps) {
@@ -112,18 +113,18 @@ export function AnalyticsSidebar({
   }, [isOverridden, sharedFilteredCounts, combinedMutedIndices, effectiveAnalysisField, points]);
 
   // Guard against continuous color fields (sequential/diverging scales) exploding
-  // into one "category" per distinct float value: trust the field's recommended
-  // scale when it's listed, and fall back to a cardinality cap for unlisted fields.
-  const isCategoricalField = useMemo(() => {
-    if (!effectiveAnalysisField) return false;
-    const fieldOption = colorFieldOptions?.find(o => o.field === effectiveAnalysisField);
-    if (fieldOption) return fieldOption.recommendedScale === 'categorical';
-    return filteredCategoryValues.length <= MAX_ANALYTICS_CATEGORIES;
-  }, [effectiveAnalysisField, colorFieldOptions, filteredCategoryValues.length]);
+  // into one "category" per distinct float value.
+  const isCategoricalField = useMemo(
+    () => CategoricalFields.includes(effectiveAnalysisField, colorFieldOptions, filteredCategoryValues.length),
+    [effectiveAnalysisField, colorFieldOptions, filteredCategoryValues.length]
+  );
 
   const hasCategoricalData = Boolean(
     isCategoricalField && filteredCategoryValues.length > 0
   );
+
+  // The association view compares two categorical fields.
+  const hasAssociationFields = CategoricalFields.options(colorFieldOptions).length >= 2;
 
   const { temporalField, temporalFieldCandidates, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,
@@ -214,9 +215,23 @@ export function AnalyticsSidebar({
             />
           )}
 
+          {hasAssociationFields && (
+            <>
+              <Separator />
+              <FieldAssociationSection
+                points={points}
+                colorByField={colorByField}
+                colorFieldOptions={colorFieldOptions}
+                mutedIndices={combinedMutedIndices}
+                categoricalPalette={categoricalPalette}
+                collectionName={collectionName}
+              />
+            </>
+          )}
+
           {showTemporalSection && (
             <>
-              {hasCategoricalData && <Separator />}
+              {(hasCategoricalData || hasAssociationFields) && <Separator />}
               {/* data-tour: spotlight target for the demo tour's temporal step */}
               <div data-tour="temporal-chart">
                 <TemporalFilterChart
@@ -252,7 +267,7 @@ export function AnalyticsSidebar({
               wrapper gives the probing tour's final step its anchor. */}
           {probes && (
             <div data-tour="probe-section" className="space-y-6">
-              {(hasCategoricalData || showTemporalSection) && <Separator />}
+              {(hasCategoricalData || hasAssociationFields || showTemporalSection) && <Separator />}
               <ProbeSection
                 probes={probes}
                 colorFieldOptions={colorFieldOptions}

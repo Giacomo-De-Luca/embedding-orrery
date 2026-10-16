@@ -442,10 +442,12 @@ const EMPTY_VALUE_SET: ReadonlySet<string> = new Set();
  * bucket and is not a meaningful category).
  */
 export function getUnclusteredValues(categoryField: string | null | undefined): ReadonlySet<string> {
-  if (!categoryField || !TOPIC_LIKE_FIELDS.has(categoryField.toLowerCase())) {
-    return EMPTY_VALUE_SET;
-  }
-  return UNCLUSTERED_TOKENS;
+  return isTopicLikeField(categoryField) ? UNCLUSTERED_TOKENS : EMPTY_VALUE_SET;
+}
+
+/** Whether `field` holds topic or subtopic assignments (ids or labels). */
+export function isTopicLikeField(field: string | null | undefined): boolean {
+  return !!field && TOPIC_LIKE_FIELDS.has(field.toLowerCase());
 }
 
 // ============ Dynamic color generation ============

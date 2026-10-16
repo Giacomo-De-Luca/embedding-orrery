@@ -2,9 +2,11 @@
 
 import strawberry
 
+from ..utils.response_cache import load_response_cache_settings
 from .mutations import Mutation
 from .queries import Query
 from .read_only import ReadOnlyExtension
+from .response_cache_extension import ResponseCacheMarkerExtension
 from .subscriptions import JobProgress, Subscription
 from .types import (
     # Scalars
@@ -88,11 +90,16 @@ from .types import (
 
 # Create the schema with subscription support. ReadOnlyExtension is always
 # installed; it only blocks mutations when ORRERY_READ_ONLY=1 (demo deploys).
+# ResponseCacheMarkerExtension likewise only acts on read-only instances: it
+# marks query results the response cache may replay (backend/main.py).
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
     subscription=Subscription,
-    extensions=[ReadOnlyExtension],
+    extensions=[
+        ReadOnlyExtension,
+        ResponseCacheMarkerExtension(settings=load_response_cache_settings()),
+    ],
 )
 
 __all__ = [

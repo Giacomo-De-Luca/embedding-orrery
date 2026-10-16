@@ -10,14 +10,16 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from strawberry.fastapi import GraphQLRouter
 from strawberry.subscriptions import GRAPHQL_TRANSPORT_WS_PROTOCOL, GRAPHQL_WS_PROTOCOL
 
 from .API import schema
+from .API.graphql_router import OrreryGraphQLRouter
 from .API.read_only import is_read_only
+from .API.response_cache_extension import response_cache_active
 from .API.upload import router as upload_router
 from .utils.http_compression import CompressionSettings, JsonGzipMiddleware
 from .utils.resource_paths import PACKAGE_ROOT
+from .utils.response_cache import GraphQLResponseCacheMiddleware, load_response_cache_settings
 from .utils.seed_bootstrap import ensure_seed_loaded
 
 
@@ -34,6 +36,16 @@ app = FastAPI(
     description="GraphQL API for exploring word embeddings with ChromaDB",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# Replay cached GraphQL responses on read-only deployments, where the data is
+# immutable. Added first, so it runs innermost: CORS still decorates hits and
+# the gzip middleware passes the stored gzip bodies through.
+response_cache_settings = load_response_cache_settings()
+app.add_middleware(
+    GraphQLResponseCacheMiddleware,
+    settings=response_cache_settings,
+    is_active=lambda: response_cache_active(response_cache_settings),
 )
 
 # Configure CORS (including WebSocket origins)
@@ -56,8 +68,8 @@ app.add_middleware(
     settings=CompressionSettings.from_file(PACKAGE_ROOT / "config" / "http_compression.json"),
 )
 
-# Create GraphQL router with WebSocket subscription support
-graphql_app = GraphQLRouter(
+# Create GraphQL router with WebSocket subscription support (orjson responses)
+graphql_app = OrreryGraphQLRouter(
     schema,
     subscription_protocols=[
         GRAPHQL_TRANSPORT_WS_PROTOCOL,

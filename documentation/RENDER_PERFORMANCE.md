@@ -7,7 +7,7 @@ A series of targeted fixes to the Explore page's scatter plots, driven by a veri
 | # | Problem | Where | Status |
 |---|---|---|---|
 | 2 | 3D markers upload glyph-outline vertices that are never drawn (~40% of marker vertex memory) | fork: gl-scatter3d | **Done** (−42% marker vertex memory, −357 MB on WordNet) |
-| 1 | 3D pick buffers re-render and fully read back on every frame the camera moves (11 buffers, ~63 MB per frame, for the WordNet topic view) | fork: gl-plot3d, gl-select-static | Planned |
+| 1 | 3D pick buffers re-render and fully read back on every frame the camera moves (11 buffers, ~63 MB per frame, for the WordNet topic view) | fork: gl-plot3d, gl-select-static | Implemented, tests pass; benchmark pending |
 | 4 | Plotly's entry file registers ~48 trace types, including two map libraries the app never uses | fork: `lib/index.js` | Planned |
 | 7 | One trace per category: ~2,695 traces when WordNet is coloured by topic | `ScatterPlot3D.tsx` | Planned |
 | 6 | Plotly's GL pixel ratio is fixed at 2, quadrupling framebuffers on standard screens | both plot configs | Planned |
@@ -20,7 +20,7 @@ Future work, not scheduled: batching the nebula haze sprites into one draw call;
 
 The FPS benchmark (`benchmarks/fps/`, see its README) gained three things for this series:
 
-- **`glStatsPostLoad` / `glStatsPostDrag`** on every run: trace count, marker fill and outline vertices with their buffer size, pick stats (once step 1 exposes them), and the GL canvas backing ratio.
+- **`glStatsPostLoad` / `glStatsPostDrag`** on every run: trace count, marker fill and outline vertices with their buffer size, pick stats (`scene.pickStats`, from step 1 on), and the GL canvas backing ratio.
 - **`BENCH_DPR`**: the page's `devicePixelRatio`. Historical runs used 1, which does not reflect a Retina screen. Non-1 ratios get their own result label suffix (`-dpr2`, `-dpr1p5`).
 - **`2d-topics` and `2d-density` passes**, for the 2D trace-count and density-overlay questions.
 
@@ -67,3 +67,37 @@ The replayed body travels base64-encoded over the DevTools protocol, which infla
 - Covered by three new tests in `benchmarkContract.test.mjs`.
 - Verified on the three previously crashing collections: WordNet 77.39 MB (same byte count the old interception recorded), `gemma_29_65k` 93.13 MB and `lacan_sentences_gemini_document` 132.57 MB. All load.
 - Synthetic payloads still use `route.fulfill`, so `synthetic_1m` (~106 MB) would hit the same limit; see the benchmark README's caveats.
+
+## Step 1: no pick pass while the camera moves
+
+**Change.** gl-plot3d hit-tests the mouse against offscreen pick buffers, up to 254 pickable objects each (11 buffers for WordNet by topic). Each pass is copied to the CPU with a full `readPixels` 1 ms later. Before this step, it re-rendered and read back every buffer on every frame the camera moved, which is useless while the image moves. Now:
+
+- The pick pass renders only on frames where the camera is still. A pass deferred while moving runs on the first still frame.
+- A hover that arrives while the pick is pending is not answered from the stale CPU copy. It is replayed once every buffer has been read back. A press in that window is dropped, so it can't become a click on whatever is under the cursor later.
+- The inverted `clearTimeout` guard in gl-select-static is fixed, so two passes in one task read each buffer once, not twice.
+- New pick buffers are allocated at pick resolution. The CPU copy is no longer pixelRatio² too large: 2 MiB instead of 8 MiB for an 800×600 plot at ratio 2.
+- `scene.pickStats` counts pick `renders`, `deferredFrames`, `readbacks` and current `buffers`; the benchmark's `glStatsPostDrag` reports them.
+
+Details: `embedding_visualization/forked/plotly_changes.md`, change 4.
+
+**Tests.** `embedding_visualization/forked/__tests__/glPlot3dPickDeferral.test.ts`, 15 cases on the real bundle. They use a fake camera, a manual frame loop and fake timers for the readback. The pick image encodes which pass rendered it, so a test can tell a stale hit from a fresh one. Eleven failed before the patch:
+- no pick pass or readback on moving frames;
+- one pass and one readback per buffer on the first still frame (300 objects → 2 buffers), with the pixel ratio restored;
+- an object update while moving is deferred to the first still frame;
+- a synchronous `scene.redraw()` while moving is deferred;
+- one readback per buffer for two passes in one task;
+- pick buffers at pick resolution;
+- no hit for a hover while moving;
+- no hit while a readback is pending, then the fresh hit;
+- a skipped hover is replayed;
+- a press during a pending pick never becomes a click;
+- `pickStats` counters.
+
+Four guards passed before and after:
+- idle frames draw nothing;
+- an update with a still camera renders the pick in the same frame;
+- a hover on a fresh pick is answered immediately;
+- a press on a fresh pick still clicks.
+
+**Benchmark.** Pending: to be run by the user (commands in the step hand-off). Expected: `3d-topics` drag FPS up from 8.6, `pickStats.renders` close to 0 during the orbit, with `deferredFrames` ≈ the frames drawn.
+

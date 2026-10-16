@@ -45,6 +45,15 @@ nginx :7860 ── /graphql, /health ──▶ uvicorn :8000  (FastAPI + Strawbe
   so `/graphql` sets `proxy_set_header Accept-Encoding ""` —
   uvicorn then answers uncompressed and compression stays in nginx's worker
   instead of the 2-vCPU Python process (see `MULTICLASS_PROBES.md`).
+- Because `ORRERY_READ_ONLY=1`, the backend's GraphQL response cache is
+  active. The first `collection` load of each collection/projection is built
+  once per container; later identical requests are replayed from memory
+  without touching DuckDB or re-encoding. Responses carry
+  `X-Orrery-Cache: miss|hit`. With the `Accept-Encoding` strip above, hits
+  leave uvicorn as plain JSON streamed in 1 MiB slices and nginx gzips them
+  per visitor. Forwarding the header on `/graphql` (plus `gunzip on;`) would
+  serve the stored gzip bytes directly. That is not applied yet; see
+  `GRAPHQL_RESPONSE_CACHE.md` "HF Space notes".
 - HF Spaces runs containers as uid 1000: the image creates `user`, points
   `ORRERY_RESOURCE_DIR=/home/user/data` and `HF_HOME=/home/user/hf` at
   writable paths. Space restarts wipe `/home/user/data` → the seed bootstrap
@@ -207,9 +216,13 @@ constraints, in the order they actually bite:
 1. **The full-collection load, not HF.** The Explore page fetches the entire
    collection in one GraphQL response (documents + metadata + projections; no
    pagination). At ~1.5–3 KB/doc of JSON, 100k docs ≈ 200–300 MB serialized
-   per request — tens of seconds on 2 vCPU, per visitor. nginx gzip (~5–8× on
-   JSON) fixes the wire size but not the serialization time. This is the real
-   ceiling and it's architectural, not a platform limit.
+   per request — tens of seconds on 2 vCPU. nginx gzip (~5–8× on
+   JSON) fixes the wire size but not the serialization time. The read-only
+   response cache (`GRAPHQL_RESPONSE_CACHE.md`) now pays the build once per
+   collection and container instead of per visitor, but that first build
+   still blocks the event loop, and every browser still downloads and parses
+   the whole collection. This is the real ceiling and it's architectural, not
+   a platform limit.
 2. **Seed / image size.** At 3072-d (Gemini) a document costs ~20 KB in the
    seed (12.3 KB vectors + HNSW + DuckDB rows + Chroma's sqlite copy) —
    measured: EMNLP's 13,980 docs added ~290 MB. The seed bakes into the image

@@ -226,6 +226,34 @@ export interface ColorFieldOption {
 }
 
 /**
+ * Which fields the Analytics views treat as categorical.
+ *
+ * A field listed in the colour-field options keeps its recommended scale, so
+ * continuous fields never explode into one category per distinct float; an
+ * unlisted field counts as categorical up to {@link MAX_UNLISTED_VALUES} values.
+ */
+export class CategoricalFields {
+  static readonly MAX_UNLISTED_VALUES = 300;
+
+  /** The categorical options, in their original order. */
+  static options(options: readonly ColorFieldOption[] | undefined): ColorFieldOption[] {
+    return options?.filter(o => o.recommendedScale === 'categorical') ?? [];
+  }
+
+  /** Whether `field`, which has `distinctCount` values, is categorical. */
+  static includes(
+    field: string | null | undefined,
+    options: readonly ColorFieldOption[] | undefined,
+    distinctCount: number,
+  ): boolean {
+    if (!field) return false;
+    const option = options?.find(o => o.field === field);
+    if (option) return option.recommendedScale === 'categorical';
+    return distinctCount <= CategoricalFields.MAX_UNLISTED_VALUES;
+  }
+}
+
+/**
  * Analyze all fields with proper type detection for coloring.
  * Counts unique values up to 1000 and returns actual numbers (no Infinity).
  *

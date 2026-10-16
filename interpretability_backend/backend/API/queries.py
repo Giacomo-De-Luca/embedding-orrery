@@ -773,6 +773,22 @@ class Query:
         ]
 
     @strawberry.field
+    async def topic_similarity_order(
+        self, collection_name: str, field: str, info=None
+    ) -> list[str] | None:
+        """A topic field's values ordered by embedding-centroid similarity, or null.
+
+        Null when the field is not a topic field or the collection's topic
+        centroids have not been computed. Async: the first call per extraction
+        clusters the centroids.
+        """
+        # Deferred: the ordering imports scipy, which must stay out of the schema's import graph.
+        from ..services.topic_order_service import TopicOrderService
+
+        service = TopicOrderService.shared(get_duckdb_client())
+        return await asyncio.to_thread(service.value_order, collection_name, field)
+
+    @strawberry.field
     def text_search(
         self,
         collection_name: str,

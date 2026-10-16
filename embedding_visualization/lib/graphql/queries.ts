@@ -377,6 +377,13 @@ export const TOPIC_SEMANTIC_SEARCH = gql`
   }
 `;
 
+/** A topic field's values ordered by embedding-centroid similarity; null when unavailable. */
+export const TOPIC_SIMILARITY_ORDER = gql`
+  query TopicSimilarityOrder($collectionName: String!, $field: String!) {
+    topicSimilarityOrder(collectionName: $collectionName, field: $field)
+  }
+`;
+
 // ========== SAE (Sparse Autoencoder) Queries ==========
 
 /**

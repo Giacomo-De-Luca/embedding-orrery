@@ -10534,6 +10534,8 @@ function SelectBuffer(gl, fbo, buffer) {
   this.fbo    = fbo
   this.buffer = buffer
   this._readTimeout = null
+  // [fork] Called after each readback, once `buffer` holds the latest pick pass.
+  this.onread = null
   var self = this
 
   this._readCallback = function() {
@@ -10543,10 +10545,21 @@ function SelectBuffer(gl, fbo, buffer) {
     fbo.bind()
     gl.readPixels(0,0,fbo.shape[0],fbo.shape[1],gl.RGBA,gl.UNSIGNED_BYTE,self.buffer)
     self._readTimeout = null
+    if(self.onread) {
+      self.onread()
+    }
   }
 }
 
 var proto = SelectBuffer.prototype
+
+// [fork] True between end() and its readback, while query() still answers from
+// the previous pick pass.
+Object.defineProperty(proto, 'readPending', {
+  get: function() {
+    return this._readTimeout !== null
+  }
+})
 
 Object.defineProperty(proto, 'shape', {
   get: function() {
@@ -10591,7 +10604,9 @@ proto.end = function() {
     return
   }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-  if(!this._readTimeout) {
+  // [fork] Was `if(!this._readTimeout)`, which only ever cleared a null timeout,
+  // so a second end() before the readback scheduled a second full readback.
+  if(this._readTimeout) {
     clearTimeout(this._readTimeout)
   }
   this._readTimeout = setTimeout(this._readCallback, 1)
@@ -13294,6 +13309,10 @@ function createScene(options) {
     oncontextloss: null,
     mouseListener: null,
     _stopped: false,
+    // [fork] Pick-pass counters, read by tests and the FPS benchmark: pick passes
+    // rendered, frames that deferred a dirty pick because the camera moved,
+    // buffer readbacks, and the current number of pick buffers.
+    pickStats: { renders: 0, deferredFrames: 0, readbacks: 0, buffers: 0 },
 
     getAspectratio: function() {
       return {
@@ -13395,7 +13414,10 @@ function createScene(options) {
         }
       }
       //Create new pick buffer
-      var nbuffer = createSelect(gl, viewShape)
+      // [fork] At pick resolution, the shape renderPick() gives every buffer,
+      // not the drawing buffer's (pixelRatio^2 larger): the CPU copy never shrinks.
+      var nbuffer = createSelect(gl, [Math.max(pickShape[0], 1), Math.max(pickShape[1], 1)])
+      nbuffer.onread = onPickRead
       pickBufferIds[i] = numPick
       pickBuffers.push(nbuffer)
       pickBufferCount.push(pickCount)
@@ -13406,6 +13428,7 @@ function createScene(options) {
       pickBufferCount.pop()
       pickBuffers.pop().dispose()
     }
+    scene.pickStats.buffers = pickBuffers.length
   }
 
   scene.update = function(options) {
@@ -13487,34 +13510,67 @@ function createScene(options) {
   scene._mouseRotating = false
   scene._prevButtons = 0
 
-  scene.enableMouseListeners = function() {
+  // [fork] The pick buffers hold the scene as of the last pick pass, which is
+  // deferred while the camera moves (see redraw) and copied to the CPU 1 ms
+  // after it renders. A hover that arrives in between is not answered from the
+  // stale copy: it is kept and replayed once the copy is fresh. A press is
+  // dropped instead, so it cannot become a click on whatever is there later.
+  var deferredHover = null
 
-    scene.mouseListener = mouseChange(canvas, function(buttons, x, y) {
-      if(scene._stopped) {
-        return
+  function pickPending() {
+    if(pickDirty) {
+      return true
+    }
+    for(var i=0; i<pickBuffers.length; ++i) {
+      if(pickBuffers[i].readPending) {
+        return true
       }
+    }
+    return false
+  }
 
-      var numPick = pickBuffers.length
-      var numObjs = objects.length
-      var prevObj = selection.object
+  function onPickRead() {
+    scene.pickStats.readbacks += 1
+    if(!deferredHover || scene._stopped || scene.contextLost || pickPending()) {
+      return
+    }
+    var hover = deferredHover
+    deferredHover = null
+    handleMouse(0, hover[0], hover[1])
+  }
 
-      selection.distance = Infinity
-      selection.mouse[0] = x
-      selection.mouse[1] = y
-      selection.object = null
-      selection.screen = null
-      selection.dataCoordinate = selection.dataPosition = null
+  function handleMouse(buttons, x, y) {
+    if(scene._stopped) {
+      return
+    }
 
-      var change = false
+    deferredHover = null
+    var numPick = pickBuffers.length
+    var numObjs = objects.length
+    var prevObj = selection.object
 
-      if(buttons && scene._prevButtons) {
-        scene._mouseRotating = true
-      } else {
-        if(scene._mouseRotating) {
-          pickDirty = true
+    selection.distance = Infinity
+    selection.mouse[0] = x
+    selection.mouse[1] = y
+    selection.object = null
+    selection.screen = null
+    selection.dataCoordinate = selection.dataPosition = null
+
+    var change = false
+
+    if(buttons && scene._prevButtons) {
+      scene._mouseRotating = true
+    } else {
+      if(scene._mouseRotating) {
+        pickDirty = true
+      }
+      scene._mouseRotating = false
+
+      if(pickPending()) {
+        if(!buttons) {
+          deferredHover = [x, y]
         }
-        scene._mouseRotating = false
-
+      } else {
         for(var i=0; i<numPick; ++i) {
           var result = pickBuffers[i].query(x, pickShape[1] - y - 1, scene.pickRadius)
           if(result) {
@@ -13542,30 +13598,34 @@ function createScene(options) {
           }
         }
       }
+    }
 
-      if(prevObj && prevObj !== selection.object) {
-        if(prevObj.highlight) {
-          prevObj.highlight(null)
-        }
-        dirty = true
+    if(prevObj && prevObj !== selection.object) {
+      if(prevObj.highlight) {
+        prevObj.highlight(null)
       }
-      if(selection.object) {
-        if(selection.object.highlight) {
-          selection.object.highlight(selection.data)
-        }
-        dirty = true
+      dirty = true
+    }
+    if(selection.object) {
+      if(selection.object.highlight) {
+        selection.object.highlight(selection.data)
       }
+      dirty = true
+    }
 
-      change = change || (selection.object !== prevObj)
-      if(change && scene.onselect) {
-        scene.onselect(selection)
-      }
+    change = change || (selection.object !== prevObj)
+    if(change && scene.onselect) {
+      scene.onselect(selection)
+    }
 
-      if((buttons & 1) && !(scene._prevButtons & 1) && scene.onclick) {
-        scene.onclick(selection)
-      }
-      scene._prevButtons = buttons
-    })
+    if((buttons & 1) && !(scene._prevButtons & 1) && scene.onclick) {
+      scene.onclick(selection)
+    }
+    scene._prevButtons = buttons
+  }
+
+  scene.enableMouseListeners = function() {
+    scene.mouseListener = mouseChange(canvas, handleMouse)
   }
 
   function checkContextLoss() {
@@ -13589,6 +13649,7 @@ function createScene(options) {
     if(checkContextLoss()) {
       return
     }
+    scene.pickStats.renders += 1
 
     gl.colorMask(true, true, true, true)
     gl.depthMask(true)
@@ -13699,6 +13760,16 @@ function createScene(options) {
     pickDirty = pickDirty || boundsChanged
     dirty = dirty || boundsChanged
 
+    // [fork] Render the pick pass only on frames where the camera is still. A
+    // moving frame's pick image is stale by the next frame, and rendering and
+    // reading back every pick buffer each frame dominated frame time with many
+    // traces. pickDirty stays set, and the first still frame renders the pass,
+    // so that frame must not take the idle return below.
+    var pickNow = pickDirty && !cameraMoved
+    if(pickNow) {
+      dirty = true
+    }
+
     if(!dirty) {
       return
     }
@@ -13754,9 +13825,11 @@ function createScene(options) {
     }
 
     //If state changed, then redraw pick buffers
-    if(pickDirty) {
+    if(pickNow) {
       pickDirty = false
       renderPick()
+    } else if(pickDirty) {
+      scene.pickStats.deferredFrames += 1
     }
 
     //Recalculate pixel data

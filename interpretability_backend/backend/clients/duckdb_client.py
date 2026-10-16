@@ -1764,13 +1764,23 @@ class DuckDBClient:
 
     def get_subtopic_labels(self, extraction_id: str, subtopic_ids: list[int]) -> dict[int, str]:
         """Current label of each requested subtopic id (labels can be edited)."""
-        if not subtopic_ids:
+        return self._assignment_labels(extraction_id, "subtopic_id", "subtopic_label", subtopic_ids)
+
+    def get_topic_labels(self, extraction_id: str, topic_ids: list[int]) -> dict[int, str]:
+        """Current label of each requested topic id, as item metadata carries it."""
+        return self._assignment_labels(extraction_id, "topic_id", "topic_label", topic_ids)
+
+    def _assignment_labels(
+        self, extraction_id: str, id_column: str, label_column: str, ids: list[int]
+    ) -> dict[int, str]:
+        """``{id: label}`` from ``topic_assignments``; the column names are fixed by the callers."""
+        if not ids:
             return {}
-        placeholders = ", ".join(["?"] * len(subtopic_ids))
+        placeholders = ", ".join(["?"] * len(ids))
         rows = self._exec(
-            f"SELECT subtopic_id, any_value(subtopic_label) FROM topic_assignments "
-            f"WHERE extraction_id = ? AND subtopic_id IN ({placeholders}) GROUP BY subtopic_id",
-            [extraction_id, *subtopic_ids],
+            f"SELECT {id_column}, any_value({label_column}) FROM topic_assignments "
+            f"WHERE extraction_id = ? AND {id_column} IN ({placeholders}) GROUP BY {id_column}",
+            [extraction_id, *ids],
         ).fetchall()
         return {int(r[0]): r[1] for r in rows}
 
