@@ -26,6 +26,7 @@ import { useExplorePanelShortcuts } from '../lib/hooks/useExplorePanelShortcuts'
 import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme } from '../lib/utils/colorScaleUrl';
 import { mergeViewSearch, shouldDropPreset, type OwnedViewParams } from '../lib/utils/urlViewParams';
 import { useHfSpaceUrlSync } from '../lib/hooks/useHfSpaceUrlSync';
+import { useInHfSpace } from '../lib/hooks/useInHfSpace';
 import {
   getPreset,
   seedInitialColorState,
@@ -119,6 +120,7 @@ function HomeContent() {
   const router = useRouter();
   // Mirror the app URL to the HF Space parent page (no-op outside an iframe).
   useHfSpaceUrlSync();
+  const inHfSpace = useInHfSpace();
   const collectionFromUrl = searchParams.get('collection');
   const colorByFromUrl = searchParams.get('colorBy');
   const isInitialLoad = useRef(true);
@@ -335,7 +337,6 @@ function HomeContent() {
   const topicSearch = useTopicSearch(
     selectedCollectionTopics,
     selectedCollection,
-    distanceMetric ?? 'COSINE',
     queryPromptName,
     data?.metadata?.embedding_prompt,
   );
@@ -777,27 +778,33 @@ function HomeContent() {
 
   return (
     <SidebarProvider>
-      <SidebarInset className=" relative ">
+      {/* `explore-shell` + its data attributes drive the header layout and
+          every offset that hangs off it (app/globals.css). */}
+      <SidebarInset
+        className="explore-shell relative"
+        data-demo={IS_DEMO ? '' : undefined}
+        data-hf-embedded={inHfSpace ? '' : undefined}
+      >
+        {/* p-2 is --eh-top in globals.css. The header manages its own
+            pointer events so the gaps between its controls reach the plot. */}
         <div className="absolute top-0 left-0 right-0 z-50 p-2 pointer-events-none">
-          <div className="pointer-events-auto  rounded-lg ">
-            <AppHeader
-              collections={collections}
-              collectionsLoading={collectionsLoading}
-              collectionsError={collectionsError}
-              selectedCollection={selectedCollection}
-              onCollectionChange={setSelectedCollection}
-              totalWords={data?.metadata.total_items}
-              embeddingDim={data?.metadata.embedding_dim}
-              onSemanticSearch={wrappedHandleSemanticSearch}
-              searchLoading={searchLoading}
-              activePanel={activePanel}
-              onToggleControls={toggleControls}
-              onToggleSearch={toggleSearch}
-              onToggleAnalytics={toggleAnalytics}
-              saeInfo={saeInfo}
-              onOpenIntro={IS_DEMO ? () => setIntroOpen(true) : undefined}
-            />
-          </div>
+          <AppHeader
+            collections={collections}
+            collectionsLoading={collectionsLoading}
+            collectionsError={collectionsError}
+            selectedCollection={selectedCollection}
+            onCollectionChange={setSelectedCollection}
+            totalWords={data?.metadata.total_items}
+            embeddingDim={data?.metadata.embedding_dim}
+            onSemanticSearch={wrappedHandleSemanticSearch}
+            searchLoading={searchLoading}
+            activePanel={activePanel}
+            onToggleControls={toggleControls}
+            onToggleSearch={toggleSearch}
+            onToggleAnalytics={toggleAnalytics}
+            saeInfo={saeInfo}
+            onOpenIntro={IS_DEMO ? () => setIntroOpen(true) : undefined}
+          />
         </div>
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           {loading ? (
@@ -869,6 +876,7 @@ function HomeContent() {
                   onTopicSemanticSearch={topicSearch.searchTopicsBySimilarity}
                   topicSemanticResults={topicSearch.semanticResults}
                   topicSemanticLoading={topicSearch.semanticLoading}
+                  topicSemanticError={topicSearch.semanticError}
                   selectedTopicIds={topicSearch.selectedTopicIds}
                   onToggleTopic={topicSearch.toggleTopic}
                   onSelectAllTopics={topicSearch.selectAll}

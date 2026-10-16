@@ -11,27 +11,37 @@ const PROJECTION_FIELDS = {
 export class BenchPass {
   static NAMES = ['3d', '2d', '3d-nebula', '3d-topics', '2d-topics', '2d-density'];
 
+  /** No name runs the 3d pass; an unknown name throws so a typo can't merge into another pass's results. */
   static parse(name) {
-    const pass = BenchPass.NAMES.includes(name) ? name : '3d';
-    const nebula = pass === '3d-nebula';
+    if (name === undefined) name = '3d';
+    if (!BenchPass.NAMES.includes(name)) {
+      throw new Error(`unknown pass "${name}"; expected one of: ${BenchPass.NAMES.join(', ')}`);
+    }
+    const nebula = name === '3d-nebula';
     return {
-      name: pass,
-      mode: pass.startsWith('2d') ? '2d' : '3d',
+      name,
+      mode: name.startsWith('2d') ? '2d' : '3d',
       nebula,
-      colorTopics: nebula || pass.endsWith('-topics'),
-      densityMode: pass === '2d-density',
+      colorTopics: nebula || name.endsWith('-topics'),
+      densityMode: name === '2d-density',
     };
   }
+}
 
+/** Run settings that apply to every pass. */
+export class BenchRunConfig {
   /** Playwright deviceScaleFactor from a BENCH_DPR value; 1 unless a positive number. */
   static deviceScaleFactor(value) {
     const dpr = Number(value);
     return Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
   }
 
-  /** Result label for a run; non-1 ratios get their own files instead of merging into DPR-1 results. */
+  /**
+   * Result label for a run. Non-1 ratios get their own files instead of merging
+   * into DPR-1 results; the dot becomes "p" so the label matches its file name.
+   */
   static resultLabel(label, dpr) {
-    return dpr === 1 ? label : `${label}-dpr${dpr}`;
+    return dpr === 1 ? label : `${label}-dpr${String(dpr).replace('.', 'p')}`;
   }
 }
 
@@ -185,20 +195,55 @@ export class BenchmarkResultFile {
 export class GraphqlPayloadTelemetry {
   constructor() {
     this.requests = [];
+    this.pending = [];
   }
 
-  record({ variables, responseBytes }) {
+  record({ variables, responseBytes, measureError }) {
     this.requests.push({
       projectionTypes: [...(variables.projectionTypes ?? [])],
       includeCore: variables.includeCore !== false,
       responseBytes,
-      responseMB: GraphqlPayloadTelemetry.#megabytes(responseBytes),
+      responseMB: responseBytes === null ? null : GraphqlPayloadTelemetry.#megabytes(responseBytes),
+      ...(measureError === undefined ? {} : { measureError }),
     });
+  }
+
+  /**
+   * Notes a request that went to the backend untouched. Replaying a large response
+   * through Playwright (`route.fulfill`) crashes the tab: the body crosses the
+   * DevTools protocol base64-encoded, and payloads of ~77 MB and up exceed its
+   * message limit. So the size is measured afterwards by `measurePending`.
+   */
+  recordPassThrough({ variables, url, postData }) {
+    this.pending.push({ variables, url, postData });
+  }
+
+  /** Re-sends each pass-through request from Node and records its decoded size. */
+  async measurePending(fetchImpl = fetch) {
+    const pending = this.pending;
+    this.pending = [];
+    for (const { variables, url, postData } of pending) {
+      try {
+        const response = await fetchImpl(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: postData,
+        });
+        if (!response.ok) {
+          this.record({ variables, responseBytes: null, measureError: `HTTP ${response.status}` });
+          continue;
+        }
+        const body = await response.arrayBuffer();
+        this.record({ variables, responseBytes: body.byteLength });
+      } catch (error) {
+        this.record({ variables, responseBytes: null, measureError: String(error) });
+      }
+    }
   }
 
   snapshot() {
     const totalResponseBytes = this.requests.reduce(
-      (total, request) => total + request.responseBytes,
+      (total, request) => total + (request.responseBytes ?? 0),
       0,
     );
     return {

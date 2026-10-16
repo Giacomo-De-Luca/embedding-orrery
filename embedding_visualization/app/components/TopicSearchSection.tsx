@@ -7,6 +7,7 @@ import { Input } from '@/lib/ui-primitives/input';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
+import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import {
   Collapsible,
   CollapsibleContent,
@@ -32,8 +33,10 @@ interface TopicSearchSectionProps {
   semanticQuery: string;
   onSemanticQueryChange: (q: string) => void;
   onSemanticSearch: () => void;
-  semanticResults: TopicSearchResult[];
+  /** null until a search has completed. */
+  semanticResults: TopicSearchResult[] | null;
   semanticLoading: boolean;
+  semanticError: string | null;
   // Selection
   selectedTopicIds: Set<number>;
   onToggleTopic: (topicId: number) => void;
@@ -55,6 +58,7 @@ export function TopicSearchSection({
   onSemanticSearch,
   semanticResults,
   semanticLoading,
+  semanticError,
   selectedTopicIds,
   onToggleTopic,
   onSelectAll,
@@ -84,25 +88,30 @@ export function TopicSearchSection({
       <Separator />
       <Label className="text-base">Topics</Label>
 
-      {/* Mode Toggle */}
-      <div className="flex gap-1">
-        <Button
-          variant={mode === 'direct' ? 'default' : 'outline'}
-          size="sm"
-          className="flex-1 h-7 text-xs"
-          onClick={() => onModeChange('direct')}
+      {/* Mode: segmented control (same style as the Controls panel segments) */}
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        value={mode}
+        onValueChange={(v) => v && onModeChange(v as TopicSearchMode)}
+        className="w-full"
+        aria-label="Topic search mode"
+      >
+        <ToggleGroupItem
+          value="direct"
+          className="flex-1 text-xs h-7"
+          title="Filter topics by label or keyword"
         >
           Browse
-        </Button>
-        <Button
-          variant={mode === 'semantic' ? 'default' : 'outline'}
-          size="sm"
-          className="flex-1 h-7 text-xs"
-          onClick={() => onModeChange('semantic')}
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="semantic"
+          className="flex-1 text-xs h-7"
+          title="Rank topics by similarity to a description"
         >
           Semantic
-        </Button>
-      </div>
+        </ToggleGroupItem>
+      </ToggleGroup>
 
       {/* Direct Mode */}
       {mode === 'direct' && (
@@ -146,7 +155,13 @@ export function TopicSearchSection({
           {semanticLoading && (
             <p className="text-xs text-muted-foreground">Searching...</p>
           )}
-          {semanticResults.length > 0 && (
+          {!semanticLoading && semanticError && (
+            <p className="text-xs text-destructive">{semanticError}</p>
+          )}
+          {!semanticLoading && !semanticError && semanticResults?.length === 0 && (
+            <p className="text-xs text-muted-foreground py-2">No matching topics</p>
+          )}
+          {semanticResults && semanticResults.length > 0 && (
             <TopicResultsList
               results={semanticResults}
               selectedTopicIds={selectedTopicIds}
@@ -226,12 +241,14 @@ function TopicRow({
   onToggle,
   color,
   relevanceBar,
+  matchedSubtopicLabel,
 }: {
   topic: TopicInfo;
   selected: boolean;
   onToggle: () => void;
   color: string;
   relevanceBar?: number; // 0-1 for semantic results
+  matchedSubtopicLabel?: string | null; // subtopic that matched a semantic query best
 }) {
   const hasSubtopics = topic.subtopics && topic.subtopics.length > 0;
   const hasKeywords = topic.keywords.length > 0;
@@ -263,6 +280,11 @@ function TopicRow({
               {topic.count}
             </span>
           </div>
+          {matchedSubtopicLabel && (
+            <p className="text-[10px] text-muted-foreground truncate" title={matchedSubtopicLabel}>
+              via {matchedSubtopicLabel}
+            </p>
+          )}
           {relevanceBar !== undefined && (
             <div className="mt-0.5 h-1 bg-muted rounded-full overflow-hidden">
               <div
@@ -329,6 +351,7 @@ function TopicResultsList({
             onToggle={() => onToggleTopic(r.topic.topicId)}
             color={topicColorMap[String(r.topic.topicId)] ?? '#888'}
             relevanceBar={r.relevance}
+            matchedSubtopicLabel={r.matchedSubtopicLabel}
           />
         ))}
       </div>

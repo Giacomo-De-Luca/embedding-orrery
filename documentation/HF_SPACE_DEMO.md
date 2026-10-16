@@ -407,10 +407,11 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    viewports below 768 px the tour downgrades to the dialog. Demo builds
    also default to **dark mode** (`providers.tsx`) and label search results
    out of the box (`showLabels` store default). Demo builds use a
-   **two-row header**: nav pills, the `?` button, and the theme toggle sit
-   in a second right-aligned row beside the Plotly modebar, clear of the
-   HuggingFace pill that `header: mini` floats over the iframe's top-right
-   (row 1 keeps a clearance spacer under it when embedded).
+   **two-row header** kept clear of the HuggingFace pill that `header: mini`
+   floats over the iframe's top-right (from 640 px; below that HF shows a
+   bottom-right button instead). Per-breakpoint layout, the measured HF
+   chrome and the offsets the panels/legend/modebar read:
+   `documentation/EXPLORE_HEADER_LAYOUT.md`.
 4. **"Inspect SAE" tour** (`?tour=sae`, steps in `lib/utils/saeTourSteps.ts`,
    storage key `orrery.demo-sae-tour.v1`). Two segments chained across a page
    navigation, because joyride cannot survive one. **Segment 1** runs on the

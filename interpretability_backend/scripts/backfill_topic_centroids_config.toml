@@ -1,0 +1,14 @@
+# Backfill embedding-space topic centroids (they power semantic topic search)
+# for collections whose topics were extracted before centroids were stored.
+# New extractions and reductions compute them automatically.
+#
+# Run from the repository root with the backend STOPPED (DuckDB is single-writer):
+#   uv run python -m interpretability_backend.scripts.backfill_topic_centroids
+# Point at another config with ORRERY_TOPIC_CENTROIDS_CONFIG=/path/to/config.toml
+
+# "all" = every collection with an active topic extraction, or a list of names:
+#   collections = ["acl_abstracts_emnlp_findings", "emotion"]
+collections = "all"
+
+# Leave extractions that already have centroids untouched (false = recompute).
+skip_existing = true

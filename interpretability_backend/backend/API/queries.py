@@ -15,6 +15,7 @@ from ..clients.local_data_client import (
     get_local_file_preview as get_local_preview,
 )
 from ..services.job_state import JobStatus, get_job_state_service
+from ..services.topic_centroid_service import TopicCentroidService
 from .chromadb_instance import get_chromadb_client
 from .converters import probe_info_from_record
 from .duckdb_instance import get_duckdb_client
@@ -61,6 +62,7 @@ from .types import (
     TextSearchResponse,
     TopicInfo,
     TopicKeyword,
+    TopicSimilarityResult,
 )
 
 
@@ -89,6 +91,73 @@ def _resolve_dataset_name(db, collection_name: str) -> str:
     if vc:
         return vc["dataset_name"]
     return collection_name
+
+
+def _filter_dicts(filters: list[FilterInput] | None) -> list[dict]:
+    """GraphQL filter inputs as the ``{field, operator, value}`` dicts DuckDB takes."""
+    return [
+        {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters or []
+    ]
+
+
+def _semantic_search_results(
+    collection_name: str,
+    n_results: int,
+    similarity_measure: SimilarityMeasure,
+    filters: list[FilterInput] | None,
+    query_texts: list[str] | None = None,
+    query_embeddings: list[list[float]] | None = None,
+    query_prompt: str | None = None,
+    include_embeddings: bool = False,
+) -> list[SemanticSearchResult]:
+    """Vector search (ChromaDB) enriched with documents + metadata (DuckDB).
+
+    Filters are resolved in DuckDB first and passed to ChromaDB as an ``ids``
+    scope, so a filtered search returns up to ``n_results`` matching items
+    instead of whatever survives a post-filter of the unscoped top hits.
+    """
+    client = get_chromadb_client()
+    db = get_duckdb_client()
+    dataset_name = _resolve_dataset_name(db, collection_name)
+
+    allowed_ids = None
+    if filters:
+        allowed_ids = db.get_filtered_item_ids(
+            dataset_name, _filter_dicts(filters), collection_name=collection_name
+        )
+        if not allowed_ids:
+            return []
+
+    results = client.semantic_search(
+        collection_name=collection_name,
+        query_texts=query_texts,
+        query_embeddings=query_embeddings,
+        n_results=n_results,
+        distance_metric=similarity_measure.value,
+        query_prompt=query_prompt,
+        ids=allowed_ids,
+    )
+    if not results["ids"] or not results["ids"][0]:
+        return []
+
+    result_ids = results["ids"][0]
+    items_by_id = {item["id"]: item for item in db.get_items_by_ids(dataset_name, result_ids)}
+    embeddings = results.get("embeddings") if include_embeddings else None
+
+    search_results = []
+    for i, item_id in enumerate(result_ids):
+        enriched_item = items_by_id.get(item_id, {})
+        result = SemanticSearchResult(
+            id=item_id,
+            document=enriched_item.get("document"),
+            metadata=enriched_item.get("metadata", {}),
+            distance=results["distances"][0][i],
+            similarity=results["similarities"][0][i],
+        )
+        if embeddings is not None:
+            result.embedding = embeddings[0][i]
+        search_results.append(result)
+    return search_results
 
 
 def _dicts_to_topic_infos(topic_dicts: list) -> list:
@@ -549,16 +618,14 @@ class Query:
         if not ds:
             return []
 
-        # Load items from DuckDB (with optional JSON filtering)
-        if filters:
-            filter_dicts = [
-                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
-            ]
-            rows_data = db.get_filtered_items(
-                dataset_name, filter_dicts, limit=limit, offset=offset
-            )
-        else:
-            rows_data = db.get_filtered_items(dataset_name, [], limit=limit, offset=offset)
+        # Load items from DuckDB (with optional metadata / topic filtering)
+        rows_data = db.get_filtered_items(
+            dataset_name,
+            _filter_dicts(filters),
+            limit=limit,
+            offset=offset,
+            collection_name=collection_name,
+        )
 
         if not rows_data:
             return []
@@ -621,70 +688,16 @@ class Query:
         Returns:
             List of search results with similarities
         """
-        client = get_chromadb_client()
-        db = get_duckdb_client()
-        dataset_name = _resolve_dataset_name(db, collection_name)
-
-        # Pre-filter via DuckDB if filters provided (ChromaDB has no metadata)
-        allowed_ids = None
-        if filters:
-            filter_dicts = [
-                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
-            ]
-            filtered = db.get_filtered_items(dataset_name, filter_dicts, limit=100000)
-            allowed_ids = {item["id"] for item in filtered}
-            if not allowed_ids:
-                return []
-
-        # ChromaDB: vector similarity search (no where clause — metadata not in ChromaDB)
-        # Over-fetch when filtering to ensure enough results survive post-filter
-        fetch_n = n_results * 5 if allowed_ids else n_results
-        results = client.semantic_search(
-            collection_name=collection_name,
+        return _semantic_search_results(
+            collection_name,
+            n_results,
+            similarity_measure,
+            filters,
             query_texts=[query] if query else None,
             query_embeddings=[query_embedding] if query_embedding else None,
-            n_results=fetch_n,
-            distance_metric=similarity_measure.value,
             query_prompt=query_prompt,
+            include_embeddings=include_embeddings,
         )
-
-        if not results["ids"]:
-            return []
-
-        result_ids = results["ids"][0]
-
-        # DuckDB: enrich with documents + metadata
-        items_by_id = {}
-        enriched = db.get_items_by_ids(dataset_name, result_ids)
-        for item in enriched:
-            items_by_id[item["id"]] = item
-
-        # Build results in ChromaDB's ranked order, post-filtering if needed
-        search_results = []
-        for i, item_id in enumerate(result_ids):
-            if allowed_ids is not None and item_id not in allowed_ids:
-                continue
-
-            distance = results["distances"][0][i]
-            similarity = results["similarities"][0][i]
-            enriched_item = items_by_id.get(item_id, {})
-
-            result = SemanticSearchResult(
-                id=item_id,
-                document=enriched_item.get("document"),
-                metadata=enriched_item.get("metadata", {}),
-                distance=distance,
-                similarity=similarity,
-            )
-
-            if include_embeddings and results.get("embeddings"):
-                result.embedding = results["embeddings"][0][i]
-
-            search_results.append(result)
-            if len(search_results) >= n_results:
-                break
-
-        return search_results
 
     @strawberry.field
     def semantic_search_by_id(
@@ -711,69 +724,53 @@ class Query:
         Returns:
             List of search results with similarities
         """
-        client = get_chromadb_client()
-        db = get_duckdb_client()
-        dataset_name = _resolve_dataset_name(db, collection_name)
-
         # ChromaDB: get the embedding for the item
-        collection = client.get_collection(collection_name, load_embedding_function=False)
+        collection = get_chromadb_client().get_collection(
+            collection_name, load_embedding_function=False
+        )
         item_data = collection.get(ids=[item_id], include=["embeddings"])
 
         if item_data is None or "embeddings" not in item_data or len(item_data["embeddings"]) == 0:
             return []
 
-        query_embedding = item_data["embeddings"][0]
-
-        # Pre-filter via DuckDB if filters provided
-        allowed_ids = None
-        if filters:
-            filter_dicts = [
-                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
-            ]
-            filtered = db.get_filtered_items(dataset_name, filter_dicts, limit=100000)
-            allowed_ids = {item["id"] for item in filtered}
-            if not allowed_ids:
-                return []
-
-        # ChromaDB: vector similarity search (no where clause)
-        fetch_n = n_results * 5 if allowed_ids else n_results
-        results = client.semantic_search(
-            collection_name=collection_name,
-            query_texts=None,
-            query_embeddings=[query_embedding],
-            n_results=fetch_n,
-            distance_metric=similarity_measure.value,
+        return _semantic_search_results(
+            collection_name,
+            n_results,
+            similarity_measure,
+            filters,
+            query_embeddings=[item_data["embeddings"][0]],
         )
 
-        if not results["ids"]:
-            return []
+    @strawberry.field
+    async def topic_semantic_search(
+        self,
+        collection_name: str,
+        query: str,
+        limit: int = 20,
+        query_prompt: str | None = None,
+        info=None,
+    ) -> list[TopicSimilarityResult]:
+        """Rank a collection's topics by similarity to a text query.
 
-        result_ids = results["ids"][0]
-
-        # DuckDB: enrich with documents + metadata
-        items_by_id = {}
-        enriched = db.get_items_by_ids(dataset_name, result_ids)
-        for item in enriched:
-            items_by_id[item["id"]] = item
-
-        search_results = []
-        for i, result_id in enumerate(result_ids):
-            if allowed_ids is not None and result_id not in allowed_ids:
-                continue
-            enriched_item = items_by_id.get(result_id, {})
-            search_results.append(
-                SemanticSearchResult(
-                    id=result_id,
-                    document=enriched_item.get("document"),
-                    metadata=enriched_item.get("metadata", {}),
-                    distance=results["distances"][0][i],
-                    similarity=results["similarities"][0][i],
-                )
+        Compares the query embedding with each topic's stored embedding
+        centroid (and its subtopics'). Async: embedding the query can load a
+        model or call an embedding API, which must not block the event loop.
+        """
+        service = TopicCentroidService(
+            duckdb=get_duckdb_client(), embed_query=get_chromadb_client().embed_query
+        )
+        matches = await asyncio.to_thread(
+            service.search, collection_name, query, limit, query_prompt
+        )
+        return [
+            TopicSimilarityResult(
+                topic_id=m.topic_id,
+                similarity=m.similarity,
+                matched_subtopic_id=m.matched_subtopic_id,
+                matched_subtopic_label=m.matched_subtopic_label,
             )
-            if len(search_results) >= n_results:
-                break
-
-        return search_results
+            for m in matches
+        ]
 
     @strawberry.field
     def text_search(
@@ -805,19 +802,15 @@ class Query:
         """
         db = get_duckdb_client()
         dataset_name = _resolve_dataset_name(db, collection_name)
-        filter_dicts = None
-        if filters:
-            filter_dicts = [
-                {"field": f.field, "operator": f.operator.value, "value": f.value} for f in filters
-            ]
         result = db.text_search(
             dataset_name=dataset_name,
             query=query,
             fields=fields,
             mode=mode.value,
             case_sensitive=case_sensitive,
-            filters=filter_dicts,
+            filters=_filter_dicts(filters) or None,
             limit=limit,
+            collection_name=collection_name,
         )
 
         matches = [

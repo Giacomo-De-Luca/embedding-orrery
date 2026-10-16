@@ -42,9 +42,22 @@ export class GlSceneStats {
     return stats;
   };
 
+  /** Reads the stats from a Playwright page; a failed read is reported, not swallowed. */
+  static async collect(page, mode) {
+    try {
+      return await page.evaluate(GlSceneStats.collectInPage, {
+        mode,
+        bytesPerVertex: GlSceneStats.BYTES_PER_SCATTER3D_VERTEX,
+      });
+    } catch (e) {
+      return { error: String(e) };
+    }
+  }
+
   /** One console line for the harness log. */
   static summarize(stats) {
     if (!stats) return 'gl stats unavailable';
+    if (stats.error) return `gl stats failed: ${stats.error}`;
     const parts = [`traces ${stats.traceCount}`];
     if (stats.fillVertices !== undefined) {
       parts.push(`vertices fill ${stats.fillVertices} / outline ${stats.outlineVertices} (${stats.vertexMB} MB)`);

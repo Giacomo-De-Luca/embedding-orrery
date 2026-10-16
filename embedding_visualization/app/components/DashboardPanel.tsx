@@ -23,7 +23,6 @@ import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocument
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
 import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import { cn } from '@/lib/utils/utils';
-import { IS_DEMO } from '@/lib/utils/demoMode';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
 import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
@@ -100,8 +99,9 @@ interface DashboardPanelProps {
   topicSemanticQuery?: string;
   onTopicSemanticQueryChange?: (q: string) => void;
   onTopicSemanticSearch?: () => void;
-  topicSemanticResults?: TopicSearchResult[];
+  topicSemanticResults?: TopicSearchResult[] | null;
   topicSemanticLoading?: boolean;
+  topicSemanticError?: string | null;
   selectedTopicIds?: Set<number>;
   onToggleTopic?: (id: number) => void;
   onSelectAllTopics?: () => void;
@@ -163,6 +163,7 @@ export function DashboardPanel({
   onTopicSemanticSearch,
   topicSemanticResults,
   topicSemanticLoading,
+  topicSemanticError,
   selectedTopicIds,
   onToggleTopic,
   onSelectAllTopics,
@@ -623,13 +624,9 @@ export function DashboardPanel({
 
   return (
 
-    <div className={cn(
-      "relative h-full w-full overflow-hidden",
-      // Demo builds have a two-row header; nudge the plot's modebar below it
-      // (`.demo-plot-chrome .modebar-container` in globals.css) so the nav row
-      // and the modebar don't overlap.
-      IS_DEMO && "demo-plot-chrome",
-    )}>
+    // Floating chrome (modebar, legend, panels, corner chips) hangs off the
+    // header geometry published as --explore-* in globals.css.
+    <div className="relative h-full w-full overflow-hidden">
 
       {/* 1. LAYER: Plot Background (Z-0) */}
       <div className="absolute inset-0 z-0" data-tour="plot">
@@ -639,7 +636,7 @@ export function DashboardPanel({
         {/* Invisible tour anchor: whole-plot steps hang their card off the
             plot's right edge (placement "left") so it never covers the view
             it narrates. Sits at 62% height, not center — the legend occupies
-            the top-right (top-30/40 + its resizable height), and a vertically
+            the top-right (under the header + its resizable height), and a vertically
             centered card overlapped it; this parks cards just below. Lives
             inside the plot layer so it unmounts with it — joyride's
             target-wait then covers collection loads. */}
@@ -650,13 +647,11 @@ export function DashboardPanel({
         />
       </div>
 
-      {/* 2. LAYER: Legend Overlay (Z-10) */}
-      {/* Demo builds push the modebar below the two-row header, so the legend
-          (which sits under the modebar) drops with it. */}
+      {/* 2. LAYER: Legend Overlay (Z-10) — sits under the modebar, both
+          below the header (--explore-legend-top in globals.css). */}
       {showLegend && !legendCollapsed && (
         <div ref={legendOverlayRef} className={cn(
-          "absolute right-4 z-10 pointer-events-none",
-          IS_DEMO ? "top-40" : "top-30",
+          "absolute right-4 top-(--explore-legend-top) z-10 pointer-events-none",
           legendDragging && "select-none"
         )}>
           <Legend
@@ -687,7 +682,7 @@ export function DashboardPanel({
 
       {/* 2b. LAYER: Collapsed Legend Pill (Z-10) */}
       {showLegend && legendCollapsed && (
-        <div className={cn("absolute right-4 z-10", IS_DEMO ? "top-40" : "top-30")}>
+        <div className="absolute right-4 top-(--explore-legend-top) z-10">
           <Button
             variant="circularghost"
             size="icon"
@@ -722,7 +717,7 @@ export function DashboardPanel({
               className="pointer-events-auto"
               onResize={(size) => { if (size < 8) setResultsCollapsed(true); }}
             >
-              <div className={cn("h-full w-full px-2 pb-4",
+              <div className={cn("h-full w-full px-2 pb-(--explore-corner-inset)",
               isExpanded? "pr-4" : ""
               )}
               >
@@ -743,9 +738,10 @@ export function DashboardPanel({
         </div>
       )}
 
-      {/* 3b. LAYER: Collapsed Results Chip (Z-20) */}
+      {/* 3b. LAYER: Collapsed Results Chip (Z-20) — lifted above the HF
+          Space's corner button on embedded phones (--explore-corner-inset). */}
       {showResultsTable && resultsCollapsed && (
-        <div className="absolute bottom-4 right-4 z-20">
+        <div className="absolute bottom-(--explore-corner-inset) right-4 z-20">
           <Button
             variant="circularghost"
             size="icon"
@@ -818,6 +814,7 @@ export function DashboardPanel({
           onTopicSemanticSearch={onTopicSemanticSearch}
           topicSemanticResults={topicSemanticResults}
           topicSemanticLoading={topicSemanticLoading}
+          topicSemanticError={topicSemanticError}
           selectedTopicIds={selectedTopicIds}
           onToggleTopic={onToggleTopic}
           onSelectAllTopics={onSelectAllTopics}

@@ -352,6 +352,31 @@ export const GET_COLLECTION_TOPICS = gql`
   }
 `;
 
+/**
+ * Rank a collection's topics by similarity between a text query and each
+ * topic's embedding centroid (best-matching subtopic named when it wins).
+ */
+export const TOPIC_SEMANTIC_SEARCH = gql`
+  query TopicSemanticSearch(
+    $collectionName: String!
+    $query: String!
+    $limit: Int = 20
+    $queryPrompt: String
+  ) {
+    topicSemanticSearch(
+      collectionName: $collectionName
+      query: $query
+      limit: $limit
+      queryPrompt: $queryPrompt
+    ) {
+      topicId
+      similarity
+      matchedSubtopicId
+      matchedSubtopicLabel
+    }
+  }
+`;
+
 // ========== SAE (Sparse Autoencoder) Queries ==========
 
 /**

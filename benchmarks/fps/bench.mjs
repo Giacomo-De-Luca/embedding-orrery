@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import {
   BenchmarkResultFile,
   BenchPass,
+  BenchRunConfig,
   GraphqlPayloadTelemetry,
   SyntheticCollectionPayload,
 } from './lib/benchmarkContract.mjs';
@@ -32,7 +33,13 @@ import { GlSceneStats } from './lib/glSceneStats.mjs';
 const pExecFile = promisify(execFile);
 
 const BASE = 'http://localhost:3000';
-const BENCH_PASS = BenchPass.parse(process.argv[2]);
+let BENCH_PASS;
+try {
+  BENCH_PASS = BenchPass.parse(process.argv[2]);
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
 const PASS = BENCH_PASS.name;
 const MODE = BENCH_PASS.mode;
 const NEBULA = BENCH_PASS.nebula;
@@ -42,14 +49,14 @@ const HAZE = process.env.BENCH_HAZE === 'density' ? 'density' : 'sprites';
 const COLOR_TOPICS = BENCH_PASS.colorTopics;
 // Page devicePixelRatio (Playwright deviceScaleFactor). Default 1 matches the
 // historical runs; BENCH_DPR=2 reproduces a Retina screen.
-const DPR = BenchPass.deviceScaleFactor(process.env.BENCH_DPR);
+const DPR = BenchRunConfig.deviceScaleFactor(process.env.BENCH_DPR);
 // Opt-in renderer heap raise (MB), e.g. BENCH_HEAP_MB=7168 for 1M attempts on big machines.
 const HEAP_MB = Number(process.env.BENCH_HEAP_MB) || 0;
 const DRAG_MS = 8000;
 const SETTLE_MS = 4000;
 const SYN_CLUSTERS = Number(process.env.BENCH_SYN_CLUSTERS) || 50;
 const RESULTS_DIR = new URL('./results/', import.meta.url).pathname;
-const RESULT_LABEL = BenchPass.resultLabel(process.env.BENCH_RESULT_LABEL || 'current', DPR);
+const RESULT_LABEL = BenchRunConfig.resultLabel(process.env.BENCH_RESULT_LABEL || 'current', DPR);
 const RESULTS_PATH = BenchmarkResultFile.path(RESULTS_DIR, PASS, RESULT_LABEL);
 const BENCH_MARKER = '--bench-run-id=fpsbench';
 
@@ -106,6 +113,8 @@ const VIZ_PREFS = JSON.stringify({
  *   loads a URL collection that exists in the list).
  * - Synthetic only: GetCollectionData for the target → generated payload;
  *   topics/probes/activations queries for it → benign empties.
+ * - Real collections: GetCollectionData passes through untouched and is only
+ *   noted; its size is measured after the run (see recordPassThrough).
  * Everything else passes through to the real backend.
  */
 async function installRoutes(context, target, synBody, payloadTelemetry) {
@@ -152,13 +161,14 @@ async function handleGraphqlRoute(route, target, synBody, payloadTelemetry) {
         return route.fulfill({ contentType: 'application/json', body: synBody });
       }
 
-      const resp = await route.fetch();
-      const body = await resp.body();
-      payloadTelemetry.record({
+      // Never replay real collection data through route.fulfill: payloads of
+      // ~77 MB and up exceed the DevTools message limit and crash the tab.
+      payloadTelemetry.recordPassThrough({
         variables: vars,
-        responseBytes: body.byteLength,
+        url: route.request().url(),
+        postData: route.request().postData() || '',
       });
-      return route.fulfill({ response: resp, body });
+      return route.continue();
     }
     if (synBody) {
       if (vars.collectionName === target.name) {
@@ -404,9 +414,7 @@ async function runOne(browser, rootPid, target) {
     }
     await page.waitForTimeout(SETTLE_MS);
     result.renderedPoints = await page.evaluate(countPoints, { mode: MODE });
-    result.glStatsPostLoad = await page.evaluate(GlSceneStats.collectInPage, {
-      mode: MODE, bytesPerVertex: GlSceneStats.BYTES_PER_SCATTER3D_VERTEX,
-    }).catch(() => null);
+    result.glStatsPostLoad = await GlSceneStats.collect(page, MODE);
     result.memPostLoad = await memSnapshot(page, rootPid, cdp);
 
     // Locate the WebGL canvas to drag on.
@@ -455,9 +463,7 @@ async function runOne(browser, rootPid, target) {
     });
     result.stats = stats(deltas);
     // Pick counters accumulate over the run: post-drag minus post-load = the drag.
-    result.glStatsPostDrag = await page.evaluate(GlSceneStats.collectInPage, {
-      mode: MODE, bytesPerVertex: GlSceneStats.BYTES_PER_SCATTER3D_VERTEX,
-    }).catch(() => null);
+    result.glStatsPostDrag = await GlSceneStats.collect(page, MODE);
     result.memMidDrag = midMemPromise ? await midMemPromise : null;
     result.memPostDrag = await memSnapshot(page, rootPid, cdp);
     result.pageErrors = pageErrors.slice(0, 5);
@@ -477,7 +483,6 @@ async function runOne(browser, rootPid, target) {
     result.error = msg;
     result.pageErrors = pageErrors.slice(0, 5);
   } finally {
-    result.graphqlPayload = payloadTelemetry.snapshot();
     // The context (or whole browser) may already be dead — never let cleanup
     // throw or hang.
     if (context) {
@@ -486,6 +491,12 @@ async function runOne(browser, rootPid, target) {
         new Promise((r) => setTimeout(r, 10000)),
       ]);
     }
+    // Measure pass-through payloads from Node, after the browser is done with
+    // the page, so the re-sent queries can't disturb the measurements above.
+    await payloadTelemetry.measurePending(
+      (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(120000) }),
+    );
+    result.graphqlPayload = payloadTelemetry.snapshot();
   }
   return result;
 }

@@ -73,8 +73,9 @@ interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentP
   topicSemanticQuery?: string;
   onTopicSemanticQueryChange?: (q: string) => void;
   onTopicSemanticSearch?: () => void;
-  topicSemanticResults?: TopicSearchResult[];
+  topicSemanticResults?: TopicSearchResult[] | null;
   topicSemanticLoading?: boolean;
+  topicSemanticError?: string | null;
   selectedTopicIds?: Set<number>;
   onToggleTopic?: (id: number) => void;
   onSelectAllTopics?: () => void;
@@ -118,6 +119,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
   onTopicSemanticSearch,
   topicSemanticResults,
   topicSemanticLoading,
+  topicSemanticError,
   selectedTopicIds,
   onToggleTopic,
   onSelectAllTopics,
@@ -633,8 +635,9 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
               semanticQuery={topicSemanticQuery ?? ''}
               onSemanticQueryChange={onTopicSemanticQueryChange ?? (() => {})}
               onSemanticSearch={onTopicSemanticSearch ?? (() => {})}
-              semanticResults={topicSemanticResults ?? []}
+              semanticResults={topicSemanticResults ?? null}
               semanticLoading={topicSemanticLoading ?? false}
+              semanticError={topicSemanticError ?? null}
               selectedTopicIds={selectedTopicIds ?? new Set()}
               onToggleTopic={onToggleTopic ?? (() => {})}
               onSelectAll={onSelectAllTopics ?? (() => {})}

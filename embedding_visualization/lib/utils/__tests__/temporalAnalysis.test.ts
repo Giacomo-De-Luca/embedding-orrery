@@ -16,6 +16,18 @@ describe('computeTemporalCrossTab', () => {
       { period: '2021', a: 0, [MISSING]: 1 },
     ]);
   });
+
+  it('sorts periods numerically and ignores categories outside the requested list', () => {
+    const points = [
+      { index: 0, metadata: { year: 10, category: 'a' } },
+      { index: 1, metadata: { year: 9, category: 'b' } },
+      { index: 2, metadata: { year: 9, category: 'a' } },
+    ];
+    expect(computeTemporalCrossTab(points, 'category', 'year', ['a'])).toEqual([
+      { period: '9', a: 1 },
+      { period: '10', a: 1 },
+    ]);
+  });
 });
 
 describe('windowPeriodsByFraction', () => {

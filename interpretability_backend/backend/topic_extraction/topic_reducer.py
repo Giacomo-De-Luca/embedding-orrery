@@ -56,8 +56,7 @@ class TopicReducer:
         ctfidf_matrix: sp.csr_matrix,
         ctfidf_words: np.ndarray,
         language: str | None = "english",
-        collection_name: str | None = None,
-        chromadb_client=None,
+        topic_embeddings: np.ndarray | None = None,
     ):
         """Initialize with existing topic extraction results.
 
@@ -67,16 +66,16 @@ class TopicReducer:
             ctfidf_matrix: c-TF-IDF matrix from keyword extraction
             ctfidf_words: Feature names from CountVectorizer
             language: Stop words language for re-extraction
-            collection_name: ChromaDB collection name (for semantic embeddings)
-            chromadb_client: ChromaDB client (for semantic embeddings)
+            topic_embeddings: Embedding-space topic centroids for semantic
+                reduction, one row per ``sorted(topics_data)`` entry (noise
+                first when present); see ``TopicCentroidService``.
         """
         self.documents_df = documents_df.copy()
         self.topics_data = topics_data
         self.ctfidf_matrix = ctfidf_matrix
         self.ctfidf_words = ctfidf_words
         self.language = language
-        self.collection_name = collection_name
-        self.chromadb_client = chromadb_client
+        self.topic_embeddings = topic_embeddings
 
         # Track topic sizes for validation
         self.topic_sizes = documents_df["Topic"].value_counts().to_dict()
@@ -85,8 +84,8 @@ class TopicReducer:
         """Compute embeddings for each topic.
 
         Args:
-            use_ctfidf: If True, use c-TF-IDF vectors. If False, use semantic
-                       embeddings (averaged document embeddings from ChromaDB).
+            use_ctfidf: If True, use c-TF-IDF vectors. If False, use the
+                       injected semantic centroids (averaged document embeddings).
 
         Returns:
             topic_embeddings: (n_topics, embedding_dim) array
@@ -95,59 +94,20 @@ class TopicReducer:
             logger.info("Computing topic embeddings from c-TF-IDF vectors")
             # Each row in ctfidf_matrix is already a topic embedding
             return self.ctfidf_matrix.toarray()
-        else:
-            logger.info("Computing topic embeddings from semantic embeddings (per-topic loading)")
-            return self._compute_semantic_embeddings()
+        logger.info("Using precomputed semantic topic centroids")
+        return self._semantic_embeddings()
 
-    def _compute_semantic_embeddings(self) -> np.ndarray:
-        """Compute topic embeddings by averaging document embeddings per topic.
-
-        Uses per-topic ChromaDB queries to avoid loading all embeddings at once.
-
-        Returns:
-            topic_embeddings: (n_topics, embedding_dim) array
-        """
-        if self.chromadb_client is None or self.collection_name is None:
-            raise ValueError("chromadb_client and collection_name required for semantic embeddings")
-
-        # Get collection without loading embedding function
-        collection = self.chromadb_client.get_collection(
-            name=self.collection_name, embedding_function=None
-        )
-
-        topic_ids = sorted(self.topics_data.keys())
-        topic_embeddings = []
-
-        for topic_id in topic_ids:
-            # Load only embeddings for this topic (memory-efficient!)
-            try:
-                results = collection.get(where={"topic_id": str(topic_id)}, include=["embeddings"])
-
-                if results["embeddings"] and len(results["embeddings"]) > 0:
-                    # Average embeddings for this topic
-                    topic_emb = np.mean(results["embeddings"], axis=0)
-                else:
-                    # Fallback for empty topic (shouldn't happen but be safe)
-                    # Infer dimension from first successful query
-                    if len(topic_embeddings) > 0:
-                        dim = len(topic_embeddings[0])
-                    else:
-                        dim = 384  # Default fallback
-                    topic_emb = np.zeros(dim)
-                    logger.warning(f"Topic {topic_id} has no embeddings, using zero vector")
-
-                topic_embeddings.append(topic_emb)
-
-            except Exception as e:
-                logger.error(f"Error loading embeddings for topic {topic_id}: {e}")
-                # Use zero vector as fallback
-                if len(topic_embeddings) > 0:
-                    dim = len(topic_embeddings[0])
-                else:
-                    dim = 384
-                topic_embeddings.append(np.zeros(dim))
-
-        return np.array(topic_embeddings)
+    def _semantic_embeddings(self) -> np.ndarray:
+        """The injected topic centroids, validated against ``topics_data``."""
+        if self.topic_embeddings is None:
+            raise ValueError("Semantic reduction needs precomputed topic centroids")
+        expected = len(self.topics_data)
+        if self.topic_embeddings.shape[0] != expected:
+            raise ValueError(
+                f"Semantic topic centroids have {self.topic_embeddings.shape[0]} rows, "
+                f"expected one per topic ({expected})"
+            )
+        return self.topic_embeddings
 
     def reduce_to_n_topics(self, n_topics: int, use_ctfidf: bool = True) -> TopicReductionResult:
         """Reduce to a fixed number of topics using AgglomerativeClustering.

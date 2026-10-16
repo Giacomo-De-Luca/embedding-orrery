@@ -12,9 +12,12 @@
  */
 
 export const SITE_NAME = 'Orrery';
-export const SITE_TITLE = 'Orrery: Embedding Observatory';
+export const SITE_TITLE = 'Embedding Orrery';
 export const SITE_DESCRIPTION =
   'Explore embedding spaces as interactive 3D constellations: topic clusters, semantic search, and sparse-autoencoder features.';
+
+/** Canonical repo URL (the older `/orrery` path only 301-redirects here). */
+export const REPO_URL = 'https://github.com/Giacomo-De-Luca/embedding-orrery';
 
 const SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 

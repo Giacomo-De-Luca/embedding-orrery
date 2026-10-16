@@ -223,16 +223,121 @@
 }
 
 
-.modebar-container {
-  top: 80px !important;
-  right: 24px !important;
+/* ── Explore page chrome ────────────────────────────────────────────────
+   AppHeader puts four cells (toggles, search, collection, actions) on a grid
+   with fixed-height rows, so the header's height at each breakpoint is known
+   here. Everything floating under it reads the --explore-* offsets below
+   instead of hard-coding pixel tops: the left panels (`explorePanelClass`),
+   the legend and results chip (DashboardPanel), and Plotly's modebar.
+
+   Attributes on the page's <SidebarInset> (app/page.tsx):
+     data-demo         demo build: the first row holds only what fits beside
+                       the HF pill (see the demo templates below).
+     data-hf-embedded  inside the HF Space iframe. Hugging Face floats its own
+                       chrome over the app: from 640px a ~368px wide
+                       "owner/space, likes" pill at top 20-60px, 24px from
+                       the right edge; below 640px a 38px button 16px from the
+                       bottom-right corner (both measured 2026-10-16). */
+.explore-shell {
+  --eh-top: 0.5rem;        /* the header wrapper's p-2 in page.tsx */
+  --eh-gap: 0.5rem;
+  --eh-row: 2.25rem;       /* size-9 controls */
+  --eh-tall-row: 4rem;     /* first row from sm: centres controls on the HF pill's band */
+  --eh-nav-row: 2.5rem;    /* a row holding the PageNav pill bar */
+  --hf-pill-clearance: 0px;
+  --explore-corner-inset: 1rem;
+
+  /* Phones: two rows, "toggles search" over "actions collection". */
+  --explore-header-h: calc(var(--eh-top) + 2 * var(--eh-row) + var(--eh-gap));
+  --explore-panel-top: calc(var(--explore-header-h) + var(--eh-gap));
+  --explore-modebar-top: calc(var(--explore-header-h) + var(--eh-gap));
+  --explore-legend-top: calc(var(--explore-modebar-top) + 2.5rem);
+}
+.explore-shell[data-hf-embedded] {
+  --explore-corner-inset: 4rem;  /* lift bottom-right chips above HF's button */
 }
 
-/* Demo builds render a two-row header (nav pills move to a second row beside
-   the modebar). Drop the modebar below that row so they don't overlap; the
-   legend, which sits under the modebar, is dropped to match in DashboardPanel. */
-.demo-plot-chrome .modebar-container {
-  top: 120px !important;
+.explore-header {
+  display: grid;
+  align-items: center;
+  gap: var(--eh-gap);
+  padding-inline: 1rem;
+  /* Phones: an icon column (panel toggles over menu/help) beside an input
+     column (search over collection), so both inputs share their edges. */
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: var(--eh-row) var(--eh-row);
+  grid-template-areas:
+    "toggles search"
+    "actions collection";
+}
+.explore-header > [data-header-cell="toggles"]    { grid-area: toggles; justify-self: start; }
+.explore-header > [data-header-cell="search"]     { grid-area: search; }
+.explore-header > [data-header-cell="collection"] { grid-area: collection; }
+.explore-header > [data-header-cell="actions"] {
+  grid-area: actions;
+  justify-self: start;
+  margin-inline-start: -0.25rem;  /* same optical nudge as the first toggle's -ml-1 */
+}
+
+@media (min-width: 40rem) {
+  .explore-shell {
+    --explore-header-h: calc(var(--eh-top) + var(--eh-tall-row));
+  }
+  .explore-shell[data-demo] {
+    --explore-header-h: calc(var(--eh-top) + var(--eh-tall-row) + var(--eh-gap) + var(--eh-row));
+  }
+  .explore-shell[data-hf-embedded] {
+    --hf-pill-clearance: 25rem;  /* the pill's 392px from the right, minus our 24px inset, plus margin */
+    --explore-corner-inset: 1rem;
+  }
+
+  /* One row: the actions fold into HeaderMenu until xl. */
+  .explore-header {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: var(--eh-tall-row);
+    grid-template-areas: "toggles search collection actions";
+  }
+  .explore-header > [data-header-cell="actions"] {
+    justify-self: end;
+    margin-inline-start: 0;
+  }
+  /* Demo: the first row holds only the panel toggles (and badges from lg),
+     which always fit left of the HF pill; everything else drops to row two. */
+  .explore-shell[data-demo] .explore-header {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: var(--eh-tall-row) var(--eh-row);
+    grid-template-areas:
+      "toggles . ."
+      "search  collection actions";
+  }
+}
+
+@media (min-width: 80rem) {
+  /* Demo desktop: search and collection share the first row, kept clear of
+     the HF pill; help and nav sit on their own row, right-aligned above the
+     modebar. Row two is empty on the left, so the panels tuck under row one. */
+  .explore-shell[data-demo] {
+    --explore-header-h: calc(var(--eh-top) + var(--eh-tall-row) + var(--eh-nav-row));
+    --explore-panel-top: calc(var(--eh-top) + var(--eh-tall-row) + var(--eh-gap));
+  }
+  .explore-shell[data-demo] .explore-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: var(--eh-tall-row) var(--eh-nav-row);
+    row-gap: 0;
+    grid-template-areas:
+      "toggles search collection"
+      ".       .      actions";
+  }
+  .explore-shell[data-demo] .explore-header > [data-header-cell="collection"] {
+    justify-self: end;
+    margin-inline-end: var(--hf-pill-clearance);
+  }
+}
+
+/* Off the Explore page the variables are unset and the fallback applies. */
+.modebar-container {
+  top: var(--explore-modebar-top, 80px) !important;
+  right: 24px !important;
 }
 
 /* Lucide icons are stroke-based — override Plotly's default fill rendering.

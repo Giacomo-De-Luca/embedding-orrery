@@ -41,6 +41,26 @@ _TOPIC_KEYS = frozenset(
     }
 )
 
+# Filterable topic fields: their values live in topic_assignments (keyed by the
+# collection's active extraction), never in item metadata JSON. Maps the field
+# to the casts applied to filter values: (equality/membership, range operators).
+_TOPIC_FILTER_COLUMNS: dict[str, tuple[type, type]] = {
+    "topic_id": (int, float),
+    "subtopic_id": (int, float),
+    "topic_label": (str, str),
+    "subtopic_label": (str, str),
+}
+
+_FILTER_COMPARATORS = {
+    "$eq": "=",
+    "$ne": "!=",
+    "$gt": ">",
+    "$gte": ">=",
+    "$lt": "<",
+    "$lte": "<=",
+}
+_RANGE_OPERATORS = frozenset({"$gt", "$gte", "$lt", "$lte"})
+
 _SNIPPET_RADIUS = 100
 
 
@@ -254,6 +274,22 @@ class DuckDBClient:
                 subtopic_id    INTEGER,
                 subtopic_label VARCHAR,
                 PRIMARY KEY (extraction_id, item_id)
+            )
+        """)
+
+        # Embedding-space centroid (mean member vector) per topic and per
+        # subtopic of an extraction; backs semantic topic search. A new table
+        # rather than a column on topic_info, so no ALTER on an FK-referencing
+        # table is ever replayed from the WAL (see the quality_metrics note).
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS topic_centroids (
+                extraction_id   VARCHAR NOT NULL REFERENCES topic_extractions(id),
+                level           VARCHAR NOT NULL,
+                topic_id        INTEGER NOT NULL,
+                parent_topic_id INTEGER,
+                member_count    INTEGER NOT NULL,
+                centroid        FLOAT[] NOT NULL,
+                PRIMARY KEY (extraction_id, level, topic_id)
             )
         """)
 
@@ -621,6 +657,14 @@ class DuckDBClient:
         """,
             [name],
         )
+        self._exec(
+            """
+            DELETE FROM topic_centroids WHERE extraction_id IN (
+                SELECT id FROM topic_extractions WHERE dataset_name = ?
+            )
+        """,
+            [name],
+        )
         self._exec("DELETE FROM topic_extractions WHERE dataset_name = ?", [name])
 
         self._exec(
@@ -792,8 +836,46 @@ class DuckDBClient:
             result.append(item)
         return result
 
-    def _build_metadata_where(self, filters: list[dict]) -> tuple:
+    @staticmethod
+    def _comparison_sql(
+        column: str,
+        column_params: list,
+        op: str,
+        value: Any,
+        cast: type,
+        range_column: str | None = None,
+        range_cast: type = float,
+    ) -> tuple[str, list] | None:
+        """SQL + params for one filter comparison, or None for an unsupported one.
+
+        ``column`` may contain placeholders (``column_params``); they are only
+        emitted when the column is actually referenced. Range operators compare
+        ``range_column`` (defaults to ``column``) against ``range_cast(value)``.
+        """
+        if op in _FILTER_COMPARATORS:
+            if op in _RANGE_OPERATORS:
+                sql = f"{range_column or column} {_FILTER_COMPARATORS[op]} ?"
+                return sql, [*column_params, range_cast(value)]
+            return f"{column} {_FILTER_COMPARATORS[op]} ?", [*column_params, cast(value)]
+        if op in ("$in", "$nin") and isinstance(value, list):
+            if not value:
+                return ("FALSE" if op == "$in" else "TRUE"), []
+            placeholders = ", ".join(["?"] * len(value))
+            negation = "NOT " if op == "$nin" else ""
+            return (
+                f"{column} {negation}IN ({placeholders})",
+                [*column_params, *(cast(v) for v in value)],
+            )
+        return None
+
+    def _build_metadata_where(
+        self, filters: list[dict], topic_extraction_id: str | None = None
+    ) -> tuple:
         """Build SQL WHERE clause from metadata filter dicts.
+
+        Fields in ``_TOPIC_FILTER_COLUMNS`` are matched against
+        ``topic_assignments`` of ``topic_extraction_id`` (required when such a
+        field is filtered); every other field against the item metadata JSON.
 
         Returns (where_sql, params) where where_sql is "cond1 AND cond2 ..."
         or "TRUE" if no filters.
@@ -805,53 +887,79 @@ class DuckDBClient:
             field = f["field"]
             op = f["operator"]
             value = f["value"]
-            json_path = f"$.{field}"
+
+            if field in _TOPIC_FILTER_COLUMNS:
+                if topic_extraction_id is None:
+                    raise ValueError(f"Filtering on {field!r} needs an active topic extraction")
+                cast, range_cast = _TOPIC_FILTER_COLUMNS[field]
+                condition = self._comparison_sql(field, [], op, value, cast, range_cast=range_cast)
+                if condition is None:
+                    continue
+                sql, condition_params = condition
+                where_parts.append(
+                    "id IN (SELECT item_id FROM topic_assignments "
+                    f"WHERE extraction_id = ? AND {sql})"
+                )
+                params.extend([topic_extraction_id, *condition_params])
+                continue
 
             extract = "json_extract_string(metadata, ?)"
-            params.append(json_path)
-
-            if op == "$eq":
-                where_parts.append(f"{extract} = ?")
-                params.append(str(value))
-            elif op == "$ne":
-                where_parts.append(f"{extract} != ?")
-                params.append(str(value))
-            elif op == "$gt":
-                where_parts.append(f"CAST({extract} AS DOUBLE) > ?")
-                params.append(float(value))
-            elif op == "$gte":
-                where_parts.append(f"CAST({extract} AS DOUBLE) >= ?")
-                params.append(float(value))
-            elif op == "$lt":
-                where_parts.append(f"CAST({extract} AS DOUBLE) < ?")
-                params.append(float(value))
-            elif op == "$lte":
-                where_parts.append(f"CAST({extract} AS DOUBLE) <= ?")
-                params.append(float(value))
-            elif op == "$in":
-                if isinstance(value, list):
-                    ph = ", ".join(["?"] * len(value))
-                    where_parts.append(f"{extract} IN ({ph})")
-                    params.extend([str(v) for v in value])
-            elif op == "$nin":
-                if isinstance(value, list):
-                    ph = ", ".join(["?"] * len(value))
-                    where_parts.append(f"{extract} NOT IN ({ph})")
-                    params.extend([str(v) for v in value])
+            condition = self._comparison_sql(
+                extract,
+                [f"$.{field}"],
+                op,
+                value,
+                str,
+                range_column=f"CAST({extract} AS DOUBLE)",
+            )
+            if condition is None:
+                continue
+            sql, condition_params = condition
+            where_parts.append(sql)
+            params.extend(condition_params)
 
         where_sql = " AND ".join(where_parts) if where_parts else "TRUE"
         return where_sql, params
 
+    def _topic_filter_extraction(
+        self, filters: list[dict] | None, collection_name: str | None
+    ) -> tuple[bool, str | None]:
+        """Whether ``filters`` touch topic fields, and the extraction to use if so.
+
+        Returns ``(uses_topics, extraction_id)``; ``extraction_id`` is None when
+        the collection has no active extraction (nothing can match then).
+
+        Raises:
+            ValueError: a topic field is filtered but no collection is given
+                (topics belong to a vector collection, not to the dataset).
+        """
+        if not filters or not any(f["field"] in _TOPIC_FILTER_COLUMNS for f in filters):
+            return False, None
+        if collection_name is None:
+            raise ValueError("Filtering on topic fields needs the collection name")
+        return True, self.get_active_extraction_id(collection_name)
+
     def get_filtered_items(
-        self, dataset_name: str, filters: list[dict], limit: int = 100, offset: int = 0
+        self,
+        dataset_name: str,
+        filters: list[dict],
+        limit: int = 100,
+        offset: int = 0,
+        collection_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get items with JSON metadata filtering.
 
         filters: list of {field, operator, value} dicts.
                  operator: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin
+        collection_name: vector collection whose active topics resolve
+                 topic-field filters (topic_id, topic_label, subtopic_*).
         """
+        uses_topics, extraction_id = self._topic_filter_extraction(filters, collection_name)
+        if uses_topics and extraction_id is None:
+            return []
+
         table = self._items_table(dataset_name)
-        where_sql, params = self._build_metadata_where(filters)
+        where_sql, params = self._build_metadata_where(filters, extraction_id)
         params.extend([limit, offset])
 
         try:
@@ -870,6 +978,27 @@ class DuckDBClient:
                 item["metadata"] = {}
             result.append(item)
         return result
+
+    def get_filtered_item_ids(
+        self, dataset_name: str, filters: list[dict], collection_name: str | None = None
+    ) -> list[str]:
+        """IDs of every item matching ``filters`` (no row cap, no payload).
+
+        Same filter semantics as :meth:`get_filtered_items`; used to scope a
+        vector search to the allowed items.
+        """
+        uses_topics, extraction_id = self._topic_filter_extraction(filters, collection_name)
+        if uses_topics and extraction_id is None:
+            return []
+
+        where_sql, params = self._build_metadata_where(filters, extraction_id)
+        try:
+            rows = self._exec(
+                f"SELECT id FROM {self._items_table(dataset_name)} WHERE {where_sql}", params
+            ).fetchall()
+        except duckdb.CatalogException:
+            return []
+        return [r[0] for r in rows]
 
     # ------------------------------------------------------------------
     # Vector Collections
@@ -1242,11 +1371,13 @@ class DuckDBClient:
         case_sensitive: bool = False,
         filters: list[dict] | None = None,
         limit: int | None = None,
+        collection_name: str | None = None,
     ) -> dict[str, Any]:
         """Search documents and/or metadata fields within one dataset.
 
         When filters are provided, results are restricted to items matching
-        the metadata filters (same operators as get_filtered_items).
+        the metadata filters (same operators as get_filtered_items; topic-field
+        filters resolve through ``collection_name``'s active topics).
 
         `total_matches` is always the full deduplicated match count; when
         `limit` is set, `matches` is truncated to at most that many rows so
@@ -1264,7 +1395,10 @@ class DuckDBClient:
         filter_sql: str | None = None
         filter_params: list = []
         if filters:
-            filter_sql, filter_params = self._build_metadata_where(filters)
+            uses_topics, extraction_id = self._topic_filter_extraction(filters, collection_name)
+            if uses_topics and extraction_id is None:
+                return {"matches": [], "total_matches": 0}
+            filter_sql, filter_params = self._build_metadata_where(filters, extraction_id)
 
         # True match count across all selected fields (rows deduplicated by OR).
         conditions: list[str] = []
@@ -1532,6 +1666,22 @@ class DuckDBClient:
         extraction["topics"] = topics
         return extraction
 
+    def get_active_extraction_id(self, collection_name: str) -> str | None:
+        """ID of the collection's active topic extraction, or None."""
+        row = self._exec(
+            "SELECT id FROM topic_extractions WHERE collection_name = ? AND is_active = TRUE LIMIT 1",
+            [collection_name],
+        ).fetchone()
+        return row[0] if row else None
+
+    def get_active_extractions(self) -> list[tuple[str, str]]:
+        """``(collection_name, extraction_id)`` of every active topic extraction."""
+        rows = self._exec(
+            "SELECT collection_name, id FROM topic_extractions WHERE is_active = TRUE "
+            "ORDER BY collection_name"
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
     def update_topic_quality_metrics(self, extraction_id: str, level: str, metrics: dict) -> None:
         """Store quality metrics on an extraction, keyed by level.
 
@@ -1611,6 +1761,84 @@ class DuckDBClient:
                         "UPDATE topic_info SET subtopics = ? WHERE extraction_id = ? AND topic_id = ?",
                         [json.dumps(subtopics), extraction_id, topic_id],
                     )
+
+    def get_subtopic_labels(self, extraction_id: str, subtopic_ids: list[int]) -> dict[int, str]:
+        """Current label of each requested subtopic id (labels can be edited)."""
+        if not subtopic_ids:
+            return {}
+        placeholders = ", ".join(["?"] * len(subtopic_ids))
+        rows = self._exec(
+            f"SELECT subtopic_id, any_value(subtopic_label) FROM topic_assignments "
+            f"WHERE extraction_id = ? AND subtopic_id IN ({placeholders}) GROUP BY subtopic_id",
+            [extraction_id, *subtopic_ids],
+        ).fetchall()
+        return {int(r[0]): r[1] for r in rows}
+
+    def replace_topic_centroids(self, extraction_id: str, rows: list[dict]) -> int:
+        """Replace every centroid row of an extraction. Returns rows written.
+
+        rows: dicts with ``level`` ("topic" | "subtopic"), ``topic_id``,
+        ``member_count``, ``centroid`` (list[float]) and, for subtopics,
+        ``parent_topic_id``.
+        """
+        df = pd.DataFrame(  # noqa: F841  # DuckDB reads this DataFrame by name in the SQL below
+            {
+                "extraction_id": extraction_id,
+                "level": [r["level"] for r in rows],
+                "topic_id": [int(r["topic_id"]) for r in rows],
+                "parent_topic_id": pd.array(
+                    [r.get("parent_topic_id") for r in rows], dtype="Int64"
+                ),
+                "member_count": [int(r["member_count"]) for r in rows],
+                "centroid": [[float(v) for v in r["centroid"]] for r in rows],
+            }
+        )
+        # One transaction: a failed insert must not leave the extraction with
+        # no centroids (searches would report them as never computed).
+        with self._write_lock:
+            self._conn.begin()
+            try:
+                self._conn.execute(
+                    "DELETE FROM topic_centroids WHERE extraction_id = ?", [extraction_id]
+                )
+                if rows:
+                    self._conn.execute("""
+                        INSERT INTO topic_centroids
+                        SELECT extraction_id, level, topic_id, parent_topic_id,
+                               member_count, centroid
+                        FROM df
+                    """)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return len(rows)
+
+    def get_topic_centroids(self, extraction_id: str, level: str) -> dict[str, np.ndarray] | None:
+        """One level's centroids as row-aligned arrays, ordered by topic id.
+
+        Returns ``{"ids", "parents", "counts", "means"}`` or None when the
+        extraction has no rows at that level. ``parents`` is None for levels
+        without parent topics (the topic level).
+        """
+        rows = self._exec(
+            "SELECT topic_id, parent_topic_id, member_count, centroid FROM topic_centroids "
+            "WHERE extraction_id = ? AND level = ? ORDER BY topic_id",
+            [extraction_id, level],
+        ).fetchall()
+        if not rows:
+            return None
+        parents = [r[1] for r in rows]
+        return {
+            "ids": np.array([r[0] for r in rows], dtype=np.int64),
+            "parents": (
+                None
+                if all(p is None for p in parents)
+                else np.array([-1 if p is None else p for p in parents], dtype=np.int64)
+            ),
+            "counts": np.array([r[2] for r in rows], dtype=np.int64),
+            "means": np.array([r[3] for r in rows], dtype=np.float64),
+        }
 
     # ------------------------------------------------------------------
     # Field Analysis

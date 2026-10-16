@@ -12,9 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 
-import chromadb
 import numpy as np
-from chromadb.config import Settings
 
 from ..topic_extraction.llm_labeling import (
     _create_labeler,
@@ -23,8 +21,8 @@ from ..topic_extraction.llm_labeling import (
 )
 from ..utils.duckdb_sync import _get_db as _get_duckdb
 from ..utils.embedding_loader import load_embeddings_for_ids
-from ..utils.resource_paths import CHROMA_DB_PATH as DB_PATH
 from .progress_emitter import emit_progress
+from .topic_centroid_service import Preloaded, TopicCentroidService
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -129,15 +127,17 @@ def _sync_topics_to_duckdb(
     reduction_method: str | None = None,
     reduction_target: int | None = None,
     topic_hierarchy: dict | None = None,
-) -> None:
+) -> str | None:
     """Store topic extraction results in DuckDB.
 
     Creates a new topic_extraction record, inserts topic_info and
     topic_assignments (with optional subtopic fields for reduction).
+
+    Returns the new extraction id, or None if nothing was stored.
     """
     db = _get_duckdb()
     if not db:
-        return
+        return None
 
     try:
         vc = db.get_vector_collection(collection_name)
@@ -145,7 +145,7 @@ def _sync_topics_to_duckdb(
             logger.warning(
                 "DuckDB: vector collection %r not found, skipping topic sync", collection_name
             )
-            return
+            return None
 
         dataset_name = vc["dataset_name"]
 
@@ -224,9 +224,68 @@ def _sync_topics_to_duckdb(
             len(assignment_records),
             collection_name,
         )
+        return ext_id
 
     except Exception as e:
         logger.error("DuckDB topic sync failed: %s", e)
+        return None
+
+
+def _semantic_topic_centroids(
+    collection_name: str,
+    item_topics: dict[str, int],
+    topics_data: dict,
+    *,
+    job_id: str,
+    total_items: int,
+    current_batch: int,
+    total_batches: int,
+    preloaded: Preloaded | None = None,
+) -> np.ndarray | None:
+    """Embedding centroids for semantic reduction, rows in ``sorted(topics_data)`` order.
+
+    When they cannot be computed, logs it, reports it on the job's progress
+    stream and returns None: the caller then reduces with c-TF-IDF.
+    """
+    try:
+        return TopicCentroidService(duckdb=_get_duckdb()).centroids_for_assignments(
+            collection_name, item_topics, order=sorted(topics_data), preloaded=preloaded
+        )
+    except Exception as e:
+        logger.warning(
+            "Semantic topic centroids unavailable for %s (%s); reducing with c-TF-IDF instead.",
+            collection_name,
+            e,
+        )
+        emit_progress(
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=current_batch,
+            total_batches=total_batches,
+            message="Embeddings unavailable; reducing topics with c-TF-IDF...",
+        )
+        return None
+
+
+def _refresh_topic_centroids(
+    collection_name: str, extraction_id: str | None, preloaded: Preloaded | None = None
+) -> None:
+    """Store centroids for a freshly synced extraction; failures never fail the job."""
+    if extraction_id is None:
+        return
+    try:
+        rows = TopicCentroidService(duckdb=_get_duckdb()).refresh(
+            collection_name, extraction_id, preloaded=preloaded
+        )
+        logger.info("Stored %d topic centroids for %s", rows, collection_name)
+    except Exception as e:
+        logger.error(
+            "Topic centroids not computed for %s (topic search unavailable): %s",
+            collection_name,
+            e,
+        )
 
 
 def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
@@ -283,12 +342,6 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         total_items = len(ids)
         logger.info(f"Loaded {total_items} items from DuckDB")
 
-        # ChromaDB client still needed for topic_reducer semantic embeddings
-        db_path = str(DB_PATH.resolve())
-        client = chromadb.PersistentClient(
-            path=db_path, settings=Settings(anonymized_telemetry=False)
-        )
-
         reduced_embeddings = np.array(coords, dtype=np.float64)
 
         # Validate we have actual projections (not all zeros)
@@ -322,7 +375,8 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         #   "embedding"    — raw L2-normalised vectors (euclidean ≈ cosine for HDBSCAN)
         # Both raw-vector modes share the loader + None-guard; on a load failure we
         # degrade gracefully to projection coords rather than hard-fail (cluster_umap
-        # is the default path).
+        # is the default path). Loaded vectors are reused for the topic centroids.
+        raw = None
         if config.cluster_on in ("embedding", "cluster_umap"):
             logger.info("Clustering on %s space for %s", config.cluster_on, config.collection_name)
             raw = load_embeddings_for_ids(config.collection_name, ids)
@@ -431,6 +485,22 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 item_id = ids[doc_idx]
                 pre_reduction_assignments[item_id] = int(row["Topic"])
 
+            # Semantic similarity needs embedding centroids of the pre-reduction
+            # topics; without them, fall back to c-TF-IDF rather than fail.
+            topic_embeddings = None
+            if not config.use_ctfidf_for_reduction:
+                topic_embeddings = _semantic_topic_centroids(
+                    config.collection_name,
+                    pre_reduction_assignments,
+                    topics_data,
+                    job_id=job_id,
+                    total_items=total_items,
+                    current_batch=2,
+                    total_batches=5,
+                    preloaded=(ids, raw) if raw is not None else None,
+                )
+            use_ctfidf = topic_embeddings is None
+
             # Initialize reducer
             from ..topic_extraction.topic_reducer import TopicReducer
 
@@ -440,8 +510,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 ctfidf_matrix=generator.c_tf_idf_matrix,
                 ctfidf_words=generator.words,
                 language=config.language,
-                collection_name=config.collection_name,
-                chromadb_client=client,
+                topic_embeddings=topic_embeddings,
             )
 
             # Run reduction
@@ -454,7 +523,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                     )
                 else:
                     reduction_result = reducer.reduce_to_n_topics(
-                        n_topics=config.nr_topics, use_ctfidf=config.use_ctfidf_for_reduction
+                        n_topics=config.nr_topics, use_ctfidf=use_ctfidf
                     )
                     documents_df = reduction_result.documents_df
                     topics_data = reduction_result.topics_data
@@ -462,9 +531,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                         f"Reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics"
                     )
             elif config.reduction_method == "auto":
-                reduction_result = reducer.auto_reduce_topics(
-                    use_ctfidf=config.use_ctfidf_for_reduction
-                )
+                reduction_result = reducer.auto_reduce_topics(use_ctfidf=use_ctfidf)
                 documents_df = reduction_result.documents_df
                 topics_data = reduction_result.topics_data
                 logger.info(
@@ -578,7 +645,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             topic_assignments[item_id] = topic_id
 
         # DuckDB: sole destination for topic data
-        _sync_topics_to_duckdb(
+        extraction_id = _sync_topics_to_duckdb(
             collection_name=config.collection_name,
             topic_infos=topic_infos,
             ids=ids,
@@ -592,6 +659,21 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             reduction_method=config.reduction_method if config.reduce_topics else None,
             reduction_target=config.nr_topics if config.reduce_topics else None,
             topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
+        )
+
+        emit_progress(
+            job_id=job_id,
+            status="running",
+            items_processed=0,
+            total_items=total_items,
+            current_batch=4,
+            total_batches=5,
+            message="Computing topic centroids...",
+        )
+        _refresh_topic_centroids(
+            config.collection_name,
+            extraction_id,
+            preloaded=(ids, raw) if raw is not None else None,
         )
 
         duration = time.time() - start_time
@@ -699,12 +781,6 @@ def reduce_existing_topics(
         # DuckDB: load items and topic data
         duckdb = _get_duckdb()
 
-        # ChromaDB client still needed for topic_reducer semantic embeddings
-        db_path = str(DB_PATH.resolve())
-        client = chromadb.PersistentClient(
-            path=db_path, settings=Settings(anonymized_telemetry=False)
-        )
-
         # Validate has_topics via DuckDB
         active_topics = duckdb.get_active_topics(collection_name)
         if not active_topics:
@@ -803,6 +879,21 @@ def reduce_existing_topics(
         for item_id, topic_id in assign_map.items():
             pre_reduction_assignments[item_id] = topic_id
 
+        # Semantic similarity needs embedding centroids of the current topics;
+        # without them, fall back to c-TF-IDF rather than fail.
+        topic_embeddings = None
+        if not use_ctfidf:
+            topic_embeddings = _semantic_topic_centroids(
+                collection_name,
+                dict(zip(ids, doc_topics, strict=True)),
+                topics_data,
+                job_id=job_id,
+                total_items=total_items,
+                current_batch=3,
+                total_batches=4,
+            )
+        use_ctfidf = topic_embeddings is None
+
         from ..topic_extraction.topic_reducer import TopicReducer
 
         reducer = TopicReducer(
@@ -811,8 +902,7 @@ def reduce_existing_topics(
             ctfidf_matrix=ctfidf_matrix,
             ctfidf_words=words,
             language=language,
-            collection_name=collection_name,
-            chromadb_client=client,
+            topic_embeddings=topic_embeddings,
         )
 
         # Run reduction based on method
@@ -919,7 +1009,7 @@ def reduce_existing_topics(
             topic_assignments[item_id] = topic_id
 
         # DuckDB: store reduced topics (with subtopic data from pre-reduction)
-        _sync_topics_to_duckdb(
+        extraction_id = _sync_topics_to_duckdb(
             collection_name=collection_name,
             topic_infos=topic_infos,
             ids=ids,
@@ -933,6 +1023,7 @@ def reduce_existing_topics(
             reduction_target=n_topics,
             topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
         )
+        _refresh_topic_centroids(collection_name, extraction_id)
 
         duration = time.time() - start_time
 

@@ -1,6 +1,7 @@
 """Unit tests for DuckDBClient — all tables, CRUD, and search."""
 
 
+import numpy as np
 import pytest
 
 from backend.clients.duckdb_client import DuckDBClient
@@ -18,6 +19,7 @@ class TestSchema:
         expected = {
             "datasets", "vector_collections", "projections",
             "projection_metadata", "topic_extractions", "topic_info", "topic_assignments",
+            "topic_centroids",
         }
         assert expected.issubset(table_names)
         # No global "items" table — items are per-dataset
@@ -421,6 +423,186 @@ class TestTopics:
             "SELECT is_active FROM topic_extractions WHERE id = ?", [ext2]
         ).fetchone()
         assert row[0] is True
+
+    def test_get_active_extraction_ids(self, db: DuckDBClient):
+        self._setup(db)
+        db.create_topic_extraction("ds_dense", "ds")
+        active = db.create_topic_extraction("ds_dense", "ds")
+
+        assert db.get_active_extraction_id("ds_dense") == active
+        assert db.get_active_extraction_id("unknown") is None
+        assert db.get_active_extractions() == [("ds_dense", active)]
+
+
+class TestTopicCentroids:
+    def _setup(self, db: DuckDBClient) -> str:
+        db.create_dataset("ds")
+        db.insert_items_batch("ds", ["a", "b"], ["x", "y"], [{}, {}])
+        db.register_vector_collection("ds", "chromadb", "ds_dense", "dense")
+        return db.create_topic_extraction("ds_dense", "ds")
+
+    ROWS = [
+        {"level": "topic", "topic_id": 0, "member_count": 2, "centroid": [0.5, 1.5]},
+        {"level": "topic", "topic_id": -1, "member_count": 1, "centroid": [0.0, 1.0]},
+        {
+            "level": "subtopic",
+            "topic_id": 3,
+            "parent_topic_id": 0,
+            "member_count": 2,
+            "centroid": [0.25, 0.75],
+        },
+    ]
+
+    def test_roundtrip_per_level(self, db: DuckDBClient):
+        ext = self._setup(db)
+        assert db.replace_topic_centroids(ext, self.ROWS) == 3
+
+        topics = db.get_topic_centroids(ext, "topic")
+        assert topics["ids"].tolist() == [-1, 0]
+        assert topics["counts"].tolist() == [1, 2]
+        np.testing.assert_allclose(topics["means"], [[0.0, 1.0], [0.5, 1.5]])
+
+        subtopics = db.get_topic_centroids(ext, "subtopic")
+        assert subtopics["ids"].tolist() == [3]
+        assert subtopics["parents"].tolist() == [0]
+
+        assert db.get_topic_centroids(ext, "nonexistent") is None
+
+    def test_replace_drops_previous_rows(self, db: DuckDBClient):
+        ext = self._setup(db)
+        db.replace_topic_centroids(ext, self.ROWS)
+        db.replace_topic_centroids(
+            ext, [{"level": "topic", "topic_id": 5, "member_count": 2, "centroid": [1.0, 1.0]}]
+        )
+
+        assert db.get_topic_centroids(ext, "topic")["ids"].tolist() == [5]
+        assert db.get_topic_centroids(ext, "subtopic") is None
+
+    def test_failed_replace_keeps_previous_rows(self, db: DuckDBClient):
+        ext = self._setup(db)
+        db.replace_topic_centroids(ext, self.ROWS)
+
+        bad = [{"level": None, "topic_id": 9, "member_count": 1, "centroid": [1.0, 1.0]}]
+        with pytest.raises(Exception):
+            db.replace_topic_centroids(ext, bad)
+
+        assert db.get_topic_centroids(ext, "topic")["ids"].tolist() == [-1, 0]
+
+    def test_delete_dataset_removes_centroids(self, db: DuckDBClient):
+        ext = self._setup(db)
+        db.replace_topic_centroids(ext, self.ROWS)
+
+        assert db.delete_dataset("ds") is True
+        count = db._conn.execute("SELECT count(*) FROM topic_centroids").fetchone()[0]
+        assert count == 0
+
+
+class TestTopicFilters:
+    """Topic fields live in topic_assignments, not item JSON: filters must join."""
+
+    def _setup(self, db: DuckDBClient) -> str:
+        db.create_dataset("ds")
+        db.insert_items_batch(
+            "ds",
+            ["a", "b", "c", "d"],
+            ["alpha doc", "beta doc", "gamma doc", "delta doc"],
+            [{"year": 2020}, {"year": 2021}, {"year": 2020}, {"year": 2021}],
+        )
+        db.register_vector_collection("ds", "chromadb", "ds_dense", "dense")
+        db.register_vector_collection("ds", "chromadb", "ds_no_topics", "dense")
+
+        # An older, now-inactive extraction that put everything in topic 0.
+        stale = db.create_topic_extraction("ds_dense", "ds")
+        db.insert_topic_assignments_batch(
+            stale, [{"item_id": i, "topic_id": 0, "topic_label": "Old"} for i in "abcd"]
+        )
+
+        active = db.create_topic_extraction("ds_dense", "ds")
+        db.insert_topic_assignments_batch(active, [
+            {"item_id": "a", "topic_id": 0, "topic_label": "Cats",
+             "subtopic_id": 10, "subtopic_label": "Lions"},
+            {"item_id": "b", "topic_id": 0, "topic_label": "Cats",
+             "subtopic_id": 11, "subtopic_label": "Tabbies"},
+            {"item_id": "c", "topic_id": 1, "topic_label": "Dogs",
+             "subtopic_id": 12, "subtopic_label": "Pugs"},
+            {"item_id": "d", "topic_id": -1, "topic_label": "Unclustered",
+             "subtopic_id": -1, "subtopic_label": "Unclustered"},
+        ])
+        return active
+
+    def _ids(self, db: DuckDBClient, filters: list[dict], collection: str = "ds_dense"):
+        items = db.get_filtered_items("ds", filters, collection_name=collection)
+        return sorted(item["id"] for item in items)
+
+    @pytest.mark.parametrize(
+        ("field", "operator", "value", "expected"),
+        [
+            ("topic_id", "$eq", 0, ["a", "b"]),
+            ("topic_id", "$eq", "1", ["c"]),
+            ("topic_id", "$in", [0, 1], ["a", "b", "c"]),
+            ("topic_id", "$ne", -1, ["a", "b", "c"]),
+            ("topic_id", "$nin", [0], ["c", "d"]),
+            ("topic_label", "$eq", "Dogs", ["c"]),
+            ("subtopic_id", "$eq", 11, ["b"]),
+            ("subtopic_label", "$in", ["Lions", "Pugs"], ["a", "c"]),
+            ("topic_id", "$gt", 0.5, ["c"]),
+            ("topic_label", "$gt", "Cats", ["c", "d"]),  # text compares as text
+        ],
+    )
+    def test_topic_field_filters_use_active_assignments(
+        self, db: DuckDBClient, field, operator, value, expected
+    ):
+        self._setup(db)
+        assert self._ids(db, [{"field": field, "operator": operator, "value": value}]) == expected
+
+    def test_topic_and_metadata_filters_combine_with_and(self, db: DuckDBClient):
+        self._setup(db)
+        filters = [
+            {"field": "topic_id", "operator": "$eq", "value": 0},
+            {"field": "year", "operator": "$eq", "value": 2020},
+        ]
+        assert self._ids(db, filters) == ["a"]
+
+    def test_empty_in_list_matches_nothing(self, db: DuckDBClient):
+        self._setup(db)
+        assert self._ids(db, [{"field": "topic_id", "operator": "$in", "value": []}]) == []
+
+    def test_collection_without_topics_matches_nothing(self, db: DuckDBClient):
+        self._setup(db)
+        filters = [{"field": "topic_id", "operator": "$eq", "value": 0}]
+        assert self._ids(db, filters, collection="ds_no_topics") == []
+
+    def test_topic_filter_without_collection_name_raises(self, db: DuckDBClient):
+        self._setup(db)
+        with pytest.raises(ValueError, match="collection"):
+            db.get_filtered_items("ds", [{"field": "topic_id", "operator": "$eq", "value": 0}])
+
+    def test_filtered_item_ids(self, db: DuckDBClient):
+        self._setup(db)
+        filters = [{"field": "topic_id", "operator": "$in", "value": [0, 1]}]
+        ids = db.get_filtered_item_ids("ds", filters, collection_name="ds_dense")
+        assert sorted(ids) == ["a", "b", "c"]
+
+        year_ids = db.get_filtered_item_ids(
+            "ds", [{"field": "year", "operator": "$gte", "value": 2021}]
+        )
+        assert sorted(year_ids) == ["b", "d"]
+
+    def test_text_search_honours_topic_filters(self, db: DuckDBClient):
+        self._setup(db)
+        result = db.text_search(
+            "ds",
+            "doc",
+            filters=[{"field": "topic_id", "operator": "$eq", "value": 1}],
+            collection_name="ds_dense",
+        )
+        assert result["total_matches"] == 1
+        assert [m["id"] for m in result["matches"]] == ["c"]
+
+    def test_subtopic_labels_lookup(self, db: DuckDBClient):
+        active = self._setup(db)
+        assert db.get_subtopic_labels(active, [10, 12]) == {10: "Lions", 12: "Pugs"}
+        assert db.get_subtopic_labels(active, []) == {}
 
 
 # ------------------------------------------------------------------

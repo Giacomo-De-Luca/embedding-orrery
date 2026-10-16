@@ -3,12 +3,14 @@
  *
  * The bundle expects a browser: it reads `window` at load time and vectorize-text
  * grabs a 2D canvas from `document` when its module initializes. `StackglHarness.load()`
- * installs minimal stand-ins for both before the first require, so gl-scatter3d and
- * gl-plot3d can run in vitest's node environment against a `RecordingGl` context.
+ * installs minimal stand-ins for both before the first require, so gl-scatter3d can
+ * run in vitest's node environment against a `RecordingGl` context. (gl-plot3d's
+ * `createScene` needs more stand-ins, e.g. `window.addEventListener`; add them when a
+ * test needs it.)
  *
- * Every fork test must load the bundle through this module: Node's require cache is
- * shared per worker, so the globals have to be in place before whichever test
- * requires the bundle first.
+ * Every fork test must load the bundle through this module: the bundle captures the
+ * globals at require time, and Node's require cache is shared by every test file that
+ * runs in the same worker when vitest's `isolate` option is off.
  */
 import { createRequire } from 'node:module';
 
@@ -67,7 +69,7 @@ class FakeCanvasElement {
 // ---------------------------------------------------------------------------
 
 /** Real WebGL enum values for every constant a test asserts on or the bundle branches on. */
-const GL_ENUMS: Record<string, number> = {
+export const GL_ENUMS: Record<string, number> = {
   POINTS: 0, LINES: 1, LINE_LOOP: 2, LINE_STRIP: 3, TRIANGLES: 4, TRIANGLE_STRIP: 5, TRIANGLE_FAN: 6,
   DEPTH_BUFFER_BIT: 256, STENCIL_BUFFER_BIT: 1024, COLOR_BUFFER_BIT: 16384,
   BYTE: 5120, UNSIGNED_BYTE: 5121, SHORT: 5122, UNSIGNED_SHORT: 5123, INT: 5124, UNSIGNED_INT: 5125, FLOAT: 5126,
@@ -137,7 +139,8 @@ export class RecordingGl {
   }
 
   private property(prop: string | symbol): unknown {
-    if (typeof prop !== 'string') return undefined;
+    // `then` must stay undefined, or the context would look like a promise to `await`.
+    if (typeof prop !== 'string' || prop === 'then') return undefined;
     if (prop === 'drawingBufferWidth') return this.drawingBufferWidth;
     if (prop === 'drawingBufferHeight') return this.drawingBufferHeight;
     if (prop === 'canvas') return null;
@@ -217,7 +220,6 @@ export class RecordingGl {
 /** The bundle's exports that the fork tests use (its full export map is wider). */
 export interface StackglModules {
   gl_scatter3d: (options: Record<string, unknown>) => PointCloud;
-  gl_plot3d: { createScene: (options: Record<string, unknown>) => unknown };
 }
 
 /** The gl-scatter3d object surface the tests read. */
@@ -251,6 +253,12 @@ export class StackglHarness {
     if (g.window === undefined) g.window = globalThis;
     if (g.document === undefined) {
       g.document = { createElement: () => new FakeCanvasElement() };
+    } else {
+      // A DOM environment (e.g. jsdom) has a document whose canvases have no 2D context.
+      const probe = (g.document as Document).createElement('canvas');
+      if (!probe.getContext('2d')) {
+        throw new Error('StackglHarness needs a canvas 2D context; run fork tests in the node environment.');
+      }
     }
     const require = createRequire(import.meta.url);
     StackglHarness.modules = require('../plotly.js/stackgl_modules/index.js') as StackglModules;

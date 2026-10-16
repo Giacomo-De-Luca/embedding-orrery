@@ -76,7 +76,7 @@ interface PillNavProps extends VariantProps<typeof pillNavVariants> {
   'aria-label'?: string;
 }
 
-function isItemActive(item: PillNavItem, pathname: string): boolean {
+export function isItemActive(item: PillNavItem, pathname: string): boolean {
   const path = item.href.split('?')[0];
   if ((item.match ?? 'prefix') === 'exact') return pathname === path;
   return pathname === path || pathname.startsWith(`${path}/`);

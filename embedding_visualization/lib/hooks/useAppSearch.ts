@@ -3,23 +3,7 @@ import { Point2D, Point3D, SemanticSearchResult, DistanceMetric, FilterInput, Te
 import { useSemanticSearch } from './useSemanticSearch';
 import { transformSearchResults } from '../utils/data-transform';
 import { buildTemporalFilterInputs } from '../utils/temporalFilters';
-
-/**
- * Map document-time prompt names to query-time equivalents.
- * For example, if documents were embedded with "Retrieval-document",
- * queries should use "Retrieval-query".
- */
-const DOCUMENT_TO_QUERY_PROMPT_MAP: Record<string, string> = {
-  'Retrieval-document': 'Retrieval-query',
-};
-
-/**
- * Get the appropriate query prompt name based on document prompt name.
- */
-export function getQueryPromptName(documentPromptName: string | null | undefined): string | null {
-  if (!documentPromptName) return null;
-  return DOCUMENT_TO_QUERY_PROMPT_MAP[documentPromptName] || documentPromptName;
-}
+import { resolveQueryPrompt } from '../utils/queryPrompt';
 
 export function useAppSearch(
   selectedCollection: string | null,
@@ -51,13 +35,7 @@ export function useAppSearch(
   }, [topicFilters, temporalRange]);
 
   const handleSemanticSearch = useCallback(async (query: string) => {
-    // Resolve effective prompt name
-    let effectivePromptName: string | null = null;
-    if (queryPromptName === 'auto' && embeddingPromptName) {
-      effectivePromptName = getQueryPromptName(embeddingPromptName);
-    } else if (queryPromptName && queryPromptName !== 'auto') {
-      effectivePromptName = queryPromptName;
-    }
+    const effectivePromptName = resolveQueryPrompt(queryPromptName, embeddingPromptName);
 
     const requestId = ++searchRequestIdRef.current;
 

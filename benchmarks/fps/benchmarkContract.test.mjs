@@ -121,3 +121,71 @@ test('GraphQL telemetry records core and projection-only response bytes', () => 
     ],
   });
 });
+
+test('pass-through requests are measured later by re-sending them, outside the browser', async () => {
+  const telemetry = new GraphqlPayloadTelemetry();
+  const postData = JSON.stringify({ operationName: 'GetCollectionData', variables: { name: 'wordnet' } });
+  telemetry.recordPassThrough({
+    variables: { projectionTypes: ['umap_3d'], includeCore: true },
+    url: 'http://localhost:8000/graphql',
+    postData,
+  });
+  // Nothing is measured until the run asks for it.
+  assert.equal(telemetry.snapshot().requests.length, 0);
+
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(3 * 1024 * 1024) };
+  };
+  await telemetry.measurePending(fakeFetch);
+
+  assert.deepEqual(calls, [{
+    url: 'http://localhost:8000/graphql',
+    init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: postData },
+  }]);
+  assert.deepEqual(telemetry.snapshot(), {
+    totalResponseBytes: 3145728,
+    totalResponseMB: 3,
+    requests: [{ projectionTypes: ['umap_3d'], includeCore: true, responseBytes: 3145728, responseMB: 3 }],
+  });
+
+  // Measuring again does not re-send or double-count.
+  await telemetry.measurePending(fakeFetch);
+  assert.equal(calls.length, 1);
+  assert.equal(telemetry.snapshot().requests.length, 1);
+});
+
+test('a failed re-send is recorded as unmeasured instead of being dropped', async () => {
+  const telemetry = new GraphqlPayloadTelemetry();
+  telemetry.recordPassThrough({
+    variables: { projectionTypes: ['umap_2d'], includeCore: false },
+    url: 'http://localhost:8000/graphql',
+    postData: '{}',
+  });
+  await telemetry.measurePending(async () => { throw new Error('ECONNREFUSED'); });
+
+  assert.deepEqual(telemetry.snapshot(), {
+    totalResponseBytes: 0,
+    totalResponseMB: 0,
+    requests: [{
+      projectionTypes: ['umap_2d'],
+      includeCore: false,
+      responseBytes: null,
+      responseMB: null,
+      measureError: 'Error: ECONNREFUSED',
+    }],
+  });
+});
+
+test('a non-OK re-send response is recorded as unmeasured', async () => {
+  const telemetry = new GraphqlPayloadTelemetry();
+  telemetry.recordPassThrough({
+    variables: { projectionTypes: ['umap_3d'] },
+    url: 'http://localhost:8000/graphql',
+    postData: '{}',
+  });
+  await telemetry.measurePending(async () => ({ ok: false, status: 502, arrayBuffer: async () => new ArrayBuffer(10) }));
+  assert.equal(telemetry.snapshot().requests[0].responseBytes, null);
+  assert.equal(telemetry.snapshot().requests[0].measureError, 'HTTP 502');
+});

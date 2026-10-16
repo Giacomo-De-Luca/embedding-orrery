@@ -1,11 +1,10 @@
 'use client';
 
 import { Moon, Sun, Search, Settings2, BarChart3, CircleHelp, Github } from 'lucide-react';
-import { useTheme } from 'next-themes';
-import { useEffect, useState, KeyboardEvent } from 'react';
+import { useState, KeyboardEvent } from 'react';
 import { PageNav } from './PageNav';
-import { IS_DEMO } from '@/lib/utils/demoMode';
-import { isEmbedded } from '@/lib/utils/hfSpaceUrlSync';
+import { HeaderMenu } from './HeaderMenu';
+import { useThemeToggle } from '@/lib/hooks/useThemeToggle';
 import {
   Combobox,
   ComboboxInput,
@@ -19,22 +18,19 @@ import { Badge } from '@/lib/ui-primitives/badge';
 import { Button } from '@/lib/ui-primitives/button';
 import { cn } from '@/lib/utils/utils';
 import { Input } from '@/lib/ui-primitives/input';
+import { REPO_URL } from '@/lib/utils/siteMetadata';
 import type { CollectionsManifest } from '../../lib/types/types';
 import { getSaeInfo } from '../../lib/utils/saeCollections';
 
-/** Canonical repo URL (the older `/orrery` path only 301-redirects here). */
-const REPO_URL = 'https://github.com/Giacomo-De-Luca/embedding-orrery';
-
 function ModeToggle() {
-  const { resolvedTheme, setTheme } = useTheme();
-  const isDark = (resolvedTheme ?? 'light') === 'dark';
+  const { isDark, toggle } = useThemeToggle();
 
   return (
     <Button
       variant="circular"
       size="icon"
       className="relative"
-      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      onClick={toggle}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       suppressHydrationWarning
     >
@@ -85,15 +81,6 @@ export function AppHeader({
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
 
-  // Inside the HF Space page (`header: mini`), HuggingFace floats a pill over
-  // the top-right corner of the iframe — exactly where the help button and
-  // theme toggle live. Reserve clearance so nothing renders underneath it.
-  // Effect-set (not render-read) to keep SSR/hydration output stable.
-  const [hfPillClearance, setHfPillClearance] = useState(false);
-  useEffect(() => {
-    if (IS_DEMO && isEmbedded(window)) setHfPillClearance(true);
-  }, []);
-
   const handleSearch = () => {
     if (searchQuery.trim() && onSemanticSearch) {
       onSemanticSearch(searchQuery.trim());
@@ -106,63 +93,20 @@ export function AppHeader({
     }
   };
 
-  const isExpanded = activePanel !== null;
-
   // Context-carrying deep link: keep model/SAE params when the collection has a mapping
   const sae = saeInfoProp ?? getSaeInfo(selectedCollection ?? null);
   const saeHref = sae
     ? `/sae?modelId=${encodeURIComponent(sae.modelId)}&saeId=${encodeURIComponent(sae.saeId)}`
     : undefined;
 
-  // Demo builds split the header into two rows: the icon buttons and nav pills
-  // move down beside the Plotly modebar (pinned to the same
-  // band by `.modebar-container` in globals.css), leaving row 1 room for the
-  // HuggingFace pill clearance without clipping. Normal builds keep one row.
-  const navCluster = (
-    <>
-      {onOpenIntro && (
-        <Button
-          variant="circularghost"
-          size="icon"
-          onClick={onOpenIntro}
-          aria-label="About this demo"
-          title="About this demo"
-          data-tour="intro-button"
-        >
-          <CircleHelp className="h-4 w-4" />
-        </Button>
-      )}
-      {/* New tab is required, not cosmetic: inside the HF Space iframe a
-          same-tab navigation would load GitHub into the frame, which its
-          X-Frame-Options then blanks — taking the demo with it. */}
-      <Button
-        variant="circularghost"
-        size="icon"
-        asChild
-        aria-label="Source code on GitHub"
-        title="Source code on GitHub"
-      >
-        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
-          <Github className="h-4 w-4" />
-        </a>
-      </Button>
-      <ModeToggle />
-      <PageNav variant="glass" saeHref={saeHref} />
-    </>
-  );
-
+  // Four cells (toggles, search, collection, actions) on one grid. Placement
+  // lives in globals.css (`.explore-header`): it moves the cells per breakpoint
+  // and per build, keeps them clear of the HF Space chrome, and publishes the
+  // header's height for the panels, legend and modebar below it. The header
+  // lets pointer events through to the plot; only the cells capture them.
   return (
-    <header
-      className={cn(
-        "flex flex-col bg-transparent shrink-0 transition-all duration-300 ease-in-out",
-        "pl-0"
-        // isExpanded ? "pl-84" : "pl-0"
-      )}
-    >
-      {/* Wraps below `sm`: the collection selector alone is 200px, so on a phone
-          the whole right-hand group moves to a second line instead of being
-          clipped past the right edge. */}
-      <div className="flex min-h-16 w-full flex-wrap items-center gap-2 px-4 sm:h-16 sm:flex-nowrap">
+    <header className="explore-header pointer-events-none">
+      <div data-header-cell="toggles" className="pointer-events-auto flex items-center gap-2">
         <Button
           variant={activePanel === 'controls' ? 'circular' : 'circularghost'}
           size="icon"
@@ -194,113 +138,137 @@ export function AppHeader({
         >
           <BarChart3 className="h-4 w-4" />
         </Button>
-
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="flex items-center gap-3">
-            {totalWords && embeddingDim && (
-              <>
-                <Badge variant="secondary" className="hidden backdrop-blur-sm sm:inline-flex">
-                  {totalWords.toLocaleString()} points
-                </Badge>
-                <Badge variant="outline" className="hidden md:inline-flex">
-                  {embeddingDim}D
-                </Badge>
-              </>
-            )}
+        {totalWords && embeddingDim && (
+          <div className="ml-1 hidden items-center gap-3 lg:flex">
+            <Badge variant="secondary" className="backdrop-blur-sm">
+              {totalWords.toLocaleString()} points
+            </Badge>
+            <Badge variant="outline">{embeddingDim}D</Badge>
           </div>
-
-          {/* Semantic Search */}
-          {onSemanticSearch && (
-            <div className="relative max-w-xs flex-1" data-tour="search-input">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Semantic search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="pl-8 pr-9"
-                disabled={searchLoading}
-              />
-              <button
-                onClick={handleSearch}
-                disabled={!searchQuery.trim() || searchLoading}
-                className={cn(
-                  "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full h-6 w-6 flex items-center justify-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-                  searchQuery.trim()
-                    ? "backdrop-blur-sm bg-foreground/80 text-background hover:bg-foreground/90"
-                    : "backdrop-blur-sm bg-muted/40 text-muted-foreground"
-                )}
-                aria-label="Search"
-              >
-                {searchLoading ? <Spinner className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Collection Selector */}
-        <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
-          <div className="flex min-w-0 flex-1 items-center sm:flex-none" data-tour="collection-selector">
-            {collectionsLoading ? (
-              <div className="flex w-full items-center gap-2 px-3 py-2 border rounded-md bg-muted sm:w-auto sm:min-w-[200px]">
-                <Spinner className="h-4 w-4" />
-                <span className="text-sm">Loading...</span>
-              </div>
-            ) : collectionsError ? (
-              <div className="w-full px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 sm:w-auto sm:min-w-[200px]">
-                <span className="text-sm text-destructive">Error</span>
-              </div>
-            ) : collections && Object.keys(collections).length > 0 ? (
-              <Combobox
-                value={selectedCollection || ''}
-                onValueChange={(val) => {
-                  if (val) onCollectionChange(val);
-                }}
-                items={Object.keys(collections)}
-                itemToStringLabel={(key) => collections[key]?.display_name ?? key}
-                filter={(key, query) => {
-                  const name = collections[key]?.display_name ?? key;
-                  return name.toLowerCase().includes(query.toLowerCase());
-                }}
-                onInputValueChange={(val) => setCollectionFilter(val)}
-              >
-                <ComboboxInput
-                  placeholder="Search collections..."
-                  className="w-full sm:w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
-                />
-                <ComboboxContent>
-                  {collectionFilter.trim() && (
-                    <ComboboxEmpty>No collections found.</ComboboxEmpty>
-                  )}
-                  <ComboboxList>
-                    {(key) => (
-                      <ComboboxItem key={key} value={key}>
-                        <span className="font-medium">{collections[key]?.display_name ?? key}</span>
-                        <span className="text-xs text-muted-foreground ml-2">
-                          ({collections[key]?.count.toLocaleString()})
-                        </span>
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            ) : null}
-          </div>
-          {!IS_DEMO && navCluster}
-          {hfPillClearance && <div aria-hidden className="w-40 shrink-0 sm:w-72" />}
-        </div>
+        )}
       </div>
-      {IS_DEMO && (
-        // Row 2 is right-aligned to sit above the legend/modebar column (both
-        // pinned to the right edge over the plot; the plot's modebar is nudged
-        // below this row in demo builds — see `.demo-plot-chrome` in
-        // globals.css). pointer-events dance: the page wraps the whole header
-        // in an interactive overlay, but row 2 is mostly empty space over the
-        // plot, so only the cluster itself may capture input.
-        <div className="pointer-events-none flex h-10 w-full items-center justify-end gap-2 px-4">
-          <div className="pointer-events-auto flex items-center gap-2">{navCluster}</div>
+
+      {/* Semantic Search */}
+      {onSemanticSearch && (
+        <div
+          data-header-cell="search"
+          data-tour="search-input"
+          className="pointer-events-auto relative w-full sm:max-w-xs"
+        >
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Semantic search..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="pl-8 pr-9"
+            disabled={searchLoading}
+          />
+          <button
+            onClick={handleSearch}
+            disabled={!searchQuery.trim() || searchLoading}
+            className={cn(
+              "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full h-6 w-6 flex items-center justify-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+              searchQuery.trim()
+                ? "backdrop-blur-sm bg-foreground/80 text-background hover:bg-foreground/90"
+                : "backdrop-blur-sm bg-muted/40 text-muted-foreground"
+            )}
+            aria-label="Search"
+          >
+            {searchLoading ? <Spinner className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
+          </button>
         </div>
       )}
+
+      {/* Collection Selector */}
+      <div
+        data-header-cell="collection"
+        data-tour="collection-selector"
+        className="pointer-events-auto flex min-w-0 items-center"
+      >
+        {collectionsLoading ? (
+          <div className="flex w-full items-center gap-2 px-3 py-2 border rounded-md bg-muted sm:w-auto sm:min-w-[200px]">
+            <Spinner className="h-4 w-4" />
+            <span className="text-sm">Loading...</span>
+          </div>
+        ) : collectionsError ? (
+          <div className="w-full px-3 py-2 border border-destructive/50 rounded-md bg-destructive/10 sm:w-auto sm:min-w-[200px]">
+            <span className="text-sm text-destructive">Error</span>
+          </div>
+        ) : collections && Object.keys(collections).length > 0 ? (
+          <Combobox
+            value={selectedCollection || ''}
+            onValueChange={(val) => {
+              if (val) onCollectionChange(val);
+            }}
+            items={Object.keys(collections)}
+            itemToStringLabel={(key) => collections[key]?.display_name ?? key}
+            filter={(key, query) => {
+              const name = collections[key]?.display_name ?? key;
+              return name.toLowerCase().includes(query.toLowerCase());
+            }}
+            onInputValueChange={(val) => setCollectionFilter(val)}
+          >
+            <ComboboxInput
+              placeholder="Search collections..."
+              className="w-full sm:w-[200px] lg:w-[280px] backdrop-blur-sm bg-transparent dark:bg-transparent [&_input]:bg-transparent [&_input]:dark:bg-transparent"
+            />
+            <ComboboxContent>
+              {collectionFilter.trim() && (
+                <ComboboxEmpty>No collections found.</ComboboxEmpty>
+              )}
+              <ComboboxList>
+                {(key) => (
+                  <ComboboxItem key={key} value={key}>
+                    <span className="font-medium">{collections[key]?.display_name ?? key}</span>
+                    <span className="text-xs text-muted-foreground ml-2">
+                      ({collections[key]?.count.toLocaleString()})
+                    </span>
+                  </ComboboxItem>
+                )}
+              </ComboboxList>
+            </ComboboxContent>
+          </Combobox>
+        ) : null}
+      </div>
+
+      {/* Help stays visible at every width (it is the demo's way back to the
+          mission menu); nav, theme and GitHub fold into a menu below `xl`.
+          On phones this cell sits under the panel toggles and the menu leads,
+          so it lines up under the first toggle. */}
+      <div data-header-cell="actions" className="pointer-events-auto flex items-center gap-2">
+        {onOpenIntro && (
+          <Button
+            variant="circularghost"
+            size="icon"
+            onClick={onOpenIntro}
+            aria-label="About this demo"
+            title="About this demo"
+            data-tour="intro-button"
+          >
+            <CircleHelp className="h-4 w-4" />
+          </Button>
+        )}
+        <HeaderMenu saeHref={saeHref} className="xl:hidden max-sm:order-first" />
+        <div className="hidden items-center gap-2 xl:flex">
+          {/* New tab is required, not cosmetic: inside the HF Space iframe a
+              same-tab navigation would load GitHub into the frame, which its
+              X-Frame-Options then blanks — taking the demo with it. */}
+          <Button
+            variant="circularghost"
+            size="icon"
+            asChild
+            aria-label="Source code on GitHub"
+            title="Source code on GitHub"
+          >
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+              <Github className="h-4 w-4" />
+            </a>
+          </Button>
+          <ModeToggle />
+          <PageNav variant="glass" saeHref={saeHref} />
+        </div>
+      </div>
     </header>
   );
 }

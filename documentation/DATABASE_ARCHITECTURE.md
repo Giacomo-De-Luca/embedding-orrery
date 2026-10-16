@@ -70,7 +70,19 @@ topic_assignments
   extraction_id (FK), item_id
   topic_id, topic_label, subtopic_id, subtopic_label
   PK: (extraction_id, item_id)
+
+topic_centroids        — embedding-space mean of each topic's / subtopic's members
+  extraction_id (FK), level ('topic' | 'subtopic'), topic_id
+  parent_topic_id      — subtopic rows: the topic containing the subtopic
+  member_count, centroid (FLOAT[])
+  PK: (extraction_id, level, topic_id)
 ```
+
+Topic fields (`topic_id`, `topic_label`, `subtopic_id`, `subtopic_label`) are
+**stripped from item metadata** on insert: they exist only in
+`topic_assignments`, keyed by the collection's active extraction. The collection
+load merges them back into `item_metadata`; filters on them join
+`topic_assignments` (see Semantic Search).
 
 ### Per-Dataset Tables
 
@@ -114,9 +126,20 @@ ChromaDB → read embeddings in 5k batches → PCA/UMAP → DuckDB projections t
 ### Topic Extraction
 ```
 DuckDB projections → HDBSCAN clustering → c-TF-IDF keywords → DuckDB topic tables
-                                                     ↓
-                                              (optional LLM labeling)
+                                                     ↓                    ↓
+                                              (optional LLM labeling)   topic_centroids
+                                                                        (ChromaDB vectors
+                                                                         averaged per topic)
 ```
+
+### Semantic Topic Search
+```
+Frontend → GraphQL topicSemanticSearch(query) →
+  ChromaDBClient.embed_query() → query vector (collection's own model)
+  DuckDB: topic_centroids of the active extraction
+  Mean-centred cosine, best subtopic lifts its topic → TopicSimilarityResult list
+```
+Details: [TOPIC_SEMANTIC_SEARCH.md](TOPIC_SEMANTIC_SEARCH.md).
 
 ### Frontend Data Load
 ```
@@ -129,12 +152,15 @@ Frontend → GraphQL collection(name, projectionType) →
 ### Semantic Search
 ```
 Frontend → GraphQL semantic_search(query, filters?) →
-  If filters: DuckDB get_filtered_items() → allowed_ids set
-  ChromaDB: vector search (over-fetch if filtered) → IDs + distances
-  Post-filter by allowed_ids
+  If filters: DuckDB get_filtered_item_ids() → allowed IDs (no cap; topic
+    fields resolved through topic_assignments of the active extraction)
+  ChromaDB: vector search scoped with query(ids=allowed) → IDs + distances
   DuckDB: get_items_by_ids() → documents + metadata enrichment
   → SemanticSearchResult list
 ```
+Scoping the vector search (instead of post-filtering an over-fetch of the
+unscoped top hits) means a filtered search returns the full `n_results`
+whenever that many items match.
 
 ### Text Search
 ```
@@ -162,7 +188,8 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `insert_items_batch(dataset_name, ids, documents, metadatas)` → bulk insert via DataFrame
 - `get_item_ids(dataset_name)` → set of IDs
 - `get_items_by_ids(dataset_name, ids)` → list of item dicts
-- `get_filtered_items(dataset_name, filters, limit, offset)` → filtered items via JSON operators
+- `get_filtered_items(dataset_name, filters, limit, offset, collection_name=None)` → filtered items via JSON operators; topic-field filters need `collection_name`
+- `get_filtered_item_ids(dataset_name, filters, collection_name=None)` → every matching ID (scopes vector search)
 
 ### Vector Collections
 - `register_vector_collection(dataset_name, backend, collection_name, vector_type, **embedding_info)`
@@ -175,7 +202,7 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `get_projection_data(collection_name, projection_type)` → items + coordinates + metadata
 
 ### Text Search
-- `text_search(dataset_name, query, fields, mode, case_sensitive)` → ILIKE-based
+- `text_search(dataset_name, query, fields, mode, case_sensitive, filters, limit, collection_name)` → ILIKE-based
 - `text_search_bm25(dataset_name, query, limit)` → FTS BM25-scored results
 
 ### Topics
@@ -186,14 +213,18 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `get_items_for_topic(extraction_id, topic_id)` → item IDs
 - `update_topic_label(extraction_id, topic_id, new_label)`
 - `update_subtopic_label(extraction_id, subtopic_id, new_label)`
+- `get_active_extraction_id(collection_name)` / `get_active_extractions()`
+- `replace_topic_centroids(extraction_id, rows)` / `get_topic_centroids(extraction_id, level)` → `{ids, parents, counts, means}` arrays
+- `get_subtopic_labels(extraction_id, subtopic_ids)` → `{subtopic_id: label}`
 
 ## ChromaDBClient API
 
-Stripped to vector-only operations (~170 lines): `backend/clients/chromadb_client.py`
+Stripped to vector-only operations: `backend/clients/chromadb_client.py`
 Singleton: `backend/API/chromadb_instance.py` → `get_chromadb_client()`
 
 - `get_collection(name, load_embedding_function, for_query, query_prompt)` — lazy EF loading
-- `semantic_search(collection_name, query_texts, query_embeddings, n_results, distance_metric, query_prompt)` — returns IDs + distances + similarities (no documents/metadata)
+- `embed_query(collection_name, text, query_prompt)` — query-mode vector from the collection's own model; raises instead of falling back to ChromaDB's default embedder
+- `semantic_search(collection_name, query_texts, query_embeddings, n_results, distance_metric, query_prompt, ids)` — returns IDs + distances + similarities (no documents/metadata); `ids` scopes the search
 
 ## Migration
 

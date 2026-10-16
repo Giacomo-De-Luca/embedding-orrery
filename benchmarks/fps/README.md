@@ -10,7 +10,7 @@ synthetic points. Standalone Node harness — not part of the app, has its own
 | File | Purpose |
 |------|---------|
 | `bench.mjs` | Chrome automation, FPS capture, memory and GraphQL-payload telemetry |
-| `lib/benchmarkContract.mjs` | Pass definitions (`BenchPass`), synthetic GraphQL contract, membership signatures, telemetry, safe artifact names |
+| `lib/benchmarkContract.mjs` | Pass definitions (`BenchPass`; unknown names are rejected), run settings (`BenchRunConfig`: device scale factor, result label), synthetic GraphQL contract, membership signatures, telemetry, safe artifact names |
 | `lib/glSceneStats.mjs` | `GlSceneStats`: in-page WebGL scene readout (trace count, marker vertices, pick stats, canvas backing ratio) |
 | `benchmarkContract.test.mjs`, `glSceneStats.test.mjs` | Node tests for the benchmark-only helpers |
 | `results/` (gitignored) | Labeled result JSON and screenshots; historical baselines are retained |
@@ -72,7 +72,8 @@ the historical results. Plotly's GL plots render at a fixed 2× regardless
 (`plotGlPixelRatio`), but the density overlay and anything else that reads
 `window.devicePixelRatio` follows the page ratio. `BENCH_DPR=2` reproduces a
 Retina screen. A non-1 ratio is appended to the result label
-(`baseline` → `baseline-dpr2`), so it never merges into DPR-1 results.
+(`baseline` → `baseline-dpr2`, `-dpr1p5` for 1.5), so it never merges into
+DPR-1 results.
 
 **GL scene stats.** Each run records `glStatsPostLoad` and `glStatsPostDrag`
 (see `lib/glSceneStats.mjs`):
@@ -152,10 +153,21 @@ is the real platform code path.
 - Payload: each target collection's `GetCollectionData` response byte length,
   requested projection types, and `includeCore` flag are stored under
   `graphqlPayload`. This verifies that active-only requests reduce transfer
-  size rather than merely changing retained heap.
+  size rather than merely changing retained heap. Real collection responses
+  pass through to the page untouched. After the run, Node re-sends the same
+  query to the backend to measure the decoded size, outside the browser. Never
+  replay large responses with `route.fulfill`: the body crosses the DevTools
+  protocol base64-encoded, and payloads of ~77 MB and up exceed its message
+  limit and crash the tab. That is why WordNet, `gemma_29_65k` and `lacan_*`
+  crashed in every run from mid-July to 2026-10-16.
 
 ## Caveats
 
+- **Synthetic payloads still go through `route.fulfill`** (there is no backend
+  to pass them through to), so they hit the same ~77 MB limit:
+  `synthetic_500k` is 53 MB, and `synthetic_1m` (~106 MB) will crash the tab
+  for that reason, whatever the memory. Serving synthetic bodies from a local
+  HTTP server would remove the limit.
 - **The 1M target remains opt-in**: historical runs crashed under memory
   pressure, but their headline heap reading included uncollected parse garbage
   and is not a valid retained-heap measurement. Establish the new labeled,

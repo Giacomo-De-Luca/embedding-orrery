@@ -25,6 +25,8 @@ For pre-existing issues (code smells, duplication), see [ISSUES_REPORT.md](ISSUE
 
 **Fix:** Retrieve item IDs per topic from DuckDB (`topic_assignments` table), then batch-fetch embeddings from ChromaDB by ID. This removes the metadata filter dependency entirely.
 
+**Status (2026-10-16): fixed.** The reducer now receives embedding centroids computed from the in-memory assignments (`TopicCentroidService.centroids_for_assignments`) and falls back to c-TF-IDF with a warning when they are unavailable. See `TOPIC_SEMANTIC_SEARCH.md`.
+
 ---
 
 ### B-NEW-2: LLM label output not validated

@@ -99,10 +99,90 @@ class TestComputeTopicEmbeddings:
         assert embeddings.shape == (10, 50)  # 10 topics x 50 words
         assert isinstance(embeddings, np.ndarray)
 
-    def test_compute_semantic_embeddings_without_chromadb(self, reducer):
-        """Test semantic embeddings fail without ChromaDB client."""
-        with pytest.raises(ValueError, match="chromadb_client and collection_name required"):
+    def test_semantic_embeddings_require_precomputed_centroids(self, reducer):
+        """Semantic mode without injected centroids fails loudly (no zero vectors)."""
+        with pytest.raises(ValueError, match="precomputed topic centroids"):
             reducer.compute_topic_embeddings(use_ctfidf=False)
+
+    def test_semantic_embeddings_reject_row_count_mismatch(
+        self, sample_documents_df, sample_topics_data, sample_ctfidf_matrix, sample_ctfidf_words
+    ):
+        reducer = TopicReducer(
+            documents_df=sample_documents_df,
+            topics_data=sample_topics_data,
+            ctfidf_matrix=sample_ctfidf_matrix,
+            ctfidf_words=sample_ctfidf_words,
+            topic_embeddings=np.ones((3, 4)),
+        )
+        with pytest.raises(ValueError, match="rows"):
+            reducer.compute_topic_embeddings(use_ctfidf=False)
+
+
+def _semantic_reducer(topic_ids, centroids):
+    """Reducer over 5 docs per topic whose semantic centroids are given explicitly."""
+    topics = [t for t in topic_ids for _ in range(5)]
+    documents_df = pd.DataFrame({
+        "Document_ID": range(len(topics)),
+        "Document": [f"topic{t} sample text number{i}" for i, t in enumerate(topics)],
+        "Topic": topics,
+    })
+    topics_data = {t: [(f"topic{t}", 0.9)] for t in topic_ids}
+    matrix = sp.random(len(topic_ids), 20, density=0.5, format="csr", random_state=0)
+    words = np.array([f"w{i}" for i in range(20)])
+    return TopicReducer(
+        documents_df=documents_df,
+        topics_data=topics_data,
+        ctfidf_matrix=matrix,
+        ctfidf_words=words,
+        topic_embeddings=np.asarray(centroids, dtype=np.float64),
+    )
+
+
+class TestSemanticReduction:
+    """Semantic (embedding-centroid) similarity drives which topics merge."""
+
+    def test_fixed_n_merges_the_closest_pair(self):
+        reducer = _semantic_reducer(
+            [0, 1, 2], [[1.0, 0.0, 0.0], [0.95, 0.05, 0.0], [0.0, 0.0, 1.0]]
+        )
+        result = reducer.reduce_to_n_topics(n_topics=2, use_ctfidf=False)
+
+        mapping = result.topic_mappings
+        assert mapping[0] == mapping[1]
+        assert mapping[2] != mapping[0]
+
+    def test_noise_row_is_skipped_by_position(self):
+        # Rows follow sorted(topics_data): -1 first. The noise row points at
+        # topic 2 so a mis-aligned slice would merge the wrong pair.
+        reducer = _semantic_reducer(
+            [-1, 0, 1, 2],
+            [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.95, 0.05, 0.0], [0.0, 0.0, 1.0]],
+        )
+        result = reducer.reduce_to_n_topics(n_topics=3, use_ctfidf=False)
+
+        mapping = result.topic_mappings
+        assert mapping[-1] == -1
+        assert mapping[0] == mapping[1]
+        assert mapping[2] != mapping[0]
+
+    def test_auto_merges_tight_groups(self):
+        reducer = _semantic_reducer(
+            [0, 1, 2, 3, 4, 5],
+            [
+                [1.0, 0.0, 0.0],
+                [0.99, 0.01, 0.0],
+                [0.98, 0.02, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.01, 0.99],
+                [0.0, 0.02, 0.98],
+            ],
+        )
+        result = reducer.auto_reduce_topics(use_ctfidf=False)
+
+        mapping = result.topic_mappings
+        assert mapping[0] == mapping[1] == mapping[2]
+        assert mapping[3] == mapping[4] == mapping[5]
+        assert mapping[0] != mapping[3]
 
 
 class TestReduceToNTopics:

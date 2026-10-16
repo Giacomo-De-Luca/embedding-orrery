@@ -11,7 +11,7 @@
     "bench:2d": "node bench.mjs 2d",
     "bench:2d-topics": "node bench.mjs 2d-topics",
     "bench:2d-density": "node bench.mjs 2d-density",
-    "bench:all": "node bench.mjs 3d; node bench.mjs 3d-topics; node bench.mjs 3d-nebula; node bench.mjs 2d"
+    "bench:all": "node bench.mjs 3d; node bench.mjs 3d-topics; node bench.mjs 3d-nebula; node bench.mjs 2d; node bench.mjs 2d-topics; node bench.mjs 2d-density"
   },
   "dependencies": {
     "playwright-core": "^1.53.0"

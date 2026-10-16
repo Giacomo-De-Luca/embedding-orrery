@@ -255,6 +255,14 @@ def _create_source_duckdb(path: Path) -> None:
             True,
         ],
     )
+    client.replace_topic_centroids(
+        "topic-docs",
+        [{"level": "topic", "topic_id": 0, "member_count": 1, "centroid": [1.0, 0.0]}],
+    )
+    client.replace_topic_centroids(
+        "topic-features",
+        [{"level": "topic", "topic_id": 0, "member_count": 1, "centroid": [0.0, 1.0]}],
+    )
     client._exec(
         "INSERT INTO probes (collection_name, target_field, kind) VALUES (?, ?, ?), (?, ?, ?)",
         ["documents", "year", "ridge", "feature-vectors", "density", "ridge"],
@@ -350,6 +358,9 @@ def test_duckdb_export_selects_payloads_and_sae_rows(tmp_path: Path) -> None:
         assert flags == {"documents": True, "feature-vectors": False}
         assert connection.execute("SELECT count(*) FROM projections").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM topic_extractions").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT extraction_id, centroid FROM topic_centroids"
+        ).fetchall() == [("topic-docs", [1.0, 0.0])]
         assert connection.execute("SELECT count(*) FROM probes").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM probe_scores").fetchone() == (1,)
         assert connection.execute("SELECT predicted, probs FROM probe_scores").fetchone() == (
@@ -368,6 +379,30 @@ def test_duckdb_export_selects_payloads_and_sae_rows(tmp_path: Path) -> None:
 
     assert counts["datasets"] == 1
     assert counts["sae_features"] == 1
+
+
+def test_duckdb_export_tolerates_source_without_topic_centroids(tmp_path: Path) -> None:
+    # A production DB not yet opened by a backend that knows topic_centroids
+    # (the exporter attaches it read-only, so the table is never created).
+    source = tmp_path / "source.duckdb"
+    destination = tmp_path / "seed.duckdb"
+    _create_source_duckdb(source)
+    connection = duckdb.connect(str(source))
+    connection.execute("DROP TABLE topic_centroids")
+    connection.close()
+    payload = _payload()
+    payload["collections"][0]["include"] = {
+        "vectors": True,
+        "projections": True,
+        "topics": True,
+        "probes": True,
+    }
+    config = SeedSnapshotConfig.from_file(_write_config(tmp_path, payload), project_root=tmp_path)
+
+    counts = DuckDBSnapshotExporter(source).export(config, destination)
+
+    assert counts["topic_centroids"] == 0
+    assert counts["topic_extractions"] == 1
 
 
 def test_duckdb_export_optionally_includes_activation_examples(tmp_path: Path) -> None:

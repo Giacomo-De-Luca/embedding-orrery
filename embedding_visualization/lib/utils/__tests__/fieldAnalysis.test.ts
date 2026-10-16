@@ -12,6 +12,8 @@ import {
   computeCategoryFieldOptions,
   detectDisplayConfig,
   getFieldValues,
+  CategoricalFields,
+  type ColorFieldOption,
 } from '../fieldAnalysis';
 
 describe('fieldToDisplayName', () => {
@@ -256,5 +258,35 @@ describe('getFieldValues', () => {
     const values = getFieldValues('nonexistent', metadata);
 
     expect(values).toHaveLength(0);
+  });
+});
+
+describe('CategoricalFields', () => {
+  const option = (field: string, recommendedScale: ColorFieldOption['recommendedScale']): ColorFieldOption => ({
+    field,
+    displayName: field,
+    valueType: 'string',
+    uniqueCount: 3,
+    recommendedScale,
+  });
+  const options = [option('source', 'categorical'), option('score', 'sequential'), option('topic_label', 'categorical')];
+
+  it('lists only the categorical options, in their original order', () => {
+    expect(CategoricalFields.options(options).map(o => o.field)).toEqual(['source', 'topic_label']);
+    expect(CategoricalFields.options(undefined)).toEqual([]);
+  });
+
+  it("trusts a listed field's recommended scale", () => {
+    expect(CategoricalFields.includes('source', options, 5000)).toBe(true);
+    expect(CategoricalFields.includes('score', options, 3)).toBe(false);
+  });
+
+  it('caps the number of values of an unlisted field', () => {
+    expect(CategoricalFields.includes('unlisted', options, CategoricalFields.MAX_UNLISTED_VALUES)).toBe(true);
+    expect(CategoricalFields.includes('unlisted', options, CategoricalFields.MAX_UNLISTED_VALUES + 1)).toBe(false);
+  });
+
+  it('rejects an empty field name', () => {
+    expect(CategoricalFields.includes(null, options, 2)).toBe(false);
   });
 });

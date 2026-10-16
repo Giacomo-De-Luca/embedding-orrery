@@ -3,18 +3,18 @@
  *
  * Each marker is a filled glyph (triangles) plus an outline (line segments) sharing
  * the same four vertex buffers. The outline is only drawn when `lineWidth > 0`, and
- * plotly defaults `marker.line.width` to 0, so `update()` should not build or upload
- * outline vertices at width 0. Everything that is drawn must stay byte-identical.
+ * plotly defaults `marker.line.width` to 0 (1 only when `marker.size` is an array), so
+ * `update()` should not build or upload outline vertices at width 0. Everything that
+ * is drawn must stay byte-identical.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { RecordingGl, StackglHarness, type PointCloud } from './stackglHarness';
+import { GL_ENUMS, RecordingGl, StackglHarness, type PointCloud } from './stackglHarness';
 
 const { gl_scatter3d: createPointCloud } = StackglHarness.load();
 
 /** Bytes per vertex in each buffer: position 3×f32, colour 4×f32, glyph offset 2×f32, id u32. */
 const STRIDES = { position: 12, color: 16, glyph: 8, id: 4 };
-const GL_TRIANGLES = 4;
-const GL_LINES = 1;
+const { TRIANGLES: GL_TRIANGLES, LINES: GL_LINES } = GL_ENUMS;
 const CAMERA = {};
 
 const POSITIONS = [[0, 0, 0], [1, 2, 3], [-1, 0.5, 2]];
@@ -105,9 +105,12 @@ describe('gl-scatter3d outline geometry', () => {
     expect(uploadLengths(cloud)).toEqual(lengthsFor(ref.tri));
   });
 
-  it('draws only triangles at width 0, in every pass', () => {
+  it.each([
+    { label: 'opaque', opacity: 1 },
+    { label: 'translucent (transparent pass)', opacity: 0.5 },
+  ])('draws only triangles at width 0 in every pass: $label', ({ opacity }) => {
     const ref = referenceCounts();
-    const cloud = build({ lineWidth: 0 });
+    const cloud = build({ lineWidth: 0, opacity });
     const { draws, lineWidths } = drawCallsOf(cloud);
     expect(draws.length).toBeGreaterThan(0);
     for (const call of draws) {
@@ -146,10 +149,13 @@ describe('gl-scatter3d outline geometry', () => {
     const fresh0 = uploads(build({ lineWidth: 0 }));
     const fresh1 = uploads(build({ lineWidth: 1 }));
 
+    const ref = referenceCounts();
     const cloud = build({ lineWidth: 1 });
     cloud.update(options({ lineWidth: 0 }));
+    expect(cloud.lineVertexCount).toBe(0);
     expect(uploads(cloud)).toEqual(fresh0);
     cloud.update(options({ lineWidth: 1 }));
+    expect(cloud.lineVertexCount).toBe(ref.line);
     expect(uploads(cloud)).toEqual(fresh1);
   });
 
@@ -165,8 +171,12 @@ describe('gl-scatter3d outline geometry', () => {
       position: [[0, 0, 0], [NaN, 0, 0], [1, 1, 1]],
       color: [0.5, 0.5, 0.5, 1],
     });
-    const ids = new Uint32Array(uploads(cloud).id.slice().buffer);
-    expect(new Set(ids)).toEqual(new Set([0, 2]));
+    // Two valid points share the fill vertices; every vertex carries its point's index.
+    const ids = Array.from(new Uint32Array(uploads(cloud).id.slice().buffer));
+    const perPoint = cloud.vertexCount / 2;
+    expect(Number.isInteger(perPoint)).toBe(true);
+    expect(ids).toEqual([...Array(perPoint).fill(0), ...Array(perPoint).fill(2)]);
+    // Smoke check: the pick result decodes to the third point.
     expect(cloud.pick({ id: cloud.pickId, value: [0, 0, 2] })?.index).toBe(2);
   });
 });

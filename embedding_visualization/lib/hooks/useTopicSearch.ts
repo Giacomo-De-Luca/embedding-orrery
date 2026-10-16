@@ -1,16 +1,24 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
-import type { TopicInfo, FilterInput, DistanceMetric } from '../types/types';
-import { useSemanticSearch } from './useSemanticSearch';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useApolloClient } from '@apollo/client/react';
+import type { TopicInfo, FilterInput } from '../types/types';
+import { TOPIC_SEMANTIC_SEARCH } from '../graphql/queries';
+import { LatestRequestGate } from '../utils/latestRequestGate';
+import { resolveQueryPrompt } from '../utils/queryPrompt';
+import {
+  buildTopicFilters,
+  toTopicSearchResults,
+  type TopicSearchResult,
+  type TopicSimilarity,
+} from '../utils/topicSearchResults';
+
+export type { TopicSearchResult } from '../utils/topicSearchResults';
 
 export type TopicSearchMode = 'direct' | 'semantic';
 
-export interface TopicSearchResult {
-  topic: TopicInfo;
-  relevance: number;  // 0-1, average similarity of matched items
-  matchCount: number; // number of semantic search results in this topic
-}
+/** Topics requested per semantic topic search. */
+const TOPIC_SEARCH_LIMIT = 20;
 
 export interface UseTopicSearchReturn {
   // Search mode
@@ -24,8 +32,10 @@ export interface UseTopicSearchReturn {
   semanticQuery: string;
   setSemanticQuery: (q: string) => void;
   searchTopicsBySimilarity: () => Promise<void>;
-  semanticResults: TopicSearchResult[];
+  /** null until a search has completed for the current collection. */
+  semanticResults: TopicSearchResult[] | null;
   semanticLoading: boolean;
+  semanticError: string | null;
   // Selection
   selectedTopicIds: Set<number>;
   toggleTopic: (topicId: number) => void;
@@ -36,24 +46,35 @@ export interface UseTopicSearchReturn {
 }
 
 /**
- * Hook encapsulating topic search: direct filtering, similarity-based ranking,
- * selection state, highlight map generation, and filter generation.
+ * Hook encapsulating topic search: direct filtering, similarity-based ranking
+ * (query embedding vs. stored topic centroids, server-side), selection state,
+ * and filter generation. Selection and results reset when the collection changes.
  */
 export function useTopicSearch(
   topics: TopicInfo[] | undefined,
   collectionName: string | null,
-  distanceMetric: DistanceMetric = 'COSINE',
   queryPromptName?: string | null,
   embeddingPromptName?: string | null,
 ): UseTopicSearchReturn {
+  const client = useApolloClient();
   const [mode, setMode] = useState<TopicSearchMode>('direct');
   const [directQuery, setDirectQuery] = useState('');
   const [semanticQuery, setSemanticQuery] = useState('');
   const [selectedTopicIds, setSelectedTopicIds] = useState<Set<number>>(new Set());
-  const [semanticResults, setSemanticResults] = useState<TopicSearchResult[]>([]);
+  const [semanticResults, setSemanticResults] = useState<TopicSearchResult[] | null>(null);
   const [semanticLoading, setSemanticLoading] = useState(false);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
+  const requestGate = useRef(new LatestRequestGate());
 
-  const { findSimilarByQuery } = useSemanticSearch(collectionName);
+  // Topic ids are per collection: a selection carried over would scope searches
+  // in the next collection to unrelated topics.
+  useEffect(() => {
+    requestGate.current.invalidate();
+    setSelectedTopicIds(new Set());
+    setSemanticResults(null);
+    setSemanticError(null);
+    setSemanticLoading(false);
+  }, [collectionName]);
 
   // Direct search: filter topics by label + keywords (case-insensitive substring)
   const filteredTopics = useMemo(() => {
@@ -67,61 +88,34 @@ export function useTopicSearch(
     });
   }, [topics, directQuery]);
 
-  // Similarity search: find which topics are most relevant to a text query
+  // Similarity search: rank topics by query-centroid similarity on the backend
   const searchTopicsBySimilarity = useCallback(async () => {
-    if (!semanticQuery.trim() || !topics?.length) return;
+    if (!collectionName || !semanticQuery.trim() || !topics?.length) return;
+    const token = requestGate.current.begin();
     setSemanticLoading(true);
+    setSemanticError(null);
     try {
-      // Resolve query prompt
-      let effectivePrompt: string | null = null;
-      if (queryPromptName === 'auto' && embeddingPromptName) {
-        const map: Record<string, string> = { 'Retrieval-document': 'Retrieval-query' };
-        effectivePrompt = map[embeddingPromptName] || embeddingPromptName;
-      } else if (queryPromptName && queryPromptName !== 'auto') {
-        effectivePrompt = queryPromptName;
-      }
-
-      const results = await findSimilarByQuery(semanticQuery, 100, distanceMetric, effectivePrompt);
-      if (results === null) return; // aborted (superseded) — leave current results untouched
-      if (results.length === 0) {
-        setSemanticResults([]);
-        return;
-      }
-
-      // Group results by topic_id, compute average similarity
-      const topicMap = new Map<number, { totalSim: number; count: number }>();
-      for (const r of results) {
-        const topicId = r.metadata?.topic_id as number | undefined;
-        if (topicId === undefined || topicId === null) continue;
-        const existing = topicMap.get(topicId);
-        if (existing) {
-          existing.totalSim += r.similarity;
-          existing.count += 1;
-        } else {
-          topicMap.set(topicId, { totalSim: r.similarity, count: 1 });
-        }
-      }
-
-      // Build ranked topic results
-      const topicById = new Map(topics.map(t => [t.topicId, t]));
-      const ranked: TopicSearchResult[] = [];
-      for (const [topicId, agg] of topicMap) {
-        const topic = topicById.get(topicId);
-        if (!topic) continue;
-        ranked.push({
-          topic,
-          relevance: agg.totalSim / agg.count,
-          matchCount: agg.count,
-        });
-      }
-      ranked.sort((a, b) => b.relevance - a.relevance);
-      setSemanticResults(ranked);
+      const { data } = await client.query<{ topicSemanticSearch: TopicSimilarity[] }>({
+        query: TOPIC_SEMANTIC_SEARCH,
+        variables: {
+          collectionName,
+          query: semanticQuery,
+          limit: TOPIC_SEARCH_LIMIT,
+          queryPrompt: resolveQueryPrompt(queryPromptName, embeddingPromptName),
+        },
+        fetchPolicy: 'no-cache',
+      });
+      if (!requestGate.current.isLatest(token)) return; // superseded or collection changed
+      setSemanticResults(toTopicSearchResults(data?.topicSemanticSearch ?? [], topics));
     } catch (err) {
+      if (!requestGate.current.isLatest(token)) return;
       console.error('Topic similarity search error:', err);
+      setSemanticResults(null);
+      setSemanticError(err instanceof Error ? err.message : 'Topic search failed');
     } finally {
-      setSemanticLoading(false);
+      if (requestGate.current.isLatest(token)) setSemanticLoading(false);
     }
-  }, [semanticQuery, topics, findSimilarByQuery, distanceMetric, queryPromptName, embeddingPromptName]);
+  }, [client, collectionName, semanticQuery, topics, queryPromptName, embeddingPromptName]);
 
   // Selection handlers
   const toggleTopic = useCallback((topicId: number) => {
@@ -140,29 +134,18 @@ export function useTopicSearch(
     if (!topics) return;
     // In direct mode, select filtered topics; in semantic mode, select result topics
     if (mode === 'direct') {
-      const q = directQuery.toLowerCase().trim();
-      const toSelect = q
-        ? topics.filter(t => t.label?.toLowerCase().includes(q) || t.keywords.some(k => k.word.toLowerCase().includes(q)))
-        : topics;
-      setSelectedTopicIds(new Set(toSelect.map(t => t.topicId)));
+      setSelectedTopicIds(new Set(filteredTopics.map(t => t.topicId)));
     } else {
-      setSelectedTopicIds(new Set(semanticResults.map(r => r.topic.topicId)));
+      setSelectedTopicIds(new Set((semanticResults ?? []).map(r => r.topic.topicId)));
     }
-  }, [topics, mode, directQuery, semanticResults]);
+  }, [topics, mode, filteredTopics, semanticResults]);
 
   const clearAll = useCallback(() => {
     setSelectedTopicIds(new Set());
   }, []);
 
   // Build topic filters for scoped semantic search
-  const topicFilters: FilterInput[] | undefined = useMemo(() => {
-    if (selectedTopicIds.size === 0) return undefined;
-    const ids = Array.from(selectedTopicIds);
-    if (ids.length === 1) {
-      return [{ field: 'topic_id', operator: 'EQ', value: ids[0] }];
-    }
-    return [{ field: 'topic_id', operator: 'IN', value: ids }];
-  }, [selectedTopicIds]);
+  const topicFilters = useMemo(() => buildTopicFilters(selectedTopicIds), [selectedTopicIds]);
 
   return {
     mode,
@@ -175,6 +158,7 @@ export function useTopicSearch(
     searchTopicsBySimilarity,
     semanticResults,
     semanticLoading,
+    semanticError,
     selectedTopicIds,
     toggleTopic,
     selectAll,

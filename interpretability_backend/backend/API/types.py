@@ -477,7 +477,7 @@ class SimilarityMeasure(Enum):
 
 @strawberry.enum
 class FilterOperator(Enum):
-    """Filter operators for ChromaDB where clauses."""
+    """Filter operators, resolved in DuckDB (metadata JSON or topic assignments)."""
 
     EQ = "$eq"
     NE = "$ne"
@@ -575,6 +575,20 @@ class SemanticSearchResult:
     distance: float
     similarity: float
     embedding: list[float] | None = None
+
+
+@strawberry.type
+class TopicSimilarityResult:
+    """A topic ranked by similarity between a query and its embedding centroid.
+
+    When one of the topic's subtopics matched better than the topic as a
+    whole, ``matched_subtopic_*`` names it.
+    """
+
+    topic_id: int
+    similarity: float
+    matched_subtopic_id: int | None = None
+    matched_subtopic_label: str | None = None
 
 
 @strawberry.type
