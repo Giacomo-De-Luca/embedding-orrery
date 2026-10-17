@@ -178,6 +178,17 @@ export class RecordingGl {
     this.lineWidths.length = 0;
   }
 
+  /** The latest uploaded bytes of a gl-scatter3d cloud's four vertex buffers. */
+  uploadsOf(cloud: PointCloud): { position: Uint8Array; color: Uint8Array; glyph: Uint8Array; id: Uint8Array } {
+    const bytes = (buffer: { handle: object }) => this.bufferBytes.get(buffer.handle) ?? new Uint8Array(0);
+    return {
+      position: bytes(cloud.pointBuffer),
+      color: bytes(cloud.colorBuffer),
+      glyph: bytes(cloud.glyphBuffer),
+      id: bytes(cloud.idBuffer),
+    };
+  }
+
   private property(prop: string | symbol): unknown {
     // `then` must stay undefined, or the context would look like a promise to `await`.
     if (typeof prop !== 'string' || prop === 'then') return undefined;

@@ -51,15 +51,7 @@ function build(overrides: Record<string, unknown> = {}): PointCloud {
 }
 
 /** The latest uploaded bytes of each of the cloud's four buffers. */
-function uploads(cloud: PointCloud): { position: Uint8Array; color: Uint8Array; glyph: Uint8Array; id: Uint8Array } {
-  const bytes = (buffer: { handle: object }) => recorder.bufferBytes.get(buffer.handle) ?? new Uint8Array(0);
-  return {
-    position: bytes(cloud.pointBuffer),
-    color: bytes(cloud.colorBuffer),
-    glyph: bytes(cloud.glyphBuffer),
-    id: bytes(cloud.idBuffer),
-  };
-}
+const uploads = (cloud: PointCloud) => recorder.uploadsOf(cloud);
 
 function uploadLengths(cloud: PointCloud) {
   const u = uploads(cloud);

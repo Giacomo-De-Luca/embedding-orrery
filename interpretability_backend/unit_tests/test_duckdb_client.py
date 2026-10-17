@@ -1,6 +1,7 @@
 """Unit tests for DuckDBClient — all tables, CRUD, and search."""
 
 
+import duckdb
 import numpy as np
 import pytest
 
@@ -483,7 +484,7 @@ class TestTopicCentroids:
         db.replace_topic_centroids(ext, self.ROWS)
 
         bad = [{"level": None, "topic_id": 9, "member_count": 1, "centroid": [1.0, 1.0]}]
-        with pytest.raises(Exception):
+        with pytest.raises(duckdb.ConstraintException):
             db.replace_topic_centroids(ext, bad)
 
         assert db.get_topic_centroids(ext, "topic")["ids"].tolist() == [-1, 0]

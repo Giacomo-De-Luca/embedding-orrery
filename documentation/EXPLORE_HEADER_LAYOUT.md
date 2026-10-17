@@ -92,6 +92,39 @@ Shell attributes:
 The header is `pointer-events-none` and only its cells capture input, so the
 gaps between controls pass drags through to the plot.
 
+## Search results table on phones (2026-10-17)
+
+Below 768 px (`max-md:`, the same breakpoint as `MOBILE_BREAKPOINT`),
+`SimilarItemsTable` trades wrapped text for density. On desktop, cells wrap and
+can each grow to 80 px before scrolling, which left about one and a half rows
+visible in the bottom panel of a phone.
+
+- **Header**: one line. The title is `text-sm`, the description shows only the
+  query label (the "Items semantically similar to" / "Features activated by"
+  prefix is hidden) and truncates, the close button is 24 px, and the card's
+  padding is tighter (content `px-2`, header `pl-4 pr-2`). Column headers are
+  32 px tall with `text-xs`.
+- **Rows**: every cell stays on one line (`whitespace-nowrap`, `text-xs`,
+  `py-1`), about 24 px a row. Overflow scrolls horizontally *inside the cell*:
+  `CellScroll` mounts a horizontal Radix scrollbar. Without one, Radix hides
+  x-overflow. A swipe that reaches the cell's end chains to the table's own
+  horizontal scroll.
+- **Fixed layout**: the table is `table-layout: fixed` on phones, so one-line
+  text cannot widen its column. Column widths come from the header row.
+- **Narrower columns**: `ResultsTableLayout.columnWidths(isMobile)`
+  (`lib/utils/resultsTableLayout.ts`, unit-tested) gives phones widths that fit
+  ID, Label and Similarity side by side (≤ 340 px). Only the widths go through
+  JS (`useIsMobile`, since tanstack sizes are JS). Everything else is CSS
+  variants, so the layout doesn't flash.
+- **Title alignment**: the effect that puts the description over the Label
+  column now measures padding, gap and border with `getComputedStyle`
+  (`ResultsTableLayout.titleColumnWidth`). The old hard-coded 32/16/8/1 px
+  would have broken with the mobile padding.
+
+Desktop rendering is unchanged. There, wrapped cells set the column's
+min-content width, so the new horizontal cell scrollbar never has overflow to
+show. Landscape phones (≥ 768 px wide) get the desktop table.
+
 ## Files
 
 - `app/globals.css`: the "Explore page chrome" block (grid templates,

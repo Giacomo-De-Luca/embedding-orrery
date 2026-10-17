@@ -23,6 +23,9 @@ import { ArrowUpDown, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
 import type { SemanticSearchResult } from '../../lib/types/types';
 import { getCategoryLabel, getCategoryDisplayName } from '../../lib/utils/categoryColors';
+import { ResultsTableLayout } from '../../lib/utils/resultsTableLayout';
+import { useIsMobile } from '../../lib/hooks/use-mobile';
+import { cn } from '@/lib/utils/utils';
 import { ScrollArea, ScrollBar } from '@/lib/ui-primitives/scroll-area';
 
 interface SimilarItemsTableProps {
@@ -53,13 +56,20 @@ const EXCLUDE_METADATA_FIELDS = new Set([
   'text',
 ]);
 
-// Overlay-scrollbar wrapper for tall cell content (replaces native overflow-y-auto,
-// whose permanent track looks heavy inside cells). Text styles go on the root and
-// inherit; the height cap must be on the viewport or the cell silently stops scrolling.
+// Overlay-scrollbar wrapper for cell content (replaces native overflow-y-auto, whose
+// permanent track looks heavy inside cells). Desktop wraps text and scrolls tall cells
+// vertically; phones keep every cell on one line and scroll it horizontally (the table
+// is layout-fixed there, so one-line text cannot widen its column). Text styles go on
+// the root and inherit; the height cap must be on the viewport or the cell silently
+// stops scrolling.
 function CellScroll({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <ScrollArea className={className} viewportClassName="max-h-20">
+    <ScrollArea
+      className={cn('whitespace-normal max-md:whitespace-nowrap max-md:text-xs', className)}
+      viewportClassName="max-h-20"
+    >
       {children}
+      <ScrollBar orientation="horizontal" className="h-1.5" />
     </ScrollArea>
   );
 }
@@ -79,6 +89,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
   ]);
 
   const hasCategory = results?.some(r => r.category && r.category.length > 0);
+  const isMobile = useIsMobile();
 
   // Detect available metadata fields from the first result
   const metadataFields = React.useMemo(() => {
@@ -97,14 +108,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
   }, [results, categoryField]);
 
   const columns: ColumnDef<SemanticSearchResult>[] = React.useMemo(() => {
+    const widths = ResultsTableLayout.columnWidths(isMobile);
     const cols: ColumnDef<SemanticSearchResult>[] = [
       // ID column
       {
         accessorKey: 'id',
         header: 'ID',
-        size: 130,
-        minSize: 80,
-        maxSize: 150,
+        ...widths.id,
         cell: ({ row }) => (
           <CellScroll className="font-mono text-xs">
             {row.getValue('id')}
@@ -115,9 +125,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       {
         accessorKey: 'label',
         header: 'Label',
-        size: 150,
-        minSize: 100,
-        maxSize: 250,
+        ...widths.label,
         cell: ({ row }) => (
           <CellScroll className="font-medium">
             {row.getValue('label')}
@@ -127,32 +135,30 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       // Similarity column with progress bar
       {
         accessorKey: 'similarity',
-        size: 200,
-        minSize: 180,
-        maxSize: 250,
+        ...widths.similarity,
         header: ({ column }) => {
           return (
             <Button
               variant="ghost"
               onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-              className="-ml-4"
+              className="-ml-4 max-md:h-7 max-md:text-xs"
             >
               {isActivationResults ? 'Activation' : 'Similarity'}
-              <ArrowUpDown className="ml-2 h-4 w-4" />
+              <ArrowUpDown className="ml-2 h-4 w-4 max-md:ml-1 max-md:size-3" />
             </Button>
           );
         },
         cell: ({ row }) => {
           const similarity = parseFloat(row.getValue('similarity'));
           return (
-            <div className="flex items-center gap-2">
-              <div className="flex-1 bg-muted rounded-full h-2 min-w-[60px]">
+            <div className="flex items-center gap-2 max-md:gap-1.5">
+              <div className="flex-1 bg-muted rounded-full h-2 min-w-[60px] max-md:h-1.5 max-md:min-w-10">
                 <div
-                  className="bg-primary h-2 rounded-full transition-all"
+                  className="bg-primary h-full rounded-full transition-all"
                   style={{ width: `${similarity * 100}%` }}
                 />
               </div>
-              <span className="text-sm font-medium tabular-nums whitespace-nowrap">
+              <span className="text-sm font-medium tabular-nums whitespace-nowrap max-md:text-xs">
                 {(similarity * 100).toFixed(1)}%
               </span>
             </div>
@@ -166,14 +172,12 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       cols.push({
         accessorKey: 'category',
         header: getCategoryDisplayName(categoryField ?? null),
-        size: 120,
-        minSize: 80,
-        maxSize: 150,
+        ...widths.category,
         cell: ({ row }) => {
           const category = row.getValue('category') as string;
           return category ? (
             <CellScroll>
-              <Badge variant="outline" className="uppercase">
+              <Badge variant="outline" className="uppercase max-md:py-0">
                 {getCategoryLabel(categoryField ?? null, category)}
               </Badge>
             </CellScroll>
@@ -182,15 +186,13 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       });
     }
 
-    // Add document/content column - allows text wrapping
+    // Add document/content column - wraps on desktop, one scrollable line on phones
     cols.push({
       accessorKey: 'document',
       header: 'Content',
-      size: 300,
-      minSize: 200,
-      maxSize: 500,
+      ...widths.document,
       cell: ({ row }) => (
-        <CellScroll className="text-sm text-muted-foreground whitespace-normal">
+        <CellScroll className="text-sm text-muted-foreground">
           {row.getValue('document')}
         </CellScroll>
       ),
@@ -201,9 +203,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
       cols.push({
         id: `metadata_${field}`,
         header: fieldToDisplayName(field),
-        size: 180,
-        minSize: 150,
-        maxSize: 350,
+        ...widths.metadata,
         cell: ({ row }) => {
           const value = row.original.metadata?.[field];
           if (value === null || value === undefined) {
@@ -215,7 +215,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
               typeof v === 'object' ? JSON.stringify(v) : String(v)
             ).join(', ');
             return (
-              <CellScroll className="text-sm whitespace-normal">
+              <CellScroll className="text-sm">
                 {preview}{value.length > 2 ? ` (+${value.length - 2} more)` : ''}
               </CellScroll>
             );
@@ -223,14 +223,14 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
           // Handle objects
           if (typeof value === 'object') {
             return (
-              <CellScroll className="text-sm font-mono whitespace-normal">
+              <CellScroll className="text-sm font-mono">
                 {JSON.stringify(value)}
               </CellScroll>
             );
           }
           // Handle primitives
           return (
-            <CellScroll className="text-sm whitespace-normal">
+            <CellScroll className="text-sm">
               {String(value)}
             </CellScroll>
           );
@@ -239,7 +239,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
     }
 
     return cols;
-  }, [hasCategory, categoryField, metadataFields]);
+  }, [hasCategory, categoryField, metadataFields, isMobile]);
 
   const table = useReactTable({
     data: results || [],
@@ -256,9 +256,10 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
   const headerRef = React.useRef<HTMLDivElement>(null);
   const tableWrapRef = React.useRef<HTMLDivElement>(null);
 
-  // Keep the header description aligned over the second table column. The table uses
-  // table-layout auto, so the ID column can render wider than its configured size —
-  // measure the real width and set the title cell's min-width accordingly.
+  // Keep the header description aligned over the second table column. The desktop
+  // table uses table-layout auto, so the ID column can render wider than its configured
+  // size, and padding/gaps differ per breakpoint: measure all of it and set the title
+  // cell's min-width accordingly.
   React.useLayoutEffect(() => {
     const headerEl = headerRef.current;
     const wrapEl = tableWrapRef.current;
@@ -267,10 +268,17 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
     if (!firstTh) return;
 
     const update = () => {
-      // 1 = table wrapper border, 8 = cell px-2, 32 = header pl-8, 16 = header gap-4
-      const labelTextLeft = wrapEl.getBoundingClientRect().left + 1 + firstTh.offsetWidth + 8;
-      const titleLeft = headerEl.getBoundingClientRect().left + 32;
-      headerEl.style.setProperty('--title-col', `${Math.max(labelTextLeft - titleLeft - 16, 0)}px`);
+      const headerStyle = getComputedStyle(headerEl);
+      const titleCol = ResultsTableLayout.titleColumnWidth({
+        tableLeft: wrapEl.getBoundingClientRect().left,
+        tableBorder: wrapEl.clientLeft,
+        firstColumnWidth: firstTh.offsetWidth,
+        cellPaddingLeft: parseFloat(getComputedStyle(firstTh).paddingLeft),
+        headerLeft: headerEl.getBoundingClientRect().left,
+        headerPaddingLeft: parseFloat(headerStyle.paddingLeft),
+        headerGap: parseFloat(headerStyle.columnGap),
+      });
+      headerEl.style.setProperty('--title-col', `${titleCol}px`);
     };
     update();
     const ro = new ResizeObserver(update);
@@ -284,38 +292,39 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
   }
 
   return (
-    <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm py-3 gap-2">
-      {/* pl-8 puts the title on the ID cell text; the title cell's min-width is set by
-          the measurement effect (--title-col) so the description starts over the second
-          column's cell text, tracking the ID column's real rendered width. */}
-      <CardHeader ref={headerRef} className="grid grid-cols-[max-content_1fr_auto] grid-rows-1 items-center gap-4 shrink-0 pl-8">
-        <CardTitle className="text-base leading-5 py-1 min-w-(--title-col,115px)">{isActivationResults ? 'Top Activated Features' : 'Similar Items'}</CardTitle>
+    <Card className="h-full flex flex-col min-w-0 backdrop-blur-sm py-3 gap-2 max-md:py-1.5 max-md:gap-1">
+      {/* pl-8 puts the title on the ID cell text (pl-4 over the phones' px-2 content);
+          the title cell's min-width is set by the measurement effect (--title-col) so the
+          description starts over the second column's cell text, tracking the ID column's
+          real rendered width. Phones get a single line: the bare query label, truncated. */}
+      <CardHeader ref={headerRef} className="grid grid-cols-[max-content_1fr_auto] grid-rows-1 items-center gap-4 shrink-0 pl-8 max-md:gap-2 max-md:pl-4 max-md:pr-2">
+        <CardTitle className="text-base leading-5 py-1 min-w-(--title-col,115px) max-md:text-sm max-md:py-0">{isActivationResults ? 'Top Activated Features' : 'Similar Items'}</CardTitle>
         {queryLabel && (
-          <CardDescription>
+          <CardDescription className="max-md:truncate max-md:text-xs">
             {isActivationResults
-              ? <>Features activated by <span className="font-semibold text-foreground">&ldquo;{queryLabel}&rdquo;</span></>
-              : <>Items semantically similar to <span className="font-semibold text-foreground">{queryLabel}</span></>
+              ? <><span className="max-md:hidden">Features activated by </span><span className="font-semibold text-foreground max-md:font-medium">&ldquo;{queryLabel}&rdquo;</span></>
+              : <><span className="max-md:hidden">Items semantically similar to </span><span className="font-semibold text-foreground max-md:font-medium">{queryLabel}</span></>
             }
           </CardDescription>
         )}
         {onClose && (
-          <Button variant="ghost" size="icon" className="ml-auto h-7 w-7" onClick={onClose}>
-            <X className="h-4 w-4" />
+          <Button variant="ghost" size="icon" className="ml-auto h-7 w-7 max-md:size-6" onClick={onClose}>
+            <X className="h-4 w-4 max-md:size-3.5" />
             <span className="sr-only">Close results</span>
           </Button>
         )}
       </CardHeader>
-      <CardContent className="flex-1 min-h-0">
+      <CardContent className="flex-1 min-h-0 max-md:px-2">
         <div ref={tableWrapRef} className="h-full rounded-md border overflow-hidden">
           <ScrollArea className="h-full">
-            <Table style={{ minWidth: table.getTotalSize() }}>
+            <Table className="max-md:table-fixed" style={{ minWidth: table.getTotalSize() }}>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (
                   <TableRow key={headerGroup.id}>
                     {headerGroup.headers.map((header) => (
                       <TableHead
                         key={header.id}
-                        className="relative"
+                        className="relative max-md:h-8 max-md:text-xs"
                         style={{
                           width: header.getSize(),
                           minWidth: header.column.columnDef.minSize,
@@ -350,7 +359,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
                       {row.getVisibleCells().map((cell) => (
                         <TableCell
                           key={cell.id}
-                          className="align-top whitespace-normal"
+                          className="align-top whitespace-normal max-md:py-1"
                           style={{
                             width: cell.column.getSize(),
                             minWidth: cell.column.columnDef.minSize,
