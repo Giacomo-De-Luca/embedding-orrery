@@ -81,7 +81,8 @@ DPR-1 results.
 - `traceCount`
 - 3D only: `glObjects`, `pointClouds`, `fillVertices`, `outlineVertices` and
   `vertexMB` (marker vertex buffers at 40 B per vertex)
-- `pickStats`, once the fork exposes them
+- `pickStats` (3D only): gl-plot3d's pick-pass counters `buffers`, `renders`,
+  `deferredFrames` and `readbacks` (fork change 4)
 - `canvas`, the GL canvas backing size vs CSS size and their ratio
 
 Pick counters accumulate over the page's life, so post-drag minus post-load

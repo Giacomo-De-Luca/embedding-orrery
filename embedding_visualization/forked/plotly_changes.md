@@ -45,22 +45,19 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 
 **File:** `stackgl_modules/index.js`, gl-plot3d `createScene` (module 4100) and gl-select-static (module 3589); search for `[fork]`.
 
-**Problem:** gl-plot3d hit-tests the mouse against offscreen pick buffers. Each buffer holds up to 254 pickable objects, so plotly's one-trace-per-category scenes need many of them (11 for WordNet coloured by topic). After each pick pass, every buffer is copied to the CPU with a full `readPixels`, 1 ms later. `redraw()` re-rendered every pick buffer on every frame the camera moved, and read it back, although nothing can be picked while the image moves. On top of that:
-- `SelectBuffer.end()`'s `clearTimeout` guard was inverted (`if(!this._readTimeout)`), so two pick passes in one task read every buffer twice.
-- New pick buffers were allocated at drawing-buffer size, pixelRatio² larger than the shape `renderPick()` gives them, and the CPU copy never shrinks.
-- The mouse handler answered from whatever copy was on the CPU, even one from before the camera moved.
+**Problem:** gl-plot3d resolves the mouse position by drawing every object a second time into offscreen pick buffers (up to 254 pickable objects each, so 11 for WordNet coloured by topic) and copying each buffer to the CPU with a full `readPixels` 1 ms later. `redraw()` did that on every frame the camera moved, although a moving frame's pick image is stale by the next frame and nothing is queried while the button is held. Three smaller faults sat next to it:
+- `SelectBuffer.end()` guarded its `clearTimeout` with `if(!this._readTimeout)`, so two pick passes in one task scheduled two readbacks per buffer.
+- New pick buffers were allocated at drawing-buffer size, four times the shape `renderPick()` gives them at pixel ratio 2, and the CPU copy never shrinks.
+- The mouse handler answered from whatever copy was on the CPU, including one from before the camera moved.
 
 **Fix:**
-- `redraw()` renders the pick pass only when the camera did not move this frame (`pickNow = pickDirty && !cameraMoved`). A deferred pass keeps `pickDirty` set, and the first still frame renders it; that frame is forced through the idle early return.
-- The mouse handler is lifted into a named `handleMouse`. While a pick pass or readback is pending (`pickPending()`), it does not query: a hover is kept as `deferredHover` and replayed by the buffers' new `onread` hook once every buffer has been read; a press is dropped, so it can't turn into a click on whatever is under the cursor later.
-- gl-select-static gets an `onread` hook and a `readPending` getter, and the guard is fixed to `if(this._readTimeout)`.
+- `redraw()` renders the pick pass only when the camera did not move this frame (`pickNow = pickDirty && !cameraMoved`). A deferred pass keeps `pickDirty` set; the first still frame renders it, and is forced through the idle early return to do so.
+- The mouse handler is a named `handleMouse`. While the pick is stale (`pickStale()`: a deferred pass, or a readback not yet run) a hover is not queried: it is kept as `deferredHover` and replayed by the buffers' new `onread` hook once every buffer has been read. A press instead brings the pick up to date at once (`renderPickNow()`: the deferred pass if there is one, then the pending readbacks), so a click is never lost or answered from a stale image; a press during motion costs one pick pass.
+- gl-select-static: the `clearTimeout` guard is fixed, `onread(buffer)` runs after each readback, a `pending` getter reports a scheduled readback, `readNow()` runs it synchronously, and the readback unbinds the pick framebuffer instead of leaving it bound.
 - New pick buffers are created at pick resolution (`max(1, drawingBuffer / pixelRatio)`).
-- `scene.pickStats` counts `renders` (pick passes), `deferredFrames`, `readbacks` (one per buffer read) and the current `buffers`. Tests and the FPS benchmark read it.
+- `scene.pickStats` counts `renders` (pick passes), `deferredFrames`, `readbacks` (one per buffer read) and the current `buffers`; the fork tests and the FPS benchmark read it. The counters accumulate for the scene's life.
 
-**Behaviour change:**
-- A mouse move while the camera is moving (during a wheel zoom, a fly-to, or the camera's easing after a drag is released) clears the hover label. The move is answered on the first still frame after the camera stops.
-- A press that lands while a pick is pending (during a fly-to, or within a frame or two of the camera stopping) is ignored.
-- The main render, the pick shaders and plotly's `scene.js` are unchanged.
+**Behaviour change:** a mouse move while the camera is moving (wheel zoom, fly-to, or the camera's easing after a drag ends) clears the hover label and is answered on the first still frame. A press during motion still clicks on what is under the cursor at that moment, as before. The main render, the pick shaders and plotly's `scene.js` are unchanged.
 
 **Tests:** `forked/__tests__/glPlot3dPickDeferral.test.ts`.
 

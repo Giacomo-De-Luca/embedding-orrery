@@ -14,7 +14,7 @@ A series of targeted fixes to the Explore page's scatter plots, driven by a veri
 | 5 | Apollo's lazy query keeps the previous collection's whole payload after a switch | `useEmbeddingData.ts` | Planned |
 | 3 | The 2D density overlay allocates four RGBA32F framebuffers (~410 MiB at 1600×950 on Retina) | `densityRenderer/` | Planned (A/B/C comparison first) |
 
-Future work, not scheduled: batching the nebula haze sprites into one draw call; releasing WebGL contexts on unmount; 2D trace grouping (decided after the `2d-topics` measurement); gl-plot3d's pick bookkeeping not re-synced after plotly sorts objects (moot with one pick buffer); the typed-array pool never freeing; the pick framebuffer left bound after a readback.
+Future work, not scheduled: batching the nebula haze sprites into one draw call; releasing WebGL contexts on unmount; 2D trace grouping (decided after the `2d-topics` measurement); gl-plot3d's pick bookkeeping not re-synced after plotly sorts objects (moot with one pick buffer); the typed-array pool never freeing.
 
 ## How each step is measured
 
@@ -70,34 +70,42 @@ The replayed body travels base64-encoded over the DevTools protocol, which infla
 
 ## Step 1: no pick pass while the camera moves
 
-**Change.** gl-plot3d hit-tests the mouse against offscreen pick buffers, up to 254 pickable objects each (11 buffers for WordNet by topic). Each pass is copied to the CPU with a full `readPixels` 1 ms later. Before this step, it re-rendered and read back every buffer on every frame the camera moved, which is useless while the image moves. Now:
+**Change.** gl-plot3d resolves the mouse against offscreen pick buffers: every object is drawn a second time into them (up to 254 objects per buffer, 11 buffers for WordNet by topic) and each buffer is copied to the CPU with a full `readPixels` 1 ms later. Before this step that happened on every frame the camera moved, which is wasted: the image is stale by the next frame, and the handler never queries while the button is held. Now:
 
-- The pick pass renders only on frames where the camera is still. A pass deferred while moving runs on the first still frame.
-- A hover that arrives while the pick is pending is not answered from the stale CPU copy. It is replayed once every buffer has been read back. A press in that window is dropped, so it can't become a click on whatever is under the cursor later.
-- The inverted `clearTimeout` guard in gl-select-static is fixed, so two passes in one task read each buffer once, not twice.
-- New pick buffers are allocated at pick resolution. The CPU copy is no longer pixelRatio² too large: 2 MiB instead of 8 MiB for an 800×600 plot at ratio 2.
-- `scene.pickStats` counts pick `renders`, `deferredFrames`, `readbacks` and current `buffers`; the benchmark's `glStatsPostDrag` reports them.
+- The pick pass renders only on frames where the camera is still. A pass deferred during motion runs on the first still frame, which is forced to render even if nothing else changed.
+- A hover that arrives while the pick is stale is not answered from the old CPU copy. It is remembered and replayed once every buffer has been read back, so the hover label returns about one frame after the camera stops.
+- A press while the pick is stale brings it up to date immediately (the deferred pass if there is one, then the pending readbacks), so a click right after a drag or wheel stop, or during a fly-to, lands on what is under the cursor and is never dropped. A press during motion costs one pick pass, instead of one per frame.
+- gl-select-static's inverted `clearTimeout` guard is fixed (two passes in one task read each buffer once, not twice), and the readback no longer leaves the pick framebuffer bound.
+- New pick buffers are allocated at pick resolution. The CPU copy was four times too large at pixel ratio 2: 2 MiB instead of 8 MiB per buffer for an 800×600 plot, so about 260 MiB less for WordNet's 11 buffers at a typical window size.
+- `scene.pickStats` counts pick `renders`, `deferredFrames`, `readbacks` and the current `buffers`; the benchmark records it post-load and post-drag.
 
 Details: `embedding_visualization/forked/plotly_changes.md`, change 4.
 
-**Tests.** `embedding_visualization/forked/__tests__/glPlot3dPickDeferral.test.ts`, 15 cases on the real bundle. They use a fake camera, a manual frame loop and fake timers for the readback. The pick image encodes which pass rendered it, so a test can tell a stale hit from a fresh one. Eleven failed before the patch:
+**Tests.** `embedding_visualization/forked/__tests__/glPlot3dPickDeferral.test.ts`, 18 cases on the real bundle with fake pick objects, a fake camera, a hand-stepped frame loop and fake timers for the readback. Sixteen failed before the patch (one of them only because `pickStats` did not exist yet):
+
 - no pick pass or readback on moving frames;
 - one pass and one readback per buffer on the first still frame (300 objects → 2 buffers), with the pixel ratio restored;
-- an object update while moving is deferred to the first still frame;
-- a synchronous `scene.redraw()` while moving is deferred;
-- one readback per buffer for two passes in one task;
-- pick buffers at pick resolution;
-- no hit for a hover while moving;
-- no hit while a readback is pending, then the fresh hit;
-- a skipped hover is replayed;
-- a press during a pending pick never becomes a click;
-- `pickStats` counters.
+- an update while moving is deferred to the first still frame; a synchronous `scene.redraw()` while moving defers too;
+- `pickStats` counters;
+- one readback per buffer for two passes in one task; no pick framebuffer left bound; buffers allocated at pick resolution;
+- no stale hit for a hover after the camera moved; no hit during a pending readback, then the replayed hit; only the latest deferred hover is replayed, and with two buffers only after both have been read back;
+- a press while moving renders the pick on demand and selects; a press while only the readback is pending reads back at once without a second pass; a drag's release is resolved at its own position once the camera is still.
 
-Four guards passed before and after:
-- idle frames draw nothing;
-- an update with a still camera renders the pick in the same frame;
-- a hover on a fresh pick is answered immediately;
-- a press on a fresh pick still clicks.
+Two guards passed before and after: idle frames draw nothing, and a hover on a fresh pick is answered at once.
 
-**Benchmark.** Pending: to be run by the user (commands in the step hand-off). Expected: `3d-topics` drag FPS up from 8.6, `pickStats.renders` close to 0 during the orbit, with `deferredFrames` ≈ the frames drawn.
+**Benchmark.** Pending, run by the user. The Step 2 "after" files are this step's baseline (same bundle), so only the patched runs are needed:
 
+```bash
+BENCH_RESULT_LABEL=step1-after node bench.mjs 3d-topics wordnet_senses_full
+BENCH_RESULT_LABEL=step1-after node bench.mjs 3d wordnet_senses_full
+BENCH_RESULT_LABEL=step1-after node bench.mjs 3d-topics lacan_sentences_gemini_document
+```
+
+Expected: `3d-topics` drag FPS up from 8.6 (the 2.7k main-pass draw calls remain until step 7); between post-load and post-drag `pickStats.renders` grows by about one (the first still frame after the release renders the deferred pass) while `deferredFrames` grows by about the number of frames drawn during the drag; process memory down by the smaller CPU readback copies. Camera fly-to animations are not benchmarked, so check them by hand on WordNet and Lacan: click a point or a search result and watch the flight; read the counters from the console with `document.querySelector('.js-plotly-plot')._fullLayout.scene._scene.glplot.pickStats`.
+
+| Run | Traces | Pick buffers | Renders / deferred (drag) | JS heap (post-load) | FPS median / mean |
+|---|---|---|---|---|---|
+| `3d-topics` before (`step2-after`) | 2,695 | 11 | | 1,253 MB | 8.6 / 8.0 |
+| `3d-topics` after | | | | | |
+| `3d` before (`step2-after`) | 1 | 1 | | 1,157 MB | 59.9 / 42.3 |
+| `3d` after | | | | | |

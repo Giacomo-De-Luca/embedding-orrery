@@ -6,8 +6,12 @@ encode (orjson refusals fall back to ``json.dumps``), and the deliberate
 differences — UTF-8 instead of escapes, NaN as ``null`` — must hold.
 """
 
+import dataclasses
+import datetime
+import enum
 import json
 import math
+import uuid
 
 import numpy as np
 import pytest
@@ -22,6 +26,16 @@ from backend.utils.json_encoding import encode_json_bytes
 
 def _roundtrip(data: object) -> object:
     return json.loads(encode_json_bytes(data))
+
+
+@dataclasses.dataclass
+class _Point:
+    x: int
+    y: int
+
+
+class _Kind(enum.Enum):
+    A = 1
 
 
 class TestEncodeJsonBytes:
@@ -64,6 +78,25 @@ class TestEncodeJsonBytes:
     def test_unsupported_types_still_raise_type_error(self):
         with pytest.raises(TypeError):
             encode_json_bytes({"obj": object()})
+
+    @pytest.mark.parametrize(
+        "value",
+        [datetime.datetime(2026, 1, 1), datetime.date(2026, 1, 1), _Point(1, 2)],
+        ids=["datetime", "date", "dataclass"],
+    )
+    def test_types_the_stdlib_refuses_still_raise(self, value):
+        # Over WebSocket Strawberry keeps json.dumps; HTTP must fail the same
+        # way, or an unsanitized DuckDB datetime would only break subscriptions.
+        with pytest.raises(TypeError):
+            encode_json_bytes({"value": value})
+
+    def test_uuids_and_enums_are_serialized_natively(self):
+        uid = uuid.UUID(int=1)
+        assert _roundtrip({"id": uid, "kind": _Kind.A}) == {"id": str(uid), "kind": 1}
+
+    def test_fallback_path_keeps_stdlib_nan(self):
+        # Only payloads orjson refuses take the stdlib path, which writes NaN.
+        assert b"NaN" in encode_json_bytes({"big": 2**70, "nan": math.nan})
 
 
 @strawberry.type

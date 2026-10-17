@@ -44,11 +44,13 @@ describe('StackglBufferPool.release', () => {
     const pool = fakePool([256 * KiB, MiB, 2 * MiB, 8 * MiB]);
     install(pool);
     expect(StackglBufferPool.DEFAULT_MIN_BYTES).toBe(MiB);
-    expect(StackglBufferPool.retainedBytes()).toBe(256 * KiB + 11 * MiB);
+    expect(StackglBufferPool.retainedBytes(0)).toBe(256 * KiB + 11 * MiB);
+    expect(StackglBufferPool.retainedBytes()).toBe(11 * MiB);
 
     expect(StackglBufferPool.release()).toEqual({ buffers: 3, bytes: 11 * MiB });
 
-    expect(StackglBufferPool.retainedBytes()).toBe(256 * KiB);
+    expect(StackglBufferPool.retainedBytes(0)).toBe(256 * KiB);
+    expect(StackglBufferPool.retainedBytes()).toBe(0);
     expect(pool.DATA[18]).toHaveLength(1);
     expect(pool.DATA[20]).toHaveLength(0);
     expect(pool.DATA[23]).toHaveLength(0);

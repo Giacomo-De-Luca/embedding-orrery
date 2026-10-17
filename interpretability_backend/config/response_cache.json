@@ -3,7 +3,8 @@
   "path": "/graphql",
   "root_fields": ["collection"],
   "max_bytes": 268435456,
-  "max_entry_bytes": 67108864,
+  "min_body_bytes": 262144,
+  "max_body_bytes": 268435456,
   "max_request_bytes": 65536,
   "gzip_level": 6,
   "stream_chunk_bytes": 1048576

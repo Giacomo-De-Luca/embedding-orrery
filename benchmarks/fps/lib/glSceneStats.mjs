@@ -21,6 +21,12 @@ export class GlSceneStats {
     } : null);
 
     const stats = { traceCount: gd.data.length };
+    // Idle ArrayBuffers in the stackgl typed-array pool (gl-scatter3d vertex arrays
+    // after upload). lib/utils/stackglBufferPool.ts releases the large ones.
+    const pool = globalThis.__TYPEDARRAY_POOL;
+    stats.poolRetainedMB = pool && Array.isArray(pool.DATA)
+      ? +(pool.DATA.flat().reduce((n, b) => n + b.byteLength, 0) / 1048576).toFixed(1)
+      : null;
     if (mode !== '3d') {
       stats.canvas = canvasStats(gd.querySelector('canvas.gl-canvas-context'));
       return stats;
@@ -67,6 +73,7 @@ export class GlSceneStats {
       parts.push(`pick buffers ${p.buffers} | renders ${p.renders} | deferred ${p.deferredFrames} | readbacks ${p.readbacks}`);
     }
     if (stats.canvas) parts.push(`backing ${stats.canvas.backingRatio}x`);
+    if (typeof stats.poolRetainedMB === 'number') parts.push(`pool ${stats.poolRetainedMB} MB`);
     return parts.join(' | ');
   }
 }

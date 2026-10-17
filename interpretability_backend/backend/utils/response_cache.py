@@ -7,24 +7,31 @@ parsing, GraphQL completion and encoding (WordNet: about 8 s of one core and
 stores the first response to an allow-listed query, gzipped, and replays it
 for identical requests.
 
-Who decides what. ``ResponseCacheMarkerExtension``
-(``backend/API/response_cache_extension.py``) knows GraphQL semantics and marks
-a response cacheable with the ``CACHEABLE_HEADER`` header: a query whose root
-fields are all allow-listed, executed without errors, while the cache is
-active. This middleware works on HTTP bytes: it keys requests on their
-canonical JSON body, stores marked 200 responses, strips the marker from
-every response, and serves hits.
+Who decides what:
+- ``RootFieldAllowList`` (``graphql_operations.py``) pre-filters requests on
+  their query text: only queries whose root fields are all allow-listed take
+  the cache path. Everything else passes straight through.
+- ``ResponseCacheMarkerExtension`` (``backend/API/response_cache_extension.py``)
+  marks a result cacheable after execution, with the ``CACHEABLE_HEADER``
+  response header, when it also produced no errors. The middleware strips the
+  marker from every response.
+- The middleware stores a marked 200 response whose JSON body size lies in
+  ``[min_body_bytes, max_body_bytes]`` (decided from ``Content-Length``
+  before anything is buffered), and serves hits.
 
+Details:
 - Keys: SHA-256 of the request's query, variables, operation name and
-  extensions, encoded with sorted keys (JSON key order cannot split entries).
-- Storage: gzipped bodies in a byte-budgeted LRU (``ResponseCache``).
+  extensions, encoded with sorted keys. Only ``application/json`` POSTs up to
+  ``max_request_bytes`` that do not ask for a multipart reply are keyed, so a
+  hit never answers a request the router would have rejected.
+- Storage: gzipped bodies in an LRU whose budget counts a fixed per-entry
+  overhead on top of the gzip bytes.
 - Serving: clients accepting gzip get the stored bytes as they are; others
-  get plain JSON decompressed in ``stream_chunk_bytes`` slices, so a hit never
-  materializes the whole uncompressed body.
-- Concurrency: identical misses are single-flighted (``KeyedLocks``): the first
-  request builds while the others wait, then hit.
-- Only POST bodies up to ``max_request_bytes`` are keyed; everything else
-  passes through (with the marker stripped).
+  get plain JSON decompressed in ``stream_chunk_bytes`` slices.
+- Single flight (``InFlight``): identical requests arriving while the first
+  is being built wait for its decision. Once it is stored they replay it; if
+  it will not be stored they are released as soon as that is known and build
+  their own responses concurrently.
 
 The cache runs only where data is immutable: ``enabled`` in
 ``config/response_cache.json`` and the read-only flag set (see
@@ -38,22 +45,21 @@ through untouched. See ``documentation/GRAPHQL_RESPONSE_CACHE.md``.
 
 import asyncio
 import functools
-import gzip
 import hashlib
 import logging
 import zlib
 from collections import OrderedDict, deque
-from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from typing import ClassVar
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import orjson
-from anyio import to_thread
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .http_compression import accepts_gzip
+from .graphql_operations import RootFieldAllowList
+from .http_compression import accepts_gzip, compress_gzip
 from .json_settings import JsonFileSettings
 from .resource_paths import PACKAGE_ROOT
 
@@ -69,7 +75,10 @@ _PER_REPLY_HEADERS = frozenset(
 )
 _KEY_FIELDS = ("query", "variables", "operationName", "extensions")
 _GUNZIP_INPUT_SLICE = 64 * 1024
-_POSITIVE_INT_FIELDS = ("max_bytes", "max_entry_bytes", "max_request_bytes", "stream_chunk_bytes")
+# Key string, headers, dataclass and LRU node of one entry (measured ~0.5 KB).
+_ENTRY_OVERHEAD_BYTES = 1024
+
+Decision = Callable[["CachedResponse | None"], None]
 
 
 @dataclass(frozen=True)
@@ -77,7 +86,8 @@ class ResponseCacheSettings(JsonFileSettings):
     """Tunables for ``GraphQLResponseCacheMiddleware`` (all optional in the file).
 
     ``root_fields`` are GraphQL field names as written in queries (camelCase),
-    matched against field names, never response aliases.
+    matched against field names, never response aliases. Body bounds apply
+    to the uncompressed JSON; ``max_bytes`` budgets the stored gzip bytes.
     """
 
     SETTINGS_LABEL: ClassVar[str] = "response cache settings"
@@ -87,14 +97,14 @@ class ResponseCacheSettings(JsonFileSettings):
     path: str = "/graphql"
     root_fields: tuple[str, ...] = ("collection",)
     max_bytes: int = 256 * 1024 * 1024
-    max_entry_bytes: int = 64 * 1024 * 1024
+    min_body_bytes: int = 256 * 1024
+    max_body_bytes: int = 256 * 1024 * 1024
     max_request_bytes: int = 64 * 1024
     gzip_level: int = 6
     stream_chunk_bytes: int = 1024 * 1024
 
     def __post_init__(self):
-        if not isinstance(self.enabled, bool):
-            raise ValueError(f"enabled must be true or false, got {self.enabled!r}")
+        self.require_bool("enabled")
         if not isinstance(self.path, str) or not self.path.startswith("/"):
             raise ValueError(f"path must start with '/', got {self.path!r}")
         if (
@@ -103,15 +113,21 @@ class ResponseCacheSettings(JsonFileSettings):
             or not all(isinstance(name, str) and name for name in self.root_fields)
         ):
             raise ValueError("root_fields must be a non-empty list of GraphQL field names")
-        for name in _POSITIVE_INT_FIELDS:
-            value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                raise ValueError(f"{name} must be a positive integer, got {value!r}")
-        if self.max_entry_bytes > self.max_bytes:
-            raise ValueError("max_entry_bytes cannot exceed max_bytes")
-        level = self.gzip_level
-        if not isinstance(level, int) or isinstance(level, bool) or not 1 <= level <= 9:
-            raise ValueError(f"gzip_level must be an integer in 1..9, got {level!r}")
+        for name in (
+            "max_bytes",
+            "min_body_bytes",
+            "max_body_bytes",
+            "max_request_bytes",
+            "stream_chunk_bytes",
+        ):
+            self.require_int(name, minimum=1)
+        self.require_int("gzip_level", minimum=1, maximum=9)
+        if self.min_body_bytes > self.max_body_bytes:
+            raise ValueError("min_body_bytes cannot exceed max_body_bytes")
+
+    def stores_body_of(self, size: int) -> bool:
+        """Whether a JSON body of ``size`` bytes is worth storing."""
+        return self.min_body_bytes <= size <= self.max_body_bytes
 
 
 @functools.cache
@@ -129,8 +145,9 @@ class CachedResponse:
     plain_size: int
 
     @property
-    def size(self) -> int:
-        return len(self.gzip_body)
+    def footprint(self) -> int:
+        """Bytes charged against the cache budget."""
+        return len(self.gzip_body) + _ENTRY_OVERHEAD_BYTES
 
 
 class ResponseCache:
@@ -139,9 +156,8 @@ class ResponseCache:
     Only touched from the event loop, so it needs no locking.
     """
 
-    def __init__(self, max_bytes: int, max_entry_bytes: int):
+    def __init__(self, max_bytes: int):
         self.max_bytes = max_bytes
-        self.max_entry_bytes = max_entry_bytes
         self._entries: OrderedDict[str, CachedResponse] = OrderedDict()
         self._bytes = 0
 
@@ -152,22 +168,18 @@ class ResponseCache:
         return entry
 
     def put(self, key: str, entry: CachedResponse) -> bool:
-        """Store ``entry``, evicting least recently used ones; False if too large."""
-        if entry.size > self.max_entry_bytes:
+        """Store ``entry``, evicting least recently used ones; False if it cannot fit."""
+        if entry.footprint > self.max_bytes:
             return False
         previous = self._entries.pop(key, None)
         if previous is not None:
-            self._bytes -= previous.size
+            self._bytes -= previous.footprint
         self._entries[key] = entry
-        self._bytes += entry.size
+        self._bytes += entry.footprint
         while self._bytes > self.max_bytes:
             _, evicted = self._entries.popitem(last=False)
-            self._bytes -= evicted.size
+            self._bytes -= evicted.footprint
         return True
-
-    def clear(self) -> None:
-        self._entries.clear()
-        self._bytes = 0
 
     @property
     def total_bytes(self) -> int:
@@ -177,42 +189,63 @@ class ResponseCache:
         return len(self._entries)
 
 
-@dataclass
-class _KeyLock:
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    users: int = 0
+class InFlight:
+    """Responses being built, keyed by request (single flight).
 
-
-class KeyedLocks:
-    """Per-key asyncio locks, dropped once nobody holds or waits on them."""
+    The first request for a key leads: it builds the response and decides as
+    early as it can whether the result is stored. Identical requests arriving
+    meanwhile wait for that decision, then replay the stored entry or, on
+    ``None``, build their own response.
+    """
 
     def __init__(self):
-        self._locks: dict[str, _KeyLock] = {}
+        self._futures: dict[str, asyncio.Future] = {}
 
-    @asynccontextmanager
-    async def hold(self, key: str) -> AsyncIterator[None]:
-        entry = self._locks.setdefault(key, _KeyLock())
-        entry.users += 1
+    def get(self, key: str) -> asyncio.Future | None:
+        return self._futures.get(key)
+
+    @contextmanager
+    def lead(self, key: str) -> Iterator[Decision]:
+        """Register this request as the builder of ``key``; yields its ``decide``."""
+        future = asyncio.get_running_loop().create_future()
+        self._futures[key] = future
+
+        def decide(entry: CachedResponse | None) -> None:
+            if not future.done():
+                future.set_result(entry)
+
         try:
-            async with entry.lock:
-                yield
+            yield decide
         finally:
-            entry.users -= 1
-            if entry.users == 0:
-                del self._locks[key]
+            decide(None)  # failures and early exits release the waiters
+            if self._futures.get(key) is future:
+                del self._futures[key]
+
+    @staticmethod
+    async def wait(future: asyncio.Future) -> CachedResponse | None:
+        # Shielded: a cancelled waiter must not cancel the future others share.
+        return await asyncio.shield(future)
 
     def __len__(self) -> int:
-        return len(self._locks)
+        return len(self._futures)
 
 
-def request_cache_key(body: bytes) -> str | None:
-    """Canonical SHA-256 key of a single GraphQL request body, or None."""
+def parse_request_body(body: bytes) -> dict[str, Any] | None:
+    """The JSON payload of a single GraphQL request, or None."""
     try:
         payload = orjson.loads(body)
     except orjson.JSONDecodeError:
         return None
     if not isinstance(payload, dict) or not isinstance(payload.get("query"), str):
         return None
+    operation_name = payload.get("operationName")
+    if operation_name is not None and not isinstance(operation_name, str):
+        return None
+    return payload
+
+
+def request_cache_key(payload: dict[str, Any]) -> str:
+    """Canonical SHA-256 key of a parsed request (JSON key order cannot split it)."""
     canonical = orjson.dumps(
         {name: payload.get(name) for name in _KEY_FIELDS}, option=orjson.OPT_SORT_KEYS
     )
@@ -254,8 +287,9 @@ class GraphQLResponseCacheMiddleware:
         self.app = app
         self.settings = settings or ResponseCacheSettings()
         self.is_active = is_active or (lambda: self.settings.enabled)
-        self.cache = ResponseCache(self.settings.max_bytes, self.settings.max_entry_bytes)
-        self.locks = KeyedLocks()
+        self.allow_list = RootFieldAllowList(self.settings.root_fields)
+        self.cache = ResponseCache(self.settings.max_bytes)
+        self.in_flight = InFlight()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
@@ -265,26 +299,34 @@ class GraphQLResponseCacheMiddleware:
         ):
             await self.app(scope, receive, send)
             return
-        if scope["method"] != "POST":
+        request_headers = Headers(scope=scope)
+        if scope["method"] != "POST" or not _expects_single_json_reply(request_headers):
             await self.app(scope, receive, _strip_marker(send))
             return
 
         messages, body = await _read_request_body(receive, self.settings.max_request_bytes)
         receive = _replaying(messages, receive)
-        key = request_cache_key(body) if body is not None else None
-        if key is None:
+        payload = parse_request_body(body) if body is not None else None
+        if payload is None or not self.allow_list.allows_query_text(
+            payload["query"], payload.get("operationName")
+        ):
             await self.app(scope, receive, _strip_marker(send))
             return
 
-        wants_gzip = accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
+        wants_gzip = accepts_gzip(request_headers.get("accept-encoding", ""))
+        key = request_cache_key(payload)
         entry = self.cache.get(key)
         if entry is None:
-            async with self.locks.hold(key):
-                entry = self.cache.get(key)  # filled while waiting on the lock?
-                if entry is None:
-                    responder = _CachingResponder(self, key, wants_gzip, send)
+            pending = self.in_flight.get(key)
+            if pending is None:
+                with self.in_flight.lead(key) as decide:
+                    responder = _CachingResponder(self, key, wants_gzip, send, decide)
                     await self.app(scope, receive, responder)
-                    return
+                return
+            entry = await self.in_flight.wait(pending)
+            if entry is None:  # the first response was not stored: build this one
+                await self.app(scope, receive, _strip_marker(send))
+                return
         await self.reply(entry, wants_gzip, send, "hit")
 
     async def reply(
@@ -292,16 +334,17 @@ class GraphQLResponseCacheMiddleware:
         entry: CachedResponse,
         wants_gzip: bool,
         send: Send,
-        cache_status: str,
+        cache_status: str | None,
         plain: bytes | None = None,
     ) -> None:
         """Send ``entry``: stored gzip bytes, or plain JSON (given or streamed)."""
         headers = MutableHeaders(raw=list(entry.headers))
         headers.add_vary_header("Accept-Encoding")
-        headers[CACHE_STATUS_HEADER] = cache_status
+        if cache_status is not None:
+            headers[CACHE_STATUS_HEADER] = cache_status
         if wants_gzip:
             headers["content-encoding"] = "gzip"
-            headers["content-length"] = str(entry.size)
+            headers["content-length"] = str(len(entry.gzip_body))
             await send({"type": "http.response.start", "status": 200, "headers": headers.raw})
             await send({"type": "http.response.body", "body": entry.gzip_body})
             return
@@ -317,7 +360,12 @@ class GraphQLResponseCacheMiddleware:
 
 
 class _CachingResponder:
-    """``send`` wrapper for a miss: stores a marked 200 response, then replies."""
+    """``send`` wrapper for the leading request of a key.
+
+    Holds back a response the extension marked cacheable, stores it, decides
+    for the waiters and replies. Anything it will not store is forwarded
+    unchanged, and the waiters are released as soon as that is known.
+    """
 
     def __init__(
         self,
@@ -325,30 +373,28 @@ class _CachingResponder:
         key: str,
         wants_gzip: bool,
         send: Send,
+        decide: Decision,
     ):
         self.middleware = middleware
         self.key = key
         self.wants_gzip = wants_gzip
         self.send = send
+        self.decide = decide
         self.start: Message | None = None
         self.chunks: list[bytes] = []
-        self.buffering = False
+        self.holding = False
 
     async def __call__(self, message: Message) -> None:
         if message["type"] == "http.response.start":
-            headers = Headers(raw=message["headers"])
-            self.buffering = (
-                headers.get(CACHEABLE_HEADER) == "1"
-                and message["status"] == 200
-                and "content-encoding" not in headers
-            )
+            self.holding = self._may_store(message)
             message = _without_marker(message)
-            if self.buffering:
+            if self.holding:
                 self.start = message
             else:
+                self.decide(None)
                 await self.send(message)
             return
-        if not self.buffering:
+        if not self.holding:
             await self.send(message)
             return
         if message["type"] != "http.response.body":
@@ -359,9 +405,21 @@ class _CachingResponder:
         if not message.get("more_body", False):
             await self._store_and_reply()
 
+    def _may_store(self, start: Message) -> bool:
+        headers = Headers(raw=start["headers"])
+        if (
+            headers.get(CACHEABLE_HEADER) != "1"
+            or start["status"] != 200
+            or "content-encoding" in headers
+        ):
+            return False
+        length = headers.get("content-length", "")
+        return not length.isdigit() or self.middleware.settings.stores_body_of(int(length))
+
     async def _release_held(self) -> None:
-        """Give up caching: forward what was held back, unchanged."""
-        self.buffering = False
+        """Give up storing: forward what was held back, unchanged."""
+        self.holding = False
+        self.decide(None)
         await self.send(self.start)
         if self.chunks:
             body = b"".join(self.chunks)
@@ -371,26 +429,40 @@ class _CachingResponder:
     async def _store_and_reply(self) -> None:
         plain = b"".join(self.chunks)
         self.chunks = []
-        compress = functools.partial(
-            gzip.compress, compresslevel=self.middleware.settings.gzip_level, mtime=0
-        )
-        gzip_body = await to_thread.run_sync(compress, plain)
+        settings = self.middleware.settings
+        if not settings.stores_body_of(len(plain)):  # no Content-Length to decide on earlier
+            self.decide(None)
+            await self.send(self.start)
+            await self.send({"type": "http.response.body", "body": plain})
+            return
         entry = CachedResponse(
             headers=_content_headers(self.start["headers"]),
-            gzip_body=gzip_body,
+            gzip_body=await compress_gzip(plain, settings.gzip_level),
             plain_size=len(plain),
         )
         cache = self.middleware.cache
-        if cache.put(self.key, entry):
+        stored = cache.put(self.key, entry)
+        self.decide(entry if stored else None)
+        if stored:
             logger.info(
                 "Cached GraphQL response %s…: %d bytes JSON, %d gzipped (cache %d entries, %d bytes)",
                 self.key[:12],
                 len(plain),
-                entry.size,
+                len(entry.gzip_body),
                 len(cache),
                 cache.total_bytes,
             )
-        await self.middleware.reply(entry, self.wants_gzip, self.send, "miss", plain=plain)
+        status = "miss" if stored else None
+        await self.middleware.reply(entry, self.wants_gzip, self.send, status, plain=plain)
+
+
+def _expects_single_json_reply(headers: Headers) -> bool:
+    """A JSON request body and no multipart reply: what a hit can answer."""
+    media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    return (
+        media_type == "application/json"
+        and "multipart/mixed" not in headers.get("accept", "").lower()
+    )
 
 
 async def _read_request_body(receive: Receive, limit: int) -> tuple[list[Message], bytes | None]:

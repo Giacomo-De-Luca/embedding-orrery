@@ -87,7 +87,6 @@ test('3d stats sum fill and outline vertices of point clouds only', () => {
   }));
   assert.deepEqual(stats, {
     traceCount: 3,
-    poolRetainedMB: null,
     glObjects: 3,
     pointClouds: 2,
     fillVertices: 900,
@@ -117,23 +116,8 @@ test('2d stats read the scattergl context canvas', () => {
   const stats = withPlot(gd, () => GlSceneStats.collectInPage({ mode: '2d', bytesPerVertex: 40 }));
   assert.deepEqual(stats, {
     traceCount: 2,
-    poolRetainedMB: null,
     canvas: { backingWidth: 1600, backingHeight: 950, cssWidth: 1600, cssHeight: 950, backingRatio: 1 },
   });
-});
-
-test('pool bytes are read from the stackgl typed-array pool when the bundle is loaded', () => {
-  const DATA = Array.from({ length: 32 }, () => []);
-  DATA[28].push(new ArrayBuffer(256 * 1048576));
-  DATA[20].push(new ArrayBuffer(1048576), new ArrayBuffer(1048576));
-  globalThis.__TYPEDARRAY_POOL = { DATA };
-  try {
-    const gd = { data: [{}], querySelector: () => null };
-    const stats = withPlot(gd, () => GlSceneStats.collectInPage({ mode: '2d', bytesPerVertex: 40 }));
-    assert.equal(stats.poolRetainedMB, 258);
-  } finally {
-    delete globalThis.__TYPEDARRAY_POOL;
-  }
 });
 
 test('the in-page function survives serialization (no module-scope references)', () => {
@@ -141,13 +125,13 @@ test('the in-page function survives serialization (no module-scope references)',
   const rebuilt = new Function(`return (${GlSceneStats.collectInPage.toString()})`)();
   const gd = { data: [{}], querySelector: () => null };
   const stats = withPlot(gd, () => rebuilt({ mode: '2d', bytesPerVertex: 40 }));
-  assert.deepEqual(stats, { traceCount: 1, canvas: null, poolRetainedMB: null });
+  assert.deepEqual(stats, { traceCount: 1, canvas: null });
 });
 
 test('collect evaluates in the page and reports failures instead of hiding them', async () => {
   const gd = { data: [{}, {}], querySelector: () => null };
   const page = { evaluate: async (fn, args) => withPlot(gd, () => fn(args)) };
-  assert.deepEqual(await GlSceneStats.collect(page, '2d'), { traceCount: 2, canvas: null, poolRetainedMB: null });
+  assert.deepEqual(await GlSceneStats.collect(page, '2d'), { traceCount: 2, canvas: null });
 
   const brokenPage = { evaluate: async () => { throw new Error('Target closed'); } };
   assert.deepEqual(await GlSceneStats.collect(brokenPage, '3d'), { error: 'Error: Target closed' });
@@ -168,8 +152,6 @@ test('summary line names traces, vertices and pick stats', () => {
   assert.match(line, /outline 500/);
   assert.match(line, /pick buffers 11/);
   assert.match(line, /backing 2x/);
-  assert.match(GlSceneStats.summarize({ traceCount: 1, poolRetainedMB: 704 }), /pool 704 MB/);
-  assert.doesNotMatch(GlSceneStats.summarize({ traceCount: 1, poolRetainedMB: null }), /pool/);
   assert.equal(GlSceneStats.summarize(null), 'gl stats unavailable');
   assert.equal(GlSceneStats.summarize({ error: 'Error: Target closed' }), 'gl stats failed: Error: Target closed');
 });

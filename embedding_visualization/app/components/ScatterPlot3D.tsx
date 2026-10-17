@@ -26,6 +26,7 @@ import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
 import { capture3DPlot } from '../../lib/utils/plotCapture';
 import { PointTraceColumns3D } from '../../lib/utils/pointTraceColumns3D';
+import { StackglBufferPool } from '../../lib/utils/stackglBufferPool';
 import { toast } from 'sonner';
 
 type PlotlyData = Partial<PlotData>;
@@ -1340,6 +1341,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   // Only run on mount/unmount — subsequent updates handled by dedicated effects below
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plotlyLoaded]);
+
+  // Release the stackgl typed-array pool's idle vertex buffers when the point count
+  // changes and on unmount. gl-scatter3d returns its vertex arrays to that pool after
+  // every upload and nothing else ever empties it, so a large collection's buffers
+  // (~704 MiB for WordNet) would otherwise stay resident for the life of the tab.
+  // Pooled sizes follow the point count, so a change means they cannot be reused.
+  // The cleanup phase runs before the effect that builds the next traces, which then
+  // allocate afresh and stay pooled; on unmount it runs after the purge above has
+  // handed the pick buffer back (React runs cleanups in declaration order).
+  useEffect(() => () => { StackglBufferPool.release(); }, [points.length]);
 
   // 2. Update base traces when they change (ref-equality check via deps — instant, not deep)
   useEffect(() => {

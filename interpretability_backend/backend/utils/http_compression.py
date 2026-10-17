@@ -43,17 +43,15 @@ class CompressionSettings(JsonFileSettings):
     content_types: tuple[str, ...] = ("application/json", "application/graphql-response+json")
 
     def __post_init__(self):
-        if not isinstance(self.level, int) or isinstance(self.level, bool):
-            raise ValueError(f"Compression level must be an integer, got {self.level!r}")
-        if not isinstance(self.content_types, tuple):
-            raise ValueError("content_types must be a list of media types")
-        if not 1 <= self.level <= 9:
-            raise ValueError(f"Compression level must be in 1..9, got {self.level}")
-        if self.minimum_size < 0:
-            raise ValueError("minimum_size must be >= 0")
-        if self.thread_threshold_bytes < 0:
-            raise ValueError("thread_threshold_bytes must be >= 0")
-        if not self.content_types or not all(isinstance(t, str) and t for t in self.content_types):
+        self.require_bool("enabled")
+        self.require_int("level", minimum=1, maximum=9)
+        self.require_int("minimum_size", minimum=0)
+        self.require_int("thread_threshold_bytes", minimum=0)
+        if (
+            not isinstance(self.content_types, tuple)
+            or not self.content_types
+            or not all(isinstance(t, str) and t for t in self.content_types)
+        ):
             raise ValueError("content_types must be a non-empty list of media types")
         # Media types compare case-insensitively.
         object.__setattr__(self, "content_types", tuple(t.lower() for t in self.content_types))
@@ -146,7 +144,16 @@ class _GzipResponder:
         return media_type in self.settings.content_types
 
     async def _compress(self, body: bytes) -> bytes:
-        compress = functools.partial(gzip.compress, compresslevel=self.settings.level, mtime=0)
-        if len(body) > self.settings.thread_threshold_bytes:
-            return await to_thread.run_sync(compress, body)
-        return compress(body)
+        return await compress_gzip(body, self.settings.level, self.settings.thread_threshold_bytes)
+
+
+async def compress_gzip(body: bytes, level: int, thread_threshold_bytes: int = 0) -> bytes:
+    """Gzip ``body`` deterministically (``mtime=0``).
+
+    Bodies larger than ``thread_threshold_bytes`` compress in a worker thread
+    so the event loop keeps serving other requests (zlib releases the GIL).
+    """
+    compress = functools.partial(gzip.compress, compresslevel=level, mtime=0)
+    if len(body) > thread_threshold_bytes:
+        return await to_thread.run_sync(compress, body)
+    return compress(body)

@@ -8,7 +8,8 @@ dataclass a ``from_file`` constructor with the shared rules:
 - unknown keys are rejected, so a typo cannot silently fall back to a default;
 - JSON lists become tuples for the fields named in ``TUPLE_FIELDS``;
 - wrong value types surface as ``ValueError``, like the range checks the
-  dataclass runs in ``__post_init__``.
+  dataclass runs in ``__post_init__`` (``require_bool`` / ``require_int``
+  are the shared checks for those).
 """
 
 import json
@@ -41,3 +42,19 @@ class JsonFileSettings:
             return cls(**raw)
         except TypeError as exc:  # wrong JSON types reaching the range checks
             raise ValueError(f"Invalid {cls.SETTINGS_LABEL}: {exc}") from exc
+
+    def require_bool(self, name: str) -> None:
+        """Raise ``ValueError`` unless field ``name`` is a bool."""
+        value = getattr(self, name)
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be true or false, got {value!r}")
+
+    def require_int(self, name: str, minimum: int, maximum: int | None = None) -> None:
+        """Raise ``ValueError`` unless field ``name`` is an int (not a bool) in range."""
+        value = getattr(self, name)
+        in_range = isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+        if maximum is not None:
+            in_range = in_range and value <= maximum
+        if not in_range:
+            bound = f"in {minimum}..{maximum}" if maximum is not None else f">= {minimum}"
+            raise ValueError(f"{name} must be an integer {bound}, got {value!r}")
