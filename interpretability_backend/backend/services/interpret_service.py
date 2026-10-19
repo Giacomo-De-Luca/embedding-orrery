@@ -49,6 +49,7 @@ from interpret.sae.source_ids import neuronpedia_source_id, qwen_source_id
 from interpret.sae.steering import SteeringMode, SteeringOp
 
 from ..utils.resource_paths import DIRECTIONS_DIR
+from .cancel_registry import is_cancelled
 from .steering_types import SteeringSpec
 from .token_emitter import emit_token
 
@@ -976,6 +977,7 @@ class InterpretService:
         hook_type: str,
         progress_callback: Callable[[int, int], None] | None = None,
         result_callback: Callable[[str, list[FeatureActivation]], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> list[tuple[str, list[FeatureActivation]]]:
         """Run SAE highlight inference on multiple documents.
 
@@ -997,6 +999,9 @@ class InterpretService:
         result_callback:
             Optional ``(item_id, activations)`` callback invoked after each
             document so callers can persist results incrementally.
+        cancel_event:
+            Checked before each document; once set, the batch stops and the
+            documents processed so far are returned.
 
         Returns
         -------
@@ -1019,6 +1024,8 @@ class InterpretService:
 
         with manager.session(wrapper.model.model.layers) as store:
             for i, (item_id, text) in enumerate(documents):
+                if is_cancelled(cancel_event):
+                    break
                 manager.reset()
                 try:
                     formatted = self._format_for_prefill(text)

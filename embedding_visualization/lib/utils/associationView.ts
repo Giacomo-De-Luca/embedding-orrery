@@ -13,7 +13,8 @@ import { lab, rgb } from 'd3-color';
 import { ContingencyTable } from './contingencyTable';
 import { AxisOrdering } from './axisOrdering';
 import { CategoryKey } from './categoryKey';
-import { getCategoryLabel, isTopicLikeField } from './categoryColors';
+import { getCategoryLabel } from './categoryColors';
+import type { HeatmapModel } from './heatmapModel';
 
 /**
  * What a cell encodes: the Pearson residual, the raw count, or the share of
@@ -21,9 +22,7 @@ import { getCategoryLabel, isTopicLikeField } from './categoryColors';
  */
 export type AssociationMode = 'enrichment' | 'count' | 'rowShare' | 'colShare';
 
-export type AssociationStrength = 'negligible' | 'weak' | 'moderate' | 'strong';
-
-interface ThemeColors {
+export interface ThemeColors {
   /** Magnitude ramp, from near zero to the maximum. */
   sequential: readonly string[];
   /** Diverging midpoint ("as expected"), also the fill of empty cells. */
@@ -56,6 +55,12 @@ export interface SpreadRow {
   count: number;
   /** Effective number of columns the row spreads over (see `ContingencyTable.effectiveCount`). */
   effective: number;
+}
+
+/** Display label of a row or column key (defaults to {@link AssociationView.axisLabel}). */
+export interface AxisLabels {
+  row: (key: string) => string;
+  col: (key: string) => string;
 }
 
 export interface AssociationLegend {
@@ -106,6 +111,11 @@ export class AssociationScale {
     return `linear-gradient(to right, ${stops.join(', ')})`;
   }
 
+  /** Whether text drawn on `fill` needs light ink to stay readable. */
+  static needsLightInk(fill: string): boolean {
+    return lab(fill).l < DARK_INK_MIN_LIGHTNESS;
+  }
+
   /** Lab interpolation through `stops`, returning the stops themselves exactly at the ends. */
   private static sampler(stops: readonly string[]): (t: number) => string {
     const interpolate = piecewise(interpolateLab, [...stops]);
@@ -115,7 +125,7 @@ export class AssociationScale {
   }
 }
 
-export class AssociationView {
+export class AssociationView implements HeatmapModel {
   /** Smallest enrichment limit: residuals within ±2 are what chance alone produces. */
   static readonly ENRICHMENT_FLOOR = 2;
   /** The enrichment limit is this quantile of |residual|, so one extreme cell can't wash out the rest. */
@@ -123,17 +133,30 @@ export class AssociationView {
 
   /** Fill of cells with no points in the magnitude modes (the neutral colour). */
   readonly emptyColor: string;
+  readonly rowLabels: string[];
+  readonly colLabels: string[];
 
   private constructor(
     readonly table: ContingencyTable,
     readonly mode: AssociationMode,
     readonly scale: AssociationScale,
     colors: ThemeColors,
+    labels: AxisLabels,
   ) {
     this.emptyColor = rgb(colors.neutral).toString();
+    this.rowLabels = table.rows.map(labels.row);
+    this.colLabels = table.cols.map(labels.col);
   }
 
-  static of(table: ContingencyTable, mode: AssociationMode, isDark: boolean): AssociationView {
+  static of(
+    table: ContingencyTable,
+    mode: AssociationMode,
+    isDark: boolean,
+    labels: AxisLabels = {
+      row: key => AssociationView.axisLabel(table.rowField, key),
+      col: key => AssociationView.axisLabel(table.colField, key),
+    },
+  ): AssociationView {
     const colors = isDark ? ASSOCIATION_COLORS.dark : ASSOCIATION_COLORS.light;
     const values: number[] = [];
     for (let i = 0; i < table.rows.length; i++) {
@@ -144,10 +167,10 @@ export class AssociationView {
       const magnitudes = values.map(Math.abs).sort((a, b) => a - b);
       const rank = Math.ceil(AssociationView.ENRICHMENT_QUANTILE * magnitudes.length) - 1;
       const limit = Math.max(AssociationView.ENRICHMENT_FLOOR, magnitudes[rank] ?? 0);
-      return new AssociationView(table, mode, new AssociationScale('diverging', limit, colors), colors);
+      return new AssociationView(table, mode, new AssociationScale('diverging', limit, colors), colors, labels);
     }
     const limit = values.reduce((max, v) => Math.max(max, v), 0);
-    return new AssociationView(table, mode, new AssociationScale('sequential', limit, colors), colors);
+    return new AssociationView(table, mode, new AssociationScale('sequential', limit, colors), colors, labels);
   }
 
   private static valueOf(table: ContingencyTable, mode: AssociationMode, i: number, j: number): number {
@@ -180,7 +203,7 @@ export class AssociationView {
 
   /** Whether a label drawn on the cell needs light ink to stay readable. */
   usesLightInk(i: number, j: number): boolean {
-    return lab(this.color(i, j)).l < DARK_INK_MIN_LIGHTNESS;
+    return AssociationScale.needsLightInk(this.color(i, j));
   }
 
   /** Short text for the cell: count, share, or observed/expected ratio. */
@@ -226,7 +249,10 @@ export class AssociationView {
   }
 
   /** Rows by how few columns they spread over (most concentrated first), Other and Missing last. */
-  static spreadRows(table: ContingencyTable): SpreadRow[] {
+  static spreadRows(
+    table: ContingencyTable,
+    labelOf: (key: string) => string = key => AssociationView.axisLabel(table.rowField, key),
+  ): SpreadRow[] {
     const effective = table.rows.map((_, i) => table.effectiveCount(i));
     const order = AxisOrdering.withPinnedLast(
       table.rows,
@@ -234,54 +260,9 @@ export class AssociationView {
     );
     return order.map(i => ({
       key: table.rows[i],
-      label: AssociationView.axisLabel(table.rowField, table.rows[i]),
+      label: labelOf(table.rows[i]),
       count: table.rowTotals[i],
       effective: effective[i],
     }));
-  }
-
-  /** Conventional reading of Cramér's V. */
-  static strength(cramersV: number | null): AssociationStrength | null {
-    if (cramersV === null) return null;
-    if (cramersV < 0.1) return 'negligible';
-    if (cramersV < 0.3) return 'weak';
-    if (cramersV < 0.5) return 'moderate';
-    return 'strong';
-  }
-}
-
-/**
- * The Group and Across fields of the association view. Defaults group by the
- * colour field (never a topic field) and compare across topics, so a fresh
- * view answers "which topics does each source cover?".
- */
-export class AssociationFields {
-  static readonly PREFERRED_ACROSS = 'topic_label';
-
-  /** The picks when still available and distinct, otherwise the defaults. */
-  static resolve(
-    group: string | null,
-    across: string | null,
-    fields: readonly string[],
-    colorByField: string | null | undefined,
-  ): { group: string | null; across: string | null } {
-    const resolvedGroup = group && fields.includes(group) ? group : AssociationFields.defaultGroup(fields, colorByField);
-    const keepAcross = !!across && fields.includes(across) && across !== resolvedGroup;
-    return {
-      group: resolvedGroup,
-      across: keepAcross ? across : AssociationFields.defaultAcross(fields, resolvedGroup),
-    };
-  }
-
-  private static defaultGroup(fields: readonly string[], colorByField: string | null | undefined): string | null {
-    const candidates = fields.filter(field => !isTopicLikeField(field));
-    if (colorByField && candidates.includes(colorByField)) return colorByField;
-    return candidates[0] ?? fields[0] ?? null;
-  }
-
-  private static defaultAcross(fields: readonly string[], group: string | null): string | null {
-    const preferred = AssociationFields.PREFERRED_ACROSS;
-    if (preferred !== group && fields.includes(preferred)) return preferred;
-    return fields.find(field => field !== group) ?? null;
   }
 }

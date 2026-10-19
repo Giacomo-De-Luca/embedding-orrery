@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,11 @@ import strawberry
 
 from ..clients.duckdb_client import _sanitize_for_json
 from ..services.cancel_registry import (
-    register_cancel_event,
+    CANCELLED_MESSAGE,
+    cancellable_job,
+    is_cancelled,
+    report_cancelled,
     request_cancel,
-    unregister_cancel_event,
 )
 from ..services.embedding_pipeline import (
     HuggingFaceEmbeddingPipeline,
@@ -27,6 +30,8 @@ from ..services.progress_emitter import emit_progress_sync
 from ..services.steering_types import SteeringSpec
 from ..services.topic_extraction_service import (
     extract_topics as do_extract_topics,
+    generate_llm_labels_for_collection,
+    llm_labeling_job_id,
 )
 from .chromadb_instance import get_chromadb_client
 from .converters import (
@@ -105,8 +110,7 @@ class Mutation:
             else None
         )
 
-        cancel_event = register_cancel_event(input.collection_name)
-        try:
+        with cancellable_job(input.collection_name) as cancel_event:
             pipeline = HuggingFaceEmbeddingPipeline(
                 config=config,
                 compute_projections=input.compute_projections,
@@ -115,8 +119,6 @@ class Mutation:
                 cancel_event=cancel_event,
             )
             pipeline_result = await pipeline.run()
-        finally:
-            unregister_cancel_event(input.collection_name)
 
         result = pipeline_result.embedding_result
 
@@ -142,8 +144,7 @@ class Mutation:
             else None
         )
 
-        cancel_event = register_cancel_event(input.collection_name)
-        try:
+        with cancellable_job(input.collection_name) as cancel_event:
             pipeline = LocalFileEmbeddingPipeline(
                 config=config,
                 compute_projections=input.compute_projections,
@@ -152,8 +153,6 @@ class Mutation:
                 cancel_event=cancel_event,
             )
             pipeline_result = await pipeline.run()
-        finally:
-            unregister_cancel_event(input.collection_name)
 
         result = pipeline_result.embedding_result
 
@@ -192,13 +191,15 @@ class Mutation:
             else None
         )
 
-        pipeline = ReEmbeddingPipeline(
-            config=config,
-            compute_projections=input.compute_projections,
-            extract_topics=input.extract_topics,
-            topic_config=topic_config,
-        )
-        pipeline_result = await pipeline.run()
+        with cancellable_job(input.collection_name) as cancel_event:
+            pipeline = ReEmbeddingPipeline(
+                config=config,
+                compute_projections=input.compute_projections,
+                extract_topics=input.extract_topics,
+                topic_config=topic_config,
+                cancel_event=cancel_event,
+            )
+            pipeline_result = await pipeline.run()
         result = pipeline_result.embedding_result
 
         return EmbedDatasetResult(
@@ -214,14 +215,17 @@ class Mutation:
         )
 
     @strawberry.mutation
-    def cancel_embedding_job(self, collection_name: str, info=None) -> bool:
-        """Cancel a running embedding job.
+    def cancel_job(self, job_id: str, info=None) -> bool:
+        """Cancel a running job by its progress job id.
 
-        Sets the cancel event so the batch loop stops after the current batch.
-        The job will be marked as interrupted with partial results preserved.
-        Returns True if a running job was found and signalled, False otherwise.
+        Covers embedding (collection name), LLM labeling
+        (``{collection}_llm_labeling``) and SAE document activations
+        (``{collection}_sae_activations``). Sets the job's cancel event so it
+        stops after the current batch / topic / document; work done so far is
+        kept and the job can be resumed. Returns True if a running job was
+        found and signalled, False otherwise.
         """
-        return request_cancel(collection_name)
+        return request_cancel(job_id)
 
     @strawberry.mutation
     def remove_embedding_job(self, collection_name: str, info=None) -> bool:
@@ -419,16 +423,16 @@ class Mutation:
         self, input: GenerateLlmLabelsInput, info=None
     ) -> GenerateLlmLabelsResult:
         """Generate LLM labels for existing topics in a collection."""
-        from ..services.topic_extraction_service import generate_llm_labels_for_collection
-
-        result = await asyncio.to_thread(
-            generate_llm_labels_for_collection,
-            collection_name=input.collection_name,
-            llm_provider=input.llm_provider,
-            llm_model=input.llm_model,
-            label_scope=input.label_scope,
-            resume=input.resume,
-        )
+        with cancellable_job(llm_labeling_job_id(input.collection_name)) as cancel_event:
+            result = await asyncio.to_thread(
+                generate_llm_labels_for_collection,
+                collection_name=input.collection_name,
+                llm_provider=input.llm_provider,
+                llm_model=input.llm_model,
+                label_scope=input.label_scope,
+                resume=input.resume,
+                cancel_event=cancel_event,
+            )
 
         return GenerateLlmLabelsResult(
             collection_name=result.collection_name,
@@ -958,194 +962,14 @@ class Mutation:
         Parses layer/width/hook_type from the collection's SAE metadata.
         Supports resume: already-processed items are skipped.
         Emits progress via the embedding_progress subscription.
+        Cancellable via ``cancelJob`` from the moment it starts.
         """
-        logger = logging.getLogger("orrery.mutations")
-        db = get_duckdb_client()
-        service = get_interpret_service()
         collection_name = input.collection_name
-
-        # --- Resolve SAE config from collection metadata ---
-        dataset_name = db.get_dataset_name_for_collection(collection_name)
-        if not dataset_name:
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=0,
-                total_items=0,
-                duration_seconds=0.0,
-                error=f"Collection '{collection_name}' not found.",
-            )
-
-        ds = db.get_dataset(dataset_name)
-        raw_extra = (ds.get("extra_metadata") or {}) if ds else {}
-        extra = json.loads(raw_extra) if isinstance(raw_extra, str) else raw_extra
-        model_id = extra.get("sae_model_id")
-        sae_id = extra.get("sae_id")
-        if not model_id or not sae_id:
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=0,
-                total_items=0,
-                duration_seconds=0.0,
-                error="Collection has no SAE metadata (sae_model_id / sae_id).",
-            )
-
-        # Parse sae_id → layer, hook_type, width
-        # Format: "{layer}-{scope}-{version}-{hookAbbrev}-{width}" (gemma- and qwen-scope)
-        parts = sae_id.split("-")
-        layer = int(parts[0]) if parts else 9
-        hook_abbrev = parts[3] if len(parts) > 3 else "res"
-        width = parts[4] if len(parts) > 4 else "16k"
-        hook_map = {"res": "resid_post", "mlp": "mlp_out", "att": "attn_out"}
-        hook_type = hook_map.get(hook_abbrev, "resid_post")
-
-        # model_id is the stored id (e.g. "gemma-3-1b", "qwen3-1.7B-base"), but
-        # load_model expects a HuggingFace checkpoint — resolve via the registry.
-        expected_checkpoint = checkpoint_for_model_id(model_id)
-
-        # --- Load all items ---
-        all_items = db.get_filtered_items(dataset_name, filters=[], limit=100_000)
-        if not all_items:
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=0,
-                total_items=0,
-                duration_seconds=0.0,
-                error="No items found in dataset.",
-            )
-
-        # --- Resume: skip already-processed items ---
-        existing_ids = db.get_document_activation_item_ids(collection_name)
-        documents = [
-            (item["id"], item.get("document") or "")
-            for item in all_items
-            if item["id"] not in existing_ids
-        ]
-
-        total_items = len(all_items)
-        already_done = len(existing_ids)
-        to_process = len(documents)
-
-        if to_process == 0:
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=total_items,
-                total_items=total_items,
-                duration_seconds=0.0,
-            )
-
         job_id = f"{collection_name}_sae_activations"
-
-        def _run_batch():
-            start = time.monotonic()
-
-            def progress_cb(done: int, total: int):
-                emit_progress_sync(
-                    job_id=job_id,
-                    status="running",
-                    items_processed=already_done + done,
-                    total_items=total_items,
-                    current_batch=done,
-                    total_batches=total,
-                    message=f"SAE inference: {already_done + done}/{total_items}",
-                )
-
-            emit_progress_sync(
-                job_id=job_id,
-                status="running",
-                items_processed=already_done,
-                total_items=total_items,
-                current_batch=0,
-                total_batches=to_process,
-                message=f"Starting SAE inference ({to_process} items)...",
-            )
-
-            FLUSH_EVERY = 50  # persist every N documents to avoid losing work
-            pending_rows: list[dict[str, Any]] = []
-            docs_since_flush = 0
-            docs_processed = 0
-
-            def on_result(item_id: str, activations: list) -> None:
-                nonlocal docs_since_flush, docs_processed
-                for f in activations:
-                    pending_rows.append(
-                        {
-                            "collection_name": collection_name,
-                            "item_id": item_id,
-                            "feature_index": f.feature_index,
-                            "activation": f.activation,
-                        }
-                    )
-                docs_since_flush += 1
-                docs_processed += 1
-                if docs_since_flush >= FLUSH_EVERY and pending_rows:
-                    db.insert_document_activations_bulk(pd.DataFrame(pending_rows))
-                    pending_rows.clear()
-                    docs_since_flush = 0
-
-            service.run_batch_highlight(
-                documents=documents,
-                layer=layer,
-                width=width,
-                hook_type=hook_type,
-                progress_callback=progress_cb,
-                result_callback=on_result,
-            )
-
-            # Flush remaining
-            if pending_rows:
-                db.insert_document_activations_bulk(pd.DataFrame(pending_rows))
-
-            elapsed = time.monotonic() - start
-
-            emit_progress_sync(
-                job_id=job_id,
-                status="completed",
-                items_processed=total_items,
-                total_items=total_items,
-                current_batch=to_process,
-                total_batches=to_process,
-                message="SAE document activations complete.",
-            )
-
-            return already_done + docs_processed, elapsed
-
-        try:
-            async with service._lock:
-                # Ensure the correct model is loaded for this SAE. Compare
-                # model ids, not checkpoints — _neuronpedia_model_id is the
-                # stored-id form ("gemma-3-1b"), never a "google/..." path.
-                status = service.get_status()
-                if status.loaded and service._neuronpedia_model_id != model_id:
-                    await asyncio.to_thread(service.unload_model)
-                    status = service.get_status()
-                if not status.loaded:
-                    await asyncio.to_thread(service.load_model, expected_checkpoint)
-                items_processed, duration = await asyncio.to_thread(_run_batch)
-
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=items_processed,
-                total_items=total_items,
-                duration_seconds=round(duration, 2),
-            )
-        except Exception as e:
-            logger.exception("compute_document_activations failed")
-            emit_progress_sync(
-                job_id=job_id,
-                status="failed",
-                items_processed=already_done,
-                total_items=total_items,
-                current_batch=0,
-                total_batches=to_process,
-                error=str(e),
-            )
-            return ComputeDocumentActivationsResult(
-                collection_name=collection_name,
-                items_processed=already_done,
-                total_items=total_items,
-                duration_seconds=0.0,
-                error=str(e),
-            )
+        # Registered before the item load, GPU lock wait and model load, so a
+        # cancel during any of them is honoured before inference starts.
+        with cancellable_job(job_id) as cancel_event:
+            return await _compute_document_activations(collection_name, job_id, cancel_event)
 
     @strawberry.mutation
     def delete_document_activations(self, collection_name: str, info=None) -> int:
@@ -1332,6 +1156,223 @@ class Mutation:
         """Delete a chat session and all its messages."""
         db = get_duckdb_client()
         return db.delete_chat_session(id)
+
+
+async def _compute_document_activations(
+    collection_name: str, job_id: str, cancel_event: threading.Event
+) -> ComputeDocumentActivationsResult:
+    """Body of the computeDocumentActivations resolver, run inside its
+    cancellable_job registration."""
+    logger = logging.getLogger("orrery.mutations")
+    db = get_duckdb_client()
+    service = get_interpret_service()
+
+    # --- Resolve SAE config from collection metadata ---
+    dataset_name = db.get_dataset_name_for_collection(collection_name)
+    if not dataset_name:
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=0,
+            total_items=0,
+            duration_seconds=0.0,
+            error=f"Collection '{collection_name}' not found.",
+        )
+
+    ds = db.get_dataset(dataset_name)
+    raw_extra = (ds.get("extra_metadata") or {}) if ds else {}
+    extra = json.loads(raw_extra) if isinstance(raw_extra, str) else raw_extra
+    model_id = extra.get("sae_model_id")
+    sae_id = extra.get("sae_id")
+    if not model_id or not sae_id:
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=0,
+            total_items=0,
+            duration_seconds=0.0,
+            error="Collection has no SAE metadata (sae_model_id / sae_id).",
+        )
+
+    # Parse sae_id → layer, hook_type, width
+    # Format: "{layer}-{scope}-{version}-{hookAbbrev}-{width}" (gemma- and qwen-scope)
+    parts = sae_id.split("-")
+    layer = int(parts[0]) if parts else 9
+    hook_abbrev = parts[3] if len(parts) > 3 else "res"
+    width = parts[4] if len(parts) > 4 else "16k"
+    hook_map = {"res": "resid_post", "mlp": "mlp_out", "att": "attn_out"}
+    hook_type = hook_map.get(hook_abbrev, "resid_post")
+
+    # model_id is the stored id (e.g. "gemma-3-1b", "qwen3-1.7B-base"), but
+    # load_model expects a HuggingFace checkpoint — resolve via the registry.
+    expected_checkpoint = checkpoint_for_model_id(model_id)
+
+    # --- Load all items ---
+    all_items = db.get_filtered_items(dataset_name, filters=[], limit=100_000)
+    if not all_items:
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=0,
+            total_items=0,
+            duration_seconds=0.0,
+            error="No items found in dataset.",
+        )
+
+    # --- Resume: skip already-processed items ---
+    existing_ids = db.get_document_activation_item_ids(collection_name)
+    documents = [
+        (item["id"], item.get("document") or "")
+        for item in all_items
+        if item["id"] not in existing_ids
+    ]
+
+    total_items = len(all_items)
+    already_done = len(existing_ids)
+    to_process = len(documents)
+
+    if to_process == 0:
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=total_items,
+            total_items=total_items,
+            duration_seconds=0.0,
+        )
+
+    def _run_batch(cancel_event: threading.Event) -> tuple[int, float, bool]:
+        """Returns (items processed incl. resumed, seconds, cancelled)."""
+        start = time.monotonic()
+
+        def progress_cb(done: int, total: int):
+            emit_progress_sync(
+                job_id=job_id,
+                status="running",
+                items_processed=already_done + done,
+                total_items=total_items,
+                current_batch=done,
+                total_batches=total,
+                message=f"SAE inference: {already_done + done}/{total_items}",
+            )
+
+        emit_progress_sync(
+            job_id=job_id,
+            status="running",
+            items_processed=already_done,
+            total_items=total_items,
+            current_batch=0,
+            total_batches=to_process,
+            message=f"Starting SAE inference ({to_process} items)...",
+        )
+
+        FLUSH_EVERY = 50  # persist every N documents to avoid losing work
+        pending_rows: list[dict[str, Any]] = []
+        docs_since_flush = 0
+        docs_processed = 0
+
+        def on_result(item_id: str, activations: list) -> None:
+            nonlocal docs_since_flush, docs_processed
+            for f in activations:
+                pending_rows.append(
+                    {
+                        "collection_name": collection_name,
+                        "item_id": item_id,
+                        "feature_index": f.feature_index,
+                        "activation": f.activation,
+                    }
+                )
+            docs_since_flush += 1
+            docs_processed += 1
+            if docs_since_flush >= FLUSH_EVERY and pending_rows:
+                db.insert_document_activations_bulk(pd.DataFrame(pending_rows))
+                pending_rows.clear()
+                docs_since_flush = 0
+
+        service.run_batch_highlight(
+            documents=documents,
+            layer=layer,
+            width=width,
+            hook_type=hook_type,
+            progress_callback=progress_cb,
+            result_callback=on_result,
+            cancel_event=cancel_event,
+        )
+
+        # Flush remaining (also after a cancel: resume skips these items)
+        if pending_rows:
+            db.insert_document_activations_bulk(pd.DataFrame(pending_rows))
+
+        elapsed = time.monotonic() - start
+
+        if is_cancelled(cancel_event):
+            report_cancelled(
+                job_id,
+                items_processed=already_done + docs_processed,
+                total_items=total_items,
+                current_batch=docs_processed,
+                total_batches=to_process,
+            )
+            return already_done + docs_processed, elapsed, True
+
+        emit_progress_sync(
+            job_id=job_id,
+            status="completed",
+            items_processed=total_items,
+            total_items=total_items,
+            current_batch=to_process,
+            total_batches=to_process,
+            message="SAE document activations complete.",
+        )
+
+        return already_done + docs_processed, elapsed, False
+
+    try:
+        async with service._lock:
+            if is_cancelled(cancel_event):
+                # Cancelled while items loaded or another inference held
+                # the GPU: stop before the (slow) model load.
+                report_cancelled(
+                    job_id,
+                    items_processed=already_done,
+                    total_items=total_items,
+                    total_batches=to_process,
+                )
+                items_processed, duration, cancelled = already_done, 0.0, True
+            else:
+                # Ensure the correct model is loaded for this SAE. Compare
+                # model ids, not checkpoints — _neuronpedia_model_id is the
+                # stored-id form ("gemma-3-1b"), never a "google/..." path.
+                status = service.get_status()
+                if status.loaded and service._neuronpedia_model_id != model_id:
+                    await asyncio.to_thread(service.unload_model)
+                    status = service.get_status()
+                if not status.loaded:
+                    await asyncio.to_thread(service.load_model, expected_checkpoint)
+                items_processed, duration, cancelled = await asyncio.to_thread(
+                    _run_batch, cancel_event
+                )
+
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=items_processed,
+            total_items=total_items,
+            duration_seconds=round(duration, 2),
+            error=CANCELLED_MESSAGE if cancelled else None,
+        )
+    except Exception as e:
+        logger.exception("compute_document_activations failed")
+        emit_progress_sync(
+            job_id=job_id,
+            status="failed",
+            items_processed=already_done,
+            total_items=total_items,
+            current_batch=0,
+            total_batches=to_process,
+            error=str(e),
+        )
+        return ComputeDocumentActivationsResult(
+            collection_name=collection_name,
+            items_processed=already_done,
+            total_items=total_items,
+            duration_seconds=0.0,
+            error=str(e),
+        )
 
 
 def _steering_inputs_to_specs(inputs) -> list[SteeringSpec]:

@@ -22,7 +22,7 @@
 
 - For folders with multiple scripts or data files, add a readme explaining both the structure of the folder, the main classes or data structures present there. 
 
-- After finishing a plan, always use the agent: *code-quality-reviewer* to review the quality of the generated code. 
+- After finishing a plan, always use the agent: *code-quality-reviewer* (definition: `.claude/agents/code-quality-reviewer.md`) to review the quality of the generated code. It is read-only: it runs ruff / tsc / eslint / the relevant unit tests and reports ranked findings with file:line and a fix; apply the fixes yourself and tell the user about any pre-existing issues it lists. 
 
 
 ## Project Overview
@@ -114,7 +114,7 @@ Data Sources → Embedding Providers → DuckDB (docs/metadata) + ChromaDB (vect
 
 **Memory-aware projection loading**: Explore initially requests only the active `{method}_{dimension}` projection plus core item data. Later method/dimension changes use `includeCore: false` and return coordinates plus a compact ordered-item signature; the frontend validates that signature before merging. `VisualizationPointBuilder` creates wrappers only for the active dimension, while `PointTraceColumns3D` supplies Float32 coordinate columns and Uint32 indices to Plotly data traces. The GraphQL argument remains backward compatible with `includeCore: true` by default. The headed-Chrome regression harness writes labeled artifacts and records GraphQL bytes plus forced-GC heap without overwriting the July 2026 baselines; see `benchmarks/fps/README.md`. See `documentation/FRONTEND_HEAP_REDUCTION.md` for the request lifecycle, tests, and remaining roadmap work.
 
-**Render performance**: a step-by-step series of scatter-plot performance fixes (3D marker outlines, pick buffers, Plotly entry, trace grouping, pixel ratio, Apollo retention, density overlay), each landed with tests first and a before/after benchmark. Fork patches are unit-tested in node through `embedding_visualization/forked/__tests__/` (a stackgl bundle harness with a recording WebGL stub) and logged in `embedding_visualization/forked/plotly_changes.md`. The benchmark gained `BENCH_DPR`, per-run GL scene stats and `2d-topics`/`2d-density` passes. See `documentation/RENDER_PERFORMANCE.md`.
+**Render performance**: a step-by-step series of scatter-plot performance fixes (3D marker outlines, pick buffers, Plotly entry, trace grouping, pixel ratio, Apollo retention, density overlay), each landed with tests first and a before/after benchmark. Fork patches are unit-tested in node through `embedding_visualization/forked/__tests__/` (a stackgl bundle harness with a recording WebGL stub) and logged in `embedding_visualization/forked/plotly_changes.md`. The benchmark gained `BENCH_DPR`, per-run GL scene stats and `2d-topics`/`2d-density` passes. The fork's Plotly entry (`forked/plotly.js/lib/index.js`) registers only `scattergl` and `scatter3d`, so a new Plotly trace type must be registered there; `forked/__tests__/plotlyEntry.test.ts` enforces it. See `documentation/RENDER_PERFORMANCE.md`.
 
 **Nebula cluster effects** (3D only): Boolean toggle (`nebulaMode`) adds translucent haze sprites around topic clusters. Uses `HazeRenderer` (`lib/utils/hazeRenderer.ts`) on a separate overlay canvas with `mix-blend-mode: screen`, hooked into Plotly's GL render loop for camera-synced projection. Cluster geometry computed in `lib/utils/clusterGeometry.ts`. Deprecated renderers (volume isosurface, WebGL billboard sprites, Three.js bloom) archived in `lib/utils/experimental/`.
 

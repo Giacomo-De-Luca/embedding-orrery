@@ -157,11 +157,12 @@ export const RE_EMBED_DATASET = gql`
 `;
 
 /**
- * Cancel a running embedding job
+ * Cancel a running job by its progress job id (embedding, LLM labeling,
+ * SAE document activations). Resolves false when no such job is running.
  */
-export const CANCEL_EMBEDDING_JOB = gql`
-  mutation CancelEmbeddingJob($collectionName: String!) {
-    cancelEmbeddingJob(collectionName: $collectionName)
+export const CANCEL_JOB = gql`
+  mutation CancelJob($jobId: String!) {
+    cancelJob(jobId: $jobId)
   }
 `;
 

@@ -93,15 +93,25 @@ describe('AxisOrdering.resolve', () => {
     const { colOrder } = AxisOrdering.resolve(shuffledBlocks, {
       rowMode: 'size',
       colMode: 'semantic',
-      colSemantic: ['c3', 'c2', 'c1', 'c0'],
+      colExternal: ['c3', 'c2', 'c1', 'c0'],
     });
     expect(ordered(shuffledBlocks.cols, colOrder)).toEqual(['c3', 'c2', 'c1', 'c0']);
   });
 
   it('falls back to pattern order when no semantic order is available', () => {
-    const semantic = AxisOrdering.resolve(shuffledBlocks, { rowMode: 'semantic', colMode: 'name', rowSemantic: null });
+    const semantic = AxisOrdering.resolve(shuffledBlocks, { rowMode: 'semantic', colMode: 'name', rowExternal: null });
     const pattern = AxisOrdering.resolve(shuffledBlocks, { rowMode: 'pattern', colMode: 'name' });
     expect(semantic.rowOrder).toEqual(pattern.rowOrder);
+  });
+
+  it('orders a binned numeric axis by its value order', () => {
+    const table = tableOf([['a', '5–10', 1], ['a', '0–5', 3], ['b', '10–15', 2]]);
+    const { colOrder } = AxisOrdering.resolve(table, {
+      rowMode: 'size',
+      colMode: 'value',
+      colExternal: ['0–5', '5–10', '10–15'],
+    });
+    expect(ordered(table.cols, colOrder)).toEqual(['0–5', '5–10', '10–15']);
   });
 
   it('keeps Missing and Other last in pattern order', () => {

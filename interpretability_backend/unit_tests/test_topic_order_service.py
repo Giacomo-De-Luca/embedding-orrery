@@ -146,6 +146,21 @@ class TestTopicOrder:
         assert centroids.loads == 2
 
 
+def test_an_extraction_switching_mid_call_is_not_cached(db, monkeypatch):
+    """The centroids loaded may belong to a newer extraction than the id read first."""
+    ext = _seed(db)
+    # Reads: value_order, then active_centroids (still `ext`, valid centroids), then the re-check.
+    ids = iter([ext, ext, "newer-extraction"])
+    real = db.get_active_extraction_id
+    monkeypatch.setattr(db, "get_active_extraction_id", lambda name: next(ids, real(name)))
+    centroids = CountingCentroidService(db)
+    service = TopicOrderService(duckdb=db, centroid_service=centroids)
+    assert service.value_order(COLLECTION, "topic_label") is None
+    # Nothing was cached under the stale id: the next call loads the centroids again.
+    assert service.value_order(COLLECTION, "topic_label") is not None
+    assert centroids.loads == 2
+
+
 class TestUnavailable:
     def test_non_topic_field_has_no_order(self, db):
         _seed(db)

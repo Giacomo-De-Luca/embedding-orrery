@@ -30,7 +30,6 @@ const HIT = [1, 0, 0, 0];
 const MISS = [255, 255, 255, 255];
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-const nextPow2 = (n: number) => 2 ** Math.ceil(Math.log2(n));
 
 /** Camera stand-in: `tick()` is what redraw() asks, `matrix` what it reads. */
 class FakeCamera {
@@ -286,7 +285,7 @@ describe('pick readback', () => {
     const target = read.args[6] as Uint8Array;
     const bytes = PICK_SHAPE[0] * PICK_SHAPE[1] * 4;
     expect(target.length).toBe(bytes);
-    expect(target.buffer.byteLength).toBe(nextPow2(bytes));
+    expect(target.buffer.byteLength).toBe(StackglHarness.nextPow2(bytes));
   });
 });
 

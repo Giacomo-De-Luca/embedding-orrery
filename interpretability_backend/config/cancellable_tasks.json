@@ -1,0 +1,6 @@
+{
+  "isolate_min_rows": 2000,
+  "poll_interval_ms": 200,
+  "spill_min_bytes": 1048576,
+  "terminate_grace_ms": 3000
+}

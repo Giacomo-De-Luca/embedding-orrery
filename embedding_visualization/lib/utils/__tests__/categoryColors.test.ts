@@ -21,6 +21,10 @@ import {
 } from '../categoryColors';
 import { CategoryKey } from '../categoryKey';
 import { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, getPaletteColors } from '../categoryPalettes';
+import { ColorMath } from '../colorMath';
+
+/** Shortest angular distance between two hues in degrees. */
+const hueDistance = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
 describe('generateCategoryColors', () => {
   it('should return correct number of colors for small counts', () => {
@@ -39,7 +43,8 @@ describe('generateCategoryColors', () => {
     const colors = generateCategoryColors(15);
     expect(colors).toHaveLength(15);
     expect(colors[0]).toBe('#0b7285'); // deep nebula teal
-    expect(colors[2]).toBe('#d4a017'); // stellar gold
+    expect(colors[1]).toBe('#d4a017'); // stellar gold: a contrasting main, not the teal echo
+    expect(colors[2]).toBe('#c92a2a'); // red dwarf
   });
 
   it('should use explicit palette when specified', () => {
@@ -313,9 +318,61 @@ describe('categoryPalettes registry', () => {
   it('should keep all built-in palette keys stable (persisted in URLs and collection defaults)', () => {
     expect(BUILTIN_PALETTE_NAMES).toEqual(expect.arrayContaining([
       'cosmicGalaxy', 'cosmicGalaxyLight', 'cosmicGalaxyXL',
+      'deepField', 'aurora', 'hubble', 'pulsar',
       'emeraldGalaxy', 'azureGalaxy', 'emberGalaxy', 'violetGalaxy',
       'Galaxy', 'category10', 'category20',
     ]));
+  });
+
+  it('cosmicGalaxy lists the ten main colours before their pale echoes', () => {
+    const colors = CATEGORY_PALETTES.cosmicGalaxy.colors;
+    expect(colors).toHaveLength(20);
+    for (let i = 0; i < 10; i++) {
+      const [mainL, , mainHue] = ColorMath.oklch(colors[i]);
+      const [echoL, , echoHue] = ColorMath.oklch(colors[i + 10]);
+      expect(echoL).toBeGreaterThan(mainL); // slot i+10 is the pale echo of slot i
+      expect(hueDistance(mainHue, echoHue)).toBeLessThan(25);
+    }
+  });
+
+  it('cosmicGalaxyLight keeps the cosmicGalaxy family order with deep siblings in the echo slots', () => {
+    const dark = CATEGORY_PALETTES.cosmicGalaxy.colors;
+    const light = CATEGORY_PALETTES.cosmicGalaxyLight.colors;
+    expect(light).toHaveLength(20);
+    for (let i = 0; i < 20; i++) {
+      expect(hueDistance(ColorMath.oklch(dark[i])[2], ColorMath.oklch(light[i])[2])).toBeLessThan(25);
+      expect(ColorMath.contrast(light[i], '#ffffff')).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('cosmicGalaxyXL appends six more main colours and then their echoes', () => {
+    const xl = CATEGORY_PALETTES.cosmicGalaxyXL.colors;
+    expect(xl).toHaveLength(32);
+    for (let i = 20; i < 26; i++) {
+      expect(ColorMath.oklch(xl[i + 6])[0]).toBeGreaterThan(ColorMath.oklch(xl[i])[0]);
+    }
+  });
+
+  it('deepField offers 64 unique colours that open with the default teal and gold', () => {
+    const deep = CATEGORY_PALETTES.deepField.colors;
+    expect(deep).toHaveLength(64);
+    expect(new Set(deep).size).toBe(64);
+    expect(deep.slice(0, 2)).toEqual(CATEGORY_PALETTES.cosmicGalaxy.colors.slice(0, 2));
+  });
+
+  it('dark-first palettes keep every colour at >= 3:1 against the black starfield', () => {
+    for (const name of ['cosmicGalaxy', 'cosmicGalaxyXL', 'deepField', 'aurora', 'hubble', 'pulsar']) {
+      for (const hex of CATEGORY_PALETTES[name].colors) {
+        expect(ColorMath.contrast(hex, '#000000'), `${name} ${hex}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it('no palette repeats a colour', () => {
+    for (const name of BUILTIN_PALETTE_NAMES) {
+      const colors = CATEGORY_PALETTES[name].colors;
+      expect(new Set(colors).size, name).toBe(colors.length);
+    }
   });
 
   it('cosmicGalaxyXL starts with cosmicGalaxy verbatim, so switching keeps existing colors', () => {

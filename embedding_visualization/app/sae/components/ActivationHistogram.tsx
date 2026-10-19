@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ReferenceLine, ResponsiveContainer, Tooltip } from 'recharts';
 import type { SaeActivation } from '@/lib/types/types';
-import { computeHistogramBins } from '../utils/histogramUtils';
+import { NumericBins } from '@/lib/utils/numericBins';
 
 interface ActivationHistogramProps {
   activations: SaeActivation[];
@@ -19,7 +19,7 @@ export function ActivationHistogram({ activations, hoveredValue }: ActivationHis
         if (v > 0) allValues.push(v);
       }
     }
-    return computeHistogramBins(allValues, 25);
+    return NumericBins.histogram(allValues, 25);
   }, [activations]);
 
   if (bins.length === 0) {

@@ -18,6 +18,7 @@ from ..clients.huggingface_client import (
     PortionStrategy,
     load_dataset_portion,
 )
+from ..services.cancel_registry import CANCELLED_MESSAGE, is_cancelled, report_cancelled
 from ..services.job_state import get_job_state_service
 from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
@@ -332,16 +333,13 @@ def embed_huggingface_dataset(
             range(0, len(rows), config.batch_size), desc="Embedding batches", unit="batch"
         ):
             # Cooperative cancellation check between batches
-            if cancel_event is not None and cancel_event.is_set():
-                job_state.fail_job(config.collection_name, "Cancelled by user")
-                emit_progress_sync(
-                    job_id=config.collection_name,
-                    status="failed",
+            if is_cancelled(cancel_event):
+                report_cancelled(
+                    config.collection_name,
                     items_processed=total_embedded,
                     total_items=len(rows),
                     current_batch=batches_completed,
                     total_batches=total_batches,
-                    error="Cancelled by user",
                 )
                 duration = time.time() - start_time
                 return EmbeddingResult(
@@ -350,6 +348,7 @@ def embed_huggingface_dataset(
                     embedding_dim=embedding_dim,
                     device=device,
                     duration_seconds=duration,
+                    error=CANCELLED_MESSAGE,
                     embedding_provider=model_config.provider.value,
                     embedding_model=model_config.model_name,
                 )

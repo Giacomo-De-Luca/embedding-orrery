@@ -2,10 +2,12 @@
 # Paths are relative to the repository root (EmbeddingVisualisation/).
 
 [repo]
-# Git repository holding the ACL Anthology metadata (XML + YAML).
+# Git repository holding the ACL Anthology metadata (under data/).
+# The clone is pinned to the tag of the installed acl-anthology release
+# (py-v<version>), whose data that release can parse; upgrade the data with
+# `uv lock --upgrade-package acl-anthology`. See README "Anthology clone".
 url = "https://github.com/acl-org/acl-anthology.git"
-# Where the shallow clone is kept (gitignored). Reused on subsequent runs;
-# delete the folder or `git -C <path> pull` to refresh.
+# Where the shallow clone is kept (gitignored), shared by all variant configs.
 path = "interpretability_backend/resources/acl_anthology"
 
 [output]
@@ -21,3 +23,21 @@ require_abstract = true
 # Optional venue filter by anthology venue id (e.g. ["acl", "emnlp", "naacl"]).
 # Empty list = all venues.
 venues = []
+
+[venue]
+# `venue` column: one primary venue per paper (Findings papers count under their
+# conference, joint events under the anthology's primary event, e.g. LREC-COLING
+# 2024 -> LREC). Acronyms listed here keep their own label; every other venue
+# (mostly workshops) becomes `other_label`. `venue_detail` always holds the
+# ungrouped acronym. Empty or missing list = no grouping. Use anthology acronyms.
+groups = [
+    # *ACL conferences
+    "ACL", "EMNLP", "NAACL", "EACL", "AACL", "IJCNLP",
+    # other major conferences and journals
+    "COLING", "LREC", "CoNLL", "TACL", "CL",
+    # large shared-task / MT series
+    "SemEval", "WMT", "IWSLT", "MTSummit",
+    # large regional and domain venues
+    "JEP/TALN/RECITAL", "RANLP", "CCL", "BioNLP",
+]
+other_label = "Other"

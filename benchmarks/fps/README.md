@@ -84,6 +84,9 @@ DPR-1 results.
 - `pickStats` (3D only): gl-plot3d's pick-pass counters `buffers`, `renders`,
   `deferredFrames` and `readbacks` (fork change 4)
 - `canvas`, the GL canvas backing size vs CSS size and their ratio
+- `poolRetainedMB`, idle ArrayBuffers in the stackgl typed-array pool (null
+  before the 3D bundle has loaded); the app releases the large ones when the
+  point count changes and on 3D unmount
 
 Pick counters accumulate over the page's life, so post-drag minus post-load
 is the drag.

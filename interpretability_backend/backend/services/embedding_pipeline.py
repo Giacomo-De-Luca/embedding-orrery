@@ -8,7 +8,7 @@ import asyncio
 import logging
 import threading
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..embed_dataset import (
     EmbeddingConfig,
@@ -20,6 +20,7 @@ from ..embed_dataset import (
 )
 from ..embedding_functions.config import ReEmbedConfig
 from ..embedding_functions.embed_existing_dataset import embed_existing_dataset as do_reembed
+from .cancel_registry import CANCELLED_MESSAGE, is_cancelled, report_cancelled
 from .job_state import get_job_state_service
 from .progress_emitter import emit_progress_sync
 from .topic_extraction_service import (
@@ -68,18 +69,17 @@ class EmbeddingPipeline(ABC):
         """Execute the full embedding pipeline.
 
         Flow: embed -> projections -> topics -> complete job -> emit completion.
+        A cancel request is honoured between batches (inside _do_embed) and
+        between steps; projections and topic extraction run to completion
+        once started.
         """
         job_state = get_job_state_service()
 
         # Step 1: Embed
         result = await asyncio.to_thread(self._do_embed)
 
-        # Check if job was cancelled during embedding
-        if self.cancel_event is not None and self.cancel_event.is_set():
-            return PipelineResult(
-                embedding_result=result,
-                projections_computed=False,
-            )
+        if is_cancelled(self.cancel_event):
+            return self._cancelled(result, projections_computed=False)
 
         # Step 2: Compute projections
         projections_computed = False
@@ -98,6 +98,9 @@ class EmbeddingPipeline(ABC):
                 self.collection_name,
                 job_id=self.collection_name,
             )
+
+        if is_cancelled(self.cancel_event):
+            return self._cancelled(result, projections_computed=projections_computed)
 
         # Step 3: Extract topics
         if self.extract_topics and projections_computed and result.error is None:
@@ -121,6 +124,28 @@ class EmbeddingPipeline(ABC):
             embedding_result=result,
             projections_computed=projections_computed,
         )
+
+    def _cancelled(self, result: EmbeddingResult, projections_computed: bool) -> PipelineResult:
+        """Stop the pipeline after a cancel request.
+
+        The batch loops report a cancel they catch themselves (result.error is
+        then already set); a cancel that lands after the last batch is
+        reported here. The job stays resumable while projections are still
+        missing (Resume recomputes them); once they exist the collection is
+        usable and only topic extraction was skipped, so the job is closed.
+        """
+        if result.error is None:
+            projections_missing = (
+                self.compute_projections and result.total_embedded > 0 and not projections_computed
+            )
+            report_cancelled(
+                self.collection_name,
+                items_processed=result.total_embedded,
+                total_items=result.total_embedded,
+                resumable=projections_missing,
+            )
+            result = replace(result, error=CANCELLED_MESSAGE)
+        return PipelineResult(embedding_result=result, projections_computed=projections_computed)
 
     async def _run_topic_extraction(self) -> bool:
         """Run topic extraction for the collection."""
@@ -164,4 +189,4 @@ class ReEmbeddingPipeline(EmbeddingPipeline):
         self.config = config
 
     def _do_embed(self) -> EmbeddingResult:
-        return do_reembed(self.config)
+        return do_reembed(self.config, cancel_event=self.cancel_event)

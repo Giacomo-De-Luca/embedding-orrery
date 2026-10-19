@@ -14,6 +14,10 @@ import { CategoryKey } from './categoryKey';
 export interface ContingencyTableOptions {
   /** Point indices to skip (the active text-search and temporal filters). */
   exclude?: ReadonlySet<number> | null;
+  /** Row key of a raw value; defaults to {@link CategoryKey.of} (e.g. a bin label for numeric fields). */
+  rowKey?: (raw: unknown) => string;
+  /** Column key of a raw value; defaults to {@link CategoryKey.of}. */
+  colKey?: (raw: unknown) => string;
   /** Row values to drop (e.g. unclustered topic noise). */
   rowExclude?: ReadonlySet<string>;
   /** Column values to drop. */
@@ -47,6 +51,9 @@ export class ContingencyTable {
     readonly rowTotals: number[],
     readonly colTotals: number[],
     readonly total: number,
+    /** Raw row value → the row key it is counted under (itself, Other, or Missing). */
+    private readonly rowFold: ReadonlyMap<string, string>,
+    private readonly colFold: ReadonlyMap<string, string>,
   ) {
     this.rowIndex = new Map(rows.map((key, i) => [key, i]));
     this.colIndex = new Map(cols.map((key, j) => [key, j]));
@@ -59,15 +66,15 @@ export class ContingencyTable {
     colField: string,
     options: ContingencyTableOptions = {},
   ): ContingencyTable {
-    const { exclude, rowExclude, colExclude, maxValues = Infinity } = options;
+    const { exclude, rowExclude, colExclude, maxValues = Infinity, rowKey = CategoryKey.of, colKey = CategoryKey.of } = options;
     const pairs: CountMap = new Map();
     const rowSums = new Map<string, number>();
     const colSums = new Map<string, number>();
 
     for (const point of points) {
       if (exclude?.has(point.index)) continue;
-      const row = CategoryKey.of(point.metadata?.[rowField]);
-      const col = CategoryKey.of(point.metadata?.[colField]);
+      const row = rowKey(point.metadata?.[rowField]);
+      const col = colKey(point.metadata?.[colField]);
       if (rowExclude?.has(row) || colExclude?.has(col)) continue;
 
       let byCol = pairs.get(row);
@@ -99,7 +106,7 @@ export class ContingencyTable {
       }
     }
 
-    return new ContingencyTable(rowField, colField, rows, cols, counts, rowTotals, colTotals, total);
+    return new ContingencyTable(rowField, colField, rows, cols, counts, rowTotals, colTotals, total, rowFold, colFold);
   }
 
   /**
@@ -131,6 +138,16 @@ export class ContingencyTable {
   /** True for Missing and Other, which sort after every real value. */
   static isPinned(key: string): boolean {
     return key === CategoryKey.MISSING || key === ContingencyTable.OTHER;
+  }
+
+  /** Row key a raw row value is counted under; undefined when it was excluded or never seen. */
+  rowKeyFor(value: string): string | undefined {
+    return this.rowFold.get(value);
+  }
+
+  /** Column key a raw column value is counted under; undefined when it was excluded or never seen. */
+  colKeyFor(value: string): string | undefined {
+    return this.colFold.get(value);
   }
 
   /** Count for a pair of keys; 0 when either key is not in the table. */
@@ -180,15 +197,26 @@ export class ContingencyTable {
     return Math.exp(entropy);
   }
 
-  /** Cramér's V in [0, 1]; null when either axis has fewer than two values. */
+  /**
+   * Cramér's V in [0, 1], bias-corrected (Bergsma 2013): plain V grows with
+   * the table size over the sample size, so small or filtered samples would
+   * show an association between unrelated fields. Null when either axis has
+   * fewer than two values or the sample is too small to correct.
+   */
   cramersV(): number | null {
-    const dof = Math.min(this.rows.length, this.cols.length) - 1;
-    if (dof < 1 || this.total === 0) return null;
+    const r = this.rows.length;
+    const c = this.cols.length;
+    const n = this.total;
+    if (Math.min(r, c) < 2 || n < 2) return null;
     let chiSquare = 0;
-    for (let i = 0; i < this.rows.length; i++) {
-      for (let j = 0; j < this.cols.length; j++) chiSquare += this.residual(i, j) ** 2;
+    for (let i = 0; i < r; i++) {
+      for (let j = 0; j < c; j++) chiSquare += this.residual(i, j) ** 2;
     }
-    return Math.sqrt(chiSquare / (this.total * dof));
+    const phiSquared = Math.max(0, chiSquare / n - ((r - 1) * (c - 1)) / (n - 1));
+    const rCorrected = r - (r - 1) ** 2 / (n - 1);
+    const cCorrected = c - (c - 1) ** 2 / (n - 1);
+    const denominator = Math.min(rCorrected, cCorrected) - 1;
+    return denominator > 0 ? Math.min(1, Math.sqrt(phiSquared / denominator)) : null;
   }
 
   /** The same table with rows and columns swapped. */
@@ -203,6 +231,8 @@ export class ContingencyTable {
       this.colTotals,
       this.rowTotals,
       this.total,
+      this.colFold,
+      this.rowFold,
     );
   }
 }

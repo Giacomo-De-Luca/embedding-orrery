@@ -6,6 +6,7 @@ vector collection. Does NOT create a new dataset or insert items into DuckDB —
 only ChromaDB gets new vectors and a new vector_collections row is registered.
 """
 
+import threading
 import time
 from collections.abc import Callable
 
@@ -13,6 +14,7 @@ import chromadb
 from chromadb.config import Settings
 from tqdm import tqdm
 
+from ..services.cancel_registry import CANCELLED_MESSAGE, is_cancelled, report_cancelled
 from ..services.job_state import get_job_state_service
 from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
@@ -32,6 +34,7 @@ PROGRESS_UPDATE_FREQUENCY = 1
 def embed_existing_dataset(
     config: ReEmbedConfig,
     progress_callback: Callable[[int, int], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> EmbeddingResult:
     """
     Re-embed an existing DuckDB dataset with a new embedding model.
@@ -43,6 +46,8 @@ def embed_existing_dataset(
     Args:
         config: Re-embedding configuration (source dataset + new model)
         progress_callback: Optional callback for progress updates
+        cancel_event: Checked between batches; when set, stops and leaves
+            the job resumable
 
     Returns:
         EmbeddingResult with statistics
@@ -233,6 +238,26 @@ def embed_existing_dataset(
     for batch_start in tqdm(
         range(0, len(all_items), batch_size), desc="Re-embedding batches", unit="batch"
     ):
+        # Cooperative cancellation check between batches
+        if is_cancelled(cancel_event):
+            report_cancelled(
+                config.collection_name,
+                items_processed=total_embedded,
+                total_items=len(all_items),
+                current_batch=batches_completed,
+                total_batches=total_batches,
+            )
+            return EmbeddingResult(
+                collection_name=config.collection_name,
+                total_embedded=total_embedded,
+                embedding_dim=embedding_dim,
+                device=device,
+                duration_seconds=time.time() - start_time,
+                error=CANCELLED_MESSAGE,
+                embedding_provider=model_config.provider.value,
+                embedding_model=model_config.model_name,
+            )
+
         batch = all_items[batch_start : batch_start + batch_size]
 
         ids = []

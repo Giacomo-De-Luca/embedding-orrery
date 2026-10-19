@@ -17,8 +17,6 @@ const MiB = 1 << 20;
 const POINT_COUNT = 2000;
 const CAMERA = {};
 
-const nextPow2 = (n: number) => 2 ** Math.ceil(Math.log2(n));
-
 let recorder: RecordingGl;
 
 /** Options as plotly's scatter3d convert.js passes them, for `count` points on a helix. */
@@ -54,7 +52,7 @@ function build(count = POINT_COUNT): PointCloud {
 
 /** The pool bytes an update leaves behind: each of the four uploads rounded up to a power of two. */
 function pooledBytesFor(cloud: PointCloud): number {
-  return Object.values(recorder.uploadsOf(cloud)).reduce((sum, bytes) => sum + nextPow2(bytes.length), 0);
+  return Object.values(recorder.uploadsOf(cloud)).reduce((sum, bytes) => sum + StackglHarness.nextPow2(bytes.length), 0);
 }
 
 const bundlePool = () => (globalThis as Record<string, unknown>).__TYPEDARRAY_POOL as { DATA: ArrayBuffer[][] };

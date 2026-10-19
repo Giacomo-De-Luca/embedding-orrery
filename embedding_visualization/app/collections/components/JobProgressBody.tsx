@@ -1,10 +1,14 @@
 'use client';
 
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { Progress } from '@/lib/ui-primitives/progress';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Square } from 'lucide-react';
+import { useCancelJob } from '@/lib/hooks/useCancelJob';
+import { cancelButtonView, type CancelState } from '@/lib/utils/jobCancellation';
 import { formatElapsed } from '../lib/jobProgress';
 import { useJobProgress } from '../lib/useJobProgress';
 
@@ -17,16 +21,19 @@ export interface JobProgressBodyProps {
   subtitle?: string;
   /** Label for the items counter, e.g. "topics" or "items" (default: "items") */
   itemsLabel?: string;
-  /** Called when user clicks the Cancel button */
-  onCancel?: () => void;
-  /** Disable the Cancel button while the mutation is in flight */
-  cancelLoading?: boolean;
+  /** Show a Cancel button that asks the backend to stop this job (`cancelJob`
+   * mutation). Only for jobs the backend registers as cancellable. */
+  cancellable?: boolean;
 }
 
 /**
  * Layout-agnostic live progress display for a job: header with status badge,
  * elapsed/ETA, optional cancel, progress bar, and counters. Wrapped by
  * ProgressModal (centered blocking overlay).
+ *
+ * Cancel is cooperative: the job stops after its current batch, so the
+ * button stays on "Cancelling…" until the job's own mutation resolves and the
+ * caller unmounts the modal.
  *
  * Supports two progress models:
  * - Stage-based (totalBatches > 1): bar tracks currentBatch/totalBatches,
@@ -38,8 +45,7 @@ export function JobProgressBody({
   title,
   subtitle,
   itemsLabel = 'items',
-  onCancel,
-  cancelLoading,
+  cancellable = false,
 }: JobProgressBodyProps) {
   const {
     progress,
@@ -51,6 +57,19 @@ export function JobProgressBody({
     showItemCounter,
     isMultiStage,
   } = useJobProgress(jobId);
+
+  const cancelJob = useCancelJob();
+  const [cancelState, setCancelState] = useState<CancelState>('idle');
+  const cancelButton = cancelButtonView(cancelState, progress?.status);
+
+  const handleCancel = async () => {
+    setCancelState('requesting');
+    const accepted = await cancelJob(jobId);
+    setCancelState(accepted ? 'requested' : 'idle');
+    if (!accepted) {
+      toast.error('This job is no longer running, so it could not be cancelled.');
+    }
+  };
 
   const statusColor = {
     running: 'bg-blue-500',
@@ -78,16 +97,17 @@ export function JobProgressBody({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {onCancel && (!progress || progress.status === 'running') && (
+          {cancellable && cancelButton.visible && (
             <Button
               variant="destructive"
               size="sm"
-              onClick={onCancel}
-              disabled={cancelLoading}
+              onClick={handleCancel}
+              disabled={cancelButton.disabled}
+              title="Stops after the current batch. Work done so far is kept and can be resumed."
               className="gap-1"
             >
               <Square className="h-3 w-3" />
-              {cancelLoading ? 'Cancelling...' : 'Cancel'}
+              {cancelButton.label}
             </Button>
           )}
           {(!progress || progress.status === 'running') && (

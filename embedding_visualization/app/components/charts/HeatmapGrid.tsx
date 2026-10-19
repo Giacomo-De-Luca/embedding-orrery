@@ -1,21 +1,27 @@
 'use client';
 
-import { Fragment, useCallback, useMemo, useRef, useState, type RefObject } from 'react';
-import { AssociationView } from '@/lib/utils/associationView';
+import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import type { HeatmapModel } from '@/lib/utils/heatmapModel';
 import { cn } from '@/lib/utils/utils';
 
 const CELL_HEIGHT = 22;
 const CELL_WIDTH = 22;
-/** Wider cells leave room for "1.2K" / "2.5×" labels. */
-const CELL_WIDTH_WITH_VALUES = 36;
+/** Wider cells leave room for "1.2K" / "2.5×" / "−0.05" labels. */
+const CELL_WIDTH_WITH_VALUES = 38;
 const TOOLTIP_WIDTH = 280;
+/** Rough tooltip height, to open it above the pointer near the bottom edge. */
+const TOOLTIP_HEIGHT = 170;
 
-interface AssociationHeatmapProps {
-  view: AssociationView;
-  /** Display order of the table's rows / columns (index permutations). */
-  rowOrder: number[];
-  colOrder: number[];
+interface HeatmapGridProps {
+  model: HeatmapModel;
+  /** Display order of the model's rows / columns (index permutations). */
+  rowOrder: readonly number[];
+  colOrder: readonly number[];
   showValues: boolean;
+  /** Accessible name of the grid. */
+  ariaLabel: string;
+  /** Tooltip body of cell (i, j), in model indices. */
+  renderTooltip: (i: number, j: number) => ReactNode;
   /** The full grid, including cells outside the scroll viewport, for PNG export. */
   exportRef?: RefObject<HTMLDivElement | null>;
 }
@@ -29,34 +35,31 @@ interface ActiveCell {
   y: number;
   /** Open the tooltip to the left of the anchor when it would overflow on the right. */
   flip: boolean;
-}
-
-function formatPercent(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
+  /** Open it above the anchor when it would overflow at the bottom; holds the wrapper height then. */
+  above: number | null;
 }
 
 /**
- * Cell grid of an {@link AssociationView}: sticky row and column labels, a
- * 2px surface gap between cells, and one tooltip that follows the pointer or
- * the arrow keys. Cells carry their display position in data attributes so a
+ * Cell grid of a {@link HeatmapModel}: sticky row and column labels, a 2px
+ * surface gap between cells, and one tooltip that follows the pointer or the
+ * arrow keys. Cells carry their display position in data attributes so a
  * single delegated handler serves the whole grid; the highlight ring and the
  * tooltip are overlays, so hovering never re-renders the cells.
  */
-export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, exportRef }: AssociationHeatmapProps) {
+export function HeatmapGrid({
+  model,
+  rowOrder,
+  colOrder,
+  showValues,
+  ariaLabel,
+  renderTooltip,
+  exportRef,
+}: HeatmapGridProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState<ActiveCell | null>(null);
-  const { table } = view;
   const cellWidth = showValues ? CELL_WIDTH_WITH_VALUES : CELL_WIDTH;
-
-  const rowLabels = useMemo(
-    () => table.rows.map(key => AssociationView.axisLabel(table.rowField, key)),
-    [table],
-  );
-  const colLabels = useMemo(
-    () => table.cols.map(key => AssociationView.axisLabel(table.colField, key)),
-    [table],
-  );
+  const { rowLabels, colLabels } = model;
 
   const cellElement = useCallback(
     (r: number, c: number) => gridRef.current?.querySelector<HTMLElement>(`[data-r="${r}"][data-c="${c}"]`) ?? null,
@@ -69,6 +72,7 @@ export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, expor
     if (!wrapper) return null;
     const bounds = wrapper.getBoundingClientRect();
     const x = clientX - bounds.left;
+    const y = clientY - bounds.top;
     return {
       r: Number(element.dataset.r),
       c: Number(element.dataset.c),
@@ -79,8 +83,9 @@ export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, expor
         height: element.offsetHeight,
       },
       x,
-      y: clientY - bounds.top,
+      y,
       flip: x + TOOLTIP_WIDTH + 24 > wrapper.clientWidth,
+      above: y + TOOLTIP_HEIGHT + 24 > wrapper.clientHeight ? wrapper.clientHeight : null,
     };
   }, []);
 
@@ -140,17 +145,17 @@ export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, expor
               key={`cell-${i}-${j}`}
               data-r={r}
               data-c={c}
-              className="flex items-center justify-center rounded-[2px]"
-              style={{ backgroundColor: view.color(i, j), height: CELL_HEIGHT }}
+              className="flex scroll-mt-[8.5rem] scroll-ml-[14.5rem] items-center justify-center rounded-[2px]"
+              style={{ backgroundColor: model.color(i, j), height: CELL_HEIGHT }}
             >
               {showValues && (
                 <span
                   className={cn(
                     'pointer-events-none text-[10px] tabular-nums',
-                    view.usesLightInk(i, j) ? 'text-white/90' : 'text-neutral-900/80',
+                    model.usesLightInk(i, j) ? 'text-white/90' : 'text-neutral-900/80',
                   )}
                 >
-                  {view.cellLabel(i, j)}
+                  {model.cellLabel(i, j)}
                 </span>
               )}
             </div>
@@ -158,18 +163,20 @@ export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, expor
         </Fragment>
       ))}
     </>
-  ), [view, rowOrder, colOrder, rowLabels, colLabels, showValues]);
+  ), [model, rowOrder, colOrder, rowLabels, colLabels, showValues]);
 
-  // Positions past the end can linger for one render after the table shrinks.
+  // Positions past the end can linger for one render after the model shrinks.
   const i = active ? rowOrder[active.r] ?? -1 : -1;
   const j = active ? colOrder[active.c] ?? -1 : -1;
+  const hasCell = i >= 0 && j >= 0;
 
   return (
     <div ref={wrapperRef} className="relative h-full min-h-0">
       <div
         className="h-full overflow-auto rounded-md focus-visible:outline-2 focus-visible:outline-ring"
-        role="grid"
-        aria-label={`${table.rowField} by ${table.colField}. Use the arrow keys to read cells.`}
+        role="group"
+        aria-roledescription="heatmap"
+        aria-label={`${ariaLabel}. Use the arrow keys to read cells.`}
         tabIndex={0}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => setActive(null)}
@@ -196,65 +203,26 @@ export function AssociationHeatmap({ view, rowOrder, colOrder, showValues, expor
         </div>
       </div>
 
-      {active && i >= 0 && j >= 0 && (
+      {/* Always mounted, so screen readers announce the first cell too. */}
+      <div className="sr-only" aria-live="polite">
+        {active && hasCell ? `${rowLabels[i]}, ${colLabels[j]}: ${model.cellLabel(i, j)}` : ''}
+      </div>
+
+      {active && hasCell && (
         <div
+          aria-hidden
           className="frosted-tooltip pointer-events-none absolute z-40"
           style={{
             left: active.flip ? active.x - TOOLTIP_WIDTH - 14 : active.x + 14,
-            top: active.y + 14,
+            ...(active.above === null ? { top: active.y + 14 } : { bottom: active.above - active.y + 14 }),
             width: TOOLTIP_WIDTH,
             backdropFilter: 'blur(12px) saturate(150%)',
             WebkitBackdropFilter: 'blur(12px) saturate(150%)',
           }}
-          role="status"
         >
-          <CellTooltip view={view} i={i} j={j} rowLabel={rowLabels[i]} colLabel={colLabels[j]} />
+          {renderTooltip(i, j)}
         </div>
       )}
     </div>
-  );
-}
-
-function CellTooltip({
-  view,
-  i,
-  j,
-  rowLabel,
-  colLabel,
-}: {
-  view: AssociationView;
-  i: number;
-  j: number;
-  rowLabel: string;
-  colLabel: string;
-}) {
-  const { table, mode } = view;
-  const count = table.counts[i][j];
-  const headline =
-    mode === 'enrichment'
-      ? `${AssociationView.formatRatio(table.ratio(i, j))} expected`
-      : mode === 'rowShare'
-        ? `${formatPercent(table.rowShare(i, j))} of ${rowLabel}`
-        : mode === 'colShare'
-          ? `${formatPercent(table.colShare(i, j))} of ${colLabel}`
-          : `${count.toLocaleString()} points`;
-
-  return (
-    <>
-      <div className="text-sm font-semibold tabular-nums">{headline}</div>
-      <div className="mt-0.5 text-xs break-words opacity-70">
-        {rowLabel} · {colLabel}
-      </div>
-      <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-        <span className="opacity-60">Points</span>
-        <span className="tabular-nums">{count.toLocaleString()}</span>
-        <span className="opacity-60">Expected if unrelated</span>
-        <span className="tabular-nums">{table.expected(i, j).toFixed(1)}</span>
-        <span className="min-w-0 truncate opacity-60">Share of {rowLabel}</span>
-        <span className="tabular-nums">{formatPercent(table.rowShare(i, j))}</span>
-        <span className="min-w-0 truncate opacity-60">Share of {colLabel}</span>
-        <span className="tabular-nums">{formatPercent(table.colShare(i, j))}</span>
-      </div>
-    </>
   );
 }

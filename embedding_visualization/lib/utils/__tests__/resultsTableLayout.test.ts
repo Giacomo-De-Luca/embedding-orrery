@@ -23,9 +23,11 @@ describe('ResultsTableLayout.columnWidths', () => {
     }
   });
 
-  it('fits ID, Label and Similarity side by side on a 360px-class phone', () => {
+  it('fits ID, Label and Similarity side by side on a 360px phone', () => {
+    // 360 minus DashboardPanel px-2 (16), panel border (2), CardContent px-2 (16)
+    // and table wrapper border (2) leaves 324px for the table.
     const { id, label, similarity } = ResultsTableLayout.columnWidths(true);
-    expect(id.size + label.size + similarity.size).toBeLessThanOrEqual(340);
+    expect(id.size + label.size + similarity.size).toBeLessThanOrEqual(324);
   });
 });
 

@@ -324,7 +324,7 @@ export function SimilarItemsTable({ results, queryLabel, categoryField, onClose,
                     {headerGroup.headers.map((header) => (
                       <TableHead
                         key={header.id}
-                        className="relative max-md:h-8 max-md:text-xs"
+                        className="relative max-md:h-8 max-md:text-xs max-md:truncate"
                         style={{
                           width: header.getSize(),
                           minWidth: header.column.columnDef.minSize,

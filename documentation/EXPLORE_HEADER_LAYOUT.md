@@ -103,7 +103,8 @@ visible in the bottom panel of a phone.
   query label (the "Items semantically similar to" / "Features activated by"
   prefix is hidden) and truncates, the close button is 24 px, and the card's
   padding is tighter (content `px-2`, header `pl-4 pr-2`). Column headers are
-  32 px tall with `text-xs`.
+  32 px tall with `text-xs` and truncate, since fixed layout no longer widens a
+  column for a long header such as "Part of Speech".
 - **Rows**: every cell stays on one line (`whitespace-nowrap`, `text-xs`,
   `py-1`), about 24 px a row. Overflow scrolls horizontally *inside the cell*:
   `CellScroll` mounts a horizontal Radix scrollbar. Without one, Radix hides
@@ -113,9 +114,13 @@ visible in the bottom panel of a phone.
   text cannot widen its column. Column widths come from the header row.
 - **Narrower columns**: `ResultsTableLayout.columnWidths(isMobile)`
   (`lib/utils/resultsTableLayout.ts`, unit-tested) gives phones widths that fit
-  ID, Label and Similarity side by side (≤ 340 px). Only the widths go through
-  JS (`useIsMobile`, since tanstack sizes are JS). Everything else is CSS
-  variants, so the layout doesn't flash.
+  ID, Label and Similarity side by side on a 360 px phone. There the table gets
+  324 px after the panel and card padding and borders. Only the widths go
+  through JS (`useIsMobile`, since tanstack sizes are JS), so they may switch
+  one frame after mount. Everything else is CSS variants.
+- **Swipes**: a horizontal swipe that starts on an overflowing cell (Content
+  nearly always overflows) scrolls that cell first. To move the whole table,
+  swipe on the header row or on the ID/Similarity cells.
 - **Title alignment**: the effect that puts the description over the Label
   column now measures padding, gap and border with `getComputedStyle`
   (`ResultsTableLayout.titleColumnWidth`). The old hard-coded 32/16/8/1 px

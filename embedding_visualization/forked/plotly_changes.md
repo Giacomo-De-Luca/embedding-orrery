@@ -61,6 +61,20 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 
 **Tests:** `forked/__tests__/glPlot3dPickDeferral.test.ts`.
 
+### 5. Slim entry: only scattergl and scatter3d are registered
+
+**File:** `lib/index.js`
+
+**Problem:** `plotly.js` resolves to `lib/index.js`, which registered all ~48 upstream trace types plus the calendars component. The app only creates `scattergl` (2D) and `scatter3d` (3D) traces, so the rest was dead weight that every page with a plot downloaded, parsed and ran. The mapbox and map traces load two full map libraries (`@plotly/mapbox-gl`, `maplibre-gl`) as soon as their modules are evaluated.
+
+**Fix:** the entry registers `./scattergl` and `./scatter3d` only. Plotly's core (`src/core.js`) still registers `scatter`, the modebar, selections (box/lasso), legend, fx (hover), colorbar, shapes and the rest of its components, and `toImage` / `react` / `relayout` are plot API methods, so nothing the app uses is lost. Without the calendars component, `Registry.getComponentMethod('calendars', …)` returns a no-op, so the default gregorian dates behave as before; non-gregorian `*calendar` attributes are simply not available.
+
+**Effect** (esbuild, minified, app aliases): 1,157 → 528 modules, 4.93 → 2.00 MB minified, 1.52 → 0.66 MB gzipped. Details: `documentation/RENDER_PERFORMANCE.md`, step 4.
+
+**Contract:** a trace type the app creates must be registered here, or plotly drops it without an error. `forked/__tests__/plotlyEntry.test.ts` scans `app/` and `lib/` for trace names written as string literals in a `type:` value and fails if one isn't registered; a type held in a variable is invisible to it. The other entry files (`lib/index-*.js`, upstream partial bundles) are untouched and unused. `registry.js` still statically requires `maplibre-gl/dist/maplibre-gl.css`, so the Turbopack alias for it in `next.config.ts` stays.
+
+**Tests:** `forked/__tests__/plotlyEntry.test.ts`.
+
 ---
 
 ## react-plotly.js
@@ -74,6 +88,10 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 **Reason:** The original entry point hardcodes the pre-built `dist/plotly.js` bundle (11 MB), which is a standalone IIFE that bypasses the source tree entirely — meaning none of the patches above would take effect for the 2D Plot component. By importing `plotly.js` (which resolves to `lib/index.js` → `src/`), both 2D and 3D components use the same patched source build. This also allowed us to drop the entire `dist/` directory (90 MB) from the fork.
 
 ---
+
+## App code that depends on bundle internals
+
+Not a patch, but anything that rebuilds or replaces the bundle must keep it working: `lib/utils/stackglBufferPool.ts` reads typedarray-pool's cache through its global, `globalThis.__TYPEDARRAY_POOL.DATA` (32 buckets of idle ArrayBuffers by power-of-two size), to release the vertex arrays gl-scatter3d returns to it after every upload. `forked/__tests__/stackglPoolRelease.test.ts` fails if the global or its shape changes.
 
 ## Editing `stackgl_modules/index.js`
 

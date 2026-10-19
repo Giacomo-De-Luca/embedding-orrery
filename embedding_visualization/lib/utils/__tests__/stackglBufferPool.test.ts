@@ -77,7 +77,7 @@ describe('StackglBufferPool.release', () => {
     expect(StackglBufferPool.release()).toEqual({ buffers: 1, bytes: 1.5 * MiB });
   });
 
-  it('empties buckets in place, since the bundle holds references to them', () => {
+  it('empties buckets in place and keeps the DATA table the bundle captured', () => {
     const pool = fakePool([MiB, MiB, 4 * MiB]);
     install(pool);
     const data = pool.DATA;

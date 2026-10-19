@@ -99,6 +99,19 @@ describe('ContingencyTable.fromPoints', () => {
     expect(table.colTotals.reduce((sum, n) => sum + n, 0)).toBe(7);
   });
 
+  it('tells which key a raw value is counted under', () => {
+    const table = ContingencyTable.fromPoints(
+      pointsOf([['a', 'x'], ['a', 'x'], ['a', 'y'], ['b', 'z']]),
+      'source',
+      'topic',
+      { maxValues: 2, colExclude: new Set(['w']) },
+    );
+    expect(table.colKeyFor('x')).toBe('x');
+    expect(table.colKeyFor('z')).toBe(OTHER);
+    expect(table.colKeyFor('never-seen')).toBeUndefined();
+    expect(table.rowKeyFor('a')).toBe('a');
+  });
+
   it('keeps Missing explicit and outside the maxValues cap', () => {
     const table = ContingencyTable.fromPoints(
       pointsOf([['a', 'x'], ['a', 'y'], ['a', 'z'], ['a', undefined]]),
@@ -121,6 +134,19 @@ describe('ContingencyTable.fromPoints', () => {
     expect(table.cols).toEqual(['x', 'y']);
   });
 
+  it('reads each axis through its own key function when given one', () => {
+    const points = [
+      { index: 0, metadata: { source: 'a', score: 0.2 } },
+      { index: 1, metadata: { source: 'a', score: 0.9 } },
+      { index: 2, metadata: { source: 'b', score: 0.7 } },
+    ];
+    const band = (raw: unknown) => ((raw as number) < 0.5 ? 'low' : 'high');
+    const table = ContingencyTable.fromPoints(points, 'source', 'score', { colKey: band });
+    expect(table.cols).toEqual(['high', 'low']);
+    expect(table.countOf('a', 'low')).toBe(1);
+    expect(table.countOf('b', 'high')).toBe(1);
+  });
+
   it('builds an empty table from no points', () => {
     const table = ContingencyTable.fromPoints([], 'source', 'topic');
     expect(table.rows).toEqual([]);
@@ -138,6 +164,12 @@ describe('ContingencyTable statistics', () => {
     expect(table.ratio(0, 0)).toBe(2);
     expect(table.ratio(0, 1)).toBe(0);
     expect(table.cramersV()).toBeCloseTo(1);
+  });
+
+  it("corrects Cramér's V for small samples (Bergsma)", () => {
+    // Uncorrected V would be 0.5 on this 8-point table.
+    const table = ContingencyTable.fromPoints(pointsFromMatrix([[3, 1], [1, 3]]), 'source', 'topic');
+    expect(table.cramersV()).toBeCloseTo(Math.sqrt(0.125), 3);
   });
 
   it('gives zero residuals and V = 0 on an independent table', () => {

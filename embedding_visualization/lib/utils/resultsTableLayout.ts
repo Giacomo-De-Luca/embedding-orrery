@@ -2,8 +2,8 @@
  * Layout of the search results table (SimilarItemsTable).
  *
  * Phones keep every cell on one line and scroll its overflow horizontally inside
- * the cell, so they get narrower columns: ID, Label and Similarity fit a phone
- * screen side by side, and the rest is one horizontal swipe away.
+ * the cell, so they get narrower columns: ID, Label and Similarity fit a 360px
+ * phone side by side, and the rest is one horizontal swipe away.
  */
 export type ResultsColumn = 'id' | 'label' | 'similarity' | 'category' | 'document' | 'metadata';
 
@@ -34,9 +34,9 @@ const DESKTOP_WIDTHS: Record<ResultsColumn, ColumnWidth> = {
 };
 
 const MOBILE_WIDTHS: Record<ResultsColumn, ColumnWidth> = {
-  id: { size: 90, minSize: 60, maxSize: 150 },
+  id: { size: 80, minSize: 60, maxSize: 150 },
   label: { size: 120, minSize: 80, maxSize: 250 },
-  similarity: { size: 125, minSize: 110, maxSize: 250 },
+  similarity: { size: 115, minSize: 110, maxSize: 250 },
   category: { size: 90, minSize: 60, maxSize: 150 },
   document: { size: 220, minSize: 120, maxSize: 500 },
   metadata: { size: 140, minSize: 80, maxSize: 350 },

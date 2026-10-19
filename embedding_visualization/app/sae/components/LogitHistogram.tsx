@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts';
 import type { SaeLogitEntry } from '@/lib/types/types';
-import { computeHistogramBins } from '../utils/histogramUtils';
+import { NumericBins } from '@/lib/utils/numericBins';
 
 interface LogitHistogramProps {
   topLogits: SaeLogitEntry[] | null;
@@ -16,7 +16,7 @@ export function LogitHistogram({ topLogits, bottomLogits }: LogitHistogramProps)
     if (topLogits) scores.push(...topLogits.map((e) => e.score));
     if (bottomLogits) scores.push(...bottomLogits.map((e) => -e.score));
     if (scores.length === 0) return [];
-    return computeHistogramBins(scores, 15);
+    return NumericBins.histogram(scores, 15);
   }, [topLogits, bottomLogits]);
 
   if (bins.length === 0) {

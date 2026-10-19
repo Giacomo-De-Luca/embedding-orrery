@@ -1336,6 +1336,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       if (plotInitializedRef.current && plotlyLibRef.current && graphDivRef.current) {
         plotlyLibRef.current.purge(graphDivRef.current);
         plotInitializedRef.current = false;
+        // purge() disposes the scene, which hands the pick buffer's CPU copy back to
+        // the stackgl typed-array pool; drop it with the rest (idempotent).
+        StackglBufferPool.release();
       }
     };
   // Only run on mount/unmount — subsequent updates handled by dedicated effects below
@@ -1343,13 +1346,13 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [plotlyLoaded]);
 
   // Release the stackgl typed-array pool's idle vertex buffers when the point count
-  // changes and on unmount. gl-scatter3d returns its vertex arrays to that pool after
-  // every upload and nothing else ever empties it, so a large collection's buffers
-  // (~704 MiB for WordNet) would otherwise stay resident for the life of the tab.
-  // Pooled sizes follow the point count, so a change means they cannot be reused.
-  // The cleanup phase runs before the effect that builds the next traces, which then
-  // allocate afresh and stay pooled; on unmount it runs after the purge above has
-  // handed the pick buffer back (React runs cleanups in declaration order).
+  // changes. gl-scatter3d returns its vertex arrays to that pool after every upload
+  // and nothing else ever empties it, so a large collection's buffers would otherwise
+  // stay resident for the life of the tab (documentation/RENDER_PERFORMANCE.md,
+  // "Typed-array pool release"). Pooled sizes follow the point count, so a change
+  // means they cannot be reused. The cleanup phase runs before the effect that builds
+  // the next traces, which then allocate afresh and stay pooled. Unmount is covered
+  // by the purge cleanup above.
   useEffect(() => () => { StackglBufferPool.release(); }, [points.length]);
 
   // 2. Update base traces when they change (ref-equality check via deps — instant, not deep)

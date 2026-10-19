@@ -1,5 +1,6 @@
-# Claude Code
-.claude/
+# Claude Code: local settings and worktrees stay private, shared agent definitions are tracked
+.claude/*
+!.claude/agents/
 
 # Submodules (reference only, not tracked)
 neuronpedia/

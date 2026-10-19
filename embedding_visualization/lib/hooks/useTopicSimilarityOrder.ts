@@ -2,7 +2,7 @@
 
 import { useQuery } from '@apollo/client/react';
 import { TOPIC_SIMILARITY_ORDER } from '../graphql/queries';
-import { isTopicLikeField } from '../utils/categoryColors';
+import { AssociationFields } from '../utils/fieldAxis';
 
 interface TopicSimilarityOrderData {
   topicSimilarityOrder: string[] | null;
@@ -18,7 +18,7 @@ export function useTopicSimilarityOrder(
   field: string | null,
   enabled: boolean,
 ): string[] | null {
-  const skip = !enabled || !collectionName || !isTopicLikeField(field);
+  const skip = !enabled || !collectionName || !AssociationFields.supportsSimilarity(field);
   const { data } = useQuery<TopicSimilarityOrderData>(TOPIC_SIMILARITY_ORDER, {
     variables: { collectionName: collectionName ?? '', field: field ?? '' },
     skip,

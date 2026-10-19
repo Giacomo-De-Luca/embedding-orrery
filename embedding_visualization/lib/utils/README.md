@@ -21,12 +21,45 @@ renderers are in `experimental/`, and the density renderer has its own README.
 - `axisOrdering.ts`: `AxisOrdering` orders a table's rows and columns by size,
   name, pattern (barycentric seriation) or an external similarity order.
 - `associationView.ts`: `AssociationView` (cell values, colours, labels and
-  sidebar summaries of the field-association heatmap) and `AssociationFields`
-  (its default fields). See `../../../documentation/FIELD_ASSOCIATIONS.md`.
+  sidebar summaries of the field-association heatmap) and `AssociationScale`
+  (its colour scales). See `../../../documentation/FIELD_ASSOCIATIONS.md`.
+- `fieldAxis.ts`: `AssociationFields` (comparable fields and defaults),
+  `FieldAxis` (a field as a table axis, numeric fields binned) and
+  `AssociationStatistics` (Cramér's V, η or Spearman ρ for a pair).
+- `numericBins.ts`: `NumericBins`, the one binning utility: axis bins
+  (equal-count or equal-width, range or percentile labels) and histogram bins
+  (equal-width, linear or log) for the legend and the SAE explorer. `fieldCorrelation.ts`: `FieldCorrelation` (ranks, Pearson,
+  Spearman, η, pairwise matrix). `correlationView.ts`: `CorrelationMatrixView`.
+  `heatmapModel.ts`: the `HeatmapModel` interface both heatmaps implement.
 - `heatmapCapture.ts`: `HeatmapCapture` exports the full heatmap grid, heading
   and legend as a 2× canvas for PNG download, cancelling if the dialog closes.
 
-Color and scatter utilities include `plotUtils.ts` (shared highlight palette/size
-rules), category palettes and scales, `collisionGrid.ts`, and `overlayLayout.ts`.
+## Colour utilities
+
+- `categoryPalettes.ts`: the categorical palette registry (`CATEGORY_PALETTES`). The
+  three Cosmic Galaxy palettes derive from one `COSMIC_FAMILIES` table and the
+  prefix-first `COSMIC_FAMILY_ORDER`; `deepField`, `aurora`, `hubble` and `pulsar`
+  are generated data (see below). `categoryColors.ts` builds category → colour maps
+  on top of it (presets, Missing/Unclustered colours, cycling past the palette length).
+- `colorMath.ts`: `ColorMath`, OKLab/OKLCH conversion and gamut search, WCAG contrast,
+  Machado colour-vision-deficiency simulation and OKLab ΔE.
+- `paletteDesign.ts`: `PaletteDesigner` (OKLCH candidate grids under hue-arc, lightness,
+  chroma and contrast constraints; greedy farthest-first selection; prefix-optimal
+  reordering) and `PaletteAudit` (closest pairs, prefix minima, contrast floors).
+- `paletteRecipes.ts`: configuration for the generated palettes. Regenerate with
+  `npm run palettes:design` (`scripts/designPalettes.ts`); `paletteDesign.test.ts`
+  fails when a committed palette no longer matches its recipe.
+  See `../../../documentation/CATEGORICAL_PALETTES.md`.
+
+## Plot memory
+
+- `stackglBufferPool.ts`: `StackglBufferPool` releases the large idle buffers from
+  the stackgl typed-array pool (`globalThis.__TYPEDARRAY_POOL`), where gl-scatter3d
+  parks its vertex arrays after every upload and nothing else ever frees them.
+  `ScatterPlot3D` calls `release()` when the point count changes and on unmount.
+  See `../../../documentation/RENDER_PERFORMANCE.md`, "Typed-array pool release".
+
+Other colour and scatter utilities include `plotUtils.ts` (shared highlight palette/size
+rules), colour scales, `collisionGrid.ts`, and `overlayLayout.ts`.
 Dataset loading, temporal filtering and membership helpers remain reusable by
 their corresponding hooks.

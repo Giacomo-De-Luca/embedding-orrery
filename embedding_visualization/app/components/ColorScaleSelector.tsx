@@ -273,6 +273,7 @@ export function ColorScaleSelector() {
                             ))}
                           </div>
                           <span className="text-sm">{pal.label}{isDefault ? ' (default)' : ''}</span>
+                          <span className="ml-auto text-xs tabular-nums text-muted-foreground" aria-label={`${pal.colors.length} colours`}>{pal.colors.length}</span>
                         </div>
                       );
                     })}

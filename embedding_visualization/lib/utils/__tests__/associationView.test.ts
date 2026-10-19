@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AssociationView, AssociationFields, ASSOCIATION_COLORS } from '../associationView';
+import { AssociationView, ASSOCIATION_COLORS } from '../associationView';
 import { ContingencyTable } from '../contingencyTable';
 import { CategoryKey } from '../categoryKey';
 
@@ -107,42 +107,18 @@ describe('AssociationView summaries', () => {
     expect(rows[0].count).toBe(4);
   });
 
-  it('names the strength of an association', () => {
-    expect(AssociationView.strength(null)).toBeNull();
-    expect(AssociationView.strength(0.05)).toBe('negligible');
-    expect(AssociationView.strength(0.2)).toBe('weak');
-    expect(AssociationView.strength(0.4)).toBe('moderate');
-    expect(AssociationView.strength(0.7)).toBe('strong');
-  });
-});
-
-describe('AssociationFields', () => {
-  const fields = ['category', 'source', 'topic_label', 'subtopic_label'];
-
-  it('groups by the colour field and compares across topics by default', () => {
-    expect(AssociationFields.resolve(null, null, fields, 'source')).toEqual({ group: 'source', across: 'topic_label' });
+  it('takes custom labels per axis, e.g. percentile labels of numeric bins', () => {
+    const table = tableOf([[1, 0], [0, 1]]);
+    const view = AssociationView.of(table, 'count', false, { row: key => `R:${key}`, col: key => `C:${key}` });
+    expect(view.rowLabels).toEqual(['R:r0', 'R:r1']);
+    expect(view.colLabels).toEqual(['C:c0', 'C:c1']);
+    expect(AssociationView.spreadRows(table, key => key.toUpperCase()).map(r => r.label)).toEqual(['R0', 'R1']);
   });
 
-  it('never groups by a topic field by default, even when it is the colour field', () => {
-    expect(AssociationFields.resolve(null, null, fields, 'topic_label')).toEqual({ group: 'category', across: 'topic_label' });
-  });
-
-  it('falls back to another field when there is no topic field', () => {
-    expect(AssociationFields.resolve(null, null, ['a', 'b'], null)).toEqual({ group: 'a', across: 'b' });
-  });
-
-  it('keeps valid picks and replaces picks the collection no longer has', () => {
-    expect(AssociationFields.resolve('subtopic_label', 'source', fields, null)).toEqual({ group: 'subtopic_label', across: 'source' });
-    expect(AssociationFields.resolve('gone', 'source', fields, null)).toEqual({ group: 'category', across: 'source' });
-  });
-
-  it('never returns the same field twice', () => {
-    expect(AssociationFields.resolve('source', 'source', fields, null)).toEqual({ group: 'source', across: 'topic_label' });
-  });
-
-  it('returns nulls when fewer than two fields exist', () => {
-    expect(AssociationFields.resolve(null, null, ['only'], 'only')).toEqual({ group: 'only', across: null });
-    expect(AssociationFields.resolve(null, null, [], null)).toEqual({ group: null, across: null });
+  it('resolves the display labels of both axes', () => {
+    const view = AssociationView.of(tableOf([[1, 0], [0, 1]]), 'count', false);
+    expect(view.rowLabels).toEqual(['r0', 'r1']);
+    expect(view.colLabels).toEqual(['c0', 'c1']);
   });
 });
 

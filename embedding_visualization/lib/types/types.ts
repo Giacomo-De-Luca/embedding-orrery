@@ -169,11 +169,13 @@ export interface CustomNumericRange {
   logScale?: boolean;  // when true, map values through log10 before coloring
 }
 
-/** Histogram bin for NumericRangeChart. */
+/** Histogram bin (legend NumericRangeChart, SAE explorer histograms), built by `NumericBins`. */
 export interface HistogramBin {
   binStart: number;
   binEnd: number;
   count: number;
+  /** Compact tick label of the bin start. */
+  label: string;
 }
 
 export interface TemporalRange {

@@ -124,9 +124,7 @@ export function JobCard({ job, onResume, onCancel, onRemove }: JobCardProps) {
             )}
           </p>
         </div>
-        {/* Cancel only for non-LLM jobs: backend cancel registration for
-            llm_labeling is unverified */}
-        {job.status === 'running' && onCancel && !isLlmLabeling && (
+        {job.status === 'running' && onCancel && (
           <Button
             size="sm"
             variant="destructive"

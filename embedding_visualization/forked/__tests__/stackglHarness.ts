@@ -367,6 +367,11 @@ export class StackglHarness {
   /** The `requestAnimationFrame` queue; tests step it by hand. */
   static readonly frames = new FrameScheduler();
 
+  /** typedarray-pool rounds every allocation up to this size. */
+  static nextPow2(n: number): number {
+    return 2 ** Math.ceil(Math.log2(n));
+  }
+
   /** Installs the browser stand-ins (once) and returns the bundle's exports. */
   static load(): StackglModules {
     if (StackglHarness.modules) return StackglHarness.modules;

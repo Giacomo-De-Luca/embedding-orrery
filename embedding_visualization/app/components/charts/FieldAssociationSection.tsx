@@ -7,28 +7,24 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/lib/ui-primitives/collapsible';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/lib/ui-primitives/select';
 import { Button } from '@/lib/ui-primitives/button';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { useFieldAssociation } from '@/lib/hooks/useFieldAssociation';
 import { useCategoryData } from '@/lib/hooks/useCategoryData';
 import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
 import { useTopicSimilarityOrder } from '@/lib/hooks/useTopicSimilarityOrder';
-import { AssociationFields, AssociationView } from '@/lib/utils/associationView';
-import { ContingencyTable } from '@/lib/utils/contingencyTable';
-import { CategoricalFields, type ColorFieldOption } from '@/lib/utils/fieldAnalysis';
+import { AssociationView } from '@/lib/utils/associationView';
+import { AssociationFields, AssociationStatistics, type BinSettings } from '@/lib/utils/fieldAxis';
+import { NumericBins } from '@/lib/utils/numericBins';
+import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
 import { getCategoryDisplayName } from '@/lib/utils/categoryColors';
 import { cn } from '@/lib/utils/utils';
 import type { MetadataPoint } from '@/lib/types/types';
+import { AssociationFieldSelect } from './AssociationFieldSelect';
 import { FieldAssociationDialog } from './FieldAssociationDialog';
 
 const FALLBACK_COLOR = '#7f7f7f';
+const DEFAULT_BINS: BinSettings = { count: NumericBins.DEFAULT_COUNT, method: 'quantile', labels: 'range' };
 
 interface FieldAssociationSectionProps {
   points: MetadataPoint[];
@@ -47,8 +43,10 @@ function formatEffective(value: number): string {
 
 /**
  * "Field associations" block of the Analytics sidebar: how strongly two
- * categorical fields are related (Cramér's V), how many Across values each
- * Group value spreads over, and a button opening the full heatmap.
+ * fields are related (Cramér's V, η or Spearman ρ by field kind), how many
+ * Across values each Group value spreads over, and a button opening the
+ * heatmap dialog (cross-tab + correlation matrix). The field picks and bin
+ * settings live here, shared with the dialog.
  */
 export function FieldAssociationSection({
   points,
@@ -61,62 +59,59 @@ export function FieldAssociationSection({
   const [open, setOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [picks, setPicks] = useState<{ group: string | null; across: string | null }>({ group: null, across: null });
+  const [bins, setBins] = useState<BinSettings>(DEFAULT_BINS);
+  // Numeric fields the user switched between bins and individual values (see AssociationFields.showsValues).
+  const [valueOverrides, setValueOverrides] = useState<Record<string, boolean>>({});
+  // Fetch similarity orders from the first opening on, so closing the dialog never re-sorts it mid-animation.
+  const [similarityWanted, setSimilarityWanted] = useState(false);
 
-  const options = useMemo(() => CategoricalFields.options(colorFieldOptions), [colorFieldOptions]);
-  const fieldNames = useMemo(() => options.map(o => o.field), [options]);
-  const { group, across } = AssociationFields.resolve(picks.group, picks.across, fieldNames, colorByField);
+  const options = useMemo(() => AssociationFields.options(colorFieldOptions), [colorFieldOptions]);
+  const numericOptions = useMemo(() => AssociationFields.numericOptions(colorFieldOptions), [colorFieldOptions]);
+  // Numeric fields shown as their values act as categorical fields from here on.
+  const effectiveOptions = useMemo(
+    () => AssociationFields.effective(options, valueOverrides),
+    [options, valueOverrides],
+  );
+  const { group, across } = AssociationFields.resolve(picks.group, picks.across, effectiveOptions, colorByField);
 
   const active = open || dialogOpen;
-  const table = useFieldAssociation(points, active ? group : null, active ? across : null, mutedIndices);
+  const association = useFieldAssociation(points, active ? group : null, active ? across : null, mutedIndices, bins);
+  const table = association?.table ?? null;
 
   // Colours come from the field's full value list, so each value keeps the colour it has in the plot and legend.
-  const { categoryValues: groupValues } = useCategoryData(points, active ? group : null);
-  const colorMap = useCategoryColorMap(group, groupValues, categoricalPalette);
+  const groupIsCategorical = group?.kind === 'categorical';
+  const { categoryValues: groupValues } = useCategoryData(points, active && groupIsCategorical ? group.field : null);
+  const colorMap = useCategoryColorMap(groupIsCategorical ? group.field : null, groupValues, categoricalPalette);
 
-  // Similarity orders for topic fields, fetched only once the heatmap opens.
-  const groupSemantic = useTopicSimilarityOrder(collectionName, group, dialogOpen);
-  const acrossSemantic = useTopicSimilarityOrder(collectionName, across, dialogOpen);
+  // Similarity orders for topic fields, fetched once the heatmap has been opened.
+  const groupSemantic = useTopicSimilarityOrder(collectionName, group?.field ?? null, similarityWanted);
+  const acrossSemantic = useTopicSimilarityOrder(collectionName, across?.field ?? null, similarityWanted);
   const semanticOrders = useMemo(() => {
     const orders: Record<string, string[] | null> = {};
-    if (group) orders[group] = groupSemantic;
-    if (across) orders[across] = acrossSemantic;
+    if (group) orders[group.field] = groupSemantic;
+    if (across) orders[across.field] = acrossSemantic;
     return orders;
   }, [group, across, groupSemantic, acrossSemantic]);
 
-  const spread = useMemo(() => (table ? AssociationView.spreadRows(table) : []), [table]);
-  const acrossCount = table ? table.cols.filter(key => !ContingencyTable.isPinned(key)).length : 0;
-  const cramersV = table?.cramersV() ?? null;
-  const strength = AssociationView.strength(cramersV);
+  const groupAxis = association?.group ?? null;
+  const spread = useMemo(
+    () => (table && groupAxis ? AssociationView.spreadRows(table, key => groupAxis.labelOf(key, bins.labels)) : []),
+    [table, groupAxis, bins.labels],
+  );
+  // Same column set as the effective count (Missing and Other included), so "N of M" never exceeds M.
+  const acrossCount = table ? table.cols.length : 0;
   const filtered = !!mutedIndices && mutedIndices.size > 0;
 
-  if (options.length < 2) return null;
-
-  const groupName = getCategoryDisplayName(group);
-  const acrossName = getCategoryDisplayName(across);
+  const groupName = getCategoryDisplayName(group?.field ?? null);
+  const acrossName = getCategoryDisplayName(across?.field ?? null);
+  const statistic = association?.statistic ?? null;
+  const summary = statistic ? AssociationStatistics.summary(statistic) : null;
 
   // Picking the field already on the other side swaps the two.
   const pickGroup = (field: string) =>
-    setPicks({ group: field, across: field === across ? group : across });
+    setPicks({ group: field, across: field === across?.field ? group?.field ?? null : across?.field ?? null });
   const pickAcross = (field: string) =>
-    setPicks({ group: field === group ? across : group, across: field });
-
-  const fieldSelect = (label: string, value: string | null, onChange: (field: string) => void) => (
-    <label className="flex min-w-0 flex-1 flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
-      <Select value={value ?? ''} onValueChange={onChange}>
-        <SelectTrigger size="sm" className="h-7 w-full text-xs">
-          <SelectValue placeholder="Select field..." />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map(opt => (
-            <SelectItem key={opt.field} value={opt.field}>
-              <span className="text-xs">{opt.displayName} ({opt.uniqueCount})</span>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </label>
-  );
+    setPicks({ group: field === group?.field ? across?.field ?? null : group?.field ?? null, across: field });
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -133,19 +128,16 @@ export function FieldAssociationSection({
 
       <CollapsibleContent className="space-y-3 pt-3">
         <div className="flex gap-2">
-          {fieldSelect('Group', group, pickGroup)}
-          {fieldSelect('Across', across, pickAcross)}
+          <AssociationFieldSelect label="Group" value={group?.field ?? null} options={options} onChange={pickGroup} />
+          <AssociationFieldSelect label="Across" value={across?.field ?? null} options={options} onChange={pickAcross} />
         </div>
 
-        {table && (
+        {association && statistic && (
           <>
-            <p
-              className="text-xs text-muted-foreground"
-              title="Cramér's V: 0 when the fields are unrelated, 1 when one field's value determines the other's."
-            >
-              {cramersV === null
-                ? 'Needs at least two values on each side.'
-                : <>Association <span className="font-medium text-foreground tabular-nums">{cramersV.toFixed(2)}</span> · {strength}{filtered ? ' (visible points)' : ''}</>}
+            <p className="text-xs text-muted-foreground" title={AssociationStatistics.explanation(statistic.kind)}>
+              {summary === null
+                ? 'Not enough values for a statistic.'
+                : <>{summary}{filtered ? ' (visible points)' : ''}</>}
             </p>
 
             <div className="space-y-1">
@@ -179,20 +171,38 @@ export function FieldAssociationSection({
                 </ul>
               </ScrollArea>
             </div>
-
-            <Button variant="outline" size="sm" className="h-7 w-full text-xs" onClick={() => setDialogOpen(true)}>
-              <Maximize2 /> Open heatmap
-            </Button>
-
-            <FieldAssociationDialog
-              open={dialogOpen}
-              onOpenChange={setDialogOpen}
-              table={table}
-              semanticOrders={semanticOrders}
-              filtered={filtered}
-            />
           </>
         )}
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 w-full text-xs"
+          onClick={() => {
+            setSimilarityWanted(true);
+            setDialogOpen(true);
+          }}
+        >
+          <Maximize2 /> Open heatmap
+        </Button>
+
+        <FieldAssociationDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          association={association}
+          options={options}
+          numericOptions={numericOptions}
+          onPickGroup={pickGroup}
+          onPickAcross={pickAcross}
+          bins={bins}
+          onBinsChange={setBins}
+          valueOverrides={valueOverrides}
+          onValuesChange={(field, asValues) => setValueOverrides(current => ({ ...current, [field]: asValues }))}
+          semanticOrders={semanticOrders}
+          points={points}
+          mutedIndices={mutedIndices}
+          filtered={filtered}
+        />
       </CollapsibleContent>
     </Collapsible>
   );

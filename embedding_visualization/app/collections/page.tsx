@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { useEmbedDataset } from '@/lib/hooks/useEmbedDataset';
+import { useCancelJob } from '@/lib/hooks/useCancelJob';
 import { GET_COLLECTIONS } from '@/lib/graphql/queries';
 import type { EmbeddingJob } from '@/lib/graphql/mutations';
 import { PageNav } from '@/app/components/PageNav';
@@ -90,6 +91,7 @@ function CollectionsPageContent() {
     lastEmbedResult,
     lastEmbedSource,
     activeJobCollectionName,
+    activeJobCancellable,
     extractTopics,
     topicsLoading,
     lastTopicsResult,
@@ -106,10 +108,9 @@ function CollectionsPageContent() {
     docActivationsLoading,
     lastDocActivationsResult,
     activeDocActivationsCollection,
-    cancelEmbeddingJob,
-    cancelJobLoading,
     removeEmbeddingJob,
   } = useEmbedDataset();
+  const cancelJob = useCancelJob();
 
   // Transform collections data for the manager tab
   const collections: CollectionInfo[] = collectionsData?.collections.map(col => ({
@@ -252,7 +253,7 @@ function CollectionsPageContent() {
       <div className="mt-6 empty:hidden">
         <ActiveJobsStrip
           onResumeJob={handleResumeJob}
-          onCancelJob={(job) => cancelEmbeddingJob(job.collectionName)}
+          onCancelJob={(job) => cancelJob(job.collectionName)}
           onRemoveJob={(job) => removeEmbeddingJob(job.collectionName)}
           hideJobIds={[
             activeJobCollectionName,
@@ -265,11 +266,7 @@ function CollectionsPageContent() {
 
       {/* Centered progress modal for client-initiated jobs */}
       {embedLoading && activeJobCollectionName && (
-        <ProgressModal
-          jobId={activeJobCollectionName}
-          onCancel={() => cancelEmbeddingJob(activeJobCollectionName)}
-          cancelLoading={cancelJobLoading}
-        />
+        <ProgressModal jobId={activeJobCollectionName} cancellable={activeJobCancellable} />
       )}
       {llmResumeJobId && (
         <ProgressModal
@@ -277,6 +274,7 @@ function CollectionsPageContent() {
           title="Generating LLM Labels"
           subtitle="Each topic is labeled individually via LLM API calls."
           itemsLabel="topics"
+          cancellable
         />
       )}
       {/* Page-global so the modal shows regardless of which tab (embed flow
@@ -287,6 +285,7 @@ function CollectionsPageContent() {
           title="Computing SAE Document Activations"
           subtitle="Running SAE inference on each document."
           itemsLabel="documents"
+          cancellable
         />
       )}
     </div>

@@ -9,6 +9,7 @@ keyword extraction. Optionally generates human-readable labels via LLM
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -21,6 +22,12 @@ from ..topic_extraction.llm_labeling import (
 )
 from ..utils.duckdb_sync import _get_db as _get_duckdb
 from ..utils.embedding_loader import load_embeddings_for_ids
+from .cancel_registry import (
+    CANCELLED_MESSAGE,
+    JobCancelled,
+    raise_if_cancelled,
+    report_cancelled,
+)
 from .progress_emitter import emit_progress
 from .topic_centroid_service import Preloaded, TopicCentroidService
 
@@ -1100,16 +1107,22 @@ def _is_keyword_label(label: str) -> bool:
     return bool(_KEYWORD_LABEL_PATTERN.match(label))
 
 
+def llm_labeling_job_id(collection_name: str) -> str:
+    """Progress / job-state / cancel id of a collection's LLM labeling job."""
+    return f"{collection_name}_llm_labeling"
+
+
 def generate_llm_labels_for_collection(
     collection_name: str,
     llm_provider: str = "gemini",
     llm_model: str = "gemini-3-flash-preview",
     label_scope: str = "both",
     resume: bool = False,
+    cancel_event: threading.Event | None = None,
 ) -> LlmLabelingResult:
     """Generate LLM labels for existing topics in a collection.
 
-    Incrementally saves labels to ChromaDB after each LLM call.
+    Incrementally saves labels to DuckDB after each LLM call.
     Supports resume by detecting already-labeled topics (non-keyword labels).
 
     Args:
@@ -1118,12 +1131,14 @@ def generate_llm_labels_for_collection(
         llm_model: Model name for the provider
         label_scope: "both", "topics_only", or "subtopics_only"
         resume: If True, skip topics that already have non-keyword labels
+        cancel_event: Checked before each LLM call; when set, stops with the
+            labels saved so far and leaves the job resumable
 
     Returns:
         LlmLabelingResult with counts and timing
     """
     start_time = time.time()
-    job_id = f"{collection_name}_llm_labeling"
+    job_id = llm_labeling_job_id(collection_name)
     job_state_service = None
 
     try:
@@ -1297,6 +1312,7 @@ def generate_llm_labels_for_collection(
                     progress_idx += 1
                     continue
 
+                raise_if_cancelled(cancel_event)
                 keywords = topics_data[topic_id]
                 docs = topic_docs.get(topic_id, [])
 
@@ -1340,6 +1356,7 @@ def generate_llm_labels_for_collection(
                     progress_idx += 1
                     continue
 
+                raise_if_cancelled(cancel_event)
                 label = generate_llm_label_for_topic(
                     topic_id=sub_id,
                     keywords=kws,
@@ -1389,6 +1406,21 @@ def generate_llm_labels_for_collection(
             total_topics=total_topics,
             total_subtopics=total_subtopics,
             duration_seconds=duration,
+        )
+
+    except JobCancelled:
+        # Raised only from the labeling loops, after the counters are set.
+        # Labels saved so far stay; the job stays resumable.
+        logger.info(f"LLM labeling cancelled for {collection_name} at {progress_idx}/{total_work}")
+        report_cancelled(job_id, items_processed=progress_idx, total_items=total_work)
+        return LlmLabelingResult(
+            collection_name=collection_name,
+            topics_labeled=topics_labeled,
+            subtopics_labeled=subtopics_labeled,
+            total_topics=total_topics,
+            total_subtopics=total_subtopics,
+            duration_seconds=time.time() - start_time,
+            error=CANCELLED_MESSAGE,
         )
 
     except Exception as e:

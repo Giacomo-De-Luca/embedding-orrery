@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts';
 import { Spinner } from '@/lib/ui-primitives/spinner';
-import { computeLogHistogramBins, findBinIndex } from '../utils/histogramUtils';
+import { NumericBins } from '@/lib/utils/numericBins';
 
 interface DensityHistogramProps {
   allDensities: number[];
@@ -12,15 +12,15 @@ interface DensityHistogramProps {
 }
 
 export function DensityHistogram({ allDensities, currentDensity, loading }: DensityHistogramProps) {
-  const bins = useMemo(() => {
-    if (allDensities.length === 0) return [];
-    return computeLogHistogramBins(allDensities, 20);
-  }, [allDensities]);
+  // Log-scale bins over the positive densities (they span orders of magnitude).
+  const positive = useMemo(() => allDensities.filter(v => v > 0), [allDensities]);
+  const binning = useMemo(() => NumericBins.histogramFor(positive, 20, 'log'), [positive]);
+  const bins = useMemo(() => binning.toHistogram(positive), [binning, positive]);
 
-  const highlightIdx = useMemo(() => {
-    if (currentDensity == null || bins.length === 0) return -1;
-    return findBinIndex(bins, currentDensity);
-  }, [bins, currentDensity]);
+  const highlightIdx = useMemo(
+    () => (currentDensity == null ? -1 : binning.indexOf(currentDensity)),
+    [binning, currentDensity],
+  );
 
   if (loading) {
     return (

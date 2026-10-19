@@ -95,6 +95,10 @@ class TopicOrderService:
         except ValueError as exc:
             logger.info("No similarity order for '%s': %s", collection_name, exc)
             return None
+        if self._db.get_active_extraction_id(collection_name) != extraction_id:
+            # A new extraction became active in between: these centroids are not
+            # `extraction_id`'s, so neither cache nor label them under it.
+            return None
 
         origin = self._centroids.ranker.origin(topics)
         topic_order = self._order_topics(topics, origin)

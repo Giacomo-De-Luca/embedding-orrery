@@ -11,7 +11,6 @@ import {
   EMBED_HUGGINGFACE_DATASET,
   EMBED_LOCAL_FILE,
   RE_EMBED_DATASET,
-  CANCEL_EMBEDDING_JOB,
   REMOVE_EMBEDDING_JOB,
   DELETE_COLLECTION,
   UPDATE_COLLECTION_METADATA,
@@ -37,6 +36,7 @@ import {
   COMPUTE_DOCUMENT_ACTIVATIONS,
 } from '../graphql/mutations';
 import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS, GENERATE_LLM_LABELS, GET_COLLECTION_TOPICS } from '../graphql/queries';
+import { isJobCancelled } from '../utils/jobCancellation';
 
 // ========== Hook Return Types ==========
 
@@ -48,7 +48,11 @@ export type EmbedSource = 'hf' | 'local' | 'reembed';
  * inspectable record. */
 function notifyEmbedOutcome(result: EmbedDatasetResult | null) {
   if (!result) return;
-  if (result.error) {
+  if (isJobCancelled(result.error)) {
+    toast.info(
+      `Embedding of "${result.collectionName}" cancelled with ${result.totalEmbedded.toLocaleString()} items embedded.`
+    );
+  } else if (result.error) {
     toast.error(`Embedding failed: ${result.error}`);
   } else {
     toast.success(
@@ -134,12 +138,12 @@ export interface UseEmbedDatasetReturn {
   activeDocActivationsCollection: string | null;
 
   // Job management
-  cancelEmbeddingJob: (collectionName: string) => Promise<boolean>;
-  cancelJobLoading: boolean;
   removeEmbeddingJob: (collectionName: string) => Promise<boolean>;
 
   // Active job tracking for progress display
   activeJobCollectionName: string | null;
+  /** Whether the active embed can be cancelled from its progress modal */
+  activeJobCancellable: boolean;
   clearActiveJob: () => void;
 }
 
@@ -159,6 +163,8 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
   // Active job tracking for progress display
   const [activeJobCollectionName, setActiveJobCollectionName] = useState<string | null>(null);
+  // Image/vector file embeds have no per-batch cancel check backend-side
+  const [activeJobCancellable, setActiveJobCancellable] = useState(true);
 
   // Loading states
   const [infoLoading, setInfoLoading] = useState(false);
@@ -198,10 +204,6 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
   const [reEmbedMutation, { loading: reEmbedLoading }] = useMutation<
     { reEmbedDataset: EmbedDatasetResult }
   >(RE_EMBED_DATASET);
-
-  const [cancelJobMutation, { loading: cancelJobLoading }] = useMutation<
-    { cancelEmbeddingJob: boolean }
-  >(CANCEL_EMBEDDING_JOB);
 
   const [removeJobMutation] = useMutation<
     { removeEmbeddingJob: boolean }
@@ -326,6 +328,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastEmbedResult(null);
     setLastEmbedSource('hf');
     setActiveJobCollectionName(input.collectionName);
+    setActiveJobCancellable(true);
 
     try {
       const { data, error } = await embedHFMutation({
@@ -346,7 +349,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.embedHuggingfaceDataset || null;
 
-      if (result?.error) {
+      if (result?.error && !isJobCancelled(result.error)) {
         setError(result.error);
       }
 
@@ -437,6 +440,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastEmbedResult(null);
     setLastEmbedSource('local');
     setActiveJobCollectionName(input.collectionName);
+    setActiveJobCancellable(!input.dataType || input.dataType === 'TEXT');
 
     try {
       const { data, error } = await embedLocalMutation({
@@ -456,7 +460,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.embedLocalFile || null;
 
-      if (result?.error) {
+      if (result?.error && !isJobCancelled(result.error)) {
         setError(result.error);
       }
 
@@ -480,6 +484,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     setLastEmbedResult(null);
     setLastEmbedSource('reembed');
     setActiveJobCollectionName(input.collectionName);
+    setActiveJobCancellable(true);
 
     try {
       const { data, error } = await reEmbedMutation({
@@ -499,7 +504,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.reEmbedDataset || null;
 
-      if (result?.error) {
+      if (result?.error && !isJobCancelled(result.error)) {
         setError(result.error);
       }
 
@@ -630,7 +635,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.generateLlmLabels || null;
 
-      if (result?.error) {
+      if (isJobCancelled(result?.error)) {
+        toast.info(
+          `LLM labeling of "${input.collectionName}" cancelled. Labels generated so far are saved; resume it from the Jobs list.`
+        );
+      } else if (result?.error) {
         setError(result.error);
         toast.error(`LLM labeling failed: ${result.error}`);
       } else if (result) {
@@ -763,15 +772,6 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
   // ========== Job Management ==========
 
-  const cancelEmbeddingJob = useCallback(async (collectionName: string): Promise<boolean> => {
-    try {
-      const { data } = await cancelJobMutation({ variables: { collectionName } });
-      return data?.cancelEmbeddingJob ?? false;
-    } catch {
-      return false;
-    }
-  }, [cancelJobMutation]);
-
   const removeEmbeddingJob = useCallback(async (collectionName: string): Promise<boolean> => {
     try {
       const { data } = await removeJobMutation({ variables: { collectionName } });
@@ -869,7 +869,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       }
 
       const result = data?.computeDocumentActivations || null;
-      if (result?.error) {
+      if (result && isJobCancelled(result.error)) {
+        toast.info(
+          `SAE activations for "${collectionName}" cancelled after ${result.itemsProcessed.toLocaleString()} / ${result.totalItems.toLocaleString()} documents. Run it again to continue where it stopped.`
+        );
+      } else if (result?.error) {
         setError(result.error);
       } else if (result) {
         toast.success(
@@ -955,12 +959,11 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     activeDocActivationsCollection,
 
     // Job management
-    cancelEmbeddingJob,
-    cancelJobLoading,
     removeEmbeddingJob,
 
     // Active job tracking
     activeJobCollectionName,
+    activeJobCancellable,
     clearActiveJob,
   };
 }

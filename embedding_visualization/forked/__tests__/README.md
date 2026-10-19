@@ -4,9 +4,11 @@ Unit tests for the patches in `forked/plotly.js` (logged in `../plotly_changes.m
 
 | File | Purpose |
 |------|---------|
-| `stackglHarness.ts` | Loads the prebuilt `plotly.js/stackgl_modules/index.js` bundle in node. Every fork test loads the bundle through this module. |
+| `stackglHarness.ts` | Loads the prebuilt `plotly.js/stackgl_modules/index.js` bundle in node. Every test that runs the bundle loads it through this module. |
 | `glScatter3dOutline.test.ts` | gl-scatter3d builds no glyph-outline vertices when the marker line width is 0 (change 3). |
 | `glPlot3dPickDeferral.test.ts` | gl-plot3d renders no pick pass while the camera moves, never answers a hover from a stale pick image, renders the pick on demand for a press, allocates pick buffers at pick resolution, and counts its work in `scene.pickStats` (change 4). |
+| `stackglPoolRelease.test.ts` | `StackglBufferPool` (`lib/utils`) against the bundle's typedarray-pool: an update leaves four idle power-of-two buffers on `globalThis.__TYPEDARRAY_POOL`, a different point count leaves both sets resident, and a release empties the large buckets while a point cloud still rebuilds byte-identically. Not a fork patch: it pins the bundle internals app code relies on. |
+| `plotlyEntry.test.ts` | The slim `lib/index.js` (change 5): every trace type the app creates (string literals in `type:` values in `app/` and `lib/`) is registered, nothing else is, and the bundle contains no map, geo or calendar libraries but still the 2D and 3D renderers. It doesn't use the harness: it bundles `plotly.js` with esbuild, using `next.config.ts`'s Turbopack aliases, and reads the metafile. esbuild comes with vitest (through vite), not as a direct dependency. |
 
 ## The harness
 

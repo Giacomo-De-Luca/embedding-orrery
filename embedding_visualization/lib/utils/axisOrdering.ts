@@ -1,11 +1,12 @@
 /**
  * Row and column orders for a {@link ContingencyTable} heatmap.
  *
- * Four sort modes per axis: size (largest total first), name (the category
- * list's Name order), pattern (each value sits where it is over-represented
- * along the other axis, which lines the strongest cells up on a diagonal) and
- * semantic (an external order, e.g. topics by embedding similarity from the
- * backend). Other and Missing always come last. Orders are index permutations
+ * Sort modes per axis: size (largest total first), name (the category list's
+ * Name order), pattern (each value sits where it is over-represented along
+ * the other axis, which lines the strongest cells up on a diagonal), and two
+ * external orders: semantic (topics by embedding similarity, from the
+ * backend) and value (the bins of a numeric field, low to high). Other and
+ * Missing always come last. Orders are index permutations
  * into `table.rows` / `table.cols`.
  */
 
@@ -13,15 +14,15 @@ import { ContingencyTable } from './contingencyTable';
 import { CategoryKey } from './categoryKey';
 import { comparePeriods } from './temporalAnalysis';
 
-export type AxisSortMode = 'size' | 'name' | 'pattern' | 'semantic';
+export type AxisSortMode = 'size' | 'name' | 'pattern' | 'semantic' | 'value';
 
 export interface AxisOrderRequest {
   rowMode: AxisSortMode;
   colMode: AxisSortMode;
-  /** External order of the row values for semantic mode; null or absent falls back to pattern. */
-  rowSemantic?: readonly string[] | null;
-  /** External order of the column values for semantic mode. */
-  colSemantic?: readonly string[] | null;
+  /** External order of the row values for the semantic and value modes; null or absent falls back to pattern. */
+  rowExternal?: readonly string[] | null;
+  /** External order of the column values for the semantic and value modes. */
+  colExternal?: readonly string[] | null;
   /** Display label of a value of `field`, used by name order (defaults to the value). */
   labelOf?: (field: string, value: string) => string;
 }
@@ -82,12 +83,12 @@ export class AxisOrdering {
     const rowLabel: Label = value => labelOf(table.rowField, value);
     const colLabel: Label = value => labelOf(table.colField, value);
 
-    const rowMode = AxisOrdering.effectiveMode(request.rowMode, request.rowSemantic);
-    const colMode = AxisOrdering.effectiveMode(request.colMode, request.colSemantic);
+    const rowMode = AxisOrdering.effectiveMode(request.rowMode, request.rowExternal);
+    const colMode = AxisOrdering.effectiveMode(request.colMode, request.colExternal);
     const fixedRows = () =>
-      AxisOrdering.fixedOrder(table.rows, table.rowTotals, rowMode, request.rowSemantic, rowLabel);
+      AxisOrdering.fixedOrder(table.rows, table.rowTotals, rowMode, request.rowExternal, rowLabel);
     const fixedCols = () =>
-      AxisOrdering.fixedOrder(table.cols, table.colTotals, colMode, request.colSemantic, colLabel);
+      AxisOrdering.fixedOrder(table.cols, table.colTotals, colMode, request.colExternal, colLabel);
 
     if (rowMode !== 'pattern' && colMode !== 'pattern') {
       return { rowOrder: fixedRows(), colOrder: fixedCols() };
@@ -115,20 +116,24 @@ export class AxisOrdering {
     return { rowOrder, colOrder };
   }
 
-  /** Semantic mode without an external order degrades to pattern order. */
-  private static effectiveMode(mode: AxisSortMode, semantic: readonly string[] | null | undefined): AxisSortMode {
-    return mode === 'semantic' && !semantic?.length ? 'pattern' : mode;
+  /** An external mode without its order degrades to pattern order. */
+  private static effectiveMode(mode: AxisSortMode, external: readonly string[] | null | undefined): AxisSortMode {
+    return AxisOrdering.isExternal(mode) && !external?.length ? 'pattern' : mode;
+  }
+
+  private static isExternal(mode: AxisSortMode): boolean {
+    return mode === 'semantic' || mode === 'value';
   }
 
   private static fixedOrder(
     values: readonly string[],
     totals: readonly number[],
     mode: AxisSortMode,
-    semantic: readonly string[] | null | undefined,
+    external: readonly string[] | null | undefined,
     label: Label,
   ): number[] {
     if (mode === 'name') return AxisOrdering.byName(values, label);
-    if (mode === 'semantic' && semantic) return AxisOrdering.byExternal(values, totals, semantic, label);
+    if (AxisOrdering.isExternal(mode) && external) return AxisOrdering.byExternal(values, totals, external, label);
     return AxisOrdering.bySize(values, totals, label);
   }
 

@@ -2,59 +2,15 @@
 
 var Plotly = require('./core');
 
+// [fork] The app only creates scattergl (2D) and scatter3d (3D) traces, so the entry
+// registers just those. Upstream's full list (~48 traces plus the calendars component)
+// also bundled two map libraries that load as soon as the module is evaluated. Core
+// still registers scatter, modebar, select/lasso, legend and toImage. A new trace type
+// must be registered here; forked/__tests__/plotlyEntry.test.ts fails until it is.
+// See forked/plotly_changes.md, change 5.
 Plotly.register([
-    // traces
-    require('./bar'),
-    require('./box'),
-    require('./heatmap'),
-    require('./histogram'),
-    require('./histogram2d'),
-    require('./histogram2dcontour'),
-    require('./contour'),
-    require('./scatterternary'),
-    require('./violin'),
-    require('./funnel'),
-    require('./waterfall'),
-    require('./image'),
-    require('./pie'),
-    require('./sunburst'),
-    require('./treemap'),
-    require('./icicle'),
-    require('./funnelarea'),
-    require('./scatter3d'),
-    require('./surface'),
-    require('./isosurface'),
-    require('./volume'),
-    require('./mesh3d'),
-    require('./cone'),
-    require('./streamtube'),
-    require('./scattergeo'),
-    require('./choropleth'),
     require('./scattergl'),
-    require('./splom'),
-    require('./parcoords'),
-    require('./parcats'),
-    require('./scattermapbox'),
-    require('./choroplethmapbox'),
-    require('./densitymapbox'),
-    require('./scattermap'),
-    require('./choroplethmap'),
-    require('./densitymap'),
-    require('./sankey'),
-    require('./indicator'),
-    require('./table'),
-    require('./carpet'),
-    require('./scattercarpet'),
-    require('./contourcarpet'),
-    require('./ohlc'),
-    require('./candlestick'),
-    require('./scatterpolar'),
-    require('./scatterpolargl'),
-    require('./barpolar'),
-    require('./scattersmith'),
-
-    // components
-    require('./calendars'),
+    require('./scatter3d'),
 ]);
 
 module.exports = Plotly;

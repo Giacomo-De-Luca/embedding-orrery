@@ -20,6 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/lib/ui-primitives/pop
 import { Trash2, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import type { UpdateCollectionMetadataResult, TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult, GenerateLlmLabelsInput, GenerateLlmLabelsResult, ComputeDocumentActivationsResult } from '@/lib/graphql/mutations';
 import { GET_COLLECTION_PREVIEW, HAS_DOCUMENT_ACTIVATIONS } from '@/lib/graphql/queries';
+import { isJobCancelled } from '@/lib/utils/jobCancellation';
 import { InlineEditableField, SelectOption } from '../InlineEditableField';
 import { AddFieldForm } from '../AddFieldForm';
 import { TopicExtractionCard } from '../TopicExtractionCard';
@@ -299,7 +300,8 @@ export function CollectionDetailPane({
   const handleComputeActivations = useCallback(async () => {
     if (!computeDocumentActivations) return;
     const result = await computeDocumentActivations(collectionName);
-    if (result && !result.error) {
+    // A cancelled run keeps the activations computed before the cancel
+    if (result && (!result.error || isJobCancelled(result.error))) {
       // Cosmetic badge/label refresh — a failed refetch shouldn't surface as an
       // unhandled rejection from the onClick handler.
       refetchHasActivations().catch(() => {});

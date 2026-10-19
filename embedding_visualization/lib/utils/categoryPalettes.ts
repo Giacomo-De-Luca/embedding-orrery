@@ -5,6 +5,11 @@
  * To add a new palette, add an entry to CATEGORY_PALETTES.
  * The DEFAULT_PALETTE_KEY controls which palette generateCategoryColors uses
  * when no explicit palette name is passed.
+ *
+ * Categories take slots in order, so the first slots matter most: every
+ * palette here is ordered so that its short prefixes are as distinct as the
+ * design allows. Design notes, validation numbers and the regeneration
+ * workflow are in documentation/CATEGORICAL_PALETTES.md.
  */
 
 export interface CategoricalPalette {
@@ -12,103 +17,128 @@ export interface CategoricalPalette {
   colors: readonly string[];
 }
 
+/** One hue family of the Cosmic Galaxy palettes: dark-starfield main + pale echo, and the light-mode pair. */
+export interface CosmicFamily {
+  /** Saturated main colour (dark mode). */
+  main: string;
+  /** Pale "echo" of the main (dark mode); slots 10–19. */
+  echo: string;
+  /** Main colour deepened where needed to hold ≥3:1 on white. */
+  lightMain: string;
+  /** Deep sibling replacing the echo in light mode (≥3:1 on white). */
+  lightDeep: string;
+}
+
+export const COSMIC_FAMILIES = {
+  teal: { main: '#0b7285', echo: '#66d9e8', lightMain: '#0b7285', lightDeep: '#0d97ad' }, // deep nebula teal / dusty teal / bright lagoon
+  gold: { main: '#d4a017', echo: '#f0d77b', lightMain: '#a27900', lightDeep: '#7e5900' }, // stellar gold / pale gold / old-star bronze
+  red: { main: '#c92a2a', echo: '#ffa8a8', lightMain: '#c92a2a', lightDeep: '#932a33' }, // red dwarf / rose / garnet ember
+  violet: { main: '#7048e8', echo: '#b197fc', lightMain: '#7048e8', lightDeep: '#9775fa' }, // ionised violet / lavender / bright lavender
+  coral: { main: '#e8590c', echo: '#ffa094', lightMain: '#d9480f', lightDeep: '#953b17' }, // Carina coral / salmon mist / iron-oxide rust
+  green: { main: '#2f9e44', echo: '#8ce99a', lightMain: '#2f9e44', lightDeep: '#087f5b' }, // nebula emerald / pale jade / comet sea-green
+  blue: { main: '#1971c2', echo: '#74c0fc', lightMain: '#1971c2', lightDeep: '#2294d3' }, // O-star blue / ice blue / clear-sky azure
+  indigo: { main: '#364fc7', echo: '#91a7ff', lightMain: '#364fc7', lightDeep: '#5c7cfa' }, // dark-matter indigo / silver-blue / periwinkle
+  magenta: { main: '#d6336c', echo: '#faa2c1', lightMain: '#d6336c', lightDeep: '#972b5f' }, // supernova magenta / blush / deep plum-rose
+  amber: { main: '#e67700', echo: '#ffd8a8', lightMain: '#d9700f', lightDeep: '#905211' }, // galactic amber / pale wheat / burnt sienna
+} satisfies Record<string, CosmicFamily>;
+
+export type CosmicFamilyName = keyof typeof COSMIC_FAMILIES;
+
+/**
+ * Slot order of the ten families. Teal leads for identity; the rest is the
+ * farthest-first order over the main colours (PaletteDesigner.prefixOrder),
+ * so 2, 3, 4… categories always get the most distinct mains available. The
+ * pale echoes follow in the same order: slot i + 10 is the echo of slot i.
+ */
+export const COSMIC_FAMILY_ORDER: readonly CosmicFamilyName[] = [
+  'teal', 'gold', 'red', 'violet', 'coral', 'green', 'blue', 'indigo', 'magenta', 'amber',
+];
+
+/** All families' `mainKey` colours in order, then all their `echoKey` colours. */
+const cosmicSlots = (families: readonly Pick<CosmicFamily, 'main' | 'echo'>[], mainKey: 'main' | 'echo' = 'main', echoKey: 'main' | 'echo' = 'echo'): string[] => [
+  ...families.map((f) => f[mainKey]),
+  ...families.map((f) => f[echoKey]),
+];
+const COSMIC_ORDERED = COSMIC_FAMILY_ORDER.map((f) => COSMIC_FAMILIES[f]);
+
+const COSMIC_GALAXY = cosmicSlots(COSMIC_ORDERED);
+
+/** Six extra families appended by Cosmic Galaxy XL (their mains, then their echoes). */
+const COSMIC_XL_EXTRA_FAMILIES: readonly Pick<CosmicFamily, 'main' | 'echo'>[] = [
+  { main: '#099268', echo: '#63e6be' }, // sea-green comet / seafoam
+  { main: '#66a80f', echo: '#c0eb75' }, // aurora lime / pale lime
+  { main: '#9c36b5', echo: '#da77f2' }, // quasar grape / orchid
+  { main: '#a05f2f', echo: '#e3ab6a' }, // copper dust / pale sand
+  { main: '#b22855', echo: '#f783ac' }, // deep-space wine / rose quartz
+  { main: '#928e04', echo: '#d3d566' }, // citron flare / pale citron
+];
+
 export const CATEGORY_PALETTES: Record<string, CategoricalPalette> = {
+  // Ten saturated mains first, their pale echoes after (slot i + 10 echoes
+  // slot i). Tuned for the black starfield; echoes drop to 1.3–2.4:1 on white.
   cosmicGalaxy: {
     label: 'Cosmic Galaxy',
-    colors: [
-      '#0b7285', // deep nebula teal
-      '#66d9e8', // dusty teal echo
-      '#d4a017', // stellar gold
-      '#f0d77b', // pale gold echo
-      '#1971c2', // O-star blue
-      '#74c0fc', // ice blue echo
-      '#e8590c', // Carina coral
-      '#ffa094', // salmon mist echo
-      '#2f9e44', // nebula emerald
-      '#8ce99a', // pale jade echo
-      '#c92a2a', // red dwarf
-      '#ffa8a8', // rose echo
-      '#7048e8', // ionised violet
-      '#b197fc', // lavender echo
-      '#e67700', // galactic amber
-      '#ffd8a8', // pale wheat echo
-      '#d6336c', // supernova magenta
-      '#faa2c1', // blush echo
-      '#364fc7', // dark-matter indigo
-      '#91a7ff', // silver-blue echo
-    ],
+    colors: COSMIC_GALAXY,
   },
-  // Light-mode sibling of Cosmic Galaxy: same ten hue families in the same
-  // order, but every slot holds ≥3:1 WCAG contrast against white so points
-  // and cluster-label titles stay readable outside dark mode. The pale
-  // "echo" slots become deep siblings instead. Keep any new color ≥3:1 on
-  // #ffffff. (#0b7285 sits below the OKLCH 0.10 chroma floor only because
-  // sRGB cannot produce a more saturated deep teal — it is at the gamut edge.)
+  // Light-mode sibling: same families in the same order, every slot ≥3:1 on
+  // white so points and cluster-label titles stay readable outside dark mode.
+  // The echo slots hold deep siblings instead of pale colours. (#0b7285 sits
+  // below the OKLCH 0.10 chroma floor only because sRGB cannot produce a more
+  // saturated deep teal — it is at the gamut edge.)
   cosmicGalaxyLight: {
     label: 'Cosmic Galaxy Light',
-    colors: [
-      '#0b7285', // deep nebula teal
-      '#0d97ad', // bright lagoon teal
-      '#a27900', // stellar gold, deepened for white
-      '#7e5900', // old-star bronze
-      '#1971c2', // O-star blue
-      '#2294d3', // clear-sky azure
-      '#d9480f', // Carina coral, deepened
-      '#953b17', // iron-oxide rust
-      '#2f9e44', // nebula emerald
-      '#087f5b', // comet sea-green
-      '#c92a2a', // red dwarf
-      '#932a33', // garnet ember
-      '#7048e8', // ionised violet
-      '#9775fa', // bright lavender
-      '#d9700f', // galactic amber, deepened
-      '#905211', // burnt sienna
-      '#d6336c', // supernova magenta
-      '#972b5f', // deep plum-rose
-      '#364fc7', // dark-matter indigo
-      '#5c7cfa', // periwinkle flare
-    ],
+    colors: cosmicSlots(COSMIC_ORDERED.map((f) => ({ main: f.lightMain, echo: f.lightDeep }))),
   },
-  // Cosmic Galaxy extended to 32 colors: the first 20 are identical to
-  // cosmicGalaxy (switching palettes keeps existing colors), followed by six
-  // more main+echo families in the same dark-starfield style.
+  // Cosmic Galaxy extended to 32: the first 20 are identical to cosmicGalaxy
+  // (switching palettes keeps existing colors), then six more mains and their
+  // echoes in the same dark-starfield style.
   cosmicGalaxyXL: {
     label: 'Cosmic Galaxy XL',
+    colors: [...COSMIC_GALAXY, ...cosmicSlots(COSMIC_XL_EXTRA_FAMILIES)],
+  },
+  // ---- Generated palettes: do not hand-edit. Recipes live in paletteRecipes.ts;
+  // ---- regenerate with `npm run palettes:design` (paletteDesign.test.ts enforces parity).
+  // Hubble Deep Field: 64 saturated colours over the whole hue circle, picked
+  // farthest-first so any prefix stays as distinct as possible. Opens with the
+  // default's teal and gold. For maps with more than 20 topics.
+  deepField: {
+    label: 'Deep Field',
     colors: [
-      '#0b7285', // deep nebula teal
-      '#66d9e8', // dusty teal echo
-      '#d4a017', // stellar gold
-      '#f0d77b', // pale gold echo
-      '#1971c2', // O-star blue
-      '#74c0fc', // ice blue echo
-      '#e8590c', // Carina coral
-      '#ffa094', // salmon mist echo
-      '#2f9e44', // nebula emerald
-      '#8ce99a', // pale jade echo
-      '#c92a2a', // red dwarf
-      '#ffa8a8', // rose echo
-      '#7048e8', // ionised violet
-      '#b197fc', // lavender echo
-      '#e67700', // galactic amber
-      '#ffd8a8', // pale wheat echo
-      '#d6336c', // supernova magenta
-      '#faa2c1', // blush echo
-      '#364fc7', // dark-matter indigo
-      '#91a7ff', // silver-blue echo
-      '#099268', // sea-green comet
-      '#63e6be', // seafoam echo
-      '#66a80f', // aurora lime
-      '#c0eb75', // pale lime echo
-      '#9c36b5', // quasar grape
-      '#da77f2', // orchid echo
-      '#a05f2f', // copper dust
-      '#e3ab6a', // pale sand echo
-      '#b22855', // deep-space wine
-      '#f783ac', // rose quartz echo
-      '#928e04', // citron flare
-      '#d3d566', // pale citron echo
+      '#0b7285', '#d4a017', '#fd78ff', '#8400f5', '#c90015', '#00e7b1', '#00a880', '#8b6fe8',
+      '#b6d700', '#c86b35', '#ff6ba1', '#00afd8', '#f3b3ff', '#a900b7', '#ffa47a', '#c0006c',
+      '#005dca', '#00cfd4', '#00d061', '#008bbf', '#ed6461', '#d93e61', '#9c44ff', '#007745',
+      '#be76ff', '#ff3806', '#009233', '#d98940', '#00b6ae', '#5cb5ff', '#cd4300', '#9a4825',
+      '#ff8bb7', '#2cdbff', '#cbb800', '#942f9e', '#3079d0', '#54d28c', '#b6324a', '#7e47e3',
+      '#3d94e2', '#ffa5d8', '#c8397a', '#ac3181', '#ff4481', '#2663ac', '#00ac4f', '#b459ff',
+      '#f08085', '#009dcb', '#007aae', '#f3ae52', '#769dec', '#9658e6', '#6038df', '#00c9b1',
+      '#358d4f', '#f070cd', '#00e187', '#8e35c5', '#00e1e6', '#ef7a00', '#00c0ec', '#a27feb',
     ],
   },
+  // Aurora: oxygen greens and limes, teal, and violet/magenta curtains.
+  aurora: {
+    label: 'Aurora',
+    colors: [
+      '#29d975', '#9200fe', '#cfa9ff', '#5d7f00', '#ba3580', '#ff66b3', '#9a75e9', '#00a880',
+      '#60e7d7', '#abe500', '#7ca800', '#a237c0', '#00b1cd', '#929bff', '#aa4cff', '#009b3d',
+    ],
+  },
+  // Hubble SHO false colour: golds, ambers and rusts against teals and blues.
+  hubble: {
+    label: 'Hubble Palette',
+    colors: [
+      '#efb225', '#0051e3', '#ac3400', '#1bc7ff', '#ff540a', '#008cbc', '#ed9377', '#3e7fff',
+      '#00b5b2', '#2c64a5', '#769ee8', '#00eaed', '#b25f35', '#be8041', '#ffb27e', '#00cfd1',
+    ],
+  },
+  // Pulsar: electric colours at the chroma ceiling, glowing on black.
+  pulsar: {
+    label: 'Pulsar',
+    colors: [
+      '#00e9f3', '#fa0013', '#8e5fff', '#ffb411', '#ff79a8', '#51a9ff', '#009f68', '#00fc8e',
+      '#bba500', '#eee300', '#ff65e8', '#00c46d', '#ff9464', '#00e5af',
+    ],
+  },
+  // ---- End of generated palettes.
   // Thematic single-family "galaxies": one hue family per palette, category
   // separation carried by strong lightness alternation (dark/bright) plus
   // sub-hue shifts. Tuned for the dark starfield first (all ≥3:1 on black),
@@ -181,11 +211,13 @@ export const CATEGORY_PALETTES: Record<string, CategoricalPalette> = {
       '#c692e6', // light violet
     ],
   },
+  // Legacy variant of the original interleaved cosmicGalaxy with a grey
+  // leading pair; kept for collections whose saved default names it.
   Galaxy: {
     label: 'Galaxy',
     colors: [
-      '#9ca3af', // deep nebula teal
-      '#7f7f7f', // dusty teal echo
+      '#9ca3af', // cool grey
+      '#7f7f7f', // mid grey
       '#d4a017', // stellar gold
       '#f0d77b', // pale gold echo
       '#1971c2', // O-star blue

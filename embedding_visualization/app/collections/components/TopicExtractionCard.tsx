@@ -210,6 +210,7 @@ export function TopicExtractionCard({
           title="Generating LLM Labels"
           subtitle="Each topic is labeled individually via LLM API calls."
           itemsLabel="topics"
+          cancellable
         />
       )}
     </Collapsible>

@@ -40,6 +40,10 @@ import { CategorySelection } from '@/lib/utils/categorySelection';
 import { CategoryKey } from '@/lib/utils/categoryKey';
 import { MutedIndices } from '@/lib/utils/mutedIndices';
 import { explorePanelClass as panelClass } from '@/lib/utils/explorePanel';
+import { NumericBins } from '@/lib/utils/numericBins';
+
+/** Bars in the continuous-scale legend's histogram. */
+const LEGEND_HISTOGRAM_BINS = 30;
 
 interface DashboardPanelProps {
   // Data
@@ -411,51 +415,16 @@ export function DashboardPanel({
   // continuous scale has a numeric range to map, matching their numericData rule
   const drawsCategoryTraces = !numericRange || numericRange.min === numericRange.max;
 
-  // Compute histogram bins for continuous scale legend
+  // Histogram of the colour field under the continuous-scale legend (equal-width bins,
+  // in log10 space when the scale is logarithmic).
   const isLogScale = customNumericRange?.logScale === true;
   const histogramBins = useMemo(() => {
     if (!numericRange || !colorByField) return undefined;
     const { min, max } = numericRange;
     if (min === max) return undefined;
-    const BIN_COUNT = 30;
-
-    if (isLogScale) {
-      // Log-space binning: equal-width bins in log10 space, edges in linear space
-      const offset = min <= 0 ? Math.abs(min) + 1 : 0;
-      const logMin = Math.log10(min + offset + 1e-10);
-      const logMax = Math.log10(max + offset);
-      const logBinWidth = (logMax - logMin) / BIN_COUNT;
-      const counts = new Array(BIN_COUNT).fill(0);
-      for (const p of points) {
-        const val = p.metadata?.[colorByField];
-        const num = typeof val === 'number' ? val : parseFloat(String(val));
-        if (isNaN(num)) continue;
-        const logVal = Math.log10(num + offset + 1e-10);
-        const idx = Math.min(Math.floor((logVal - logMin) / logBinWidth), BIN_COUNT - 1);
-        counts[idx]++;
-      }
-      return counts.map((count: number, i: number) => ({
-        binStart: Math.pow(10, logMin + i * logBinWidth) - offset,
-        binEnd: Math.pow(10, logMin + (i + 1) * logBinWidth) - offset,
-        count,
-      }));
-    }
-
-    // Linear binning
-    const binWidth = (max - min) / BIN_COUNT;
-    const counts = new Array(BIN_COUNT).fill(0);
-    for (const p of points) {
-      const val = p.metadata?.[colorByField];
-      const num = typeof val === 'number' ? val : parseFloat(String(val));
-      if (isNaN(num)) continue;
-      const idx = Math.min(Math.floor((num - min) / binWidth), BIN_COUNT - 1);
-      counts[idx]++;
-    }
-    return counts.map((count: number, i: number) => ({
-      binStart: min + i * binWidth,
-      binEnd: min + (i + 1) * binWidth,
-      count,
-    }));
+    return NumericBins
+      .histogramBins(min, max, LEGEND_HISTOGRAM_BINS, isLogScale ? 'log' : 'linear')
+      .toHistogram(points.map(p => p.metadata?.[colorByField]));
   }, [numericRange, colorByField, points, isLogScale]);
 
   // Select-only handler: click isolates a category, shift+click toggles multi-select

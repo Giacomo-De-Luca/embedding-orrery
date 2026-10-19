@@ -20,6 +20,7 @@ import { getUnclusteredValues } from '../../lib/utils/categoryColors';
 import { CategoryKey } from '../../lib/utils/categoryKey';
 import type { MetadataPoint, TemporalRange } from '../../lib/types/types';
 import { CategoricalFields, type ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import { AssociationFields } from '../../lib/utils/fieldAxis';
 
 /** Stable empty array so useTemporalData memo deps don't churn. */
 const NO_CATEGORIES: string[] = [];
@@ -123,8 +124,8 @@ export function AnalyticsSidebar({
     isCategoricalField && filteredCategoryValues.length > 0
   );
 
-  // The association view compares two categorical fields.
-  const hasAssociationFields = CategoricalFields.options(colorFieldOptions).length >= 2;
+  // The association view compares two fields (categorical, or numeric binned on the axis).
+  const hasAssociationFields = AssociationFields.options(colorFieldOptions).length >= 2;
 
   const { temporalField, temporalFieldCandidates, crossTabData, temporalCounts, allPeriods } = useTemporalData(
     points,

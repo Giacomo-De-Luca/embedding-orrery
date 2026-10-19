@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from '@/lib/ui-primitives/select';
 import type { GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
+import { isJobCancelled } from '@/lib/utils/jobCancellation';
 
 interface LlmLabelingSectionProps {
   collectionName: string;
@@ -52,7 +53,8 @@ export function LlmLabelingSection({
       labelScope: llmLabelScope,
       resume: llmLabelResume,
     });
-    if (result && !result.error) {
+    // A cancelled run still saved the labels generated before the cancel
+    if (result && (!result.error || isJobCancelled(result.error))) {
       onLabeled();
     }
   };

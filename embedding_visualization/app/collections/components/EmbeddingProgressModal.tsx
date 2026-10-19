@@ -16,7 +16,8 @@ export function ProgressModal({
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50">
       <Card className="w-[650px]">
         <CardContent className="pt-6">
-          <JobProgressBody subtitle={subtitle} {...props} />
+          {/* Keyed by job so a reused modal never carries a previous job's cancel state */}
+          <JobProgressBody key={props.jobId} subtitle={subtitle} {...props} />
         </CardContent>
       </Card>
     </div>

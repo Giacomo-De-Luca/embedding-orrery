@@ -6,9 +6,10 @@
  * them straight back. The pool files every returned ArrayBuffer in a power-of-two
  * bucket on `globalThis.__TYPEDARRAY_POOL.DATA` and never empties it (its
  * `clearCache` is unreachable from the bundle's exports). After a large collection
- * has been drawn in 3D its buffers therefore stay resident for the life of the tab,
- * about 704 MiB for WordNet, through collection switches, 2D mode and client-side
- * navigation, because smaller collections borrow from other buckets.
+ * has been drawn in 3D its buffers therefore stay resident for the life of the tab
+ * (hundreds of MiB; the WordNet figures are in the doc below) through collection
+ * switches, 2D mode and client-side navigation, because smaller collections borrow
+ * from other buckets.
  *
  * Buffers in use are never in the buckets, so releasing is safe at any moment: the
  * next `update()` allocates afresh. Call it when the pooled sizes can no longer be
@@ -62,7 +63,9 @@ export class StackglBufferPool {
         return false;
       });
       if (kept.length === bucket.length) return;
-      // In place: the bundle keeps references to the bucket arrays.
+      // In place. The bundle captured `DATA` itself and indexes into it on every
+      // malloc and free, so that table must survive; emptying its buckets in place
+      // is the most conservative way to keep it intact.
       bucket.length = 0;
       bucket.push(...kept);
     });

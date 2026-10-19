@@ -4,6 +4,7 @@ All tests use mocked inference wrappers and SAE objects so no GPU or
 model weights are required.
 """
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -447,6 +448,42 @@ class TestPromptHighlight:
         result = service.run_prompt_highlight("hello", layer=9, width="16k", hook_type="resid_post")
 
         assert {f.feature_index: f.activation for f in result} == {3: pytest.approx(2.0)}
+
+
+class TestBatchHighlightCancel:
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_stops_before_next_document(self, mock_hm_cls, mock_inf_cls, service):
+        """A cancel request stops the batch before the next forward pass."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.token_strings.return_value = ["<bos>", "hello"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-1b")
+
+        feature_acts = torch.zeros(1, 2, 8)
+        feature_acts[0, 1, 3] = 1.0
+        _make_mock_highlight_session(mock_hm_cls, feature_acts, feature_acts, feature_acts)
+
+        cancel = threading.Event()
+        persisted: list[str] = []
+
+        def on_result(item_id, activations):
+            persisted.append(item_id)
+            cancel.set()  # user cancels while document "a" runs
+
+        results = service.run_batch_highlight(
+            [("a", "hello"), ("b", "hello"), ("c", "hello")],
+            layer=9,
+            width="16k",
+            hook_type="resid_post",
+            result_callback=on_result,
+            cancel_event=cancel,
+        )
+
+        assert persisted == ["a"]
+        assert [item_id for item_id, _ in results] == ["a"]
+        assert wrapper.generate_from_template.call_count == 1
 
 
 # ---------------------------------------------------------------------------
