@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from hdbscan import HDBSCAN
+from sklearn.cluster import KMeans, SpectralClustering
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import normalize
 from sklearn.utils import check_array
 
@@ -116,6 +118,41 @@ class ClassTfidfTransformer(TfidfTransformer):
         return X
 
 
+def cluster_labels(
+    points: np.ndarray,
+    clustering_method: str = "hdbscan",
+    min_topic_size: int = 10,
+    n_clusters: int | None = None,
+) -> np.ndarray:
+    """Per-point cluster labels (``-1`` = noise, HDBSCAN only).
+
+    Module-level so it can run as a CancellableTask in a child process.
+    """
+    logger.info(f"Cluster - Start clustering with method='{clustering_method}'")
+
+    if n_clusters is not None and n_clusters > len(points):
+        raise ValueError(f"n_clusters ({n_clusters}) exceeds number of data points ({len(points)})")
+
+    if clustering_method == "hdbscan":
+        model = HDBSCAN(
+            min_cluster_size=min_topic_size,
+            metric="euclidean",
+            cluster_selection_method="eom",
+            prediction_data=True,
+            gen_min_span_tree=True,  # required for relative_validity_ (DBCV) after fit
+        )
+        return model.fit(points).labels_
+    if clustering_method == "kmeans":
+        return KMeans(n_clusters=n_clusters, random_state=7, n_init=10).fit_predict(points)
+    if clustering_method == "gmm":
+        return GaussianMixture(n_components=n_clusters, random_state=7).fit_predict(points)
+    if clustering_method == "spectral":
+        return SpectralClustering(
+            n_clusters=n_clusters, random_state=7, affinity="nearest_neighbors"
+        ).fit_predict(points)
+    raise ValueError(f"Unknown clustering method: {clustering_method}")
+
+
 class GenerateTopics:
     SUPPORTED_METHODS = ("hdbscan", "kmeans", "gmm", "spectral")
 
@@ -141,16 +178,6 @@ class GenerateTopics:
         if clustering_method != "hdbscan" and n_clusters is None:
             raise ValueError(f"n_clusters is required when clustering_method='{clustering_method}'")
 
-        if clustering_method == "hdbscan":
-            self.hdbscan_model = HDBSCAN(
-                min_cluster_size=self.min_topic_size,
-                metric="euclidean",
-                cluster_selection_method="eom",
-                prediction_data=True,
-                gen_min_span_tree=True,  # required for relative_validity_ (DBCV) after fit
-            )
-        else:
-            self.hdbscan_model = None
         self.docs_id = range(len(self.documents))
         self.n_gram_range = n_gram_range
         self.language = language
@@ -168,42 +195,19 @@ class GenerateTopics:
         Returns:
             documents_df: DataFrame with Document_ID, Document, and Topic columns
         """
-        logger.info(f"Cluster - Start clustering with method='{self.clustering_method}'")
+        labels = cluster_labels(
+            reduced_embeddings, self.clustering_method, self.min_topic_size, self.n_clusters
+        )
+        return self.documents_frame(labels)
 
-        if self.n_clusters is not None and self.n_clusters > len(reduced_embeddings):
-            raise ValueError(
-                f"n_clusters ({self.n_clusters}) exceeds number of data points ({len(reduced_embeddings)})"
-            )
-
-        if self.clustering_method == "hdbscan":
-            self.hdbscan_model.fit(reduced_embeddings)
-            labels = self.hdbscan_model.labels_
-        elif self.clustering_method == "kmeans":
-            from sklearn.cluster import KMeans
-
-            labels = KMeans(n_clusters=self.n_clusters, random_state=7, n_init=10).fit_predict(
-                reduced_embeddings
-            )
-        elif self.clustering_method == "gmm":
-            from sklearn.mixture import GaussianMixture
-
-            labels = GaussianMixture(n_components=self.n_clusters, random_state=7).fit_predict(
-                reduced_embeddings
-            )
-        elif self.clustering_method == "spectral":
-            from sklearn.cluster import SpectralClustering
-
-            labels = SpectralClustering(
-                n_clusters=self.n_clusters, random_state=7, affinity="nearest_neighbors"
-            ).fit_predict(reduced_embeddings)
-        else:
-            raise ValueError(f"Unknown clustering method: {self.clustering_method}")
-
+    def documents_frame(self, labels) -> pd.DataFrame:
+        """Document_ID / Document / Topic frame for per-document cluster labels
+        (computed by ``cluster_labels``, possibly in another process)."""
         documents_df = pd.DataFrame(
             {"Document_ID": self.docs_id, "Document": self.documents, "Topic": labels}
         )
         n_clusters = len(set(labels) - {-1})
-        n_noise = int((np.array(labels) == -1).sum())
+        n_noise = int((np.asarray(labels) == -1).sum())
         logger.info(f"Cluster - Completed ✓ ({n_clusters} clusters, {n_noise} noise points)")
 
         return documents_df

@@ -12,6 +12,7 @@
  "embed-multilingual-v3.0": 1024,
  "gemini-embedding-001": 3072,
  "gemini-embedding-2": 3072,
+ "google/embeddinggemma-2": 768,
  "google/embeddinggemma-300M": 768,
  "google/embeddinggemma-300m": 768,
  "mxbai-embed-large": 1024,

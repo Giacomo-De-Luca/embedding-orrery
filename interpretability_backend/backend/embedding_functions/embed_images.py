@@ -5,10 +5,9 @@ This module handles embedding images into vector representations using
 Vision Transformer (ViT) models from HuggingFace transformers.
 """
 
+import threading
 import time
 from collections.abc import Callable
-
-from tqdm import tqdm
 
 from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
@@ -20,6 +19,7 @@ from .config import (
     EmbeddingResult,
     LocalFileEmbeddingConfig,
 )
+from .embedding_job import EmbeddingBatchJob, open_embedding_collection
 
 
 def embed_images(
@@ -30,6 +30,7 @@ def embed_images(
     device: str,
     start_time: float,
     progress_callback: Callable | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> EmbeddingResult:
     """
     Embed images using a ViT model.
@@ -42,6 +43,8 @@ def embed_images(
         device: Device string (for result metadata)
         start_time: Start time for duration calculation
         progress_callback: Optional progress callback
+        cancel_event: Checked between batches; when set, stops and leaves the
+            job resumable
 
     Returns:
         EmbeddingResult with statistics
@@ -114,7 +117,9 @@ def embed_images(
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    collection = client.create_collection(name=config.collection_name, metadata=collection_metadata)
+    collection, existing_ids = open_embedding_collection(
+        client, config.collection_name, resume=config.resume, metadata=collection_metadata
+    )
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
@@ -139,72 +144,69 @@ def embed_images(
         exclude_cols.update(text_columns)
         metadata_columns = [k for k in first_row.keys() if k not in exclude_cols]
 
-    # Process in batches
-    total_embedded = 0
+    job = EmbeddingBatchJob(
+        collection_name=config.collection_name,
+        job_type="local_file",
+        job_config=config.to_job_config(),
+        n_rows=len(rows),
+        batch_size=IMAGE_BATCH_SIZE,
+        embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
+        device=device,
+        start_time=start_time,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+        description="Embedding images",
+    )
+    job.start(already_embedded=len(existing_ids), resume=config.resume)
 
-    for batch_start in tqdm(
-        range(0, len(rows), IMAGE_BATCH_SIZE), desc="Embedding images", unit="batch"
-    ):
-        batch = rows[batch_start : batch_start + IMAGE_BATCH_SIZE]
-
-        # Load images for batch
-        images = []
-        valid_indices = []
-        for i, row in enumerate(batch):
+    for batch_start, batch_end in job.batches():
+        # Load the batch's images, skipping rows a resumed job already embedded
+        loaded = []  # (row_idx, doc_id, image)
+        for row_idx in range(batch_start, batch_end):
+            row = rows[row_idx]
+            if config.id_column and config.id_column in row:
+                doc_id = str(row[config.id_column])
+            else:
+                doc_id = f"{config.collection_name}_{row_idx}"
+            if doc_id in existing_ids:
+                continue
             try:
-                img = load_image(row[image_column])
-                images.append(img)
-                valid_indices.append(i)
+                loaded.append((row_idx, doc_id, load_image(row[image_column])))
             except Exception as e:
-                print(f"Warning: Could not load image at row {batch_start + i}: {e}")
+                print(f"Warning: Could not load image at row {row_idx}: {e}")
 
-        if not images:
-            continue
-
-        # Get embeddings
-        with torch.no_grad():
-            features = pipe(images, return_tensors=True)
-            # Average pool if needed
-            embeddings_batch = []
-            for feat in features:
-                if len(feat.shape) == 3:
-                    feat = feat.mean(1)
-                embeddings_batch.append(feat.squeeze().cpu().numpy().tolist())
-
-        # Prepare data for ChromaDB
         ids = []
         embeddings = []
         documents = []
         metadatas = []
 
-        for idx, emb in zip(valid_indices, embeddings_batch, strict=True):
-            row = batch[idx]
-            row_idx = batch_start + idx
+        if loaded:
+            with torch.no_grad():
+                features = pipe([image for _, _, image in loaded], return_tensors=True)
 
-            # Generate ID
-            if config.id_column and config.id_column in row:
-                doc_id = str(row[config.id_column])
-            else:
-                doc_id = f"{config.collection_name}_{row_idx}"
+            for (row_idx, doc_id, _), feat in zip(loaded, features, strict=True):
+                row = rows[row_idx]
+                # Average pool if needed
+                if len(feat.shape) == 3:
+                    feat = feat.mean(1)
 
-            # Create document text
-            doc_text = (
-                format_text_for_embedding(row, text_columns, None)
-                if text_columns
-                else f"Image {row_idx}"
-            )
+                # Create document text
+                doc_text = (
+                    format_text_for_embedding(row, text_columns, None)
+                    if text_columns
+                    else f"Image {row_idx}"
+                )
 
-            # Extract metadata using shared function
-            metadata = extract_metadata(row, metadata_columns)
-            metadata = preprocess_color_metadata(metadata, row)
-            metadata["row_index"] = row_idx
+                # Extract metadata using shared function
+                metadata = extract_metadata(row, metadata_columns)
+                metadata = preprocess_color_metadata(metadata, row)
+                metadata["row_index"] = row_idx
 
-            ids.append(doc_id)
-            embeddings.append(emb)
-            documents.append(doc_text)
-            metadatas.append(metadata)
+                ids.append(doc_id)
+                embeddings.append(feat.squeeze().cpu().numpy().tolist())
+                documents.append(doc_text)
+                metadatas.append(metadata)
 
-        if ids:
             # ChromaDB: vectors only
             collection.add(ids=ids, embeddings=embeddings)
 
@@ -212,18 +214,6 @@ def embed_images(
             if _duckdb_dataset_name:
                 sync_items(_duckdb_dataset_name, ids, documents, metadatas)
 
-            total_embedded += len(ids)
+        job.record(added=len(ids), end=batch_end)
 
-        if progress_callback:
-            progress_callback(min(batch_start + IMAGE_BATCH_SIZE, len(rows)), len(rows))
-
-    duration = time.time() - start_time
-    print(f"Embedded {total_embedded} images in {duration:.2f}s")
-
-    return EmbeddingResult(
-        collection_name=config.collection_name,
-        total_embedded=total_embedded,
-        embedding_dim=IMAGE_EMBEDDING_DIMENSIONS,
-        device=device,
-        duration_seconds=duration,
-    )
+    return job.result()

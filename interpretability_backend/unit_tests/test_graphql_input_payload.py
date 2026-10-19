@@ -66,6 +66,7 @@ class TestGraphqlInputPayload:
         assert payload["saeLink"] == {
             "saeModelId": "gemma-3-4b-it",
             "saeId": "9-gemmascope-2-res-16k",
+            "computeActivations": False,
         }
 
     def test_payload_is_valid_mutation_input(self):

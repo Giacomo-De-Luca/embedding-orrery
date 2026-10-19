@@ -26,6 +26,7 @@ import {
   type ProbeWithScores,
 } from '../utils/probeFields';
 import type { TrainProbeInputVars } from '../utils/probeParams';
+import { JobIds } from '../utils/jobIds';
 
 interface CollectionProbesData {
   collectionProbes: {
@@ -323,7 +324,7 @@ export function useProbes(
       const stillCurrent = () => collectionRef.current === startedFor;
       setTraining(true);
       setTrainingError(null);
-      setActiveJobId(`${startedFor}_probe`);
+      setActiveJobId(JobIds.probe(startedFor));
       try {
         const { data: res, error: mutationError } = await trainProbeMutation({
           variables: { input },

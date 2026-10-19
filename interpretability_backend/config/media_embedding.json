@@ -1,0 +1,23 @@
+{
+  "defaults": {
+    "image_max_soft_tokens": 280,
+    "video_fps": 1.0,
+    "video_max_frames": 32,
+    "video_max_soft_tokens": 140,
+    "max_audio_seconds": 120
+  },
+  "soft_token_budgets": [70, 140, 280, 560, 1120],
+  "video_fps_limit": 4,
+  "video_frames_limit": 128,
+  "audio_seconds_limit": 327,
+  "context_tokens": 8192,
+  "reserved_tokens": 512,
+  "audio_tokens_per_second": 25,
+  "audio_sample_rate": 16000,
+  "video_frame_max_side": 768,
+  "rows_per_batch": 16,
+  "encode_batch_size": 8,
+  "detection_sample_rows": 20,
+  "allow_remote_urls": false,
+  "remote_timeout_seconds": 10
+}

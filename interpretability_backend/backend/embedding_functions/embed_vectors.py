@@ -5,11 +5,11 @@ This module handles loading and storing pre-computed vector embeddings in Chroma
 """
 
 import json
+import threading
 import time
 from collections.abc import Callable
 
 import numpy as np
-from tqdm import tqdm
 
 from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
@@ -20,6 +20,7 @@ from .config import (
     EmbeddingResult,
     LocalFileEmbeddingConfig,
 )
+from .embedding_job import EmbeddingBatchJob, open_embedding_collection
 
 
 def _parse_vector(value) -> list[float] | None:
@@ -68,6 +69,7 @@ def embed_vectors(
     device: str,
     start_time: float,
     progress_callback: Callable | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> EmbeddingResult:
     """
     Embed using pre-computed vector embeddings.
@@ -80,6 +82,8 @@ def embed_vectors(
         device: Device string (for result metadata)
         start_time: Start time for duration calculation
         progress_callback: Optional progress callback
+        cancel_event: Checked between batches; when set, stops and leaves the
+            job resumable
 
     Returns:
         EmbeddingResult with statistics
@@ -129,7 +133,9 @@ def embed_vectors(
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    collection = client.create_collection(name=config.collection_name, metadata=collection_metadata)
+    collection, existing_ids = open_embedding_collection(
+        client, config.collection_name, resume=config.resume, metadata=collection_metadata
+    )
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
@@ -157,22 +163,30 @@ def embed_vectors(
         exclude_cols.update(text_columns)
         metadata_columns = [k for k in first_row.keys() if k not in exclude_cols]
 
-    # Process in batches
-    total_embedded = 0
+    job = EmbeddingBatchJob(
+        collection_name=config.collection_name,
+        job_type="local_file",
+        job_config=config.to_job_config(),
+        n_rows=len(rows),
+        batch_size=EMBEDDING_BATCH_SIZE,
+        embedding_dim=embedding_dim,
+        device=device,
+        start_time=start_time,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+        description="Adding vectors",
+    )
+    job.start(already_embedded=len(existing_ids), resume=config.resume)
     id_deduplicator = IDDeduplicator()
 
-    for batch_start in tqdm(
-        range(0, len(rows), EMBEDDING_BATCH_SIZE), desc="Adding vectors", unit="batch"
-    ):
-        batch = rows[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
-
+    for batch_start, batch_end in job.batches():
         ids = []
         embeddings = []
         documents = []
         metadatas = []
 
-        for i, row in enumerate(batch):
-            row_idx = batch_start + i
+        for row_idx in range(batch_start, batch_end):
+            row = rows[row_idx]
 
             # Get vector (parse string-encoded arrays from TSV/CSV)
             vector = _parse_vector(row[vector_column])
@@ -185,6 +199,10 @@ def embed_vectors(
                 doc_id = id_deduplicator.get_unique_id(base_id)
             else:
                 doc_id = f"{config.collection_name}_{row_idx}"
+
+            # Skip if already embedded (resume mode)
+            if doc_id in existing_ids:
+                continue
 
             # Create document text
             doc_text = (
@@ -211,18 +229,6 @@ def embed_vectors(
             if _duckdb_dataset_name:
                 sync_items(_duckdb_dataset_name, ids, documents, metadatas)
 
-            total_embedded += len(ids)
+        job.record(added=len(ids), end=batch_end)
 
-        if progress_callback:
-            progress_callback(min(batch_start + EMBEDDING_BATCH_SIZE, len(rows)), len(rows))
-
-    duration = time.time() - start_time
-    print(f"Added {total_embedded} pre-computed vectors in {duration:.2f}s")
-
-    return EmbeddingResult(
-        collection_name=config.collection_name,
-        total_embedded=total_embedded,
-        embedding_dim=embedding_dim,
-        device=device,
-        duration_seconds=duration,
-    )
+    return job.result()

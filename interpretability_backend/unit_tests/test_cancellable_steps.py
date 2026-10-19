@@ -24,14 +24,14 @@ from backend.services import (
     embedding_pipeline,
     job_state,
     sae_pipeline_service,
+    topic_extraction_service as topic_service,
     topic_quality_service,
 )
-from backend.services import topic_extraction_service as topic_service
 from backend.services.cancel_registry import CANCELLED_MESSAGE, JobCancelled, request_cancel
 from backend.services.job_ids import JobIds
 from backend.services.job_state import JobStateService
 from backend.topic_extraction import llm_labeling
-from backend.utils import cancellable_task, compute_projections
+from backend.utils import cancellable_task, compute_projections, embedding_loader
 from backend.utils.cancellable_task import CancellableTaskSettings
 
 INLINE = CancellableTaskSettings(isolate_min_rows=10**9)
@@ -99,7 +99,7 @@ class TestProjections:
         event = threading.Event()
         db = FakeProjectionDB(on_insert=event.set)  # cancel once PCA 2D is stored
         monkeypatch.setattr(compute_projections, "_get_duckdb", lambda: db)
-        monkeypatch.setattr(compute_projections, "iter_embedding_batches", _fake_loader(_blobs()))
+        monkeypatch.setattr(embedding_loader, "iter_embedding_batches", _fake_loader(_blobs()))
 
         with pytest.raises(JobCancelled):
             compute_projections.compute_projections_for_collection(
@@ -119,7 +119,7 @@ class TestProjections:
 
         db = FakeProjectionDB()
         monkeypatch.setattr(compute_projections, "_get_duckdb", lambda: db)
-        monkeypatch.setattr(compute_projections, "iter_embedding_batches", iter_batches)
+        monkeypatch.setattr(embedding_loader, "iter_embedding_batches", iter_batches)
 
         with pytest.raises(JobCancelled):
             compute_projections.compute_projections_for_collection("c", cancel_event=event)
@@ -130,7 +130,7 @@ class TestProjections:
         vectors = _blobs()
         db = FakeProjectionDB()
         monkeypatch.setattr(compute_projections, "_get_duckdb", lambda: db)
-        monkeypatch.setattr(compute_projections, "iter_embedding_batches", _fake_loader(vectors))
+        monkeypatch.setattr(embedding_loader, "iter_embedding_batches", _fake_loader(vectors))
 
         assert compute_projections.compute_projections_for_collection("c", ["pca2d", "pca3d"])
         assert db.inserted["pca_2d"].shape == (len(vectors), 2)
@@ -211,7 +211,9 @@ class TestTopicExtraction:
 
         monkeypatch.setattr(llm_labeling, "_create_labeler", lambda provider, model: object())
         monkeypatch.setattr(llm_labeling, "generate_llm_label_for_topic", _label)
-        documents_df = pd.DataFrame({"Document_ID": [0, 1], "Document": ["a", "b"], "Topic": [0, 1]})
+        documents_df = pd.DataFrame(
+            {"Document_ID": [0, 1], "Document": ["a", "b"], "Topic": [0, 1]}
+        )
 
         with pytest.raises(JobCancelled):
             llm_labeling.generate_llm_labels(
@@ -370,7 +372,11 @@ class TestSaePrepare:
 class _InstantPipeline(embedding_pipeline.EmbeddingPipeline):
     def _do_embed(self) -> EmbeddingResult:
         return EmbeddingResult(
-            collection_name="col", total_embedded=5, embedding_dim=3, device="cpu", duration_seconds=0
+            collection_name="col",
+            total_embedded=5,
+            embedding_dim=3,
+            device="cpu",
+            duration_seconds=0,
         )
 
 
@@ -404,18 +410,47 @@ class TestPipelineSteps:
         asyncio.run(pipeline.run())
         assert seen["cancel_event"] is pipeline.cancel_event
 
-    def test_cancelled_topics_close_the_job(self, monkeypatch, job_states):
+    def test_cancelled_topics_close_the_job_but_keep_the_sae_link(self, monkeypatch, job_states):
+        """The embedding is complete, so the requested link is applied before the
+        optional steps; a cancel there cannot drop it."""
         job_states.start_job("col", job_type="t", total_expected=5, total_batches=1, config={})
+        link = {"sae_model_id": "m", "sae_id": "s"}
         pipeline, _, linked = self._pipeline(
-            monkeypatch,
-            topics_error=CANCELLED_MESSAGE,
-            sae_link={"sae_model_id": "m", "sae_id": "s"},
+            monkeypatch, topics_error=CANCELLED_MESSAGE, sae_link=link
         )
 
         result = asyncio.run(pipeline.run())
 
         assert result.embedding_result.error == CANCELLED_MESSAGE
         assert job_states.get_job("col") is None
+        assert linked == [link]
+
+    def test_failed_embed_keeps_its_resume_record(self, monkeypatch, job_states):
+        """Regression: a failed embed was marked completed (record deleted)."""
+        job_states.start_job("col", job_type="t", total_expected=5, total_batches=1, config={})
+        job_states.fail_job("col", "boom")  # what the embedder does on an exception
+        events: list[dict] = []
+        monkeypatch.setattr(
+            embedding_pipeline, "emit_progress_sync", lambda **kw: events.append(kw)
+        )
+        pipeline, _, linked = self._pipeline(
+            monkeypatch, sae_link={"sae_model_id": "m", "sae_id": "s"}
+        )
+        failed = EmbeddingResult(
+            collection_name="col",
+            total_embedded=0,
+            embedding_dim=3,
+            device="cpu",
+            duration_seconds=0,
+            error="boom",
+        )
+        monkeypatch.setattr(pipeline, "_do_embed", lambda: failed)
+
+        result = asyncio.run(pipeline.run())
+
+        assert result.embedding_result.error == "boom"
+        assert job_states.get_job("col") is not None
+        assert "completed" not in [e["status"] for e in events]
         assert linked == []
 
     def test_links_the_sae_after_a_successful_run(self, monkeypatch, job_states):
@@ -452,8 +487,12 @@ class TestMutationRegistration:
             _cancel_from_inside(JobIds.topic_extraction("c"))
             seen["set"] = cancel_event.is_set()
             return topic_service.TopicExtractionResult(
-                collection_name="c", num_topics=0, num_noise_points=0, topics=[],
-                duration_seconds=0, error=CANCELLED_MESSAGE,
+                collection_name="c",
+                num_topics=0,
+                num_noise_points=0,
+                topics=[],
+                duration_seconds=0,
+                error=CANCELLED_MESSAGE,
             )
 
         monkeypatch.setattr(mutations, "do_extract_topics", _extract)
@@ -470,13 +509,17 @@ class TestMutationRegistration:
             _cancel_from_inside(JobIds.topic_reduction("c"))
             seen["set"] = kwargs["cancel_event"].is_set()
             return topic_service.TopicExtractionResult(
-                collection_name="c", num_topics=0, num_noise_points=0, topics=[],
-                duration_seconds=0, error=CANCELLED_MESSAGE,
+                collection_name="c",
+                num_topics=0,
+                num_noise_points=0,
+                topics=[],
+                duration_seconds=0,
+                error=CANCELLED_MESSAGE,
             )
 
         monkeypatch.setattr(topic_service, "reduce_existing_topics", _reduce)
         _execute(
-            "mutation($c: String!) { reduceTopics(input: {collectionName: $c, method: \"auto\"})"
+            'mutation($c: String!) { reduceTopics(input: {collectionName: $c, method: "auto"})'
             " { error } }",
             {"c": "c"},
         )
@@ -497,6 +540,62 @@ class TestMutationRegistration:
         )
         assert seen["set"]
 
+    def test_sae_collection_phase_is_resumable_and_cancellable_by_collection(self, monkeypatch):
+        """The collection created by prepareSaeData stores a replayable input
+        (SAE link, topics) and can be cancelled from the Jobs list by its
+        collection id."""
+        seen = {}
+
+        def _prepare(**kwargs):
+            return {
+                "model_id": "gemma-3-4b-it",
+                "sae_id": "9-gemmascope-2-res-16k",
+                "duration_seconds": 0.0,
+                "status": "completed",
+                "error": None,
+                "features_parquet": "/tmp/features.parquet",
+            }
+
+        class _Pipeline:
+            def __init__(self, config, **kwargs):
+                seen["config"], seen["kwargs"] = config, kwargs
+
+            async def run(self):
+                seen["cancelled_by_collection"] = request_cancel("sae_4b_9_res_16k_vectors")
+                return SimpleNamespace(
+                    embedding_result=EmbeddingResult(
+                        collection_name="c",
+                        total_embedded=0,
+                        embedding_dim=3,
+                        device="cpu",
+                        duration_seconds=0,
+                        error=CANCELLED_MESSAGE,
+                    ),
+                    projections_computed=False,
+                )
+
+        monkeypatch.setattr(sae_pipeline_service, "prepare_sae_data", _prepare)
+        monkeypatch.setattr(mutations, "LocalFileEmbeddingPipeline", _Pipeline)
+        data = _execute(
+            'mutation { prepareSaeData(input: {layer: 9, width: "16k", hookType: "resid_post",'
+            ' modelSize: "4b", variant: "it", createCollection: true, extractTopics: true})'
+            " { error collectionName } }",
+            {},
+        )
+
+        link = {"sae_model_id": "gemma-3-4b-it", "sae_id": "9-gemmascope-2-res-16k"}
+        assert seen["kwargs"]["sae_link"] == link
+        stored = seen["config"].to_job_config()["input"]
+        assert stored["saeLink"] == {
+            "saeModelId": "gemma-3-4b-it",
+            "saeId": "9-gemmascope-2-res-16k",
+            "computeActivations": False,
+        }
+        assert stored["extractTopics"] is True and stored["dataType"] == "VECTOR"
+        assert seen["cancelled_by_collection"] is True
+        assert seen["kwargs"]["cancel_event"].is_set()
+        assert data["prepareSaeData"]["error"] == CANCELLED_MESSAGE
+
     def test_prepare_sae_data(self, monkeypatch):
         seen = {}
 
@@ -504,14 +603,17 @@ class TestMutationRegistration:
             _cancel_from_inside(JobIds.sae_prepare("4b", "it", 9, "resid_post", "16k"))
             seen["set"] = kwargs["cancel_event"].is_set()
             return {
-                "model_id": "m", "sae_id": "s", "duration_seconds": 0.0,
-                "status": "failed", "error": CANCELLED_MESSAGE,
+                "model_id": "m",
+                "sae_id": "s",
+                "duration_seconds": 0.0,
+                "status": "failed",
+                "error": CANCELLED_MESSAGE,
             }
 
         monkeypatch.setattr(sae_pipeline_service, "prepare_sae_data", _prepare)
         data = _execute(
-            "mutation { prepareSaeData(input: {layer: 9, width: \"16k\", hookType: \"resid_post\","
-            " modelSize: \"4b\", variant: \"it\"}) { error status } }",
+            'mutation { prepareSaeData(input: {layer: 9, width: "16k", hookType: "resid_post",'
+            ' modelSize: "4b", variant: "it"}) { error status } }',
             {},
         )
         assert seen["set"] and data["prepareSaeData"]["error"] == CANCELLED_MESSAGE

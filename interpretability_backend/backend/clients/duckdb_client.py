@@ -1073,6 +1073,17 @@ class DuckDBClient:
         ).fetchone()
         return row[0] if row else None
 
+    def update_collection_extra_metadata(self, collection_name: str, extra_metadata: dict) -> str:
+        """Merge ``extra_metadata`` into the dataset behind a vector collection.
+
+        Collection-level settings (SAE link, default colour scheme, …) live on
+        the dataset row, which a re-embedded collection shares with its source.
+        Returns the dataset name that was updated.
+        """
+        dataset_name = self.get_dataset_name_for_collection(collection_name) or collection_name
+        self.update_dataset(dataset_name, extra_metadata=extra_metadata)
+        return dataset_name
+
     def set_collection_has_topics(self, collection_name: str) -> None:
         """Mark a vector collection as having topic data."""
         self._exec(
@@ -1248,9 +1259,7 @@ class DuckDBClient:
         dimensions = 3 if projection_type.endswith("_3d") else 2
         ids = [row[0] for row in rows]
         return {
-            "coordinates": [
-                list(row[1]) if row[1] else [0.0] * dimensions for row in rows
-            ],
+            "coordinates": [list(row[1]) if row[1] else [0.0] * dimensions for row in rows],
             "item_signature": self.item_id_signature(ids),
         }
 
@@ -2868,7 +2877,10 @@ class DuckDBClient:
         )
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
-        return [_sanitize_for_json(dict(zip(cols, r, strict=True)), json_columns=("config",)) for r in rows]
+        return [
+            _sanitize_for_json(dict(zip(cols, r, strict=True)), json_columns=("config",))
+            for r in rows
+        ]
 
     def get_chat_session_with_messages(self, session_id: str) -> dict | None:
         """Get a session with all its messages."""

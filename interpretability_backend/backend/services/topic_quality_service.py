@@ -15,6 +15,7 @@ stack (hdbscan → sklearn) and gensim, so the API layer must import it lazily
 
 import json
 import logging
+import threading
 import time
 
 import numpy as np
@@ -30,7 +31,11 @@ except ImportError:
     from evaluation.quality_metrics import TopicQualityEvaluator
 
 from ..topic_extraction.cluster_and_label import GenerateTopics
+from ..utils import cancellable_task
+from ..utils.cancellable_task import CancellableTask
 from ..utils.duckdb_sync import _get_db as _get_duckdb
+from .cancel_registry import CANCELLED_MESSAGE, JobCancelled, emit_cancelled, raise_if_cancelled
+from .job_ids import JobIds
 from .progress_emitter import emit_progress
 
 logger = logging.getLogger("orrery." + __name__)
@@ -53,6 +58,45 @@ def _recompute_keywords(documents, labels, n_keywords, language):
     return generator.extract_topics(documents_df, n_words=n_keywords)
 
 
+def score_metrics(
+    channel,
+    documents: list[str],
+    labels: np.ndarray,
+    coords: np.ndarray,
+    *,
+    metrics: set[str] | None,
+    sample_size: int,
+    language: str | None,
+    n_keywords: int,
+    cluster_space: str,
+) -> dict:
+    """Task target: keywords (when a keyword metric is requested) + metrics.
+
+    Sends ``(stage, message)`` progress items. Runs in a CancellableTask child
+    on large collections, so a cancel stops c-TF-IDF / gensim mid-step.
+    """
+    # Keywords are only needed for the keyword-based metrics; the c-TF-IDF
+    # fit dominates cost on large collections, so skip it otherwise.
+    keyword_metrics = {"diversity", "coherence_cv", "coherence_umass"}
+    topics_data = None
+    if metrics is None or (set(metrics) & keyword_metrics):
+        channel.send((2, "Recomputing per-topic keywords (c-TF-IDF)..."))
+        topics_data = _recompute_keywords(documents, labels, n_keywords, language)
+
+    channel.send((3, "Computing quality metrics..."))
+    return TopicQualityEvaluator().evaluate(
+        labels=labels,
+        projection_coords=coords,
+        topics_data=topics_data,
+        documents=documents,
+        language=language,
+        sample_size=sample_size,
+        n_keywords=n_keywords,
+        metrics=metrics,
+        cluster_space=cluster_space,
+    )
+
+
 def _extraction_config(active: dict) -> dict:
     """Parse the config snapshot stored on the extraction row."""
     config = active.get("config")
@@ -73,6 +117,7 @@ def score_topic_quality(
     n_keywords: int = 10,
     persist: bool = True,
     duckdb=None,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
     """Score the active topic extraction of ``collection_name``.
 
@@ -86,12 +131,14 @@ def score_topic_quality(
         n_keywords: Top-N keywords per topic for diversity/coherence.
         persist: Store the result on the extraction row (keyed by level).
         duckdb: Optional client override (tests); defaults to the shared one.
+        cancel_event: The job's cancel event; the metric computation stops
+            mid-step (see ``score_metrics``) and nothing is persisted.
 
     Returns:
         Metrics dict (plus meta fields) or ``{"error": ...}``. Never raises.
     """
     start_time = time.time()
-    job_id = f"{collection_name}_evaluate"
+    job_id = JobIds.topic_evaluation(collection_name)
 
     def _progress(stage: int, message: str, status: str = "running", error: str | None = None):
         emit_progress(
@@ -156,24 +203,20 @@ def score_topic_quality(
                 )
             return _fail(f"Collection '{collection_name}' has fewer than 2 topics")
 
-        # Keywords are only needed for the keyword-based metrics; the c-TF-IDF
-        # fit dominates cost on large collections, so skip it otherwise.
-        keyword_metrics = {"diversity", "coherence_cv", "coherence_umass"}
-        topics_data = None
-        if metrics is None or (set(metrics) & keyword_metrics):
-            _progress(2, "Recomputing per-topic keywords (c-TF-IDF)...")
-            topics_data = _recompute_keywords(documents, labels, n_keywords, language)
-
-        _progress(3, "Computing quality metrics...")
-        result = TopicQualityEvaluator().evaluate(
-            labels=labels,
-            projection_coords=coords,
-            topics_data=topics_data,
-            documents=documents,
-            language=language,
-            sample_size=sample_size,
-            n_keywords=n_keywords,
+        raise_if_cancelled(cancel_event)
+        result = CancellableTask(
+            cancel_event,
+            isolate=cancellable_task.SETTINGS.should_isolate(len(ids)),
+            on_item=lambda stage_message: _progress(*stage_message),
+        ).run(
+            score_metrics,
+            documents,
+            labels,
+            coords,
             metrics=metrics,
+            sample_size=sample_size,
+            language=language,
+            n_keywords=n_keywords,
             cluster_space=f"{cluster_on}/{projection_type}",
         )
         result["collection_name"] = collection_name
@@ -187,6 +230,11 @@ def score_topic_quality(
 
         _progress(4, "Complete!", status="completed")
         return result
+
+    except JobCancelled:
+        logger.info("Topic quality scoring cancelled for %r", collection_name)
+        emit_cancelled(job_id, total_items=4, total_batches=4)
+        return {"error": CANCELLED_MESSAGE, "collection_name": collection_name, "level": level}
 
     except Exception as e:
         logger.error("Topic quality scoring error for %r: %s", collection_name, e)

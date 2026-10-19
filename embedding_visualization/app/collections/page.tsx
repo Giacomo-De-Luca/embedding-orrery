@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { useEmbedDataset } from '@/lib/hooks/useEmbedDataset';
 import { useCancelJob } from '@/lib/hooks/useCancelJob';
+import { JobIds } from '@/lib/utils/jobIds';
 import { GET_COLLECTIONS } from '@/lib/graphql/queries';
 import type { EmbeddingJob } from '@/lib/graphql/mutations';
 import { PageNav } from '@/app/components/PageNav';
@@ -91,7 +92,6 @@ function CollectionsPageContent() {
     lastEmbedResult,
     lastEmbedSource,
     activeJobCollectionName,
-    activeJobCancellable,
     extractTopics,
     topicsLoading,
     lastTopicsResult,
@@ -142,6 +142,7 @@ function CollectionsPageContent() {
       embedLocalFile,
       reEmbedDataset,
       generateLlmLabels,
+      computeDocumentActivations,
       refreshCollections: handleRefreshCollections,
       setLlmResumeJobId,
     });
@@ -178,7 +179,6 @@ function CollectionsPageContent() {
             fetchHFDatasetPreview={fetchHFDatasetPreview}
             embedHFDataset={embedHFDataset}
             refreshCollections={handleRefreshCollections}
-            updateCollectionMetadata={updateCollectionMetadata}
             computeDocumentActivations={computeDocumentActivations}
             datasetInfo={datasetInfo}
             datasetPreview={datasetPreview}
@@ -200,7 +200,6 @@ function CollectionsPageContent() {
             reEmbedDataset={reEmbedDataset}
             collections={collections}
             refreshCollections={handleRefreshCollections}
-            updateCollectionMetadata={updateCollectionMetadata}
             computeDocumentActivations={computeDocumentActivations}
             localFileInfo={localFileInfo}
             localFilePreview={localFilePreview}
@@ -258,15 +257,15 @@ function CollectionsPageContent() {
           hideJobIds={[
             activeJobCollectionName,
             llmResumeJobId,
-            llmLabelsLoading && managedCollection ? `${managedCollection}_llm_labeling` : null,
-            activeDocActivationsCollection ? `${activeDocActivationsCollection}_sae_activations` : null,
+            llmLabelsLoading && managedCollection ? JobIds.llmLabeling(managedCollection) : null,
+            activeDocActivationsCollection ? JobIds.saeActivations(activeDocActivationsCollection) : null,
           ]}
         />
       </div>
 
       {/* Centered progress modal for client-initiated jobs */}
       {embedLoading && activeJobCollectionName && (
-        <ProgressModal jobId={activeJobCollectionName} cancellable={activeJobCancellable} />
+        <ProgressModal jobId={activeJobCollectionName} cancellable />
       )}
       {llmResumeJobId && (
         <ProgressModal
@@ -281,7 +280,7 @@ function CollectionsPageContent() {
           or manage pane) triggered the activations compute */}
       {docActivationsLoading && activeDocActivationsCollection && (
         <ProgressModal
-          jobId={`${activeDocActivationsCollection}_sae_activations`}
+          jobId={JobIds.saeActivations(activeDocActivationsCollection)}
           title="Computing SAE Document Activations"
           subtitle="Running SAE inference on each document."
           itemsLabel="documents"

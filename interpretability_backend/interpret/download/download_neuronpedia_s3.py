@@ -122,6 +122,37 @@ def download_batch(session: requests.Session, key: str, retries: int = 3) -> byt
                 raise
 
 
+def write_atomic(path: Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` via a ``.partial`` file and a rename, so an
+    interrupted download (e.g. a cancelled job) never leaves a truncated batch
+    that the resume check would mistake for a finished one."""
+    partial = path.with_name(path.name + ".partial")
+    partial.write_bytes(data)
+    partial.replace(path)
+
+
+def drop_torn_tail(path: Path, chunk_size: int = 65536) -> None:
+    """Cut a half-written last line (an interrupted append) off a JSONL file,
+    so records appended on resume start on a fresh line."""
+    size = path.stat().st_size
+    if size == 0:
+        return
+    with open(path, "rb+") as f:
+        f.seek(size - 1)
+        if f.read(1) == b"\n":
+            return
+        end = size
+        while end > 0:
+            start = max(0, end - chunk_size)
+            f.seek(start)
+            newline = f.read(end - start).rfind(b"\n")
+            if newline != -1:
+                f.truncate(start + newline + 1)
+                return
+            end = start
+        f.truncate(0)
+
+
 def parse_batch(raw_gz: bytes) -> list[dict]:
     """Decompress and parse a gzipped JSONL batch."""
     text = gzip.decompress(raw_gz).decode("utf-8")
@@ -242,7 +273,7 @@ def download_activations_raw(
     for i, key in enumerate(pbar or to_download):
         raw = download_batch(session, key)
         filename = key.rsplit("/", 1)[-1]
-        (act_dir / filename).write_bytes(raw)
+        write_atomic(act_dir / filename, raw)
         if progress_callback:
             progress_callback(i + 1, len(to_download))
 
@@ -282,6 +313,7 @@ def download_source(
     # Resume: collect already-merged indices
     existing_indices: set[int] = set()
     if output_file.exists():
+        drop_torn_tail(output_file)  # an interrupted run may have left half a line
         with open(output_file) as f:
             for line in f:
                 try:

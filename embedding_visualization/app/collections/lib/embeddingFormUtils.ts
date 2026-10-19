@@ -12,8 +12,10 @@ import type {
   DataType,
   PortionStrategy,
   PortionInput,
+  SaeLinkInput,
   TopicConfigInput,
 } from '@/lib/graphql/mutations';
+import { JobIds } from '@/lib/utils/jobIds';
 
 /**
  * Update a text template when embedding columns are toggled.
@@ -86,7 +88,7 @@ export async function resumeLlmLabelingJob(
     llm_model?: string;
     label_scope?: string;
   };
-  const jobId = `${llmConfig.collection_name || job.collectionName}_llm_labeling`;
+  const jobId = JobIds.llmLabeling(llmConfig.collection_name || job.collectionName);
 
   callbacks.setLlmResumeJobId(jobId);
   await generateLlmLabels({
@@ -102,7 +104,7 @@ export async function resumeLlmLabelingJob(
   return true;
 }
 
-export interface ResumeJobDeps {
+export interface ResumeJobDeps extends SaePostEmbedDeps {
   embedHFDataset: (input: EmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   embedLocalFile: (input: EmbedLocalFileInput) => Promise<EmbedDatasetResult | null>;
   reEmbedDataset: (input: ReEmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
@@ -156,6 +158,8 @@ export interface CommonEmbedFormValues {
   batchSize: number;
   embeddingModel?: EmbeddingModelInput;
   topicParams: { extractTopics?: boolean; topicConfig?: TopicConfigInput };
+  /** SAE to link the collection to after a successful embed (see saeLinkFromParams) */
+  saeLink?: SaeLinkInput | null;
 }
 
 export function buildHFEmbedInput(
@@ -181,6 +185,7 @@ export function buildHFEmbedInput(
     batchSize: form.batchSize,
     embeddingModel: form.embeddingModel,
     ...form.topicParams,
+    saeLink: form.saeLink ?? undefined,
   };
 
   if (source.portion.strategy === 'ALL') {
@@ -227,6 +232,7 @@ export function buildLocalEmbedInput(
     batchSize: form.batchSize,
     embeddingModel: dataType === 'TEXT' ? form.embeddingModel : undefined,
     ...form.topicParams,
+    saeLink: form.saeLink ?? undefined,
   };
 }
 
@@ -248,6 +254,7 @@ export function buildReEmbedInput(
     batchSize: form.batchSize,
     computeProjections: true,
     ...form.topicParams,
+    saeLink: form.saeLink ?? undefined,
   };
 }
 
@@ -275,48 +282,156 @@ export interface SaePostEmbedParams {
   selection: string | null;
 }
 
+/**
+ * The embed input's `saeLink` for the optional post-embed SAE step: the
+ * backend links the collection to it once the embed succeeds (and keeps it in
+ * the job's stored input, so a resumed run links it too). Null when the step
+ * is off or nothing valid is selected.
+ */
+export function saeLinkFromParams(params: SaePostEmbedParams): SaeLinkInput | null {
+  if (!params.enabled) return null;
+  const link = parseSaeSelection(params.selection);
+  return link ? { saeModelId: link.sae_model_id, saeId: link.sae_id, computeActivations: true } : null;
+}
+
 export interface SaePostEmbedDeps {
-  updateCollectionMetadata: (
-    collectionName: string,
-    metadata: Record<string, unknown>
-  ) => Promise<{ error?: string | null } | null>;
   computeDocumentActivations: (
     collectionName: string
   ) => Promise<{ error?: string | null } | null>;
 }
 
 /**
- * Optional final step of the embed flow: after a successful embed (+ topics,
- * which run inside the embed job), link the collection to the chosen SAE and
- * compute document activations. The backend reads the SAE to run from the
- * collection's `sae_model_id`/`sae_id` metadata, so linking must come first.
+ * Optional final step of the embed flow: after an embed whose SAE link asks
+ * for activations (`computeActivations`) succeeds, compute the collection's
+ * document activations — the backend linked the SAE as soon as every item was
+ * embedded, so the compute knows which SAE to run. Link-only links (SAE
+ * feature collections from the SAE tab) never compute.
  *
  * Returns whether the activations compute was reached. A compute-side error
  * still counts as run — the embed itself succeeded and the deps surface the
  * error (toast/error state); activations can be recomputed from the manage
- * tab. A failed link skips the compute (it would run against no SAE).
+ * tab. A failed or cancelled embed skips the step.
  */
 export async function runPostEmbedSaeStep(
   embedResult: EmbedDatasetResult | null,
-  params: SaePostEmbedParams,
+  saeLink: SaeLinkInput | null | undefined,
   deps: SaePostEmbedDeps
 ): Promise<boolean> {
-  if (!params.enabled) return false;
-  if (!embedResult || embedResult.error) return false;
-  const link = parseSaeSelection(params.selection);
-  if (!link) return false;
-
-  const linkResult = await deps.updateCollectionMetadata(embedResult.collectionName, link);
-  if (linkResult?.error) return false;
-
+  if (!saeLink?.computeActivations || !embedResult || embedResult.error) return false;
   await deps.computeDocumentActivations(embedResult.collectionName);
   return true;
 }
 
+// ========== Resume ==========
+
+/** The embed mutation (and its input) that resumes an interrupted job. */
+export type ResumePlan =
+  | { kind: 'hf'; input: EmbedDatasetInput }
+  | { kind: 'local'; input: EmbedLocalFileInput }
+  | { kind: 'reembed'; input: ReEmbedDatasetInput };
+
 /**
- * Resume any interrupted job, dispatching on its jobType. Unpacks the stored
- * backend config (snake_case) back into the matching embed mutation input
- * with `resume: true`.
+ * How to resume an interrupted embedding job, or null for job types resumed
+ * elsewhere (LLM labeling). Jobs store the GraphQL input they were started
+ * with (`config.input`, see BaseConfig.to_job_config on the backend), which is
+ * replayed with `resume: true` — columns, topic settings and the SAE link
+ * included. Jobs recorded before inputs were stored fall back to unpacking
+ * the snake_case config summary.
+ */
+export function resumePlanFor(job: EmbeddingJob): ResumePlan | null {
+  const config = job.config as Record<string, unknown>;
+  const stored = config.input as Record<string, unknown> | null | undefined;
+
+  switch (job.jobType) {
+    case 'huggingface':
+      return {
+        kind: 'hf',
+        input: { ...(stored ? (stored as unknown as EmbedDatasetInput) : legacyHFInput(job, config)), resume: true },
+      };
+    case 'local_file':
+      return {
+        kind: 'local',
+        input: { ...(stored ? (stored as unknown as EmbedLocalFileInput) : legacyLocalInput(job, config)), resume: true },
+      };
+    case 're_embed':
+      return {
+        kind: 'reembed',
+        input: { ...(stored ? (stored as unknown as ReEmbedDatasetInput) : legacyReEmbedInput(job, config)), resume: true },
+      };
+    default:
+      return null;
+  }
+}
+
+function legacyHFInput(job: EmbeddingJob, config: Record<string, unknown>): EmbedDatasetInput {
+  const storedPortion = config.portion as Record<string, unknown> | undefined;
+  return {
+    datasetId: config.dataset_id as string,
+    collectionName: job.collectionName,
+    config: config.config as string | undefined,
+    split: config.split as string | undefined,
+    splits: config.splits as string[] | undefined,
+    columns: config.columns as string[] | undefined,
+    textTemplate: config.text_template as string | undefined,
+    idColumn: config.id_column as string | undefined,
+    metadataColumns: config.metadata_columns as string[] | undefined,
+    portion: storedPortion
+      ? {
+          strategy: (storedPortion.strategy as string)?.toUpperCase() as PortionStrategy,
+          n: storedPortion.n as number | undefined,
+          start: storedPortion.start as number | undefined,
+          end: storedPortion.end as number | undefined,
+          seed: storedPortion.seed as number | undefined,
+        }
+      : undefined,
+    computeProjections: true,
+    batchSize: config.batch_size as number | undefined,
+    embeddingModel: transformStoredEmbeddingModel(
+      config.embedding_model as Record<string, unknown> | undefined
+    ),
+  };
+}
+
+function legacyLocalInput(job: EmbeddingJob, config: Record<string, unknown>): EmbedLocalFileInput {
+  return {
+    filePath: config.file_path as string,
+    collectionName: job.collectionName,
+    dataType: (config.data_type as string | undefined)?.toUpperCase() as DataType | undefined,
+    columns: config.columns as string[] | undefined,
+    textTemplate: config.text_template as string | undefined,
+    imageColumn: config.image_column as string | undefined,
+    vectorColumn: config.vector_column as string | undefined,
+    idColumn: config.id_column as string | undefined,
+    metadataColumns: config.metadata_columns as string[] | undefined,
+    nRows: config.n_rows as number | undefined,
+    sampleN: config.sample_n as number | undefined,
+    sampleSeed: config.sample_seed as number | undefined,
+    computeProjections: true,
+    batchSize: config.batch_size as number | undefined,
+    embeddingModel: transformStoredEmbeddingModel(
+      config.embedding_model as Record<string, unknown> | undefined
+    ),
+  };
+}
+
+function legacyReEmbedInput(job: EmbeddingJob, config: Record<string, unknown>): ReEmbedDatasetInput {
+  // Legacy re-embed jobs stored only source/provider/model (no columns or
+  // template), so they resume on the source dataset's document text.
+  return {
+    sourceDatasetName: config.source_dataset_name as string,
+    collectionName: job.collectionName,
+    embeddingModel: transformStoredEmbeddingModel({
+      provider: config.embedding_provider,
+      model_name: config.embedding_model,
+    })!,
+    computeProjections: true,
+  };
+}
+
+/**
+ * Resume any interrupted job: LLM labeling through its own mutation, embed
+ * jobs by replaying their plan — then, when the stored input linked an SAE and
+ * the resumed embed succeeded, compute the document activations it never got.
  */
 export async function resumeJob(job: EmbeddingJob, deps: ResumeJobDeps): Promise<void> {
   const handled = await resumeLlmLabelingJob(job, deps.generateLlmLabels, {
@@ -325,79 +440,18 @@ export async function resumeJob(job: EmbeddingJob, deps: ResumeJobDeps): Promise
   });
   if (handled) return;
 
-  const config = job.config as Record<string, unknown>;
+  const plan = resumePlanFor(job);
+  if (!plan) return;
 
-  if (job.jobType === 're_embed') {
-    // The backend stores only source/provider/model for re-embed jobs
-    // (no columns/template), so resume always uses the source dataset's
-    // existing document text — matching the omit-columns contract of
-    // ReEmbedDatasetInput.
-    await deps.reEmbedDataset({
-      sourceDatasetName: config.source_dataset_name as string,
-      collectionName: job.collectionName,
-      embeddingModel: transformStoredEmbeddingModel({
-        provider: config.embedding_provider,
-        model_name: config.embedding_model,
-      })!,
-      computeProjections: true,
-      resume: true,
-    });
-    await deps.refreshCollections();
-    return;
-  }
-
-  if (job.jobType === 'local_file') {
-    const dataTypeValue = config.data_type as string | undefined;
-
-    await deps.embedLocalFile({
-      filePath: config.file_path as string,
-      collectionName: job.collectionName,
-      dataType: dataTypeValue?.toUpperCase() as DataType | undefined,
-      columns: config.columns as string[] | undefined,
-      textTemplate: config.text_template as string | undefined,
-      imageColumn: config.image_column as string | undefined,
-      vectorColumn: config.vector_column as string | undefined,
-      idColumn: config.id_column as string | undefined,
-      metadataColumns: config.metadata_columns as string[] | undefined,
-      nRows: config.n_rows as number | undefined,
-      sampleN: config.sample_n as number | undefined,
-      sampleSeed: config.sample_seed as number | undefined,
-      computeProjections: true,
-      batchSize: config.batch_size as number | undefined,
-      embeddingModel: transformStoredEmbeddingModel(
-        config.embedding_model as Record<string, unknown> | undefined
-      ),
-      resume: true,
-    });
-  } else {
-    const storedPortion = config.portion as Record<string, unknown> | undefined;
-    const portion = storedPortion ? {
-      strategy: (storedPortion.strategy as string)?.toUpperCase() as PortionStrategy,
-      n: storedPortion.n as number | undefined,
-      start: storedPortion.start as number | undefined,
-      end: storedPortion.end as number | undefined,
-      seed: storedPortion.seed as number | undefined,
-    } : undefined;
-
-    await deps.embedHFDataset({
-      datasetId: config.dataset_id as string,
-      collectionName: job.collectionName,
-      config: config.config as string | undefined,
-      split: config.split as string | undefined,
-      splits: config.splits as string[] | undefined,
-      columns: config.columns as string[] | undefined,
-      textTemplate: config.text_template as string | undefined,
-      idColumn: config.id_column as string | undefined,
-      metadataColumns: config.metadata_columns as string[] | undefined,
-      portion,
-      computeProjections: true,
-      batchSize: config.batch_size as number | undefined,
-      embeddingModel: transformStoredEmbeddingModel(
-        config.embedding_model as Record<string, unknown> | undefined
-      ),
-      resume: true,
-    });
-  }
-
+  const result =
+    plan.kind === 'hf'
+      ? await deps.embedHFDataset(plan.input)
+      : plan.kind === 'local'
+        ? await deps.embedLocalFile(plan.input)
+        : await deps.reEmbedDataset(plan.input);
   await deps.refreshCollections();
+
+  if (await runPostEmbedSaeStep(result, plan.input.saeLink, deps)) {
+    await deps.refreshCollections();
+  }
 }

@@ -29,6 +29,7 @@ describe('saeLinkFromParams', () => {
     expect(saeLinkFromParams({ enabled: true, selection: 'gemma-3-4b-it::9-gemmascope-2-res-16k' })).toEqual({
       saeModelId: 'gemma-3-4b-it',
       saeId: '9-gemmascope-2-res-16k',
+      computeActivations: true,
     });
   });
 
@@ -51,7 +52,11 @@ describe('runPostEmbedSaeStep', () => {
     embeddingProvider: null,
     embeddingModel: null,
   };
-  const link: SaeLinkInput = { saeModelId: 'gemma-3-4b-it', saeId: '9-gemmascope-2-res-16k' };
+  const link: SaeLinkInput = {
+    saeModelId: 'gemma-3-4b-it',
+    saeId: '9-gemmascope-2-res-16k',
+    computeActivations: true,
+  };
 
   function compute() {
     return vi.fn().mockResolvedValue({ error: null });
@@ -64,6 +69,13 @@ describe('runPostEmbedSaeStep', () => {
 
     expect(ran).toBe(true);
     expect(computeDocumentActivations).toHaveBeenCalledWith('my_coll');
+  });
+
+  it('does not compute for a link-only SAE (e.g. a resumed SAE-tab feature collection)', async () => {
+    const computeDocumentActivations = compute();
+    const linkOnly = { ...link, computeActivations: false };
+    expect(await runPostEmbedSaeStep(okResult, linkOnly, { computeDocumentActivations })).toBe(false);
+    expect(computeDocumentActivations).not.toHaveBeenCalled();
   });
 
   it('does nothing without a link', async () => {

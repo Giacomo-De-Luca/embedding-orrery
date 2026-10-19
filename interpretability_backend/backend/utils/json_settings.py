@@ -29,9 +29,18 @@ class JsonFileSettings:
         """Build the settings from ``path``; a missing file means defaults."""
         if not path.exists():
             return cls()
-        raw = json.loads(path.read_text())
+        return cls.from_mapping(json.loads(path.read_text()), source=path)
+
+    @classmethod
+    def from_mapping(cls, raw: object, source: object = "input") -> Self:
+        """Build the settings from a parsed JSON object, with the same rules as ``from_file``.
+
+        Also used for nested objects (e.g. catalog entries); ``source`` only
+        names the object in the "must hold a JSON object" error.
+        """
         if not isinstance(raw, dict):
-            raise ValueError(f"Invalid {cls.SETTINGS_LABEL}: {path} must hold a JSON object")
+            raise ValueError(f"Invalid {cls.SETTINGS_LABEL}: {source} must hold a JSON object")
+        raw = dict(raw)
         unknown = set(raw) - {f.name for f in fields(cls)}
         if unknown:
             raise ValueError(f"Unknown {cls.SETTINGS_LABEL}: {sorted(unknown)}")

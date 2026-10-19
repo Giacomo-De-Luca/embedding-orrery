@@ -33,7 +33,6 @@ interface HuggingFaceTabProps {
   ) => Promise<HFDatasetPreview | null>;
   embedHFDataset: (input: EmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   refreshCollections: () => Promise<void>;
-  updateCollectionMetadata: SaePostEmbedDeps['updateCollectionMetadata'];
   computeDocumentActivations: SaePostEmbedDeps['computeDocumentActivations'];
   datasetInfo: HFDatasetInfo | null;
   datasetPreview: HFDatasetPreview | null;
@@ -51,7 +50,6 @@ export function HuggingFaceTab({
   fetchHFDatasetPreview,
   embedHFDataset,
   refreshCollections,
-  updateCollectionMetadata,
   computeDocumentActivations,
   datasetInfo,
   datasetPreview,
@@ -138,21 +136,19 @@ export function HuggingFaceTab({
     // CTA is disabled while issues exist; guard anyway
     if (validationIssues.length > 0) return;
 
-    const result = await embedHFDataset(buildHFEmbedInput(form.commonValues(), {
+    const input = buildHFEmbedInput(form.commonValues(), {
       datasetId,
       defaultConfig: datasetInfo?.defaultConfig,
       selectedSplit,
       allSplits: datasetInfo?.configs[0]?.splits.map(s => s.name) || [],
       portion: { strategy: portionStrategy, numRows, rangeStart, rangeEnd, seed: randomSeed },
-    }));
+    });
+    const result = await embedHFDataset(input);
 
     await refreshCollections();
 
-    // Optional final step: link the SAE + compute document activations
-    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
-      updateCollectionMetadata,
-      computeDocumentActivations,
-    });
+    // Optional final step: compute document activations (the embed linked the SAE)
+    const saeStepRan = await runPostEmbedSaeStep(result, input.saeLink, { computeDocumentActivations });
     if (saeStepRan) await refreshCollections();
   };
 

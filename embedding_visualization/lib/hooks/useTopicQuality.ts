@@ -3,7 +3,7 @@
 /**
  * Topic-quality scoring hook (mirrors the useProbes shape rather than growing
  * useEmbedDataset further). Completion is driven by the awaited mutation
- * promise; the `{collection}_evaluate` progress subscription is display-only
+ * promise; the `JobIds.topicEvaluation` progress subscription is display-only
  * and lives in the consuming component's ProgressModal.
  */
 
@@ -12,6 +12,7 @@ import { useMutation } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { EVALUATE_TOPICS } from '../graphql/queries';
 import type { EvaluateTopicsInput, EvaluateTopicsResult } from '../graphql/mutations';
+import { announceJobOutcome } from '../utils/jobCancellation';
 
 export interface UseTopicQualityReturn {
   evaluateTopics: (input: EvaluateTopicsInput) => Promise<EvaluateTopicsResult | null>;
@@ -43,14 +44,15 @@ export function useTopicQuality(): UseTopicQualityReturn {
           return null;
         }
         const result = data?.evaluateTopics ?? null;
-        if (result?.error) {
-          setError(result.error);
-          toast.error(`Topic scoring failed: ${result.error}`);
-        } else if (result) {
-          toast.success(
-            `Scored ${result.level} quality for "${result.collectionName}" in ${result.durationSeconds.toFixed(1)}s`
-          );
-        }
+        const outcome = announceJobOutcome(result, {
+          cancelled: () => `Topic scoring for "${input.collectionName}" cancelled.`,
+          failed: (r) => `Topic scoring failed: ${r.error}`,
+          succeeded: (r) =>
+            `Scored ${r.level} quality for "${r.collectionName}" in ${r.durationSeconds.toFixed(1)}s`,
+        }, toast);
+        // A cancel persisted nothing: keep showing the stored scores
+        if (outcome === 'cancelled') return result;
+        if (outcome === 'failed') setError(result!.error!);
         setLastResult(result);
         return result;
       } catch (err) {

@@ -9,6 +9,7 @@ import { Label } from '@/lib/ui-primitives/label';
 import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import { ProgressModal } from '../EmbeddingProgressModal';
 import { useTopicQuality } from '@/lib/hooks/useTopicQuality';
+import { JobIds } from '@/lib/utils/jobIds';
 import {
   DEFAULT_SELECTED_METRICS,
   METRIC_OPTIONS,
@@ -171,10 +172,11 @@ export function TopicQualitySection({
 
       {loading && (
         <ProgressModal
-          jobId={`${collectionName}_evaluate`}
+          jobId={JobIds.topicEvaluation(collectionName)}
           title="Scoring Topic Quality"
           subtitle="Computing cluster and keyword quality metrics..."
           itemsLabel="stages"
+          cancellable
         />
       )}
     </div>

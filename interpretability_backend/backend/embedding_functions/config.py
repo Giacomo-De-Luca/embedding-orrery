@@ -63,6 +63,17 @@ class EmbeddingModelConfig:
     # SentenceTransformers: Prompt support for models like EmbeddingGemma
     prompt: str | None = None  # Single field - can be predefined name or custom string
 
+    def to_job_config(self) -> dict:
+        """JSON form stored in job state (see BaseConfig.to_job_config)."""
+        return {
+            "provider": self.provider.value,
+            "model_name": self.model_name,
+            "ollama_url": self.ollama_url,
+            "task": self.task,
+            "task_type": self.task_type,
+            "prompt": self.prompt,
+        }
+
 
 @dataclass
 class EmbeddingResult:
@@ -90,6 +101,31 @@ class BaseConfig:
     metadata_columns: list[str] | None = None  # Additional columns to store as metadata
     batch_size: int = 100  # Batch size for embedding
     resume: bool = False  # Resume an interrupted job instead of starting fresh
+    # The GraphQL input the job was started from (camelCase, as built by
+    # API/converters.graphql_input_payload). Stored in job state so the
+    # frontend resumes by replaying it with resume=true.
+    job_input: dict | None = None
+
+    def to_job_config(self) -> dict:
+        """JSON summary stored in job state: Jobs-list display fields + the
+        replayable input."""
+        return {
+            "collection_name": self.collection_name,
+            "columns": self.columns,
+            "text_template": self.text_template,
+            "id_column": self.id_column,
+            "metadata_columns": self.metadata_columns,
+            "batch_size": self.batch_size,
+            "embedding_model": self.embedding_model.to_job_config()
+            if self.embedding_model
+            else None,
+            **self._source_job_config(),
+            "input": self.job_input,
+        }
+
+    def _source_job_config(self) -> dict:
+        """Source-specific fields of to_job_config (overridden per source)."""
+        return {}
 
 
 @dataclass(kw_only=True)
@@ -105,6 +141,24 @@ class EmbeddingConfig(BaseConfig):
     splits: list[str] | None = None
     portion: PortionConfig | None = None  # Portion of dataset to embed
 
+    def _source_job_config(self) -> dict:
+        portion = None
+        if self.portion:
+            portion = {
+                "strategy": self.portion.strategy.value,
+                "n": self.portion.n,
+                "start": self.portion.start,
+                "end": self.portion.end,
+                "seed": self.portion.seed,
+            }
+        return {
+            "dataset_id": self.dataset_id,
+            "config": self.config,
+            "split": self.split,
+            "splits": self.splits,
+            "portion": portion,
+        }
+
 
 @dataclass(kw_only=True)
 class LocalFileEmbeddingConfig(BaseConfig):
@@ -118,6 +172,17 @@ class LocalFileEmbeddingConfig(BaseConfig):
     sample_n: int | None = None  # Random sample
     sample_seed: int = 42
 
+    def _source_job_config(self) -> dict:
+        return {
+            "file_path": self.file_path,
+            "data_type": self.data_type.value,
+            "image_column": self.image_column,
+            "vector_column": self.vector_column,
+            "n_rows": self.n_rows,
+            "sample_n": self.sample_n,
+            "sample_seed": self.sample_seed,
+        }
+
 
 @dataclass(kw_only=True)
 class ReEmbedConfig(BaseConfig):
@@ -129,3 +194,6 @@ class ReEmbedConfig(BaseConfig):
     """
 
     source_dataset_name: str  # Existing dataset in DuckDB to read documents from
+
+    def _source_job_config(self) -> dict:
+        return {"source_dataset_name": self.source_dataset_name}

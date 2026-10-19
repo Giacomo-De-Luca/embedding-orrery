@@ -2,8 +2,9 @@
 Local file text embedding using SentenceTransformers and other providers.
 
 This module handles embedding text from local files (parquet, JSON, CSV, TSV)
-into ChromaDB using various embedding providers.
-Supports resume capability for interrupted jobs.
+into ChromaDB using various embedding providers, and dispatches image and
+pre-computed vector files to their own embedders. Every data type supports
+resume and cancellation through ``embedding_job``.
 """
 
 import json
@@ -13,10 +14,8 @@ from collections.abc import Callable
 
 import chromadb
 from chromadb.config import Settings
-from tqdm import tqdm
 
-from ..services.cancel_registry import CANCELLED_MESSAGE, is_cancelled, report_cancelled
-from ..services.job_state import get_job_state_service
+from ..clients.local_data_client import load_local_file_portion
 from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
 from ..utils.color_preprocessing import preprocess_color_metadata
@@ -34,39 +33,7 @@ from .config import (
 from .create_embedding_function import create_embedding_function, get_device
 from .embed_images import embed_images
 from .embed_vectors import embed_vectors
-
-# Progress update frequency (every N batches)
-PROGRESS_UPDATE_FREQUENCY = 1
-
-
-def _config_to_dict(config: LocalFileEmbeddingConfig) -> dict:
-    """Convert LocalFileEmbeddingConfig to a JSON-serializable dict for job state."""
-    result = {
-        "file_path": config.file_path,
-        "collection_name": config.collection_name,
-        "data_type": config.data_type.value,
-        "columns": config.columns,
-        "text_template": config.text_template,
-        "image_column": config.image_column,
-        "vector_column": config.vector_column,
-        "id_column": config.id_column,
-        "metadata_columns": config.metadata_columns,
-        "n_rows": config.n_rows,
-        "sample_n": config.sample_n,
-        "sample_seed": config.sample_seed,
-        "batch_size": config.batch_size,
-    }
-
-    if config.embedding_model:
-        result["embedding_model"] = {
-            "provider": config.embedding_model.provider.value,
-            "model_name": config.embedding_model.model_name,
-            "ollama_url": config.embedding_model.ollama_url,
-            "task": config.embedding_model.task,
-            "task_type": config.embedding_model.task_type,
-        }
-
-    return result
+from .embedding_job import EmbeddingBatchJob, open_embedding_collection, report_embedding_failure
 
 
 def embed_local_file(
@@ -82,14 +49,13 @@ def embed_local_file(
     Args:
         config: Embedding configuration
         progress_callback: Optional callback for progress updates
+        cancel_event: Checked between batches; when set, stops and leaves the
+            job resumable
 
     Returns:
         EmbeddingResult with statistics
     """
-    from ..clients.local_data_client import load_local_file_portion
-
     start_time = time.time()
-    job_state = get_job_state_service()
 
     try:
         device = get_device()
@@ -123,59 +89,28 @@ def embed_local_file(
             path=db_path, settings=Settings(anonymized_telemetry=False)
         )
 
-        # Handle different data types
-        if config.data_type == DataType.VECTOR:
-            # Vector embedding doesn't support resume yet (pass through to existing)
-            try:
-                if not config.resume:
-                    client.delete_collection(name=config.collection_name)
-                    print(f"Deleted existing collection: {config.collection_name}")
-            except Exception:
-                pass
-            return embed_vectors(client, config, rows, total, device, start_time, progress_callback)
-        elif config.data_type == DataType.IMAGE:
-            # Image embedding doesn't support resume yet (pass through to existing)
-            try:
-                if not config.resume:
-                    client.delete_collection(name=config.collection_name)
-                    print(f"Deleted existing collection: {config.collection_name}")
-            except Exception:
-                pass
-            return embed_images(client, config, rows, total, device, start_time, progress_callback)
-        else:  # TEXT
-            return embed_text_from_local(
-                client,
-                config,
-                rows,
-                total,
-                device,
-                start_time,
-                progress_callback,
-                cancel_event=cancel_event,
-            )
-
-    except Exception as e:
-        # Mark job as failed
-        job_state.fail_job(config.collection_name, str(e))
-
-        # Emit failure event to WebSocket subscribers
-        emit_progress_sync(
-            job_id=config.collection_name,
-            status="failed",
-            items_processed=0,
-            total_items=0,
-            current_batch=0,
-            total_batches=0,
-            error=str(e),
+        embedder = {
+            DataType.VECTOR: embed_vectors,
+            DataType.IMAGE: embed_images,
+        }.get(config.data_type, embed_text_from_local)
+        return embedder(
+            client,
+            config,
+            rows,
+            total,
+            device,
+            start_time,
+            progress_callback,
+            cancel_event=cancel_event,
         )
 
-        return EmbeddingResult(
-            collection_name=config.collection_name,
-            total_embedded=0,
-            embedding_dim=TEXT_EMBEDDING_DIMENSIONS,
+    except Exception as e:
+        return report_embedding_failure(
+            config.collection_name,
+            e,
+            start_time=start_time,
             device=get_device(),
-            duration_seconds=time.time() - start_time,
-            error=str(e),
+            embedding_dim=TEXT_EMBEDDING_DIMENSIONS,
         )
 
 
@@ -200,12 +135,11 @@ def embed_text_from_local(
         device: Device string (cpu, cuda, mps)
         start_time: Start time for duration calculation
         progress_callback: Optional progress callback
+        cancel_event: Checked between batches
 
     Returns:
         EmbeddingResult with statistics
     """
-    job_state = get_job_state_service()
-
     # Get model config early
     model_config = config.embedding_model or EmbeddingModelConfig()
 
@@ -263,54 +197,27 @@ def embed_text_from_local(
     embedding_func, embedding_dim = create_embedding_function(model_config, device)
     print(f"Using embedding model: {model_config.provider.value} / {model_config.model_name}")
 
-    # Handle existing collection (resume vs overwrite)
-    existing_ids: set[str] = set()
-    collection = None
-
-    try:
-        existing_collection = client.get_collection(
-            name=config.collection_name, embedding_function=embedding_func
-        )
-
-        if config.resume:
-            # Resume mode: get existing IDs to skip
-            result = existing_collection.get(include=[])
-            existing_ids = set(result["ids"])
-            collection = existing_collection
-            print(f"Resuming: found {len(existing_ids)} existing embeddings")
-        else:
-            # Overwrite mode: delete existing collection
-            client.delete_collection(name=config.collection_name)
-            print(f"Deleted existing collection: {config.collection_name}")
-    except Exception:
-        # Collection doesn't exist
-        pass
-
-    # Create new collection if needed
-    if collection is None:
-        collection_metadata = {
-            "description": f"Embeddings from local file: {config.file_path}",
-            "source_file": config.file_path,
-            "embedded_columns": json.dumps(columns),
-            "data_type": "text",
-            "embedding_provider": model_config.provider.value,
-            "embedding_model": model_config.model_name,
-            "embedding_dim": embedding_dim,
-            "embedding_task": model_config.task,
-            "embedding_task_type": model_config.task_type,
-            "embedding_prompt": model_config.prompt,
-            "total_in_file": total,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-        # Filter out None values from metadata (ChromaDB doesn't like them)
-        collection_metadata = {k: v for k, v in collection_metadata.items() if v is not None}
-
-        collection = client.create_collection(
-            name=config.collection_name,
-            embedding_function=embedding_func,
-            metadata=collection_metadata,
-        )
+    collection_metadata = {
+        "description": f"Embeddings from local file: {config.file_path}",
+        "source_file": config.file_path,
+        "embedded_columns": json.dumps(columns),
+        "data_type": "text",
+        "embedding_provider": model_config.provider.value,
+        "embedding_model": model_config.model_name,
+        "embedding_dim": embedding_dim,
+        "embedding_task": model_config.task,
+        "embedding_task_type": model_config.task_type,
+        "embedding_prompt": model_config.prompt,
+        "total_in_file": total,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    collection, existing_ids = open_embedding_collection(
+        client,
+        config.collection_name,
+        resume=config.resume,
+        metadata=collection_metadata,
+        embedding_function=embedding_func,
+    )
 
     # DuckDB dual-write: create dataset + register vector collection
     _duckdb_dataset_name = sync_dataset_and_collection(
@@ -329,65 +236,29 @@ def embed_text_from_local(
             exclude_cols.add(config.id_column)
         metadata_columns = [k for k in first_row.keys() if k not in exclude_cols]
 
-    # Register job start (only if not resuming, or if resuming from scratch)
-    if not config.resume or len(existing_ids) == 0:
-        job_state.start_job(
-            collection_name=config.collection_name,
-            job_type="local_file",
-            total_expected=len(rows),
-            total_batches=total_batches,
-            config=_config_to_dict(config),
-        )
-
-    # Emit initial progress so subscribers know the job has started
-    emit_progress_sync(
-        job_id=config.collection_name,
-        status="running",
-        items_processed=len(existing_ids),
-        total_items=len(rows),
-        current_batch=0,
-        total_batches=total_batches,
-        message="Starting embedding...",
+    job = EmbeddingBatchJob(
+        collection_name=config.collection_name,
+        job_type="local_file",
+        job_config=config.to_job_config(),
+        n_rows=len(rows),
+        batch_size=config.batch_size,
+        embedding_dim=embedding_dim,
+        device=device,
+        start_time=start_time,
+        model_config=model_config,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
     )
-
-    # Process in batches
-    total_embedded = len(existing_ids)  # Start from existing count if resuming
-    new_embedded = 0
+    job.start(already_embedded=len(existing_ids), resume=config.resume)
     id_deduplicator = IDDeduplicator()
-    batches_completed = 0
 
-    for batch_start in tqdm(
-        range(0, len(rows), config.batch_size), desc="Embedding batches", unit="batch"
-    ):
-        # Cooperative cancellation check between batches
-        if is_cancelled(cancel_event):
-            report_cancelled(
-                config.collection_name,
-                items_processed=total_embedded,
-                total_items=len(rows),
-                current_batch=batches_completed,
-                total_batches=total_batches,
-            )
-            duration = time.time() - start_time
-            return EmbeddingResult(
-                collection_name=config.collection_name,
-                total_embedded=total_embedded,
-                embedding_dim=embedding_dim,
-                device=device,
-                duration_seconds=duration,
-                error=CANCELLED_MESSAGE,
-                embedding_provider=model_config.provider.value,
-                embedding_model=model_config.model_name,
-            )
-
-        batch = rows[batch_start : batch_start + config.batch_size]
-
+    for batch_start, batch_end in job.batches():
         ids = []
         documents = []
         metadatas = []
 
-        for i, row in enumerate(batch):
-            row_idx = batch_start + i
+        for row_idx in range(batch_start, batch_end):
+            row = rows[row_idx]
 
             # Generate ID
             if config.id_column and config.id_column in row:
@@ -415,63 +286,13 @@ def embed_text_from_local(
             metadatas.append(metadata)
 
         if ids:
-            # Compute embeddings explicitly
-            batch_embeddings = embedding_func(documents)
-
-            # ChromaDB: vectors only
-            collection.add(ids=ids, embeddings=batch_embeddings)
+            # Compute embeddings explicitly; ChromaDB stores vectors only
+            collection.add(ids=ids, embeddings=embedding_func(documents))
 
             # DuckDB: documents + metadata
             if _duckdb_dataset_name:
                 sync_items(_duckdb_dataset_name, ids, documents, metadatas)
 
-            total_embedded += len(ids)
-            new_embedded += len(ids)
+        job.record(added=len(ids), end=batch_end)
 
-        batches_completed += 1
-
-        # Update job state and emit progress periodically
-        if batches_completed % PROGRESS_UPDATE_FREQUENCY == 0:
-            job_state.update_progress(
-                collection_name=config.collection_name,
-                items_embedded=total_embedded,
-                batches_completed=batches_completed,
-            )
-            # Emit progress to WebSocket subscribers
-            emit_progress_sync(
-                job_id=config.collection_name,
-                status="running",
-                items_processed=total_embedded,
-                total_items=len(rows),
-                current_batch=batches_completed,
-                total_batches=total_batches,
-            )
-
-        if progress_callback:
-            progress_callback(min(batch_start + config.batch_size, len(rows)), len(rows))
-
-    # Emit completion event to WebSocket subscribers
-    emit_progress_sync(
-        job_id=config.collection_name,
-        status="progress",
-        items_processed=total_embedded,
-        total_items=len(rows),
-        current_batch=total_batches,
-        total_batches=total_batches,
-    )
-
-    duration = time.time() - start_time
-    if config.resume and len(existing_ids) > 0:
-        print(f"Embedded {new_embedded} new items ({total_embedded} total) in {duration:.2f}s")
-    else:
-        print(f"Embedded {total_embedded} items in {duration:.2f}s")
-
-    return EmbeddingResult(
-        collection_name=config.collection_name,
-        total_embedded=total_embedded,
-        embedding_dim=embedding_dim,
-        device=device,
-        duration_seconds=duration,
-        embedding_provider=model_config.provider.value,
-        embedding_model=model_config.model_name,
-    )
+    return job.result()

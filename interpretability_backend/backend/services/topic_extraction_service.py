@@ -20,14 +20,18 @@ from ..topic_extraction.llm_labeling import (
     generate_llm_label_for_topic,
     generate_llm_labels,
 )
+from ..utils import cancellable_task
+from ..utils.cancellable_task import CancellableTask
 from ..utils.duckdb_sync import _get_db as _get_duckdb
-from ..utils.embedding_loader import load_embeddings_for_ids
+from ..utils.embedding_loader import cancellable_embedding_batches, load_embeddings_for_ids
 from .cancel_registry import (
     CANCELLED_MESSAGE,
     JobCancelled,
+    emit_cancelled,
     raise_if_cancelled,
     report_cancelled,
 )
+from .job_ids import JobIds
 from .progress_emitter import emit_progress
 from .topic_centroid_service import Preloaded, TopicCentroidService
 
@@ -59,6 +63,53 @@ def _reduce_for_clustering(embeddings, n_components, min_dist, n_neighbors):
         verbose=False,
     )
     return reducer.fit_transform(embeddings)
+
+
+def cluster_documents(
+    channel,
+    config: "TopicExtractionConfig",
+    projection_coords: np.ndarray,
+    raw: np.ndarray | None,
+) -> np.ndarray:
+    """Task target: per-document cluster labels in the configured space.
+
+    Spaces (``config.cluster_on``):
+      "projection"   — stored UMAP/PCA viz coords (fast, but tuned for looks)
+      "cluster_umap" — BERTopic-style fresh UMAP (5D, min_dist=0) for sharper density (default)
+      "embedding"    — raw L2-normalised vectors (euclidean ≈ cosine for HDBSCAN)
+    Without raw vectors, or when the clustering UMAP fails (small N), the
+    projection coords are used. Runs in a CancellableTask child on large
+    collections, so a cancel can stop the UMAP / HDBSCAN fits mid-step.
+    """
+    # Deferred like extract_topics: hdbscan/sklearn stay out of module scope.
+    from ..topic_extraction.cluster_and_label import cluster_labels
+
+    points = projection_coords
+    if raw is not None and config.cluster_on == "cluster_umap":
+        channel.send("Reducing vectors for clustering (UMAP)...")
+        try:
+            points = _reduce_for_clustering(
+                raw,
+                n_components=config.cluster_n_components,
+                min_dist=config.cluster_min_dist,
+                n_neighbors=config.cluster_n_neighbors,
+            )
+        except Exception as exc:
+            # Small-N or any UMAP failure → degrade to projection coords
+            # rather than hard-failing the whole extraction.
+            logger.warning(
+                "Clustering UMAP failed for %s (%s); falling back to projection coords.",
+                config.collection_name,
+                exc,
+            )
+    elif raw is not None and config.cluster_on == "embedding":
+        norms = np.linalg.norm(raw, axis=1, keepdims=True)
+        points = raw / np.where(norms == 0, 1.0, norms)
+
+    channel.send(f"Running {config.clustering_method.upper()} clustering...")
+    return cluster_labels(
+        points, config.clustering_method, config.min_topic_size, config.n_clusters
+    )
 
 
 @dataclass
@@ -118,6 +169,18 @@ class TopicExtractionResult:
     num_topics_before_reduction: int | None = None
     reduction_applied: bool = False
     topic_mappings: dict[int, int] | None = None
+
+
+def _cancelled_topics_result(collection_name: str, start_time: float) -> TopicExtractionResult:
+    """Result of an extraction or reduction stopped by a cancel (nothing stored)."""
+    return TopicExtractionResult(
+        collection_name=collection_name,
+        num_topics=0,
+        num_noise_points=0,
+        topics=[],
+        duration_seconds=time.time() - start_time,
+        error=CANCELLED_MESSAGE,
+    )
 
 
 def _sync_topics_to_duckdb(
@@ -248,14 +311,19 @@ def _semantic_topic_centroids(
     current_batch: int,
     total_batches: int,
     preloaded: Preloaded | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> np.ndarray | None:
     """Embedding centroids for semantic reduction, rows in ``sorted(topics_data)`` order.
 
     When they cannot be computed, logs it, reports it on the job's progress
-    stream and returns None: the caller then reduces with c-TF-IDF.
+    stream and returns None: the caller then reduces with c-TF-IDF. A cancel
+    during the vector load raises JobCancelled.
     """
     try:
-        return TopicCentroidService(duckdb=_get_duckdb()).centroids_for_assignments(
+        service = TopicCentroidService(
+            duckdb=_get_duckdb(), vector_batches=cancellable_embedding_batches(cancel_event)
+        )
+        return service.centroids_for_assignments(
             collection_name, item_topics, order=sorted(topics_data), preloaded=preloaded
         )
     except Exception as e:
@@ -295,7 +363,9 @@ def _refresh_topic_centroids(
         )
 
 
-def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
+def extract_topics(
+    config: TopicExtractionConfig, cancel_event: threading.Event | None = None
+) -> TopicExtractionResult:
     """Extract topic clusters from an existing collection.
 
     Pipeline:
@@ -306,14 +376,19 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
     5. Update item metadata with topic_id and topic_label
     6. Update collection metadata with topic summary
 
+    A cancel stops the extraction before anything is stored (the clustering
+    kernels stop mid-step, see cluster_documents); it reports CANCELLED_MESSAGE
+    and leaves job state to the caller (the embed pipeline owns its job record).
+
     Args:
         config: Topic extraction configuration
+        cancel_event: The job's cancel event
 
     Returns:
         TopicExtractionResult with topic information
     """
     start_time = time.time()
-    job_id = config.collection_name
+    job_id = JobIds.topic_extraction(config.collection_name)
 
     try:
         # Step 1: Load projection data from DuckDB
@@ -348,6 +423,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
 
         total_items = len(ids)
         logger.info(f"Loaded {total_items} items from DuckDB")
+        raise_if_cancelled(cancel_event)
 
         reduced_embeddings = np.array(coords, dtype=np.float64)
 
@@ -376,54 +452,18 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             f"Clustering with method={config.clustering_method}, min_topic_size={config.min_topic_size}, n_clusters={config.n_clusters}"
         )
 
-        # Select the space to cluster on:
-        #   "projection"   — stored UMAP/PCA viz coords (fast, but tuned for looks)
-        #   "cluster_umap" — BERTopic-style fresh UMAP (5D, min_dist=0) for sharper density (default)
-        #   "embedding"    — raw L2-normalised vectors (euclidean ≈ cosine for HDBSCAN)
-        # Both raw-vector modes share the loader + None-guard; on a load failure we
-        # degrade gracefully to projection coords rather than hard-fail (cluster_umap
-        # is the default path). Loaded vectors are reused for the topic centroids.
+        # The raw-vector modes load the embeddings here (reused below for the
+        # topic centroids); on a load failure clustering degrades to the
+        # projection coords rather than hard-failing.
         raw = None
         if config.cluster_on in ("embedding", "cluster_umap"):
             logger.info("Clustering on %s space for %s", config.cluster_on, config.collection_name)
-            raw = load_embeddings_for_ids(config.collection_name, ids)
+            raw = load_embeddings_for_ids(config.collection_name, ids, cancel_event=cancel_event)
             if raw is None:
                 logger.warning(
                     "Could not load embeddings for %s; falling back to projection coords.",
                     config.collection_name,
                 )
-                cluster_input = reduced_embeddings
-            elif config.cluster_on == "cluster_umap":
-                emit_progress(
-                    job_id=job_id,
-                    status="running",
-                    items_processed=0,
-                    total_items=total_items,
-                    current_batch=1,
-                    total_batches=5,
-                    message="Reducing vectors for clustering (UMAP)...",
-                )
-                try:
-                    cluster_input = _reduce_for_clustering(
-                        raw,
-                        n_components=config.cluster_n_components,
-                        min_dist=config.cluster_min_dist,
-                        n_neighbors=config.cluster_n_neighbors,
-                    )
-                except Exception as exc:
-                    # Small-N or any UMAP failure → degrade to projection coords
-                    # rather than hard-failing the whole extraction.
-                    logger.warning(
-                        "Clustering UMAP failed for %s (%s); falling back to projection coords.",
-                        config.collection_name,
-                        exc,
-                    )
-                    cluster_input = reduced_embeddings
-            else:  # "embedding": L2-normalise so HDBSCAN euclidean approximates cosine
-                norms = np.linalg.norm(raw, axis=1, keepdims=True)
-                cluster_input = raw / np.where(norms == 0, 1.0, norms)
-        else:  # "projection"
-            cluster_input = reduced_embeddings
 
         # Local import: cluster_and_label pulls in hdbscan/sklearn/scipy (~94 MB RSS),
         # keep it out of module scope so server startup stays light (mirrors umap guard).
@@ -436,7 +476,25 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             clustering_method=config.clustering_method,
             n_clusters=config.n_clusters,
         )
-        documents_df = generator.generate_clusters(cluster_input)
+
+        def clustering_progress(message: str) -> None:
+            emit_progress(
+                job_id=job_id,
+                status="running",
+                items_processed=0,
+                total_items=total_items,
+                current_batch=1,
+                total_batches=5,
+                message=message,
+            )
+
+        labels = CancellableTask(
+            cancel_event,
+            isolate=cancellable_task.SETTINGS.should_isolate(total_items),
+            on_item=clustering_progress,
+        ).run(cluster_documents, config, reduced_embeddings, raw)
+        documents_df = generator.documents_frame(labels)
+        raise_if_cancelled(cancel_event)
 
         # Count topics and noise
         topic_counts = documents_df["Topic"].value_counts().to_dict()
@@ -463,6 +521,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
         pre_reduction_labels = {}  # topic_id -> label (before reduction)
         pre_reduction_assignments = {}  # item_id -> original topic_id
         if config.reduce_topics:
+            raise_if_cancelled(cancel_event)
             emit_progress(
                 job_id=job_id,
                 status="running",
@@ -505,6 +564,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                     current_batch=2,
                     total_batches=5,
                     preloaded=(ids, raw) if raw is not None else None,
+                    cancel_event=cancel_event,
                 )
             use_ctfidf = topic_embeddings is None
 
@@ -608,6 +668,7 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
                 llm_provider=config.llm_provider,
                 llm_model=config.llm_model,
                 progress_callback=llm_progress,
+                cancel_event=cancel_event,
             )
 
             # Update labels with LLM-generated ones
@@ -650,6 +711,9 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             topic_id = int(row["Topic"])
             item_id = ids[doc_idx]
             topic_assignments[item_id] = topic_id
+
+        # Last cancel point: once synced, the extraction is the active one.
+        raise_if_cancelled(cancel_event)
 
         # DuckDB: sole destination for topic data
         extraction_id = _sync_topics_to_duckdb(
@@ -709,6 +773,11 @@ def extract_topics(config: TopicExtractionConfig) -> TopicExtractionResult:
             topic_mappings=reduction_result.topic_mappings if reduction_result else None,
         )
 
+    except JobCancelled:
+        logger.info("Topic extraction cancelled for %s", config.collection_name)
+        emit_cancelled(job_id)
+        return _cancelled_topics_result(config.collection_name, start_time)
+
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Topic extraction failed: {e}")
@@ -743,6 +812,7 @@ def reduce_existing_topics(
     llm_provider: str,
     llm_model: str,
     language: str = "english",
+    cancel_event: threading.Event | None = None,
 ) -> TopicExtractionResult:
     """Reduce topics on an existing collection with extracted topics.
 
@@ -765,12 +835,14 @@ def reduce_existing_topics(
         llm_provider: "gemini" or "openai"
         llm_model: LLM model name
         language: Stop words language for keyword extraction
+        cancel_event: Checked between steps and before each LLM call; a
+            cancel stores nothing and reports CANCELLED_MESSAGE
 
     Returns:
         TopicExtractionResult with reduced topics
     """
     start_time = time.time()
-    job_id = f"{collection_name}_reduce"
+    job_id = JobIds.topic_reduction(collection_name)
 
     try:
         # Step 1: Load collection and validate
@@ -808,6 +880,7 @@ def reduce_existing_topics(
 
         total_items = len(ids)
         logger.info(f"Loaded {total_items} items from DuckDB")
+        raise_if_cancelled(cancel_event)
 
         # Step 3: Reconstruct documents_df
         emit_progress(
@@ -859,6 +932,7 @@ def reduce_existing_topics(
 
         ctfidf = ClassTfidfTransformer()
         ctfidf_matrix = ctfidf.fit_transform(X)
+        raise_if_cancelled(cancel_event)
 
         # Step 6: Run reduction
         emit_progress(
@@ -898,6 +972,7 @@ def reduce_existing_topics(
                 total_items=total_items,
                 current_batch=3,
                 total_batches=4,
+                cancel_event=cancel_event,
             )
         use_ctfidf = topic_embeddings is None
 
@@ -973,6 +1048,7 @@ def reduce_existing_topics(
                 llm_provider=llm_provider,
                 llm_model=llm_model,
                 progress_callback=llm_progress,
+                cancel_event=cancel_event,
             )
 
             for topic_info in topic_infos:
@@ -1014,6 +1090,9 @@ def reduce_existing_topics(
             topic_id = int(row["Topic"])
             item_id = ids[doc_idx]
             topic_assignments[item_id] = topic_id
+
+        # Last cancel point: once synced, the reduced extraction is the active one.
+        raise_if_cancelled(cancel_event)
 
         # DuckDB: store reduced topics (with subtopic data from pre-reduction)
         extraction_id = _sync_topics_to_duckdb(
@@ -1057,6 +1136,11 @@ def reduce_existing_topics(
             reduction_applied=True,
             topic_mappings=result.topic_mappings,
         )
+
+    except JobCancelled:
+        logger.info("Topic reduction cancelled for %s", collection_name)
+        emit_cancelled(job_id)
+        return _cancelled_topics_result(collection_name, start_time)
 
     except Exception as e:
         duration = time.time() - start_time
@@ -1107,11 +1191,6 @@ def _is_keyword_label(label: str) -> bool:
     return bool(_KEYWORD_LABEL_PATTERN.match(label))
 
 
-def llm_labeling_job_id(collection_name: str) -> str:
-    """Progress / job-state / cancel id of a collection's LLM labeling job."""
-    return f"{collection_name}_llm_labeling"
-
-
 def generate_llm_labels_for_collection(
     collection_name: str,
     llm_provider: str = "gemini",
@@ -1138,7 +1217,7 @@ def generate_llm_labels_for_collection(
         LlmLabelingResult with counts and timing
     """
     start_time = time.time()
-    job_id = llm_labeling_job_id(collection_name)
+    job_id = JobIds.llm_labeling(collection_name)
     job_state_service = None
 
     try:

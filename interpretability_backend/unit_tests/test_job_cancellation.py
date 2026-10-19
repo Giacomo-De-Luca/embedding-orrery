@@ -35,6 +35,7 @@ from backend.services.cancel_registry import (
     request_cancel,
     unregister_cancel_event,
 )
+from backend.services.job_ids import JobIds
 from backend.services.job_state import JobStateService, JobStatus
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "embedding_visualization"
@@ -387,7 +388,7 @@ class TestLlmLabelingCancel:
         assert db.saved == {0: "Label 0"}
         assert result.error == CANCELLED_MESSAGE
         assert (result.topics_labeled, result.total_topics) == (1, 3)
-        job = job_states.get_job(topic_service.llm_labeling_job_id("col"))
+        job = job_states.get_job(JobIds.llm_labeling("col"))
         assert job is not None and job.status is JobStatus.INTERRUPTED
 
 

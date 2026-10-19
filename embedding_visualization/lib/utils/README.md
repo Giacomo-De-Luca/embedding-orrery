@@ -63,3 +63,13 @@ Other colour and scatter utilities include `plotUtils.ts` (shared highlight pale
 rules), colour scales, `collisionGrid.ts`, and `overlayLayout.ts`.
 Dataset loading, temporal filtering and membership helpers remain reusable by
 their corresponding hooks.
+
+## Background jobs
+
+- `jobIds.ts`: `JobIds` builds every job id that progress subscriptions, the Jobs
+  list and `cancelJob` share (mirror of the backend `services/job_ids.py`, both
+  tested against the same examples). Never hand-build `${collection}_…` ids.
+- `jobCancellation.ts`: `JOB_CANCELLED_MESSAGE` (the backend's `CANCELLED_MESSAGE`),
+  `isJobCancelled` / `jobOutcome` (succeeded, cancelled or failed, for toasts and
+  result cards) and `cancelButtonView` (the progress modal's Cancel button
+  states). See `../../../documentation/JOB_CANCELLATION.md`.

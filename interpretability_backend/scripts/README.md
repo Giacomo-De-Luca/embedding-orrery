@@ -6,6 +6,10 @@ setup. Run Python entry points from the repository root with `uv run python`.
 - `backfill_topic_centroids.py` computes the embedding-space topic centroids
   that semantic topic search needs, for topic extractions created before they
   were stored (config: `backfill_topic_centroids_config.toml`; backend stopped).
+- `prune_chroma_orphans.py` removes the HNSW index directories chromadb leaves
+  on disk for deleted collections (config: `prune_chroma_orphans_config.toml`,
+  dry run by default; backend stopped). See
+  `documentation/CHROMA_ORPHAN_INDEXES.md`.
 - `build_seed_snapshot.py` builds a staged, checksummed DuckDB/Chroma snapshot
   from a JSON manifest under `../config/seed_snapshots/`.
 - `publish_seed_snapshot.py` verifies an existing snapshot, uploads it to its

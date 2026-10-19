@@ -186,6 +186,19 @@ class TopicConfigInput:
 
 
 @strawberry.input
+class SaeLinkInput:
+    """SAE to link a collection to once its embedding run succeeds (the SAE
+    whose document activations ``computeDocumentActivations`` will compute)."""
+
+    sae_model_id: str
+    sae_id: str
+    # The client follows a successful embed with computeDocumentActivations
+    # (the post-embed SAE step); false for SAE feature collections, which are
+    # only linked. Stored with the job's input, so a resumed run does the same.
+    compute_activations: bool = False
+
+
+@strawberry.input
 class ExtractTopicsInput:
     """Input for standalone topic extraction from an existing collection."""
 
@@ -332,6 +345,8 @@ class EmbedDatasetInput:
     # Topic extraction after embedding
     extract_topics: bool = False
     topic_config: TopicConfigInput | None = None
+    # Link the collection to this SAE after a successful run
+    sae_link: SaeLinkInput | None = None
 
 
 @strawberry.type
@@ -411,6 +426,8 @@ class EmbedLocalFileInput:
     # Topic extraction after embedding
     extract_topics: bool = False
     topic_config: TopicConfigInput | None = None
+    # Link the collection to this SAE after a successful run
+    sae_link: SaeLinkInput | None = None
 
 
 @strawberry.input
@@ -433,6 +450,8 @@ class ReEmbedDatasetInput:
     compute_projections: bool = True
     extract_topics: bool = False
     topic_config: TopicConfigInput | None = None
+    # Link the collection to this SAE after a successful run
+    sae_link: SaeLinkInput | None = None
 
 
 # ========== Text Search Types ==========

@@ -1,0 +1,72 @@
+{
+  "query_prompt_map": {
+    "Retrieval-document": "Retrieval-query",
+    "Document": "SearchQuery",
+    "document": "query"
+  },
+  "query_task_type_map": {
+    "RETRIEVAL_DOCUMENT": "RETRIEVAL_QUERY"
+  },
+  "extra_prompt_names": ["s2p", "s2s"],
+  "providers": {
+    "sentence_transformers": [
+      {"model": "all-MiniLM-L6-v2", "description": "Small and fast; the default text model"},
+      {"model": "all-MiniLM-L12-v2"},
+      {"model": "all-mpnet-base-v2"},
+      {"model": "paraphrase-MiniLM-L6-v2"},
+      {"model": "BAAI/bge-small-en-v1.5"},
+      {"model": "BAAI/bge-base-en-v1.5"},
+      {"model": "BAAI/bge-large-en-v1.5"},
+      {
+        "model": "google/embeddinggemma-300m",
+        "description": "EmbeddingGemma: multilingual text with task prompts",
+        "prompts": [
+          "query", "document", "BitextMining", "Clustering", "Classification",
+          "InstructionRetrieval", "MultilabelClassification", "PairClassification",
+          "Reranking", "Retrieval", "Retrieval-query", "Retrieval-document", "STS",
+          "Summarization"
+        ]
+      },
+      {
+        "model": "google/embeddinggemma-2",
+        "description": "EmbeddingGemma 2: text, images, audio and video in one space",
+        "modalities": ["text", "image", "audio", "video"],
+        "prompts": [
+          "query", "document", "BitextMining", "Classification", "Clustering",
+          "CodeRetrieval", "Document", "FactChecking", "InstructionRetrieval",
+          "MultilabelClassification", "PairClassification", "QuestionAnswering",
+          "Reranking", "Retrieval", "Retrieval-query", "Retrieval-document", "STS",
+          "SearchQuery", "SentenceSimilarity", "Summarization"
+        ],
+        "default_for": ["multimodal"],
+        "encoders": {"image": "vision_config", "video": "vision_config", "audio": "audio_config"}
+      }
+    ],
+    "openai": [
+      {"model": "text-embedding-3-small"},
+      {"model": "text-embedding-3-large"},
+      {"model": "text-embedding-ada-002"}
+    ],
+    "cohere": [
+      {"model": "embed-english-v3.0"},
+      {"model": "embed-multilingual-v3.0"}
+    ],
+    "ollama": [
+      {"model": "nomic-embed-text"},
+      {"model": "mxbai-embed-large"}
+    ],
+    "gemini": [
+      {"model": "gemini-embedding-001"},
+      {"model": "gemini-embedding-2"}
+    ],
+    "bge": [
+      {"model": "BAAI/bge-m3"}
+    ],
+    "qwen": [
+      {"model": "Qwen/Qwen3-Embedding-0.6B"}
+    ],
+    "huggingface_api": [
+      {"model": "sentence-transformers/all-MiniLM-L6-v2"}
+    ]
+  }
+}

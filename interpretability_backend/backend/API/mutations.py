@@ -24,6 +24,7 @@ from ..services.embedding_pipeline import (
     LocalFileEmbeddingPipeline,
     ReEmbeddingPipeline,
 )
+from ..services.job_ids import JobIds
 from ..services.job_state import JobStatus, get_job_state_service
 from ..services.model_registry import checkpoint_for_model_id
 from ..services.progress_emitter import emit_progress_sync
@@ -31,14 +32,14 @@ from ..services.steering_types import SteeringSpec
 from ..services.topic_extraction_service import (
     extract_topics as do_extract_topics,
     generate_llm_labels_for_collection,
-    llm_labeling_job_id,
 )
 from .chromadb_instance import get_chromadb_client
 from .converters import (
-    build_embedding_model_config,
     build_hf_embedding_config,
     build_local_file_embedding_config,
     build_probe_config,
+    build_reembed_config,
+    build_sae_link,
     build_topic_extraction_config,
     convert_topic_infos,
     probe_info_from_record,
@@ -53,6 +54,7 @@ from .types import (
     ComputeDocumentActivationsInput,
     ComputeDocumentActivationsResult,
     CreateChatSessionInput,
+    DataTypeEnum,
     EmbedDatasetInput,
     EmbedDatasetResult,
     EmbedLocalFileInput,
@@ -85,6 +87,7 @@ from .types import (
     RunPromptActivationsInput,
     RunPromptHighlightInput,
     SaeCollectionMode,
+    SaeLinkInput,
     SaveChatMessageInput,
     SearchDocumentsByPromptInput,
     SteeredGenerationResponse,
@@ -103,127 +106,34 @@ class Mutation:
         self, input: EmbedDatasetInput, info=None
     ) -> EmbedDatasetResult:
         """Embed a HuggingFace dataset into a ChromaDB collection."""
-        config = build_hf_embedding_config(input)
-        topic_config = (
-            build_topic_extraction_config(input.collection_name, input.topic_config)
-            if input.extract_topics
-            else None
-        )
-
-        with cancellable_job(input.collection_name) as cancel_event:
-            pipeline = HuggingFaceEmbeddingPipeline(
-                config=config,
-                compute_projections=input.compute_projections,
-                extract_topics=input.extract_topics,
-                topic_config=topic_config,
-                cancel_event=cancel_event,
-            )
-            pipeline_result = await pipeline.run()
-
-        result = pipeline_result.embedding_result
-
-        return EmbedDatasetResult(
-            collection_name=result.collection_name,
-            total_embedded=result.total_embedded,
-            embedding_dim=result.embedding_dim,
-            device=result.device,
-            duration_seconds=result.duration_seconds,
-            projections_computed=pipeline_result.projections_computed,
-            error=result.error,
-            embedding_provider=result.embedding_provider,
-            embedding_model=result.embedding_model,
+        return await _run_embedding_pipeline(
+            HuggingFaceEmbeddingPipeline, build_hf_embedding_config(input), input
         )
 
     @strawberry.mutation
     async def embed_local_file(self, input: EmbedLocalFileInput, info=None) -> EmbedDatasetResult:
         """Embed a local file (parquet/json/csv) into a ChromaDB collection."""
-        config = build_local_file_embedding_config(input)
-        topic_config = (
-            build_topic_extraction_config(input.collection_name, input.topic_config)
-            if input.extract_topics
-            else None
-        )
-
-        with cancellable_job(input.collection_name) as cancel_event:
-            pipeline = LocalFileEmbeddingPipeline(
-                config=config,
-                compute_projections=input.compute_projections,
-                extract_topics=input.extract_topics,
-                topic_config=topic_config,
-                cancel_event=cancel_event,
-            )
-            pipeline_result = await pipeline.run()
-
-        result = pipeline_result.embedding_result
-
-        return EmbedDatasetResult(
-            collection_name=result.collection_name,
-            total_embedded=result.total_embedded,
-            embedding_dim=result.embedding_dim,
-            device=result.device,
-            duration_seconds=result.duration_seconds,
-            projections_computed=pipeline_result.projections_computed,
-            error=result.error,
-            embedding_provider=result.embedding_provider,
-            embedding_model=result.embedding_model,
+        return await _run_embedding_pipeline(
+            LocalFileEmbeddingPipeline, build_local_file_embedding_config(input), input
         )
 
     @strawberry.mutation
     async def re_embed_dataset(self, input: ReEmbedDatasetInput, info=None) -> EmbedDatasetResult:
         """Re-embed an existing dataset with a different embedding model."""
-        from ..embedding_functions.config import (
-            ReEmbedConfig,  # noqa: E402 - avoid circular at module level
-        )
-
-        config = ReEmbedConfig(
-            source_dataset_name=input.source_dataset_name,
-            collection_name=input.collection_name,
-            embedding_model=build_embedding_model_config(input.embedding_model),
-            columns=input.columns,
-            text_template=input.text_template,
-            batch_size=input.batch_size or 100,
-            resume=input.resume,
-        )
-
-        topic_config = (
-            build_topic_extraction_config(input.collection_name, input.topic_config)
-            if input.extract_topics
-            else None
-        )
-
-        with cancellable_job(input.collection_name) as cancel_event:
-            pipeline = ReEmbeddingPipeline(
-                config=config,
-                compute_projections=input.compute_projections,
-                extract_topics=input.extract_topics,
-                topic_config=topic_config,
-                cancel_event=cancel_event,
-            )
-            pipeline_result = await pipeline.run()
-        result = pipeline_result.embedding_result
-
-        return EmbedDatasetResult(
-            collection_name=result.collection_name,
-            total_embedded=result.total_embedded,
-            embedding_dim=result.embedding_dim,
-            device=result.device,
-            duration_seconds=result.duration_seconds,
-            projections_computed=pipeline_result.projections_computed,
-            error=result.error,
-            embedding_provider=result.embedding_provider,
-            embedding_model=result.embedding_model,
+        return await _run_embedding_pipeline(
+            ReEmbeddingPipeline, build_reembed_config(input), input
         )
 
     @strawberry.mutation
     def cancel_job(self, job_id: str, info=None) -> bool:
-        """Cancel a running job by its progress job id.
+        """Cancel a running job by its progress job id (built by ``JobIds``).
 
-        Covers embedding (collection name), LLM labeling
-        (``{collection}_llm_labeling``) and SAE document activations
-        (``{collection}_sae_activations``). Sets the job's cancel event so it
-        stops after the current batch / topic / document; work done so far is
-        kept and the job can be resumed. Returns True if a running job was
-        found and signalled, False otherwise.
+        Every long-running mutation registers one: embeds, topic extraction /
+        reduction / evaluation, LLM labeling, SAE preparation and document
+        activations. Sets the job's cancel event; the job stops at its next
+        checkpoint, or its heavy step's worker process is killed (see
+        documentation/JOB_CANCELLATION.md for what each job keeps). Returns
+        True if a running job was found and signalled, False otherwise.
         """
         return request_cancel(job_id)
 
@@ -245,17 +155,18 @@ class Mutation:
         return True
 
     @strawberry.mutation
-    def delete_collection(self, collection_name: str, info=None) -> bool:
+    async def delete_collection(self, collection_name: str, info=None) -> bool:
         """Delete a collection from both DuckDB and ChromaDB."""
         try:
             # Delete from DuckDB (cascades items, projections, topics)
             db = get_duckdb_client()
             db.delete_dataset(collection_name)
 
-            # Delete from ChromaDB (vector storage)
+            # Delete from ChromaDB (vector storage + its HNSW index directory,
+            # hundreds of MB to remove: off the event loop)
             client = get_chromadb_client()
             try:
-                client.client.delete_collection(name=collection_name)
+                await asyncio.to_thread(client.delete_collection, collection_name)
             except Exception:
                 pass  # ChromaDB collection may not exist
             return True
@@ -268,10 +179,8 @@ class Mutation:
     ) -> UpdateCollectionMetadataResult:
         """Update metadata for a collection."""
         try:
-            # Update DuckDB (primary) — resolve dataset name from vector_collections
             db = get_duckdb_client()
-            dataset_name = db.get_dataset_name_for_collection(collection_name) or collection_name
-            db.update_dataset(dataset_name, extra_metadata=metadata)
+            dataset_name = db.update_collection_extra_metadata(collection_name, metadata)
             ds = db.get_dataset(dataset_name)
 
             return UpdateCollectionMetadataResult(
@@ -283,9 +192,10 @@ class Mutation:
 
     @strawberry.mutation
     async def extract_topics(self, input: ExtractTopicsInput, info=None) -> ExtractTopicsResult:
-        """Extract topic clusters from an existing collection."""
+        """Extract topic clusters from an existing collection (cancellable)."""
         config = build_topic_extraction_config(input.collection_name, input.config)
-        result = await asyncio.to_thread(do_extract_topics, config)
+        with cancellable_job(JobIds.topic_extraction(input.collection_name)) as cancel_event:
+            result = await asyncio.to_thread(do_extract_topics, config, cancel_event=cancel_event)
 
         return ExtractTopicsResult(
             collection_name=result.collection_name,
@@ -346,19 +256,21 @@ class Mutation:
 
     @strawberry.mutation
     async def reduce_topics(self, input: ReduceTopicsInput, info=None) -> ReduceTopicsResult:
-        """Reduce topics on an existing collection (standalone post-processing)."""
+        """Reduce topics on an existing collection (standalone post-processing, cancellable)."""
         from ..services.topic_extraction_service import reduce_existing_topics
 
-        result = await asyncio.to_thread(
-            reduce_existing_topics,
-            collection_name=input.collection_name,
-            method=input.method,
-            n_topics=input.n_topics,
-            use_ctfidf=input.use_ctfidf,
-            regenerate_labels=input.regenerate_labels,
-            llm_provider=input.llm_provider,
-            llm_model=input.llm_model,
-        )
+        with cancellable_job(JobIds.topic_reduction(input.collection_name)) as cancel_event:
+            result = await asyncio.to_thread(
+                reduce_existing_topics,
+                collection_name=input.collection_name,
+                method=input.method,
+                n_topics=input.n_topics,
+                use_ctfidf=input.use_ctfidf,
+                regenerate_labels=input.regenerate_labels,
+                llm_provider=input.llm_provider,
+                llm_model=input.llm_model,
+                cancel_event=cancel_event,
+            )
 
         topic_mappings = {str(k): v for k, v in (result.topic_mappings or {}).items()}
 
@@ -401,13 +313,15 @@ class Mutation:
         # schema-build time (torch-free / lean-import boundary).
         from ..services.topic_quality_service import score_topic_quality
 
-        result = await asyncio.to_thread(
-            score_topic_quality,
-            collection_name=input.collection_name,
-            level=input.level,
-            metrics=set(input.metrics) if input.metrics else None,
-            sample_size=input.sample_size,
-        )
+        with cancellable_job(JobIds.topic_evaluation(input.collection_name)) as cancel_event:
+            result = await asyncio.to_thread(
+                score_topic_quality,
+                collection_name=input.collection_name,
+                level=input.level,
+                metrics=set(input.metrics) if input.metrics else None,
+                sample_size=input.sample_size,
+                cancel_event=cancel_event,
+            )
 
         error = result.get("error")
         return EvaluateTopicsResult(
@@ -423,7 +337,7 @@ class Mutation:
         self, input: GenerateLlmLabelsInput, info=None
     ) -> GenerateLlmLabelsResult:
         """Generate LLM labels for existing topics in a collection."""
-        with cancellable_job(llm_labeling_job_id(input.collection_name)) as cancel_event:
+        with cancellable_job(JobIds.llm_labeling(input.collection_name)) as cancel_event:
             result = await asyncio.to_thread(
                 generate_llm_labels_for_collection,
                 collection_name=input.collection_name,
@@ -642,134 +556,14 @@ class Mutation:
 
         Runs the pipeline: S3 download -> merge activations -> extract decoder
         vectors into parquet. Optionally creates a visualization collection
-        with projections and topic extraction.
+        with projections and topic extraction. Cancellable throughout (job id
+        ``JobIds.sae_prepare``), including the collection-creation phase.
         """
-        from ..embedding_functions.config import (  # noqa: E402 - avoid circular
-            DataType,
-            LocalFileEmbeddingConfig,
+        job_id = JobIds.sae_prepare(
+            input.model_size, input.variant, input.layer, input.hook_type, input.width
         )
-        from ..services.sae_pipeline_service import prepare_sae_data as run_pipeline
-
-        # Phase 1: SAE download + ingest into DuckDB
-        job_id = f"sae_prepare_{input.model_size}_{input.variant}_{input.layer}_{input.hook_type}_{input.width}"
-        result = await asyncio.to_thread(
-            run_pipeline,
-            layer=input.layer,
-            width=input.width,
-            hook_type=input.hook_type,
-            model_size=input.model_size,
-            variant=input.variant,
-            family=input.family,
-            skip_download=input.skip_download,
-            include_activations=input.include_activations,
-            job_id=job_id,
-        )
-
-        collection_name = None
-        collection_items = 0
-
-        # Phase 2: Create visualization collection (if requested and phase 1 succeeded)
-        collection_error = None
-        if (
-            input.create_collection
-            and result["status"] == "completed"
-            and result.get("features_parquet")
-        ):
-            hook_abbrev = {"resid_post": "res", "mlp_out": "mlp", "attn_out": "att"}.get(
-                input.hook_type, "res"
-            )
-            mode = input.collection_mode or SaeCollectionMode.DECODER_VECTORS
-            if input.family == "qwen" and mode == SaeCollectionMode.LABEL_EMBEDDINGS:
-                # qwen-scope features have no labels to embed yet
-                mode = SaeCollectionMode.DECODER_VECTORS
-            mode_suffix = "vectors" if mode == SaeCollectionMode.DECODER_VECTORS else "labels"
-            if input.family == "qwen":
-                model_prefix = f"qwen_{input.model_size}"
-            else:
-                variant_suffix = f"_{input.variant}" if input.variant != "it" else ""
-                model_prefix = f"{input.model_size}{variant_suffix}"
-            collection_name = (
-                f"sae_{model_prefix}_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
-            )
-
-            try:
-                emb_model_config = build_embedding_model_config(input.embedding_model)
-
-                if mode == SaeCollectionMode.DECODER_VECTORS:
-                    config = LocalFileEmbeddingConfig(
-                        file_path=result["features_parquet"],
-                        collection_name=collection_name,
-                        data_type=DataType.VECTOR,
-                        vector_column="vector",
-                        metadata_columns=["density", "label", "index"],
-                    )
-                else:
-                    config = LocalFileEmbeddingConfig(
-                        file_path=result["features_parquet"],
-                        collection_name=collection_name,
-                        data_type=DataType.TEXT,
-                        columns=["label"],
-                        metadata_columns=["density", "index"],
-                        # Labels as item ids (IDDeduplicator suffixes collisions;
-                        # empty-label rows are skipped as empty documents).
-                        id_column="label",
-                        embedding_model=emb_model_config,
-                    )
-
-                topic_config = (
-                    build_topic_extraction_config(collection_name, input.topic_config)
-                    if input.extract_topics
-                    else None
-                )
-
-                pipeline = LocalFileEmbeddingPipeline(
-                    config=config,
-                    compute_projections=True,
-                    extract_topics=input.extract_topics,
-                    topic_config=topic_config,
-                )
-                pipeline_result = await pipeline.run()
-                collection_items = pipeline_result.embedding_result.total_embedded
-
-                # Set SAE metadata for cross-linking with feature explorer
-                db = get_duckdb_client()
-                db.update_dataset(
-                    collection_name,
-                    extra_metadata={
-                        "sae_model_id": result["model_id"],
-                        "sae_id": result["sae_id"],
-                    },
-                )
-
-                # Cleanup source files if requested
-                if input.delete_source_files:
-
-                    def _cleanup():
-                        Path(result["features_parquet"]).unlink(missing_ok=True)
-                        if result.get("activations_jsonl"):
-                            Path(result["activations_jsonl"]).unlink(missing_ok=True)
-
-                    await asyncio.to_thread(_cleanup)
-
-            except Exception as e:
-                logger = logging.getLogger("orrery.mutations")
-                logger.exception("SAE collection creation failed for %s", collection_name)
-                collection_error = f"Collection creation failed: {e}"
-                collection_name = None
-
-        return PrepareSaeResult(
-            model_id=result["model_id"],
-            sae_id=result["sae_id"],
-            features_parquet=result.get("features_parquet"),
-            activations_jsonl=result.get("activations_jsonl"),
-            features_inserted=result.get("features_inserted", 0),
-            activations_inserted=result.get("activations_inserted", 0),
-            duration_seconds=result["duration_seconds"],
-            status=result["status"],
-            error=collection_error or result.get("error"),
-            collection_name=collection_name,
-            collection_items=collection_items,
-        )
+        with cancellable_job(job_id) as cancel_event:
+            return await _prepare_sae_data(input, job_id, cancel_event)
 
     @strawberry.mutation
     async def update_sae_feature_label(
@@ -965,7 +759,7 @@ class Mutation:
         Cancellable via ``cancelJob`` from the moment it starts.
         """
         collection_name = input.collection_name
-        job_id = f"{collection_name}_sae_activations"
+        job_id = JobIds.sae_activations(collection_name)
         # Registered before the item load, GPU lock wait and model load, so a
         # cancel during any of them is honoured before inference starts.
         with cancellable_job(job_id) as cancel_event:
@@ -1156,6 +950,172 @@ class Mutation:
         """Delete a chat session and all its messages."""
         db = get_duckdb_client()
         return db.delete_chat_session(id)
+
+
+async def _run_embedding_pipeline(pipeline_cls, config, input) -> EmbedDatasetResult:
+    """Run one embedding mutation's pipeline (embed → projections → topics →
+    SAE link) under the job's cancel registration; shared by the HF,
+    local-file and re-embed mutations."""
+    topic_config = (
+        build_topic_extraction_config(input.collection_name, input.topic_config)
+        if input.extract_topics
+        else None
+    )
+    with cancellable_job(JobIds.embedding(input.collection_name)) as cancel_event:
+        pipeline = pipeline_cls(
+            config=config,
+            compute_projections=input.compute_projections,
+            extract_topics=input.extract_topics,
+            topic_config=topic_config,
+            cancel_event=cancel_event,
+            sae_link=build_sae_link(input.sae_link),
+        )
+        pipeline_result = await pipeline.run()
+
+    result = pipeline_result.embedding_result
+    return EmbedDatasetResult(
+        collection_name=result.collection_name,
+        total_embedded=result.total_embedded,
+        embedding_dim=result.embedding_dim,
+        device=result.device,
+        duration_seconds=result.duration_seconds,
+        projections_computed=pipeline_result.projections_computed,
+        error=result.error,
+        embedding_provider=result.embedding_provider,
+        embedding_model=result.embedding_model,
+    )
+
+
+async def _prepare_sae_data(
+    input: PrepareSaeInput, job_id: str, cancel_event: threading.Event
+) -> PrepareSaeResult:
+    """Body of the prepareSaeData resolver, run inside its cancellable_job registration."""
+    from ..services.sae_pipeline_service import prepare_sae_data as run_pipeline
+
+    # Phase 1: SAE download + ingest into DuckDB
+    result = await asyncio.to_thread(
+        run_pipeline,
+        layer=input.layer,
+        width=input.width,
+        hook_type=input.hook_type,
+        model_size=input.model_size,
+        variant=input.variant,
+        family=input.family,
+        skip_download=input.skip_download,
+        include_activations=input.include_activations,
+        job_id=job_id,
+        cancel_event=cancel_event,
+    )
+
+    collection_name = None
+    collection_items = 0
+
+    # Phase 2: Create visualization collection (if requested and phase 1 succeeded)
+    collection_error = None
+    if (
+        input.create_collection
+        and result["status"] == "completed"
+        and result.get("features_parquet")
+    ):
+        hook_abbrev = {"resid_post": "res", "mlp_out": "mlp", "attn_out": "att"}.get(
+            input.hook_type, "res"
+        )
+        mode = input.collection_mode or SaeCollectionMode.DECODER_VECTORS
+        if input.family == "qwen" and mode == SaeCollectionMode.LABEL_EMBEDDINGS:
+            # qwen-scope features have no labels to embed yet
+            mode = SaeCollectionMode.DECODER_VECTORS
+        mode_suffix = "vectors" if mode == SaeCollectionMode.DECODER_VECTORS else "labels"
+        if input.family == "qwen":
+            model_prefix = f"qwen_{input.model_size}"
+        else:
+            variant_suffix = f"_{input.variant}" if input.variant != "it" else ""
+            model_prefix = f"{input.model_size}{variant_suffix}"
+        collection_name = (
+            f"sae_{model_prefix}_{input.layer}_{hook_abbrev}_{input.width}_{mode_suffix}"
+        )
+
+        try:
+            # The collection is embedded like a local file, through the same
+            # converter, so its job stores a replayable input: a Resume from
+            # the Jobs list keeps the SAE link (feature-explorer cross-link)
+            # and the topic settings.
+            if mode == SaeCollectionMode.DECODER_VECTORS:
+                source = {
+                    "data_type": DataTypeEnum.VECTOR,
+                    "vector_column": "vector",
+                    "metadata_columns": ["density", "label", "index"],
+                }
+            else:
+                source = {
+                    "data_type": DataTypeEnum.TEXT,
+                    "columns": ["label"],
+                    "metadata_columns": ["density", "index"],
+                    # Labels as item ids (IDDeduplicator suffixes collisions;
+                    # empty-label rows are skipped as empty documents).
+                    "id_column": "label",
+                    "embedding_model": input.embedding_model,
+                }
+            collection_input = EmbedLocalFileInput(
+                file_path=result["features_parquet"],
+                collection_name=collection_name,
+                extract_topics=input.extract_topics,
+                topic_config=input.topic_config,
+                # SAE metadata for cross-linking with the feature explorer
+                sae_link=SaeLinkInput(sae_model_id=result["model_id"], sae_id=result["sae_id"]),
+                **source,
+            )
+            topic_config = (
+                build_topic_extraction_config(collection_name, input.topic_config)
+                if input.extract_topics
+                else None
+            )
+
+            pipeline = LocalFileEmbeddingPipeline(
+                config=build_local_file_embedding_config(collection_input),
+                compute_projections=True,
+                extract_topics=input.extract_topics,
+                topic_config=topic_config,
+                cancel_event=cancel_event,
+                sae_link=build_sae_link(collection_input.sae_link),
+            )
+            # Also cancellable by the collection's own id (the Jobs list's)
+            with cancellable_job(JobIds.embedding(collection_name), event=cancel_event):
+                pipeline_result = await pipeline.run()
+            collection_items = pipeline_result.embedding_result.total_embedded
+
+            if pipeline_result.embedding_result.error:
+                # Failed or cancelled: report it rather than a collection
+                collection_error = pipeline_result.embedding_result.error
+                collection_name = None
+            elif input.delete_source_files:
+                # Cleanup source files if requested
+
+                def _cleanup():
+                    Path(result["features_parquet"]).unlink(missing_ok=True)
+                    if result.get("activations_jsonl"):
+                        Path(result["activations_jsonl"]).unlink(missing_ok=True)
+
+                await asyncio.to_thread(_cleanup)
+
+        except Exception as e:
+            logger = logging.getLogger("orrery.mutations")
+            logger.exception("SAE collection creation failed for %s", collection_name)
+            collection_error = f"Collection creation failed: {e}"
+            collection_name = None
+
+    return PrepareSaeResult(
+        model_id=result["model_id"],
+        sae_id=result["sae_id"],
+        features_parquet=result.get("features_parquet"),
+        activations_jsonl=result.get("activations_jsonl"),
+        features_inserted=result.get("features_inserted", 0),
+        activations_inserted=result.get("activations_inserted", 0),
+        duration_seconds=result["duration_seconds"],
+        status=result["status"],
+        error=collection_error or result.get("error"),
+        collection_name=collection_name,
+        collection_items=collection_items,
+    )
 
 
 async def _compute_document_activations(

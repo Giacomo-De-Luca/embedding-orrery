@@ -1,5 +1,10 @@
 """Converters between GraphQL types and internal service/config types."""
 
+from enum import Enum
+from typing import Any
+
+from strawberry.utils.str_converters import to_camel_case
+
 from ..embed_dataset import (
     DataType,
     EmbeddingConfig,
@@ -9,6 +14,7 @@ from ..embed_dataset import (
     PortionConfig,
     PortionStrategy,
 )
+from ..embedding_functions.config import ReEmbedConfig
 from ..services.probing_types import (
     MLP_ACTIVATIONS,
     PROBE_KINDS,
@@ -50,6 +56,31 @@ DATA_TYPE_MAP = {
 
 
 # ========== Input -> Config Builders ==========
+
+
+def graphql_input_payload(value: Any) -> Any:
+    """The GraphQL variables form (camelCase keys, enum names) of a Strawberry
+    input, so a stored job can be replayed as mutation variables (resume)."""
+    definition = getattr(value, "__strawberry_definition__", None)
+    if definition is not None:
+        return {
+            (field.graphql_name or to_camel_case(field.python_name)): graphql_input_payload(
+                getattr(value, field.python_name)
+            )
+            for field in definition.fields
+        }
+    if isinstance(value, Enum):
+        return value.name
+    if isinstance(value, list):
+        return [graphql_input_payload(item) for item in value]
+    return value
+
+
+def build_sae_link(input) -> dict | None:
+    """SaeLinkInput → the collection extra-metadata keys the SAE services read."""
+    if input is None:
+        return None
+    return {"sae_model_id": input.sae_model_id, "sae_id": input.sae_id}
 
 
 def build_embedding_model_config(input) -> EmbeddingModelConfig | None:
@@ -95,6 +126,7 @@ def build_hf_embedding_config(input) -> EmbeddingConfig:
         embedding_model=build_embedding_model_config(input.embedding_model),
         batch_size=input.batch_size or 100,
         resume=input.resume,
+        job_input=graphql_input_payload(input),
     )
 
 
@@ -116,6 +148,21 @@ def build_local_file_embedding_config(input) -> LocalFileEmbeddingConfig:
         embedding_model=build_embedding_model_config(input.embedding_model),
         batch_size=input.batch_size or 100,
         resume=input.resume,
+        job_input=graphql_input_payload(input),
+    )
+
+
+def build_reembed_config(input) -> ReEmbedConfig:
+    """Convert ReEmbedDatasetInput to internal ReEmbedConfig."""
+    return ReEmbedConfig(
+        source_dataset_name=input.source_dataset_name,
+        collection_name=input.collection_name,
+        embedding_model=build_embedding_model_config(input.embedding_model),
+        columns=input.columns,
+        text_template=input.text_template,
+        batch_size=input.batch_size or 100,
+        resume=input.resume,
+        job_input=graphql_input_payload(input),
     )
 
 

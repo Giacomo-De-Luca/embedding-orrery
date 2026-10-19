@@ -13,6 +13,7 @@ import { Separator } from '@/lib/ui-primitives/separator';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 import { ProgressModal } from './EmbeddingProgressModal';
+import { JobIds } from '@/lib/utils/jobIds';
 import type { TopicConfigInput, ExtractTopicsResult, ReduceTopicsInput, ReduceTopicsResult, GenerateLlmLabelsInput, GenerateLlmLabelsResult } from '@/lib/graphql/mutations';
 import { TopicConfigForm, DEFAULT_TOPIC_CONFIG, toTopicConfigInput, type TopicConfigState } from './TopicConfigForm';
 import { TopicListSection } from './topics/TopicListSection';
@@ -188,25 +189,27 @@ export function TopicExtractionCard({
       {/* Topic Extraction Progress Modal */}
       {topicsLoading && (
         <ProgressModal
-          jobId={collectionName}
+          jobId={JobIds.topicExtraction(collectionName)}
           title="Extracting Topics"
           subtitle="Clustering points and extracting keywords..."
           itemsLabel="topics"
+          cancellable
         />
       )}
       {/* Topic Reduction Progress Modal */}
       {reduceTopicsLoading && (
         <ProgressModal
-          jobId={`${collectionName}_reduce`}
+          jobId={JobIds.topicReduction(collectionName)}
           title="Reducing Topics"
           subtitle="Merging similar topics..."
           itemsLabel="topics"
+          cancellable
         />
       )}
       {/* LLM Labeling Progress Modal */}
       {llmLabelsLoading && (
         <ProgressModal
-          jobId={`${collectionName}_llm_labeling`}
+          jobId={JobIds.llmLabeling(collectionName)}
           title="Generating LLM Labels"
           subtitle="Each topic is labeled individually via LLM API calls."
           itemsLabel="topics"

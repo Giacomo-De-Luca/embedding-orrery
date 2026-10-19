@@ -5,6 +5,7 @@ in an importable module rather than inside the test file's functions.
 """
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -38,3 +39,12 @@ def sleep_forever(channel, marker: str) -> None:
 
 def exit_hard(channel, code: int) -> None:
     os._exit(code)
+
+
+def spawn_grandchild_and_block(channel, marker: str) -> None:
+    """Start a long-lived grandchild (like a worker pool would), report its pid, block."""
+    grandchild = subprocess.Popen(["sleep", "60"])
+    Path(marker).write_text(str(grandchild.pid))
+    channel.send("started")
+    while True:
+        time.sleep(0.05)

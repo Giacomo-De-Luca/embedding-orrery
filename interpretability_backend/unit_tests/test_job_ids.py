@@ -18,4 +18,7 @@ def test_collection_scoped_ids():
 
 
 def test_sae_prepare_id():
-    assert JobIds.sae_prepare("4b", "it", 9, "resid_post", "16k") == "sae_prepare_4b_it_9_resid_post_16k"
+    assert (
+        JobIds.sae_prepare("4b", "it", 9, "resid_post", "16k")
+        == "sae_prepare_4b_it_9_resid_post_16k"
+    )

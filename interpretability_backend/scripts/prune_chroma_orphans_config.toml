@@ -1,0 +1,16 @@
+# Remove the HNSW index directories chromadb left on disk for deleted
+# collections (chromadb never deletes them; see backend/utils/chroma_segments.py).
+#
+# Run from the repository root with the backend STOPPED:
+#   uv run python -m interpretability_backend.scripts.prune_chroma_orphans
+# Point at another config with ORRERY_CHROMA_PRUNE_CONFIG=/path/to/config.toml
+
+# true = only list the orphan directories and their size; false = delete them.
+dry_run = true
+
+# Skip directories modified in the last N minutes (a collection being written).
+min_age_minutes = 10
+
+# ChromaDB store to clean (absolute, or relative to the directory you run from).
+# Empty = the live store, interpretability_backend/resources/vector_db.
+chroma_path = ""

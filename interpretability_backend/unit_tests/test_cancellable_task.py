@@ -19,7 +19,6 @@ from backend.utils.cancellable_task import (
     CancellableTaskSettings,
     TaskFailed,
 )
-
 from unit_tests import cancellable_task_workers as workers
 
 SPILL_ALL = CancellableTaskSettings(spill_min_bytes=0, poll_interval_ms=20)
@@ -114,6 +113,23 @@ class TestCancellation:
         with pytest.raises(JobCancelled):
             task.run(workers.sleep_forever, str(marker))
         assert time.monotonic() - start < 10
+
+        pid = int(marker.read_text())
+        deadline = time.monotonic() + 5
+        while _pid_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _pid_alive(pid)
+
+    def test_isolated_cancel_also_kills_grandchildren(self, tmp_path):
+        """Worker pools a step starts (joblib, gensim) die with it."""
+        event = threading.Event()
+        marker = tmp_path / "grandchild"
+        task = CancellableTask(
+            event, isolate=True, on_item=lambda item: event.set(), settings=SPILL_ALL
+        )
+
+        with pytest.raises(JobCancelled):
+            task.run(workers.spawn_grandchild_and_block, str(marker))
 
         pid = int(marker.read_text())
         deadline = time.monotonic() + 5

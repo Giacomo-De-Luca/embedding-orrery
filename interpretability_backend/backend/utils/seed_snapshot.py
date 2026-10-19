@@ -338,8 +338,7 @@ class SeedSnapshotConfig:
             )
             if document_top_k is not None and not document_activations:
                 raise SeedSnapshotConfigError(
-                    f"sae_data[{index}] document_activation_top_k "
-                    "requires document_activations"
+                    f"sae_data[{index}] document_activation_top_k requires document_activations"
                 )
 
             explanation = entry.get("explanation_vector_collection")

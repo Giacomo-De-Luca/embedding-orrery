@@ -2,9 +2,8 @@
 Factory for creating embedding functions.
 """
 
-import json
 import os
-from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from chromadb.utils import embedding_functions
@@ -13,11 +12,12 @@ from dotenv import load_dotenv
 from huggingface_hub import login
 from huggingface_hub.errors import GatedRepoError
 
+from ..utils.known_dimensions import KnownDimensions
 from .config import EmbeddingModelConfig, EmbeddingProvider
 
 load_dotenv()
 
-DIMENSIONS_FILE = Path(__file__).parent.parent / "utils" / "known_dimensions.json"
+TEXT_ONLY = ("text",)
 
 _hf_logged_in = False
 
@@ -57,33 +57,13 @@ except Exception:
     print("Internet not accessible or HF token not in env.")
 
 
-def _load_known_dimensions() -> dict[str, int]:
-    """Load dimensions from the JSON file."""
-    if not DIMENSIONS_FILE.exists():
-        return {}
-    try:
-        with open(DIMENSIONS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_known_dimension(model_name: str, dimension: int, current_dims: dict[str, int]) -> None:
-    """Update the JSON file with a new model dimension."""
-    try:
-        current_dims[model_name] = dimension
-        with open(DIMENSIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(current_dims, f, indent=1, sort_keys=True)
-            print(f"Updated known dimensions file with {model_name}: {dimension}")
-    except OSError as e:
-        print(f"Warning: Could not save dimension to file: {e}")
-
-
 def create_embedding_function(
     config: EmbeddingModelConfig | None,
     device: str,
     known_dimension: int | None = None,
     is_query: bool = False,
+    modalities: Iterable[str] = TEXT_ONLY,
+    query_prompt: str | None = None,
 ) -> tuple[EmbeddingFunction, int]:
     """
     Create an embedding function based on the configuration.
@@ -93,19 +73,32 @@ def create_embedding_function(
         device: Device for local models (cpu, cuda, mps)
         known_dimension: Pre-computed dimension (from metadata or cache).
                         If provided, skips test embedding.
-        is_query: If True, configures EF for query embedding (QWEN adds instruction prefix)
+        is_query: If True, configures EF for query embedding (QWEN adds its instruction,
+                  SentenceTransformers maps the document prompt to its query prompt)
+        modalities: Input modalities to embed ("text", "image", "audio", "video"). Only
+                    SentenceTransformers models embed media; they load only the
+                    encoder towers these need.
+        query_prompt: Explicit query prompt (SentenceTransformers, with ``is_query``)
 
     Returns:
         Tuple of (embedding_function, embedding_dimension)
 
     Raises:
-        ValueError: If provider is not supported or API key is missing
+        ValueError: If provider is not supported, API key is missing, or the
+            provider cannot embed the requested modalities
     """
     if config is None:
         config = EmbeddingModelConfig()
 
     provider = config.provider
     model_name = config.model_name
+    modalities = tuple(modalities)
+    media = sorted(set(modalities) - set(TEXT_ONLY))
+    if media and provider != EmbeddingProvider.SENTENCE_TRANSFORMERS:
+        raise ValueError(
+            f"{provider.value} embeds text only; {', '.join(media)} needs a "
+            "sentence-transformers model such as google/embeddinggemma-2"
+        )
 
     # Helper to get dimension (with fallback chain)
     def get_dimension(ef_for_test: Any) -> int:
@@ -113,16 +106,17 @@ def create_embedding_function(
         if known_dimension is not None:
             return known_dimension
 
-        known_dimensions = _load_known_dimensions()
+        known_dimensions = KnownDimensions()
 
         # 2. Check local cache
-        if model_name in known_dimensions:
-            return known_dimensions[model_name]
+        cached = known_dimensions.get(model_name)
+        if cached is not None:
+            return cached
 
         # 3. Fallback: Run test embedding (only if needed)
         print(f"Warning: Unknown dimension for {model_name}, running test embedding...")
         test_embedding = ef_for_test(["test"])
-        _save_known_dimension(model_name, len(test_embedding[0]), known_dimensions)
+        known_dimensions.record(model_name, len(test_embedding[0]))
         return len(test_embedding[0])
 
     if provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
@@ -134,23 +128,22 @@ def create_embedding_function(
         if hf_token:
             _ensure_hf_login()
 
-        st_kwargs = {"token": hf_token} if hf_token else {}
+        st_kwargs = {
+            "model_name": model_name,
+            "device": device,
+            "prompt": config.prompt,
+            "modalities": modalities,
+            "is_query": is_query,
+            "query_prompt": query_prompt,
+        }
+        if hf_token:
+            st_kwargs["token"] = hf_token
 
         try:
-            ef = SentenceTransformerEmbeddingFunction(
-                model_name=model_name,
-                device=device,
-                prompt=config.prompt,
-                **st_kwargs,
-            )
+            ef = SentenceTransformerEmbeddingFunction(**st_kwargs)
         except GatedRepoError:
             _ensure_hf_login()
-            ef = SentenceTransformerEmbeddingFunction(
-                model_name=model_name,
-                device=device,
-                prompt=config.prompt,
-                **st_kwargs,
-            )
+            ef = SentenceTransformerEmbeddingFunction(**st_kwargs)
         dim = get_dimension(ef)
         return ef, dim
 

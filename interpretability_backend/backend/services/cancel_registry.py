@@ -39,9 +39,9 @@ class JobCancelled(BaseException):  # noqa: N818 - mirrors asyncio.CancelledErro
         super().__init__(CANCELLED_MESSAGE)
 
 
-def register_cancel_event(job_id: str) -> threading.Event:
-    """Create and store a cancel event for a job. Returns the event."""
-    event = threading.Event()
+def register_cancel_event(job_id: str, event: threading.Event | None = None) -> threading.Event:
+    """Store a cancel event for a job (a new one unless ``event`` is given). Returns it."""
+    event = event or threading.Event()
     with _lock:
         _active_cancel_events[job_id] = event
     return event
@@ -69,9 +69,14 @@ def unregister_cancel_event(job_id: str, event: threading.Event | None = None) -
 
 
 @contextmanager
-def cancellable_job(job_id: str) -> Iterator[threading.Event]:
-    """Register a cancel event for the duration of a job."""
-    event = register_cancel_event(job_id)
+def cancellable_job(job_id: str, event: threading.Event | None = None) -> Iterator[threading.Event]:
+    """Register a cancel event for the duration of a job.
+
+    Pass ``event`` to make a running job cancellable under a second id too
+    (prepareSaeData's collection phase also answers to the collection's id,
+    which is what the Jobs list cancels by).
+    """
+    event = register_cancel_event(job_id, event)
     try:
         yield event
     finally:

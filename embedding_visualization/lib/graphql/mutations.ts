@@ -334,6 +334,17 @@ export interface EmbedDatasetInput {
   resume?: boolean; // Resume an interrupted job instead of starting fresh
   extractTopics?: boolean;
   topicConfig?: TopicConfigInput;
+  /** Link the collection to this SAE once the run succeeds */
+  saeLink?: SaeLinkInput | null;
+}
+
+/** SAE whose document activations a collection uses (set after a successful embed) */
+export interface SaeLinkInput {
+  saeModelId: string;
+  saeId: string;
+  /** Follow a successful embed with computeDocumentActivations (false: link only,
+   * e.g. SAE feature collections). Stored with the job, so resume does the same. */
+  computeActivations?: boolean;
 }
 
 export type DataType = 'TEXT' | 'IMAGE' | 'VECTOR';
@@ -357,6 +368,8 @@ export interface EmbedLocalFileInput {
   resume?: boolean; // Resume an interrupted job instead of starting fresh
   extractTopics?: boolean;
   topicConfig?: TopicConfigInput;
+  /** Link the collection to this SAE once the run succeeds */
+  saeLink?: SaeLinkInput | null;
 }
 
 export interface ReEmbedDatasetInput {
@@ -370,6 +383,8 @@ export interface ReEmbedDatasetInput {
   computeProjections?: boolean;
   extractTopics?: boolean;
   topicConfig?: TopicConfigInput;
+  /** Link the collection to this SAE once the run succeeds */
+  saeLink?: SaeLinkInput | null;
 }
 
 export interface EmbedDatasetResult {

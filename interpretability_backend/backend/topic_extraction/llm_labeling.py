@@ -6,8 +6,11 @@ from clustered documents and c-TF-IDF keywords.
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
+
+from ..services.cancel_registry import raise_if_cancelled
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -170,6 +173,7 @@ def generate_llm_labels(
     llm_provider: str = "gemini",
     llm_model: str = "gemini-3-flash-preview",
     progress_callback: Callable[[int, int], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[int, str]:
     """Generate human-readable topic labels using an LLM.
 
@@ -179,6 +183,7 @@ def generate_llm_labels(
         llm_provider: LLM provider to use ("gemini" or "openai")
         llm_model: Model name for the provider
         progress_callback: Optional callback(done, total) called after each topic is labeled
+        cancel_event: Checked before each LLM call; raises JobCancelled once set
 
     Returns:
         Dict of topic_id -> label string
@@ -199,6 +204,7 @@ def generate_llm_labels(
     labeling_start = time.time()
 
     for call_num, topic_id in enumerate(topics_to_label, 1):
+        raise_if_cancelled(cancel_event)
         keywords = topics_data[topic_id]
         topic_docs = documents_df[documents_df["Topic"] == topic_id]["Document"].tolist()
 

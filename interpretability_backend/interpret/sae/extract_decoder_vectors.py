@@ -185,7 +185,11 @@ def extract_and_merge(
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, output_path, compression="snappy")
+    # Write, then rename: a killed run (e.g. a cancelled job) never leaves a
+    # truncated parquet that later runs would mistake for a finished one.
+    partial_path = output_path.with_name(output_path.name + ".partial")
+    pq.write_table(table, partial_path, compression="snappy")
+    partial_path.replace(output_path)
 
     size_mb = output_path.stat().st_size / 1024**2
     print(f"  Saved to {output_path} ({size_mb:.0f} MB)")

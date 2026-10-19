@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from chromadb.errors import NotFoundError
 from tqdm import tqdm
 
 logger = logging.getLogger("orrery." + __name__)
@@ -187,10 +188,11 @@ def _store_feature_vectors(
         "sae_id": sae_id,
     }
 
-    # Create ChromaDB collection (no embedding function — vectors are pre-computed)
+    # Create ChromaDB collection (no embedding function — vectors are pre-computed),
+    # replacing any previous one together with its HNSW index directory.
     try:
-        chroma.client.delete_collection(name=collection_name)
-    except Exception:
+        chroma.delete_collection(collection_name)
+    except NotFoundError:
         pass
     collection = chroma.client.create_collection(
         name=collection_name,

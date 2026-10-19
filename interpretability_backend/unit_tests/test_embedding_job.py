@@ -6,12 +6,12 @@ progress bookkeeping, cooperative cancellation between batches, and failure
 reporting, plus regression tests for resume on the local-text and vector paths.
 """
 
+import importlib
+import json
 import threading
 
 import pytest
 
-from backend.embedding_functions import embed_local_file as local_module
-from backend.embedding_functions import embed_vectors as vectors_module
 from backend.embedding_functions.config import (
     DataType,
     EmbeddingModelConfig,
@@ -24,7 +24,11 @@ from backend.embedding_functions.embedding_job import (
 )
 from backend.services import cancel_registry, job_state
 from backend.services.cancel_registry import CANCELLED_MESSAGE
-from backend.services.job_state import JobStateService, JobStatus
+from backend.services.job_state import JobState, JobStateService, JobStatus
+
+# The package re-exports functions with the same names as these submodules.
+local_module = importlib.import_module("backend.embedding_functions.embed_local_file")
+vectors_module = importlib.import_module("backend.embedding_functions.embed_vectors")
 
 
 @pytest.fixture(autouse=True)
@@ -161,12 +165,19 @@ class TestEmbeddingBatchJob:
         assert emitted[0]["message"] == "Starting embedding..."
 
     def test_resume_keeps_the_original_job_record(self, job_states, emitted):
-        job_states.start_job("c", job_type="local_file", total_expected=5, total_batches=3, config={"orig": True})
+        job_states.start_job(
+            "c", job_type="local_file", total_expected=5, total_batches=3, config={"orig": True}
+        )
+        job_states.fail_job("c", "interrupted earlier")
         job = _job(job_config={"new": True})
 
         job.start(already_embedded=2, resume=True)
 
-        assert job_states.get_job("c").config == {"orig": True}
+        stored = job_states.get_job("c")
+        assert stored.config == {"orig": True}
+        # Regression: a resumed job stayed "interrupted" while running, so the
+        # Jobs list offered Resume for a live job.
+        assert stored.status is JobStatus.RUNNING
         assert job.total_embedded == 2
 
     def test_cancel_stops_between_batches(self, job_states, emitted):
@@ -187,7 +198,9 @@ class TestEmbeddingBatchJob:
         assert emitted[-1]["error"] == CANCELLED_MESSAGE
 
     def test_failure_marks_job_interrupted(self, job_states, emitted):
-        job_states.start_job("c", job_type="local_file", total_expected=5, total_batches=3, config={})
+        job_states.start_job(
+            "c", job_type="local_file", total_expected=5, total_batches=3, config={}
+        )
 
         result = report_embedding_failure(
             "c", RuntimeError("model exploded"), start_time=0.0, device="cpu"
@@ -293,3 +306,43 @@ class TestVectorEmbedCancelAndResume:
         )
         assert resumed.error is None and resumed.total_embedded == 5
         assert sorted(client.existing.ids) == [f"v{k}" for k in range(5)]
+
+
+class TestCollectionExtraMetadata:
+    """The SAE link (and other collection settings) live on the dataset row."""
+
+    def test_reembedded_collection_updates_its_source_dataset(self, db):
+        db._conn.execute("INSERT INTO datasets (name, item_count) VALUES ('ds', 1)")
+        db._conn.execute(
+            "INSERT INTO vector_collections (collection_name, dataset_name, backend, vector_type)"
+            " VALUES ('ds_gemini', 'ds', 'chromadb', 'dense')"
+        )
+        db.update_dataset("ds", extra_metadata={"default_color_scheme": "x"})
+
+        dataset_name = db.update_collection_extra_metadata(
+            "ds_gemini", {"sae_model_id": "m", "sae_id": "s"}
+        )
+
+        assert dataset_name == "ds"
+        extra = db.get_dataset("ds")["extra_metadata"]
+        extra = json.loads(extra) if isinstance(extra, str) else extra
+        assert extra == {"default_color_scheme": "x", "sae_model_id": "m", "sae_id": "s"}
+
+
+class TestJobSource:
+    def test_reembed_jobs_report_their_source_dataset(self):
+        job = JobState.from_dict(
+            {
+                "collection_name": "ds_gemini",
+                "status": "interrupted",
+                "job_type": "re_embed",
+                "items_embedded": 1,
+                "total_expected": 2,
+                "batches_completed": 1,
+                "total_batches": 2,
+                "config": {"source_dataset_name": "ds"},
+                "started_at": "",
+            }
+        )
+
+        assert job.source == "ds"

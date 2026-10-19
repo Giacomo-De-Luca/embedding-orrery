@@ -54,8 +54,12 @@ class JobState:
 
     @property
     def source(self) -> str:
-        """Extract source (dataset_id or file_path) from config."""
-        return self.config.get("dataset_id") or self.config.get("file_path", "")
+        """Extract source (dataset_id, file_path or re-embed source dataset) from config."""
+        return (
+            self.config.get("dataset_id")
+            or self.config.get("file_path")
+            or self.config.get("source_dataset_name", "")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -228,6 +232,16 @@ class JobStateService:
                     del data["jobs"][collection_name]
                 else:
                     data["jobs"][collection_name]["status"] = JobStatus.COMPLETED.value
+                self._save(data)
+
+    def resume_job(self, collection_name: str) -> None:
+        """Mark an interrupted job running again (its record and config are kept),
+        so the Jobs list does not offer Resume for a job that is running."""
+        with self._lock:
+            data = self._load()
+            if collection_name in data["jobs"]:
+                data["jobs"][collection_name]["status"] = JobStatus.RUNNING.value
+                data["jobs"][collection_name].pop("error", None)
                 self._save(data)
 
     def fail_job(self, collection_name: str, error: str | None = None) -> None:

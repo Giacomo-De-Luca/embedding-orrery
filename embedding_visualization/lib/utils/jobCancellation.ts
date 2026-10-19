@@ -14,11 +14,46 @@ export function isJobCancelled(error: string | null | undefined): boolean {
   return error === JOB_CANCELLED_MESSAGE;
 }
 
+export type JobOutcome = 'succeeded' | 'cancelled' | 'failed';
+
+/** How a finished job ended, read from its result's error (null: no result). */
+export function jobOutcome(result: { error?: string | null } | null | undefined): JobOutcome | null {
+  if (!result) return null;
+  if (!result.error) return 'succeeded';
+  return isJobCancelled(result.error) ? 'cancelled' : 'failed';
+}
+
+/** Where outcome messages go: sonner's `toast` in the app. */
+export interface OutcomeNotifier {
+  info(message: string): unknown;
+  error(message: string): unknown;
+  success(message: string): unknown;
+}
+
+/**
+ * Announce a finished job: a cancel as info, a failure as an error, a
+ * success as success. Returns the outcome so the caller can update its own
+ * state (e.g. keep the previous result on a cancel).
+ */
+export function announceJobOutcome<R extends { error?: string | null }>(
+  result: R | null | undefined,
+  messages: Record<JobOutcome, (result: R) => string>,
+  notifier: OutcomeNotifier,
+): JobOutcome | null {
+  const outcome = jobOutcome(result);
+  if (!outcome || !result) return null;
+  const message = messages[outcome](result);
+  if (outcome === 'cancelled') notifier.info(message);
+  else if (outcome === 'failed') notifier.error(message);
+  else notifier.success(message);
+  return outcome;
+}
+
 /**
  * Cancel button lifecycle in a progress modal: `requesting` while the cancel
- * mutation is in flight, then `requested` until the job actually stops
- * (it finishes its current batch first). A refused request — the job is no
- * longer running — returns to `idle`.
+ * mutation is in flight, then `requested` until the job actually stops (at
+ * its next checkpoint, or when its worker process is killed). A refused
+ * request — the job is no longer running — returns to `idle`.
  */
 export type CancelState = 'idle' | 'requesting' | 'requested';
 

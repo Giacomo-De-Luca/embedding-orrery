@@ -44,7 +44,6 @@ interface LocalFileTabProps {
   reEmbedDataset: (input: ReEmbedDatasetInput) => Promise<EmbedDatasetResult | null>;
   collections: CollectionInfo[];
   refreshCollections: () => Promise<void>;
-  updateCollectionMetadata: SaePostEmbedDeps['updateCollectionMetadata'];
   computeDocumentActivations: SaePostEmbedDeps['computeDocumentActivations'];
   localFileInfo: LocalFileInfo | null;
   localFilePreview: LocalFilePreview | null;
@@ -64,7 +63,6 @@ export function LocalFileTab({
   reEmbedDataset,
   collections,
   refreshCollections,
-  updateCollectionMetadata,
   computeDocumentActivations,
   localFileInfo,
   localFilePreview,
@@ -191,19 +189,17 @@ export function LocalFileTab({
     // CTA is disabled while issues exist; guard anyway
     if (fileValidationIssues.length > 0) return;
 
-    const result = await embedLocalFile(buildLocalEmbedInput(form.commonValues(), {
+    const input = buildLocalEmbedInput(form.commonValues(), {
       filePath,
       dataType,
       portion: { strategy: portionStrategy, numRows, seed: randomSeed },
-    }));
+    });
+    const result = await embedLocalFile(input);
 
     await refreshCollections();
 
-    // Optional final step: link the SAE + compute document activations
-    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
-      updateCollectionMetadata,
-      computeDocumentActivations,
-    });
+    // Optional final step: compute document activations (the embed linked the SAE)
+    const saeStepRan = await runPostEmbedSaeStep(result, input.saeLink, { computeDocumentActivations });
     if (saeStepRan) await refreshCollections();
   };
 
@@ -228,18 +224,16 @@ export function LocalFileTab({
     // CTA is disabled while issues exist; guard anyway
     if (reEmbedValidationIssues.length > 0) return;
 
-    const result = await reEmbedDataset(buildReEmbedInput(
+    const input = buildReEmbedInput(
       { ...form.commonValues(), embeddingModel: model.buildEmbeddingModelInput() },
       sourceDataset
-    ));
+    );
+    const result = await reEmbedDataset(input);
 
     await refreshCollections();
 
-    // Optional final step: link the SAE + compute document activations
-    const saeStepRan = await runPostEmbedSaeStep(result, model.getSaePostParams(), {
-      updateCollectionMetadata,
-      computeDocumentActivations,
-    });
+    // Optional final step: compute document activations (the embed linked the SAE)
+    const saeStepRan = await runPostEmbedSaeStep(result, input.saeLink, { computeDocumentActivations });
     if (saeStepRan) await refreshCollections();
   };
 

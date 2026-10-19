@@ -16,7 +16,9 @@ class _Service:
         self.result, self.error = result, error
         self.calls = []
 
-    def __call__(self, duckdb):
+    def __call__(self, duckdb, vector_batches=None):
+        # vector_batches: the cancel-aware loader the reduction injects
+        self.vector_batches = vector_batches
         return self
 
     def centroids_for_assignments(self, collection_name, item_topics, order, preloaded=None):

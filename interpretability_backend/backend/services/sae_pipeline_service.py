@@ -14,11 +14,19 @@ Two SAE families are supported, dispatched on ``family``:
   download stage: decoder vectors are extracted straight from the HF
   weights with empty labels/densities (backfilled later by the autointerp
   pass), and activation examples are unavailable.
+
+Cancellation: the file-producing stages (``run_gemma_pipeline``,
+``extract_qwen_vectors``) run as CancellableTasks in a child process that a
+cancel kills mid-download or mid-extraction; DuckDB ingestion stays in this
+process and stops between steps. Partial files are safe to reuse: downloads
+resume per batch file and the decoder-vector parquet is written atomically.
 """
 
 import logging
+import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from interpret.sae.paths import vectors_parquet_path
 from interpret.sae.pipeline.prepare_sae_data import (
@@ -36,6 +44,8 @@ from interpret.sae.sae_config import (
 from interpret.sae.source_ids import neuronpedia_source_id, qwen_source_id
 
 from ..services.progress_emitter import emit_progress
+from ..utils.cancellable_task import CancellableTask
+from .cancel_registry import CANCELLED_MESSAGE, JobCancelled, emit_cancelled, raise_if_cancelled
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -163,6 +173,53 @@ def _finalize(result: dict, job_id: str | None, start: float) -> dict:
     return result
 
 
+def _cancelled(result: dict, job_id: str | None, start: float) -> dict:
+    """Result of a preparation stopped by a cancel. Files already written are
+    kept for the next run (downloads resume, parquet writes are atomic)."""
+    logger.info("SAE preparation cancelled for %s/%s", result["model_id"], result["sae_id"])
+    if job_id:
+        emit_cancelled(job_id, total_items=100)
+    return {
+        **result,
+        "status": "failed",
+        "error": CANCELLED_MESSAGE,
+        "duration_seconds": round(time.time() - start, 2),
+    }
+
+
+def run_gemma_pipeline(channel, pipeline_config: SAEPipelineConfig) -> dict:
+    """Task target: download → merge → extract into files (no DuckDB access).
+
+    Sends ``(stage, done, total)`` progress items; returns the output paths.
+    Runs in a CancellableTask child, so a cancel stops a download or the SAE
+    weight load mid-step.
+    """
+    pipeline_result = SAEPipelineRunner(pipeline_config).run(
+        progress_callback=lambda stage, done, total: channel.send((stage, done, total)),
+    )
+    return {
+        "error": pipeline_result.error,
+        "features_parquet": str(pipeline_result.features_parquet)
+        if pipeline_result.features_parquet
+        else None,
+        "activations_jsonl": str(pipeline_result.activations_jsonl)
+        if pipeline_result.activations_jsonl
+        else None,
+    }
+
+
+def extract_qwen_vectors(channel, sae_config: QwenScopeSAEConfig, out_path: Path) -> None:
+    """Task target: extract qwen-scope decoder vectors from the HF weights."""
+    # Lazy: pulls torch via load_sae (same boundary as the gemma pipeline's
+    # extract stage).
+    from interpret.sae.extract_decoder_vectors import extract_and_merge
+    from interpret.sae.loading import clear_sae_cache
+
+    channel.send(("extract_vectors", 0, 1))
+    extract_and_merge(sae_config, out_path, skip_labels=True)
+    clear_sae_cache()  # free the cpu weight tensors
+
+
 def prepare_sae_data(
     layer: int,
     width: str = "16k",
@@ -173,6 +230,8 @@ def prepare_sae_data(
     skip_download: bool = False,
     include_activations: bool = False,
     job_id: str | None = None,
+    cancel_event: threading.Event | None = None,
+    isolate: bool = True,
 ) -> dict:
     """Run the SAE pipeline: download, extract, and ingest into DuckDB.
 
@@ -185,6 +244,10 @@ def prepare_sae_data(
 
     ``family="qwen"`` dispatches to the qwen-scope path (extract-only, no
     Neuronpedia download — see :func:`prepare_qwen_sae_data`).
+
+    A cancel (``cancel_event``) stops the download / extraction mid-step —
+    they run in a killable child process unless ``isolate=False`` — or the
+    DuckDB ingestion between steps, and reports ``CANCELLED_MESSAGE``.
     """
     if family == "qwen":
         if include_activations:
@@ -198,6 +261,8 @@ def prepare_sae_data(
             hook_type=hook_type,
             model_size=model_size,
             job_id=job_id,
+            cancel_event=cancel_event,
+            isolate=isolate,
         )
     if family != "gemma":
         return _failed(f"Unknown SAE family '{family}'. Valid: ['gemma', 'qwen']")
@@ -249,68 +314,70 @@ def prepare_sae_data(
     # and DuckDB inserts use INSERT OR REPLACE, so re-runs are safe.
     _progress = _make_progress(job_id, _STAGE_WEIGHTS, _STAGE_OFFSETS)
 
-    # Run pipeline (download → merge → extract)
     try:
-        pipeline_config = SAEPipelineConfig(
-            sae=sae_config,
-            skip_download=skip_download,
-            skip_activations=not include_activations,
-            skip_extract=False,
-        )
-        pipeline_result = SAEPipelineRunner(pipeline_config).run(
-            progress_callback=_progress,
-        )
-
-        if pipeline_result.error:
-            result["error"] = f"Pipeline failed: {pipeline_result.error}"
-            result["status"] = "failed"
-            return result
-
-        # Populate output paths
-        if pipeline_result.features_parquet:
-            result["features_parquet"] = str(pipeline_result.features_parquet)
-        if pipeline_result.activations_jsonl:
-            result["activations_jsonl"] = str(pipeline_result.activations_jsonl)
-
-    except Exception as e:
-        result["error"] = f"Pipeline failed: {e}"
-        result["status"] = "failed"
-        logger.exception("SAE pipeline failed for %s/%s", model_id, sae_id)
-        return result
-
-    # ── Ingest features into DuckDB (without ChromaDB vectors) ────────
-    if pipeline_result.features_parquet and pipeline_result.features_parquet.exists():
-        if not _ingest_features(
-            result, str(pipeline_result.features_parquet), model_id, sae_id, _progress
-        ):
-            return result
-
-    # ── Ingest activations into DuckDB ────────────────────────────────
-    if (
-        include_activations
-        and pipeline_result.activations_jsonl
-        and pipeline_result.activations_jsonl.exists()
-    ):
+        # Run pipeline (download → merge → extract)
         try:
-            from ..embedding_functions.ingest_sae import ingest_sae_activations
-
-            _progress("ingest_activations", 0, 1)
-            act_result = ingest_sae_activations(
-                jsonl_path=str(pipeline_result.activations_jsonl),
-                model_id=model_id,
-                sae_id=sae_id,
+            pipeline_config = SAEPipelineConfig(
+                sae=sae_config,
+                skip_download=skip_download,
+                skip_activations=not include_activations,
+                skip_extract=False,
             )
-            result["activations_inserted"] = act_result.get("records_inserted", 0)
-            if act_result.get("error"):
-                result["error"] = act_result["error"]
+            files = CancellableTask(
+                cancel_event, isolate=isolate, on_item=lambda item: _progress(*item)
+            ).run(run_gemma_pipeline, pipeline_config)
+
+            if files["error"]:
+                result["error"] = f"Pipeline failed: {files['error']}"
                 result["status"] = "failed"
                 return result
-            _progress("ingest_activations", 1, 1)
+
+            # Populate output paths
+            result["features_parquet"] = files["features_parquet"]
+            result["activations_jsonl"] = files["activations_jsonl"]
+
         except Exception as e:
-            result["error"] = f"Activation ingestion failed: {e}"
+            result["error"] = f"Pipeline failed: {e}"
             result["status"] = "failed"
-            logger.exception("Activation ingestion failed for %s/%s", model_id, sae_id)
+            logger.exception("SAE pipeline failed for %s/%s", model_id, sae_id)
             return result
+
+        # ── Ingest features into DuckDB (without ChromaDB vectors) ────────
+        features_parquet = result["features_parquet"]
+        if features_parquet and Path(features_parquet).exists():
+            raise_if_cancelled(cancel_event)
+            if not _ingest_features(result, features_parquet, model_id, sae_id, _progress):
+                return result
+
+        # ── Ingest activations into DuckDB ────────────────────────────────
+        activations_jsonl = result["activations_jsonl"]
+        if include_activations and activations_jsonl and Path(activations_jsonl).exists():
+            raise_if_cancelled(cancel_event)
+            try:
+                from ..embedding_functions.ingest_sae import ingest_sae_activations
+
+                _progress("ingest_activations", 0, 1)
+                act_result = ingest_sae_activations(
+                    jsonl_path=activations_jsonl,
+                    model_id=model_id,
+                    sae_id=sae_id,
+                    # Between batches (INSERT OR REPLACE: a re-run is idempotent)
+                    progress_callback=lambda done, total: raise_if_cancelled(cancel_event),
+                )
+                result["activations_inserted"] = act_result.get("records_inserted", 0)
+                if act_result.get("error"):
+                    result["error"] = act_result["error"]
+                    result["status"] = "failed"
+                    return result
+                _progress("ingest_activations", 1, 1)
+            except Exception as e:
+                result["error"] = f"Activation ingestion failed: {e}"
+                result["status"] = "failed"
+                logger.exception("Activation ingestion failed for %s/%s", model_id, sae_id)
+                return result
+
+    except JobCancelled:
+        return _cancelled(result, job_id, start)
 
     return _finalize(result, job_id, start)
 
@@ -321,6 +388,8 @@ def prepare_qwen_sae_data(
     hook_type: str = "resid_post",
     model_size: str = "1.7B",
     job_id: str | None = None,
+    cancel_event: threading.Event | None = None,
+    isolate: bool = True,
 ) -> dict:
     """Extract + ingest a qwen-scope SAE (synchronous, like the gemma path).
 
@@ -331,6 +400,7 @@ def prepare_qwen_sae_data(
     ``scripts/extract_qwen_decoder_vectors.py`` bootstrap
     (``qwen3-1.7B-base`` / ``{layer}-qwenscope-1-res-32k``), so re-running
     over an existing ingest is a safe no-op (INSERT OR REPLACE).
+    Cancellation as in :func:`prepare_sae_data`.
     """
     start = time.time()
 
@@ -380,26 +450,26 @@ def prepare_qwen_sae_data(
     out_path = vectors_parquet_path(sae_config)
 
     try:
-        if out_path.exists():
-            logger.info("Qwen decoder-vector parquet already exists: %s", out_path)
-        else:
-            # Lazy: pulls torch via load_sae (same boundary as the gemma
-            # pipeline's extract stage).
-            from interpret.sae.extract_decoder_vectors import extract_and_merge
-            from interpret.sae.loading import clear_sae_cache
+        try:
+            if out_path.exists():
+                logger.info("Qwen decoder-vector parquet already exists: %s", out_path)
+            else:
+                CancellableTask(
+                    cancel_event, isolate=isolate, on_item=lambda item: _progress(*item)
+                ).run(extract_qwen_vectors, sae_config, out_path)
+            result["features_parquet"] = str(out_path)
+            _progress("extract_vectors", 1, 1)
+        except Exception as e:
+            result["error"] = f"Pipeline failed: {e}"
+            result["status"] = "failed"
+            logger.exception("Qwen SAE extraction failed for %s/%s", model_id, sae_id)
+            return result
 
-            _progress("extract_vectors", 0, 1)
-            extract_and_merge(sae_config, out_path, skip_labels=True)
-            clear_sae_cache()  # free the cpu weight tensors
-        result["features_parquet"] = str(out_path)
-        _progress("extract_vectors", 1, 1)
-    except Exception as e:
-        result["error"] = f"Pipeline failed: {e}"
-        result["status"] = "failed"
-        logger.exception("Qwen SAE extraction failed for %s/%s", model_id, sae_id)
-        return result
+        raise_if_cancelled(cancel_event)
+        if not _ingest_features(result, str(out_path), model_id, sae_id, _progress):
+            return result
 
-    if not _ingest_features(result, str(out_path), model_id, sae_id, _progress):
-        return result
+    except JobCancelled:
+        return _cancelled(result, job_id, start)
 
     return _finalize(result, job_id, start)

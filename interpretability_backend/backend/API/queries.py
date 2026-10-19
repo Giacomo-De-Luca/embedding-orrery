@@ -69,8 +69,8 @@ from .types import (
 def _job_model_name(embedding_model) -> str | None:
     """Model name from a job-config ``embedding_model`` entry.
 
-    HF/local jobs store a dict ``{provider, model_name, ...}`` (via
-    ``_build_job_config``); re-embed jobs historically stored a bare string.
+    Jobs store a dict ``{provider, model_name, ...}`` (via
+    ``BaseConfig.to_job_config``); older re-embed jobs stored a bare string.
     Tolerate both so one malformed record can't null the whole jobs list.
     """
     if isinstance(embedding_model, dict):

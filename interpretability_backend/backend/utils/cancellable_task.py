@@ -159,10 +159,14 @@ class CancellableTask:
             process.start()
             sender.close()
             try:
-                return self._collect(process, receiver)
+                result = self._collect(process, receiver)
+            except BaseException:  # cancelled, failed or interrupted: stop it now
+                self._stop(process, wait=False)
+                raise
             finally:
                 receiver.close()
-                self._stop(process)
+            self._stop(process, wait=True)
+            return result
 
     def _collect(self, process, receiver) -> Any:
         poll_seconds = self.settings.poll_interval_ms / 1000
@@ -190,16 +194,25 @@ class CancellableTask:
                     f"worker exited with code {process.exitcode} before returning",
                 )
 
-    def _stop(self, process) -> None:
+    def _stop(self, process, *, wait: bool) -> None:
+        """Reap the child: let a finished one exit (``wait``), else terminate it
+        (SIGTERM, SIGKILL after the grace period); then kill anything still
+        running in its process group, e.g. worker pools it started."""
         grace = self.settings.terminate_grace_ms / 1000
-        process.join(timeout=0 if process.exitcode is None and is_cancelled(self.cancel_event) else grace)
-        if process.is_alive():
-            _signal_group(process, signal.SIGTERM)
+        pid = process.pid
+        if wait:
             process.join(grace)
         if process.is_alive():
-            _signal_group(process, signal.SIGKILL)
+            _signal_group(pid, signal.SIGTERM)
+            process.join(grace)
+        if process.is_alive():
+            _signal_group(pid, signal.SIGKILL)
             process.join()
         process.close()
+        # The group outlives its leader while members remain, so its id is not
+        # reused yet: safe to signal after the child is reaped.
+        with contextlib.suppress(OSError, AttributeError):
+            os.killpg(pid, signal.SIGKILL)
 
 
 class _ArraySpill:
@@ -231,33 +244,47 @@ def _unspill(value: Any) -> Any:
     return value
 
 
-def _signal_group(process, signum: int) -> None:
+def _signal_group(pid: int, signum: int) -> None:
     """Signal the child's process group (it and anything it started)."""
     try:
-        os.killpg(process.pid, signum)
+        os.killpg(pid, signum)
     except (OSError, AttributeError):
         # No group yet (the child had not run setpgrp) or no killpg (Windows).
         with contextlib.suppress(OSError):
-            os.kill(process.pid, signum)
+            os.kill(pid, signum)
 
 
 def _watch_parent(parent_pid: int) -> None:
-    """Exit if the parent dies, so an orphaned step does not keep the CPU busy."""
+    """Exit if the parent dies, taking the whole group (worker pools included)
+    down, so an orphaned step does not keep the CPU busy."""
     while True:
         if os.getppid() != parent_pid:
+            with contextlib.suppress(OSError, AttributeError):
+                os.killpg(os.getpgrp(), signal.SIGKILL)
             os._exit(1)
         time.sleep(1.0)
+
+
+def _exit_on_sigterm(signum, frame) -> None:
+    """Turn the parent's SIGTERM into SystemExit, so pure-Python steps unwind
+    (``with open(...)`` blocks flush and close). A step inside compiled code
+    only sees it when control returns to Python; SIGKILL follows after the
+    grace period."""
+    raise SystemExit(128 + signum)
 
 
 def _child_main(sender, parent_pid: int, target, args: tuple, kwargs: dict) -> None:
     if hasattr(os, "setpgrp"):
         os.setpgrp()  # own process group: the parent can kill our children too
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     threading.Thread(target=_watch_parent, args=(parent_pid,), daemon=True).start()
     try:
         args = tuple(_unspill(a) for a in args)
         kwargs = {k: _unspill(v) for k, v in kwargs.items()}
         result = target(_PipeChannel(sender), *args, **kwargs)
         sender.send(("result", result))
+    except SystemExit:  # terminated by the parent: nobody is listening any more
+        raise
     except BaseException as exc:  # report everything; the parent re-raises
         sender.send(("error", (type(exc).__name__, str(exc), traceback.format_exc())))
     finally:

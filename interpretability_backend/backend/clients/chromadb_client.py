@@ -19,6 +19,7 @@ from chromadb.errors import InternalError
 
 from ..embedding_functions.config import EmbeddingModelConfig, EmbeddingProvider
 from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
+from ..utils.chroma_segments import ChromaSegmentJanitor
 from ..utils.resource_paths import CHROMA_DB_PATH
 
 logger = logging.getLogger("orrery")
@@ -89,6 +90,15 @@ class ChromaDBClient:
             return self.client.get_collection(name=name, embedding_function=ef)
         except Exception as e:
             raise ValueError(f"Collection '{name}' not found: {e}") from e
+
+    def delete_collection(self, name: str) -> list[Path]:
+        """Delete a collection together with its HNSW index directory.
+
+        chromadb's own ``delete_collection`` leaves the directory on disk (see
+        ``utils/chroma_segments.py``). Raises chromadb's ``NotFoundError`` when
+        the collection does not exist; returns the directories removed.
+        """
+        return ChromaSegmentJanitor.delete_collection(self.client, name)
 
     @staticmethod
     def _embedding_function_for(

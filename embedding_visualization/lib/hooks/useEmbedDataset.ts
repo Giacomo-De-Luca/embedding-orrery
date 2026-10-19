@@ -36,7 +36,7 @@ import {
   COMPUTE_DOCUMENT_ACTIVATIONS,
 } from '../graphql/mutations';
 import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS, GENERATE_LLM_LABELS, GET_COLLECTION_TOPICS } from '../graphql/queries';
-import { isJobCancelled } from '../utils/jobCancellation';
+import { announceJobOutcome, jobOutcome } from '../utils/jobCancellation';
 
 // ========== Hook Return Types ==========
 
@@ -47,19 +47,16 @@ export type EmbedSource = 'hf' | 'local' | 'reembed';
  * another tab when it finishes. Inline result/error cards stay as the
  * inspectable record. */
 function notifyEmbedOutcome(result: EmbedDatasetResult | null) {
-  if (!result) return;
-  if (isJobCancelled(result.error)) {
-    toast.info(
-      `Embedding of "${result.collectionName}" cancelled with ${result.totalEmbedded.toLocaleString()} items embedded.`
-    );
-  } else if (result.error) {
-    toast.error(`Embedding failed: ${result.error}`);
-  } else {
-    toast.success(
-      `Embedded ${result.totalEmbedded.toLocaleString()} items into "${result.collectionName}" in ${result.durationSeconds.toFixed(1)}s`
-    );
-  }
+  announceJobOutcome(result, {
+    cancelled: (r) => `Embedding of "${r.collectionName}" cancelled with ${r.totalEmbedded.toLocaleString()} items embedded.`,
+    failed: (r) => `Embedding failed: ${r.error}`,
+    succeeded: (r) =>
+      `Embedded ${r.totalEmbedded.toLocaleString()} items into "${r.collectionName}" in ${r.durationSeconds.toFixed(1)}s`,
+  }, toast);
 }
+
+/** Embedding runs can take minutes: allow 10 before the request times out. */
+const EMBED_CONTEXT = { fetchOptions: { timeout: 600000 } };
 
 export interface UseEmbedDatasetReturn {
   // HuggingFace dataset operations
@@ -142,8 +139,6 @@ export interface UseEmbedDatasetReturn {
 
   // Active job tracking for progress display
   activeJobCollectionName: string | null;
-  /** Whether the active embed can be cancelled from its progress modal */
-  activeJobCancellable: boolean;
   clearActiveJob: () => void;
 }
 
@@ -163,8 +158,6 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
   // Active job tracking for progress display
   const [activeJobCollectionName, setActiveJobCollectionName] = useState<string | null>(null);
-  // Image/vector file embeds have no per-batch cancel check backend-side
-  const [activeJobCancellable, setActiveJobCancellable] = useState(true);
 
   // Loading states
   const [infoLoading, setInfoLoading] = useState(false);
@@ -252,6 +245,45 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     { collectionTopics: ExtractTopicsResult | null }
   >(GET_COLLECTION_TOPICS, { fetchPolicy: 'network-only' });
 
+  // ========== Embedding runs (HF / local file / re-embed share one flow) ==========
+
+  /**
+   * Run one embed mutation: tracks the active job (drives the progress
+   * modal), records the result for the tab that started it, surfaces a failure
+   * in the error state (a cancel is not one) and toasts the outcome.
+   */
+  const runEmbed = useCallback(async (
+    source: EmbedSource,
+    collectionName: string,
+    run: () => Promise<{ result: EmbedDatasetResult | null; error?: { message: string } | null }>,
+    failureMessage: string,
+  ): Promise<EmbedDatasetResult | null> => {
+    setError(null);
+    setLastEmbedResult(null);
+    setLastEmbedSource(source);
+    setActiveJobCollectionName(collectionName);
+    try {
+      const { result, error } = await run();
+      if (error) {
+        setError(error.message);
+        return null;
+      }
+      if (jobOutcome(result) === 'failed') {
+        setError(result!.error!);
+      }
+      setLastEmbedResult(result);
+      notifyEmbedOutcome(result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : failureMessage;
+      setError(message);
+      toast.error(message);
+      return null;
+    } finally {
+      setActiveJobCollectionName(null);
+    }
+  }, []);
+
   // ========== HuggingFace Operations ==========
 
   const fetchHFDatasetInfo = useCallback(async (datasetId: string): Promise<HFDatasetInfo | null> => {
@@ -323,48 +355,12 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     }
   }, [getHFPreview]);
 
-  const embedHFDataset = useCallback(async (input: EmbedDatasetInput): Promise<EmbedDatasetResult | null> => {
-    setError(null);
-    setLastEmbedResult(null);
-    setLastEmbedSource('hf');
-    setActiveJobCollectionName(input.collectionName);
-    setActiveJobCancellable(true);
-
-    try {
-      const { data, error } = await embedHFMutation({
-        variables: { input },
-        // Longer timeout for embedding operations
-        context: {
-          fetchOptions: {
-            timeout: 600000 // 10 minutes
-          }
-        }
-      });
-
-      if (error) {
-        setError(error.message);
-        setActiveJobCollectionName(null);
-        return null;
-      }
-
-      const result = data?.embedHuggingfaceDataset || null;
-
-      if (result?.error && !isJobCancelled(result.error)) {
-        setError(result.error);
-      }
-
-      setLastEmbedResult(result);
-      setActiveJobCollectionName(null);
-      notifyEmbedOutcome(result);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to embed dataset';
-      setError(message);
-      setActiveJobCollectionName(null);
-      toast.error(message);
-      return null;
-    }
-  }, [embedHFMutation]);
+  const embedHFDataset = useCallback((input: EmbedDatasetInput) =>
+    runEmbed('hf', input.collectionName, async () => {
+      const { data, error } = await embedHFMutation({ variables: { input }, context: EMBED_CONTEXT });
+      return { result: data?.embedHuggingfaceDataset ?? null, error };
+    }, 'Failed to embed dataset'),
+  [runEmbed, embedHFMutation]);
 
   // ========== Local File Operations ==========
 
@@ -435,91 +431,21 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
     }
   }, [getLocalPreview]);
 
-  const embedLocalFile = useCallback(async (input: EmbedLocalFileInput): Promise<EmbedDatasetResult | null> => {
-    setError(null);
-    setLastEmbedResult(null);
-    setLastEmbedSource('local');
-    setActiveJobCollectionName(input.collectionName);
-    setActiveJobCancellable(!input.dataType || input.dataType === 'TEXT');
-
-    try {
-      const { data, error } = await embedLocalMutation({
-        variables: { input },
-        context: {
-          fetchOptions: {
-            timeout: 600000 // 10 minutes
-          }
-        }
-      });
-
-      if (error) {
-        setError(error.message);
-        setActiveJobCollectionName(null);
-        return null;
-      }
-
-      const result = data?.embedLocalFile || null;
-
-      if (result?.error && !isJobCancelled(result.error)) {
-        setError(result.error);
-      }
-
-      setLastEmbedResult(result);
-      setActiveJobCollectionName(null);
-      notifyEmbedOutcome(result);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to embed file';
-      setError(message);
-      setActiveJobCollectionName(null);
-      toast.error(message);
-      return null;
-    }
-  }, [embedLocalMutation]);
+  const embedLocalFile = useCallback((input: EmbedLocalFileInput) =>
+    runEmbed('local', input.collectionName, async () => {
+      const { data, error } = await embedLocalMutation({ variables: { input }, context: EMBED_CONTEXT });
+      return { result: data?.embedLocalFile ?? null, error };
+    }, 'Failed to embed file'),
+  [runEmbed, embedLocalMutation]);
 
   // ========== Re-embed Existing Dataset ==========
 
-  const reEmbedDataset = useCallback(async (input: ReEmbedDatasetInput): Promise<EmbedDatasetResult | null> => {
-    setError(null);
-    setLastEmbedResult(null);
-    setLastEmbedSource('reembed');
-    setActiveJobCollectionName(input.collectionName);
-    setActiveJobCancellable(true);
-
-    try {
-      const { data, error } = await reEmbedMutation({
-        variables: { input },
-        context: {
-          fetchOptions: {
-            timeout: 600000 // 10 minutes
-          }
-        }
-      });
-
-      if (error) {
-        setError(error.message);
-        setActiveJobCollectionName(null);
-        return null;
-      }
-
-      const result = data?.reEmbedDataset || null;
-
-      if (result?.error && !isJobCancelled(result.error)) {
-        setError(result.error);
-      }
-
-      setLastEmbedResult(result);
-      setActiveJobCollectionName(null);
-      notifyEmbedOutcome(result);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to re-embed dataset';
-      setError(message);
-      setActiveJobCollectionName(null);
-      toast.error(message);
-      return null;
-    }
-  }, [reEmbedMutation]);
+  const reEmbedDataset = useCallback((input: ReEmbedDatasetInput) =>
+    runEmbed('reembed', input.collectionName, async () => {
+      const { data, error } = await reEmbedMutation({ variables: { input }, context: EMBED_CONTEXT });
+      return { result: data?.reEmbedDataset ?? null, error };
+    }, 'Failed to re-embed dataset'),
+  [runEmbed, reEmbedMutation]);
 
   // ========== Topic Extraction ==========
 
@@ -547,14 +473,14 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.extractTopics || null;
 
-      if (result?.error) {
-        setError(result.error);
-        toast.error(`Topic extraction failed: ${result.error}`);
-      } else if (result) {
-        toast.success(
-          `Extracted ${result.numTopics} topics for "${result.collectionName}" in ${result.durationSeconds.toFixed(1)}s`
-        );
-      }
+      const outcome = announceJobOutcome(result, {
+        cancelled: () => `Topic extraction for "${collectionName}" cancelled. The existing topics are unchanged.`,
+        failed: (r) => `Topic extraction failed: ${r.error}`,
+        succeeded: (r) => `Extracted ${r.numTopics} topics for "${r.collectionName}" in ${r.durationSeconds.toFixed(1)}s`,
+      }, toast);
+      // A cancel stored nothing: keep showing the collection's current topics
+      if (outcome === 'cancelled') return result;
+      if (outcome === 'failed') setError(result!.error!);
 
       setLastTopicsResult(result);
       return result;
@@ -591,14 +517,14 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.reduceTopics || null;
 
-      if (result?.error) {
-        setError(result.error);
-        toast.error(`Topic reduction failed: ${result.error}`);
-      } else if (result) {
-        toast.success(
-          `Reduced ${result.numTopicsBefore} → ${result.numTopicsAfter} topics for "${result.collectionName}"`
-        );
-      }
+      const outcome = announceJobOutcome(result, {
+        cancelled: () => `Topic reduction for "${input.collectionName}" cancelled. The existing topics are unchanged.`,
+        failed: (r) => `Topic reduction failed: ${r.error}`,
+        succeeded: (r) => `Reduced ${r.numTopicsBefore} → ${r.numTopicsAfter} topics for "${r.collectionName}"`,
+      }, toast);
+      // A cancel stored nothing: the current topics stay active
+      if (outcome === 'cancelled') return result;
+      if (outcome === 'failed') setError(result!.error!);
 
       setLastReduceResult(result);
       return result;
@@ -635,20 +561,17 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
       const result = data?.generateLlmLabels || null;
 
-      if (isJobCancelled(result?.error)) {
-        toast.info(
-          `LLM labeling of "${input.collectionName}" cancelled. Labels generated so far are saved; resume it from the Jobs list.`
-        );
-      } else if (result?.error) {
-        setError(result.error);
-        toast.error(`LLM labeling failed: ${result.error}`);
-      } else if (result) {
-        const parts = [`${result.topicsLabeled}/${result.totalTopics} topics`];
-        if (result.totalSubtopics > 0) {
-          parts.push(`${result.subtopicsLabeled}/${result.totalSubtopics} subtopics`);
-        }
-        toast.success(`Labeled ${parts.join(' and ')} for "${result.collectionName}"`);
-      }
+      const outcome = announceJobOutcome(result, {
+        cancelled: () =>
+          `LLM labeling of "${input.collectionName}" cancelled. Labels generated so far are saved; resume it from the Jobs list.`,
+        failed: (r) => `LLM labeling failed: ${r.error}`,
+        succeeded: (r) => {
+          const parts = [`${r.topicsLabeled}/${r.totalTopics} topics`];
+          if (r.totalSubtopics > 0) parts.push(`${r.subtopicsLabeled}/${r.totalSubtopics} subtopics`);
+          return `Labeled ${parts.join(' and ')} for "${r.collectionName}"`;
+        },
+      }, toast);
+      if (outcome === 'failed') setError(result!.error!);
 
       setLastLlmLabelsResult(result);
       return result;
@@ -869,17 +792,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       }
 
       const result = data?.computeDocumentActivations || null;
-      if (result && isJobCancelled(result.error)) {
-        toast.info(
-          `SAE activations for "${collectionName}" cancelled after ${result.itemsProcessed.toLocaleString()} / ${result.totalItems.toLocaleString()} documents. Run it again to continue where it stopped.`
-        );
-      } else if (result?.error) {
-        setError(result.error);
-      } else if (result) {
-        toast.success(
-          `Computed SAE activations for ${result.itemsProcessed.toLocaleString()} documents in "${collectionName}"`
-        );
-      }
+      const outcome = announceJobOutcome(result, {
+        cancelled: (r) =>
+          `SAE activations for "${collectionName}" cancelled after ${r.itemsProcessed.toLocaleString()} / ${r.totalItems.toLocaleString()} documents. Run it again to continue where it stopped.`,
+        failed: (r) => `SAE activations failed: ${r.error}`,
+        succeeded: (r) => `Computed SAE activations for ${r.itemsProcessed.toLocaleString()} documents in "${collectionName}"`,
+      }, toast);
+      if (outcome === 'failed') setError(result!.error!);
 
       setLastDocActivationsResult(result);
       return result;
@@ -963,7 +882,6 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
     // Active job tracking
     activeJobCollectionName,
-    activeJobCancellable,
     clearActiveJob,
   };
 }

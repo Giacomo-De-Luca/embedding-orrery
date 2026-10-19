@@ -42,6 +42,7 @@ from ..utils.duckdb_sync import _get_db as _get_duckdb
 from ..utils.embedding_loader import load_embeddings_for_ids
 from ..utils.probe_split import ProbeSplitter
 from ..utils.resource_paths import PROBING_RESULTS_DIR
+from .job_ids import JobIds
 from .probe_targets import CategoricalLabel, CategoricalTarget, ProbeTargetError
 from .probing_types import (
     _CALIBRATED_KINDS,
@@ -715,7 +716,7 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
     comes back as a ProbeRunResult with ``error`` set.
     """
     start_time = time.time()
-    job_id = f"{config.collection_name}_probe"
+    job_id = JobIds.probe(config.collection_name)
     score_field, residual_field = score_field_names(config.target_field, config.kind)
     result = ProbeRunResult(
         collection_name=config.collection_name,

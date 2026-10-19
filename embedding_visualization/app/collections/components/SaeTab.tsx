@@ -16,6 +16,8 @@ import {
   SelectValue,
 } from '@/lib/ui-primitives/select';
 import { ProgressModal } from './EmbeddingProgressModal';
+import { JobIds } from '@/lib/utils/jobIds';
+import { isJobCancelled } from '@/lib/utils/jobCancellation';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { TopicConfigForm, toTopicConfigInput } from './TopicConfigForm';
 import { useEmbeddingModelState } from '../lib/useEmbeddingModelState';
@@ -194,7 +196,7 @@ export function SaeTab() {
       ? collectionMode
       : 'DECODER_VECTORS';
 
-    const jobId = `sae_prepare_${activeModel.size}_${effVariant}_${layer}_${effHook}_${effWidth}`;
+    const jobId = JobIds.saePrepare(activeModel.size, effVariant, layer, effHook, effWidth);
     setActiveJobId(jobId);
     setLastResult(null);
 
@@ -575,6 +577,7 @@ export function SaeTab() {
                 : "Downloading from Neuronpedia and extracting decoder vectors. This may take several minutes."
           }
           itemsLabel="batches"
+          cancellable
         />
       )}
     </div>
@@ -584,6 +587,18 @@ export function SaeTab() {
 // ── Result Display ──────────────────────────────────────────────────────────
 
 function ResultDisplay({ result }: { result: PrepareSaeResult }) {
+  if (isJobCancelled(result.error)) {
+    return (
+      <div className="rounded-md bg-muted/50 p-3 text-sm">
+        <Badge variant="outline" className="text-xs mb-1">Cancelled</Badge>
+        <p className="text-xs text-muted-foreground">
+          {result.modelId} / {result.saeId}: stopped early. Running it again reuses the files
+          already downloaded.
+        </p>
+      </div>
+    );
+  }
+
   if (result.status === 'failed') {
     return (
       <div className="rounded-md bg-destructive/10 p-3 text-sm">
@@ -619,6 +634,9 @@ function ResultDisplay({ result }: { result: PrepareSaeResult }) {
         <p className="text-xs font-mono text-muted-foreground truncate">
           Activations: {result.activationsJsonl}
         </p>
+      )}
+      {result.error && (
+        <p className="text-xs text-destructive mt-2">{result.error}</p>
       )}
       {result.collectionName ? (
         <p className="text-xs text-muted-foreground mt-2">

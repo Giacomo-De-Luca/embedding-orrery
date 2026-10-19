@@ -31,9 +31,9 @@ export interface JobProgressBodyProps {
  * elapsed/ETA, optional cancel, progress bar, and counters. Wrapped by
  * ProgressModal (centered blocking overlay).
  *
- * Cancel is cooperative: the job stops after its current batch, so the
- * button stays on "Cancelling…" until the job's own mutation resolves and the
- * caller unmounts the modal.
+ * After a cancel request the button stays on "Cancelling…" until the job's
+ * own mutation resolves (the backend stops it at its next checkpoint, or kills
+ * the step's worker process) and the caller unmounts the modal.
  *
  * Supports two progress models:
  * - Stage-based (totalBatches > 1): bar tracks currentBatch/totalBatches,
@@ -103,7 +103,7 @@ export function JobProgressBody({
               size="sm"
               onClick={handleCancel}
               disabled={cancelButton.disabled}
-              title="Stops after the current batch. Work done so far is kept and can be resumed."
+              title="Stops the job. Work it has already saved is kept."
               className="gap-1"
             >
               <Square className="h-3 w-3" />

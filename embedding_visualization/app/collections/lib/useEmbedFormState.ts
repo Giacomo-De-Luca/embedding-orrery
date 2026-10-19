@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import type { PortionStrategy } from '@/lib/graphql/mutations';
 import { useEmbeddingModelState, type EmbeddingModelState } from './useEmbeddingModelState';
-import { updateTextTemplate, type CommonEmbedFormValues } from './embeddingFormUtils';
+import { saeLinkFromParams, updateTextTemplate, type CommonEmbedFormValues } from './embeddingFormUtils';
 
 export interface EmbedFormState {
   /** Model + topic configuration (shared hook) */
@@ -84,6 +84,7 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     batchSize: model.batchSize,
     embeddingModel: model.buildEmbeddingModelInput(),
     topicParams: model.getTopicParams(),
+    saeLink: saeLinkFromParams(model.getSaePostParams()),
   });
 
   return {

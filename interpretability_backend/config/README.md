@@ -1,5 +1,9 @@
 # Backend configuration
 
+- `cancellable_tasks.json`: `CancellableTaskSettings` for `utils/cancellable_task.py`
+  (row count from which heavy steps run in a killable child process, cancel
+  poll interval, array size spilled to a temp `.npy` instead of the pipe,
+  terminate grace period). See `../../documentation/JOB_CANCELLATION.md`.
 - `http_compression.json`: JSON response gzip settings (level, minimum size,
   worker-thread threshold, media types), loaded by `CompressionSettings` for
   `JsonGzipMiddleware`. See `../../documentation/MULTICLASS_PROBES.md`.

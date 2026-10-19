@@ -1,46 +1,53 @@
 """
 Modified fork of ChromaDB's SentenceTransformerEmbeddingFunction.
-Adds prompt support passed to encode() for EmbeddingGemma and similar models.
 
-ChromaDB's original implementation only passes **kwargs to the SentenceTransformer constructor,
-not to encode(). This fork adds prompt support to enable task-specific embeddings.
+Differences from ChromaDB's implementation:
 
-For EmbeddingGemma and similar models, pass a prompt that can be either:
-- A known prompt name (e.g., "Retrieval-query", "STS") → passed as prompt_name
-- A custom prompt string (e.g., "Classify: ") → passed as prompt
-
-See: https://huggingface.co/google/gemma-embedding-001
+- Task prompts (EmbeddingGemma and similar models). The prompt string is resolved
+  once, against the loaded model's own ``prompts``: a name the model defines is
+  passed as ``prompt_name``, other text as a literal ``prompt``, and a known
+  prompt name the model lacks raises (``utils/embedding_prompts.py``). For
+  queries (``is_query=True``) the collection's document prompt maps to its
+  query counterpart (``Retrieval-document`` -> ``Retrieval-query``) unless an
+  explicit ``query_prompt`` is given.
+- Load options (``utils/model_load_options.py``): dtype per device (never
+  float16), and only the encoder towers the requested ``modalities`` need
+  (EmbeddingGemma 2 text queries load the text tower only).
+- Media inputs: ``embed_inputs`` encodes image / audio / video / mixed inputs,
+  applying the prompt only to inputs that contain text (the model card's rule).
+- Secrets passed as load kwargs (the HF ``token``) are never returned by
+  ``get_config()``, which ChromaDB persists.
+- A class-level single-slot model cache (see ``models``).
 """
 
 import gc
 import logging
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings, Space
 from chromadb.utils.embedding_functions.schemas import validate_config_schema
 
-# Known prompt names that SentenceTransformers recognizes for models like EmbeddingGemma
-KNOWN_PROMPT_NAMES = {
-    "Retrieval-query",
-    "Retrieval-document",
-    "STS",
-    "Classification",
-    "Clustering",
-    "s2p",  # Sentence to passage
-    "s2s",  # Sentence to sentence
-}
+from ...utils.chroma_config_scrubber import DEFAULT_SECRET_KEYS
+from ...utils.embedding_prompts import DocumentPromptResolver, QueryPromptResolver
+from ...utils.model_load_options import SentenceTransformerLoadOptions
 
 logger = logging.getLogger("orrery." + __name__)
 
+_SECRET_KWARGS = frozenset(key.casefold() for key in DEFAULT_SECRET_KEYS)
+
 
 class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
-    """Fork of ChromaDB's SentenceTransformerEmbeddingFunction with prompt support."""
+    """Fork of ChromaDB's SentenceTransformerEmbeddingFunction (see module docstring)."""
 
-    # Class-level single-slot model cache (shared across all instances). Unlike
-    # ChromaDB's unbounded dict, loading a different model evicts the previous one
+    # Class-level single-slot model cache (shared across all instances), keyed by
+    # model name. Unlike ChromaDB's unbounded dict, loading a different model (or
+    # the same model with towers the cached load lacks) evicts the previous one,
     # so only one SentenceTransformer stays resident (each is 100 MB-1 GB+).
     models: dict[str, Any] = {}
+    # Load options of each cached model; a cached load is reused when it covers a request.
+    _loaded_options: dict[str, SentenceTransformerLoadOptions] = {}
 
     def __init__(
         self,
@@ -48,6 +55,9 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         device: str = "cpu",
         normalize_embeddings: bool = False,
         prompt: str | None = None,
+        modalities: Iterable[str] = ("text",),
+        is_query: bool = False,
+        query_prompt: str | None = None,
         **kwargs: Any,
     ):
         """Initialize SentenceTransformerEmbeddingFunction.
@@ -56,8 +66,12 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             model_name: Identifier of the SentenceTransformer model
             device: Device used for computation (cpu, cuda, mps)
             normalize_embeddings: Whether to normalize returned vectors
-            prompt: Prompt string - can be a known name (e.g., "Retrieval-query") or custom string
-            **kwargs: Additional arguments to pass to the SentenceTransformer model.
+            prompt: The collection's prompt: a prompt name of the model or literal text
+            modalities: Input modalities this instance will embed ("text", "image", ...)
+            is_query: Embed queries: map ``prompt`` to its query counterpart
+            query_prompt: Explicit query prompt (only with ``is_query``), wins over the mapping
+            **kwargs: Extra SentenceTransformer constructor arguments (e.g. ``token``);
+                secrets among them are never returned by ``get_config()``.
         """
         try:
             from sentence_transformers import SentenceTransformer
@@ -71,24 +85,39 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         self.device = device
         self.normalize_embeddings = normalize_embeddings
         self.prompt = prompt
-
-        # Resolve: if it's a known name, use prompt_name; otherwise use prompt
-        self._is_prompt_name = prompt in KNOWN_PROMPT_NAMES if prompt else False
+        self.is_query = is_query
+        self.query_prompt = query_prompt
 
         for key, value in kwargs.items():
             if not isinstance(value, (str, int, float, bool, list, dict, tuple)):
                 raise ValueError(f"Keyword argument {key} is not a primitive type")
-        self.kwargs = kwargs
+        self.kwargs = {k: v for k, v in kwargs.items() if k.casefold() not in _SECRET_KWARGS}
 
+        options = SentenceTransformerLoadOptions.for_modalities(model_name, device, modalities)
         # Bind through a local: a concurrent constructor may evict between the
         # membership check and a dict re-read (embed jobs run in worker threads
         # while sync semantic-search resolvers construct EFs on the event loop).
         model = self.models.get(model_name)
-        if model is None:
+        cached = self._loaded_options.get(model_name)
+        if model is None or cached is None or not cached.covers(options):
             self._evict_cached_models()
-            model = SentenceTransformer(model_name_or_path=model_name, device=device, **kwargs)
+            model = SentenceTransformer(
+                model_name_or_path=model_name,
+                device=device,
+                **options.constructor_kwargs(),
+                **kwargs,
+            )
             self.models[model_name] = model
+            self._loaded_options[model_name] = options
         self._model = model
+
+        model_prompts = getattr(model, "prompts", None) or {}
+        effective = (
+            QueryPromptResolver().for_model(query_prompt, prompt, model_prompts)
+            if is_query
+            else prompt
+        )
+        self._resolved_prompt = DocumentPromptResolver().resolve(effective, model_prompts)
 
     @classmethod
     def _evict_cached_models(cls) -> None:
@@ -101,9 +130,11 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         alongside the new one).
         """
         if not cls.models:
+            cls._loaded_options.clear()
             return
         evicted = list(cls.models)
         cls.models.clear()
+        cls._loaded_options.clear()
         gc.collect()
         try:
             import torch
@@ -117,29 +148,70 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         logger.info("Evicted cached SentenceTransformer model(s): %s", ", ".join(evicted))
 
     def __call__(self, input: Documents) -> Embeddings:
-        """Generate embeddings for the given documents.
-
-        Args:
-            input: Documents to generate embeddings for.
-
-        Returns:
-            Embeddings for the documents.
-        """
-        # Build encode kwargs with prompt support
-        encode_kwargs: dict[str, Any] = {
-            "convert_to_numpy": True,
-            "normalize_embeddings": self.normalize_embeddings,
-        }
-
-        # Add prompt - use prompt_name if it's a known name, otherwise use prompt directly
-        if self.prompt is not None:
-            if self._is_prompt_name:
-                encode_kwargs["prompt_name"] = self.prompt
-            else:
-                encode_kwargs["prompt"] = self.prompt
-
-        embeddings = self._model.encode(list(input), **encode_kwargs)
+        """Generate embeddings for the given text documents."""
+        embeddings = self._model.encode(
+            list(input),
+            convert_to_numpy=True,
+            normalize_embeddings=self.normalize_embeddings,
+            **self._resolved_prompt.encode_kwargs(),
+        )
         return [np.array(embedding, dtype=np.float32) for embedding in embeddings]
+
+    def embed_inputs(
+        self,
+        inputs: Sequence[Any],
+        has_text: Sequence[bool],
+        processing_kwargs: Mapping[str, Any] | None = None,
+        batch_size: int | None = None,
+    ) -> list[np.ndarray]:
+        """Embed media or mixed inputs (``{"text": ..., "image": ...}`` dicts and the like).
+
+        The prompt applies only to inputs with text (``has_text``): media-only
+        inputs are encoded without a prefix. Returns one float32 vector per
+        input, in input order.
+        """
+        if len(inputs) != len(has_text):
+            raise ValueError("embed_inputs needs one has_text flag per input")
+        extra: dict[str, Any] = {}
+        if processing_kwargs:
+            extra["processing_kwargs"] = dict(processing_kwargs)
+        if batch_size is not None:
+            extra["batch_size"] = batch_size
+        vectors: list[np.ndarray | None] = [None] * len(inputs)
+        for with_text in (True, False):
+            positions = [i for i, flag in enumerate(has_text) if flag is with_text]
+            if not positions:
+                continue
+            prompt_kwargs = self._resolved_prompt.encode_kwargs() if with_text else {}
+            encoded = self._model.encode(
+                [inputs[i] for i in positions],
+                convert_to_numpy=True,
+                normalize_embeddings=self.normalize_embeddings,
+                **prompt_kwargs,
+                **extra,
+            )
+            for position, vector in zip(positions, encoded, strict=True):
+                vectors[position] = np.asarray(vector, dtype=np.float32)
+        return vectors
+
+    def require_modalities(self, kinds: Iterable[str], with_text: bool) -> None:
+        """Raise ``ValueError`` unless the loaded model embeds these media kinds.
+
+        With ``with_text`` (or several kinds) the model must also combine them
+        in one input.
+        """
+        kinds = tuple(dict.fromkeys(kinds))
+        supports = getattr(self._model, "supports", None)
+        if supports is None:
+            raise ValueError(f"{self.model_name} embeds text only, not {', '.join(kinds)}")
+        missing = [kind for kind in kinds if not supports(kind)]
+        if missing:
+            raise ValueError(f"{self.model_name} cannot embed {', '.join(missing)}")
+        combination = tuple(sorted(set(kinds) | ({"text"} if with_text else set())))
+        if len(combination) > 1 and not supports(combination):
+            raise ValueError(
+                f"{self.model_name} cannot combine {', '.join(combination)} in one input"
+            )
 
     @staticmethod
     def name() -> str:
