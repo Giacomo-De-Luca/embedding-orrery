@@ -24,6 +24,7 @@ from backend.services.interpret_service import (
 from interpret.inference.gemma_pytorch import GemmaPytorchInference
 from interpret.inference.qwen3_transformers import Qwen3Inference
 from interpret.sae.activation_store import max_pool_feature_acts
+from interpret.sae.exploration.prompt_explorer import SaeSpec
 from interpret.sae.sae_config import GemmaScopeSAEConfig, HookType, QwenScopeSAEConfig
 
 # ---------------------------------------------------------------------------
@@ -76,13 +77,16 @@ def _make_mock_layer_result(layer: int, width: str, feature_index: int = 42):
     return lr
 
 
-def _make_mock_prompt_result(specs: list[tuple[int, str]]):
-    """Mock toolkit PromptResult keyed by (layer, width) as the explorer returns."""
+def _make_mock_prompt_result(specs: list[tuple[int, str] | SaeSpec]):
+    """Mock toolkit PromptResult keyed by SaeSpec as the explorer returns.
+
+    Plain ``(layer, width)`` pairs stand for residual-stream SAEs.
+    """
     prompt_result = MagicMock()
     prompt_result.prompt = "hello"
     prompt_result.token_strings = ["hello"]
     prompt_result.layers = {
-        (layer, width): _make_mock_layer_result(layer, width) for layer, width in specs
+        SaeSpec(*spec): _make_mock_layer_result(spec[0], spec[1]) for spec in specs
     }
     prompt_result.generated_text = None
     return prompt_result
@@ -130,6 +134,12 @@ class TestLifecycle:
         status = service.unload_model()
         assert status.loaded is False
 
+    @patch("backend.services.interpret_service.clear_sae_cache")
+    def test_unload_without_a_model_still_frees_cached_saes(self, mock_clear, service):
+        """A failed or partial load can leave SAEs cached with no model set."""
+        service.unload_model()
+        mock_clear.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # UC1: Prompt activations
@@ -154,9 +164,9 @@ class TestPromptActivations:
 
         result = service.run_prompt_activations("hello", [9], "16k", 10)
 
-        # Legacy layers+width call resolves to a single (layer, width) spec
+        # Legacy layers+width call resolves to a single residual-stream spec
         config = mock_explorer_cls.call_args[0][0]
-        assert config.effective_saes() == [(9, "16k")]
+        assert config.effective_saes() == [SaeSpec(9, "16k")]
 
         assert isinstance(result, PromptActivationsResult)
         assert result.prompt == "hello"
@@ -165,6 +175,7 @@ class TestPromptActivations:
         layer = result.layers[0]
         assert isinstance(layer, LayerActivationsResult)
         assert layer.layer == 9
+        assert layer.hook_type == "resid_post"
         assert len(layer.tokens) == 1
         tok = layer.tokens[0]
         assert isinstance(tok, TokenFeaturesResult)
@@ -209,7 +220,7 @@ class TestPromptActivations:
         # One explorer construction with the spec list, one forward pass
         assert mock_explorer_cls.call_count == 1
         config = mock_explorer_cls.call_args[0][0]
-        assert config.saes == specs
+        assert config.saes == [SaeSpec(*spec) for spec in specs]
         assert explorer.run_prompt.call_count == 1
 
         # Three layer entries, per-spec (layer, width)
@@ -251,6 +262,99 @@ class TestPromptActivations:
 
         service.run_prompt_activations("hello", None, "16k", 10, saes=[(9, "16k")])
         assert mock_explorer_cls.call_count == 2  # spec change → rebuild
+
+    @patch("backend.API.duckdb_instance.get_duckdb_client")
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.PromptExplorer")
+    def test_hook_type_reaches_explorer_and_label_lookup(
+        self, mock_explorer_cls, mock_inf_cls, mock_get_db, service
+    ):
+        """An MLP spec hooks the MLP output and reads the MLP SAE's labels."""
+        mock_inf_cls.return_value = _make_mock_wrapper()
+        db = _make_mock_db()
+        mock_get_db.return_value = db
+        service.load_model("google/gemma-3-4b-it")
+
+        mlp = SaeSpec(9, "16k", HookType.MLP_OUT)
+        mock_explorer_cls.return_value.run_prompt.return_value = _make_mock_prompt_result([mlp])
+
+        result = service.run_prompt_activations(
+            "hello", None, "16k", 10, saes=[(9, "16k", "mlp_out")]
+        )
+
+        config = mock_explorer_cls.call_args[0][0]
+        assert config.saes == [mlp]
+        sae_config = config.sae_config_factory(mlp)
+        assert sae_config.hook_type is HookType.MLP_OUT
+        assert sae_config.prefill_only is True
+        assert db.get_sae_feature_labels_batch.call_args.args[1] == "9-gemmascope-2-mlp-16k"
+        assert [(lr.layer, lr.hook_type, lr.width) for lr in result.layers] == [
+            (9, "mlp_out", "16k")
+        ]
+
+    @patch("backend.API.duckdb_instance.get_duckdb_client")
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.PromptExplorer")
+    def test_residual_and_mlp_at_one_layer_and_width(
+        self, mock_explorer_cls, mock_inf_cls, mock_get_db, service
+    ):
+        """Two hook sites at one (layer, width) give two results, residual first."""
+        mock_inf_cls.return_value = _make_mock_wrapper()
+        db = _make_mock_db()
+        mock_get_db.return_value = db
+        service.load_model("google/gemma-3-4b-it")
+
+        mock_explorer_cls.return_value.run_prompt.return_value = _make_mock_prompt_result(
+            [SaeSpec(9, "16k", HookType.MLP_OUT), SaeSpec(9, "16k")]
+        )
+
+        result = service.run_prompt_activations(
+            "hello",
+            None,
+            "16k",
+            10,
+            db_model_id="gemma-3-4b-it",
+            saes=[(9, "16k", "mlp_out"), (9, "16k", "resid_post")],
+        )
+
+        assert [(lr.layer, lr.hook_type, lr.width) for lr in result.layers] == [
+            (9, "resid_post", "16k"),
+            (9, "mlp_out", "16k"),
+        ]
+        lookup_calls = db.get_sae_feature_labels_batch.call_args_list
+        assert {call.args[1] for call in lookup_calls} == {
+            "9-gemmascope-2-res-16k",
+            "9-gemmascope-2-mlp-16k",
+        }
+
+    @patch("backend.API.duckdb_instance.get_duckdb_client")
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.PromptExplorer")
+    def test_explorer_rebuilt_when_only_the_hook_site_changes(
+        self, mock_explorer_cls, mock_inf_cls, mock_get_db, service
+    ):
+        mock_inf_cls.return_value = _make_mock_wrapper()
+        mock_get_db.return_value = _make_mock_db()
+        service.load_model("google/gemma-3-4b-it")
+
+        def factory(config):
+            inst = MagicMock()
+            inst.config = config  # real config so the cache compare runs
+            inst.run_prompt.return_value = _make_mock_prompt_result(config.saes)
+            return inst
+
+        mock_explorer_cls.side_effect = factory
+
+        service.run_prompt_activations("hello", None, "16k", 10, saes=[(9, "16k", "resid_post")])
+        service.run_prompt_activations("hello", None, "16k", 10, saes=[(9, "16k", "mlp_out")])
+        assert mock_explorer_cls.call_count == 2
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    def test_unknown_hook_type_raises(self, mock_inf_cls, service):
+        mock_inf_cls.return_value = _make_mock_wrapper()
+        service.load_model("google/gemma-3-4b-it")
+        with pytest.raises(ValueError, match="Unknown hook_type"):
+            service.run_prompt_activations("hello", None, "16k", 10, saes=[(9, "16k", "bogus")])
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +434,27 @@ class TestSteeredGeneration:
         """At least one steering spec is required."""
         with pytest.raises((RuntimeError, ValueError)):
             service.generate_steered("hello", [], output_len=64, temperature=None)
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_steering_saes_record_only_the_prefill(self, mock_hm_cls, mock_inf_cls, service):
+        """Steering needs the decoder row only; recording SAE activations at every
+        decode step grew device memory with the output length."""
+        wrapper = _make_mock_wrapper()
+        wrapper.generate.side_effect = ["baseline text", "steered text"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-4b-it")
+        mock_manager = MagicMock()
+        mock_manager.session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
+        mock_hm_cls.return_value = mock_manager
+
+        service.generate_steered("hello", self.MULTI_SPEC, output_len=64, temperature=None)
+
+        sae_configs = [c.args[0] for c in mock_manager.add_sae.call_args_list]
+        assert len(sae_configs) == 2
+        assert all(cfg.prefill_only for cfg in sae_configs)
+        assert mock_manager.add_steering.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -482,8 +607,34 @@ class TestBatchHighlightCancel:
         )
 
         assert persisted == ["a"]
-        assert [item_id for item_id, _ in results] == ["a"]
+        assert results == []  # streamed to the callback, not also kept in memory
         assert wrapper.generate_from_template.call_count == 1
+
+    @patch("backend.services.interpret_service.GemmaPytorchInference")
+    @patch("backend.services.interpret_service.HookManager")
+    def test_callback_results_are_not_accumulated(self, mock_hm_cls, mock_inf_cls, service):
+        """The job persists every document through the callback; keeping them
+        all in a list too grew memory with the collection size."""
+        wrapper = _make_mock_wrapper()
+        wrapper.prepends_bos = True
+        wrapper.token_strings.return_value = ["<bos>", "hello"]
+        mock_inf_cls.return_value = wrapper
+        service.load_model("google/gemma-3-1b")
+        feature_acts = torch.zeros(1, 2, 8)
+        feature_acts[0, 1, 3] = 1.0
+        _make_mock_highlight_session(mock_hm_cls, feature_acts, feature_acts)
+        persisted: list[str] = []
+
+        results = service.run_batch_highlight(
+            [("a", "hello"), ("b", "hello")],
+            layer=9,
+            width="16k",
+            hook_type="resid_post",
+            result_callback=lambda item_id, acts: persisted.append(item_id),
+        )
+
+        assert persisted == ["a", "b"]
+        assert results == []
 
 
 # ---------------------------------------------------------------------------
@@ -645,9 +796,25 @@ class TestQwenLifecycle:
 
         # The explorer is handed a family-aware factory that builds Qwen configs.
         config = mock_explorer_cls.call_args[0][0]
-        cfg = config.sae_config_factory(14, "32k")
+        cfg = config.sae_config_factory(SaeSpec(14, "32k"))
         assert isinstance(cfg, QwenScopeSAEConfig)
         assert cfg.k == 50 and cfg.prefill_only is True
+
+    @patch("backend.services.interpret_service.PromptExplorer")
+    @patch("backend.services.interpret_service.Qwen3Inference")
+    def test_prompt_activations_reject_non_residual_sites(
+        self, mock_cls, mock_explorer_cls, service
+    ):
+        """Qwen-scope SAEs are residual-only: an MLP spec fails with a clear error."""
+        mock_cls.return_value = _make_mock_wrapper()
+        service.load_model(QWEN_CHECKPOINT)
+        mlp = SaeSpec(14, "32k", HookType.MLP_OUT)
+
+        service._get_prompt_explorer([mlp], 0)
+
+        config = mock_explorer_cls.call_args[0][0]
+        with pytest.raises(ValueError, match="residual-stream only"):
+            config.sae_config_factory(mlp)
 
     @patch("backend.API.duckdb_instance.get_duckdb_client")
     @patch("backend.services.interpret_service.PromptExplorer")

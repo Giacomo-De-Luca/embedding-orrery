@@ -75,9 +75,7 @@ export class AssociationFields {
    */
   static readonly MAX_AXIS_VALUES = 50;
   /** Fields the backend's `topicSimilarityOrder` can order (see `topic_order_service.py`). */
-  private static readonly SIMILARITY_FIELDS: ReadonlySet<string> = new Set([
-    'topic_label', 'topic_id', 'subtopic_label', 'subtopic_id',
-  ]);
+  private static readonly SIMILARITY_FIELDS: ReadonlySet<string> = new Set(CategoryKey.TOPIC_FIELDS);
 
   /** Whether the heatmap can offer a Similarity sort for `field`. */
   static supportsSimilarity(field: string | null | undefined): boolean {

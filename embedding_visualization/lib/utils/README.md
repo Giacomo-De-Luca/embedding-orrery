@@ -59,6 +59,18 @@ renderers are in `experimental/`, and the density renderer has its own README.
   `ScatterPlot3D` calls `release()` when the point count changes and on unmount.
   See `../../../documentation/RENDER_PERFORMANCE.md`, "Typed-array pool release".
 
+## Plot gestures
+
+- `pinchGesture.ts`: `PinchGesture`, the DOM-free two-finger recogniser behind
+  `usePinchZoom`. Per touch event it says whether to keep the event from Plotly
+  and reports the pair's spread ratio and midpoint.
+- `plotPinchZoom.ts`: the `PinchZoomTarget` each plot implements.
+  `CartesianPinchZoom` (2D) replays a pinch as wheel events on Plotly's drag
+  surface; `CameraPinchZoom` (3D) sets the gl-plot3d camera distance.
+  `PinchZoomSession` is the hook's DOM-free event handling (gesture → target,
+  one `pinch` per animation frame through an injected scheduler).
+  See `../../../documentation/MOBILE_PINCH_ZOOM.md`.
+
 Other colour and scatter utilities include `plotUtils.ts` (shared highlight palette/size
 rules), colour scales, `collisionGrid.ts`, and `overlayLayout.ts`.
 Dataset loading, temporal filtering and membership helpers remain reusable by
@@ -73,3 +85,24 @@ their corresponding hooks.
   `isJobCancelled` / `jobOutcome` (succeeded, cancelled or failed, for toasts and
   result cards) and `cancelButtonView` (the progress modal's Cancel button
   states). See `../../../documentation/JOB_CANCELLATION.md`.
+
+## Topic merge trees
+
+- `topicTreeCut.ts`: `TopicMergeTree` (a validated dendrogram over a topic
+  extraction's base topics, scipy's linkage layout), `TopicTreeCut` (groups at N
+  topics or at a height, absorbed noise, representatives) and `TopicTreeView`
+  (`fromGraphQL` for the `topicMergeTree` query; `baseField` / `baseLabelField`).
+  Mirror of the backend's `utils/topic_merge_tree.py`, tested on the same literal
+  examples.
+- `topicCutMetadata.ts`: `TopicTreeGroups` (every tree node as a preview group:
+  representative, label, size, and the colour pin's value map) and
+  `TopicCutPreview` (one cut; `apply` rewrites the items' topic fields for the
+  Explore slider's preview).
+- `topicReduction.ts`: `REDUCTION_STRATEGY_OPTIONS`, `ReductionRules` (which
+  options each strategy takes) and `ReductionInputs` (reduction requests the
+  backend's `ReductionRequest` accepts), shared by the Collections forms
+  (re-exported from `app/collections/lib/topicConfigInput.ts`) and the slider's Apply.
+- Related: `categoryColors.ts` `buildPinnedCategoryColorMap` (colour pins),
+  `categoryKey.ts` `CategoryKey.subtopicKey` (nested colouring keys),
+  `fieldAnalysis.ts` `TopicFieldOptions` (topic-field colour options after a reduction).
+  See `../../../documentation/TOPIC_MERGE_TREES.md`.

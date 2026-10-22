@@ -15,6 +15,10 @@ export interface EmbedValidationInput {
   portionStrategy?: PortionStrategy;
   rangeStart?: number;
   rangeEnd?: number;
+  /** Text template / task prefix problems the backend would reject (`placeholderIssues`). */
+  placeholderIssues?: string[];
+  /** The task-prefix table is still loading: the input could miss the model's prefixes. */
+  taskPrefixesLoading?: boolean;
 }
 
 /**
@@ -55,6 +59,11 @@ export function getEmbedValidationIssues(input: EmbedValidationInput): string[] 
     input.rangeStart >= input.rangeEnd
   ) {
     issues.push('Row range start must be before end');
+  }
+
+  issues.push(...(input.placeholderIssues ?? []));
+  if (input.taskPrefixesLoading) {
+    issues.push('Loading the task prefixes');
   }
 
   return issues;

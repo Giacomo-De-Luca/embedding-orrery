@@ -80,7 +80,7 @@ Steering works identically across families — `SteeringOp(layer_index=15, mode=
 
 | File | Class | Purpose |
 |---|---|---|
-| `sae_config.py` | `GemmaScopeSAEConfig` (alias: `SAEConfig`), `QwenScopeSAEConfig`, `HookType` | Per-family configuration dataclasses. Each derives its HF `repo_id` and weight filename. |
+| `sae_config.py` | `GemmaScopeSAEConfig` (alias: `SAEConfig`), `QwenScopeSAEConfig`, `HookType`, `parse_hook_type` | Per-family configuration dataclasses. Each derives its HF `repo_id` and weight filename. `parse_hook_type` turns a hook-site value (`"mlp_out"`) into a `HookType`, raising on unknown values. |
 | `sae_model.py` | `SAEBase`, `JumpReLUSAE`, `TopKSAE` | `SAEBase` is the common interface (`encode/decode/forward` returning `(feature_acts, reconstruction)` + `w_dec` shape `(d_sae, d_in)`). `JumpReLUSAE` is the Gemma-scope architecture; `TopKSAE` is the Qwen-scope architecture. |
 | `loading.py` | `load_sae()` | Downloads SAE weights from HuggingFace Hub. Dispatches on config type — Gemma-scope `params.safetensors` -> `JumpReLUSAE`, Qwen-scope `layer{N}.sae.pt` -> `TopKSAE` (transposes `W_enc` / `W_dec` to the Gemma orientation on load). |
 | `hook_manager.py` | `HookManager` | Attaches/detaches SAEs as forward hooks on decoder layers. Supports `prefill_only`, read-only mode, and steering interventions composed alongside activation capture. |

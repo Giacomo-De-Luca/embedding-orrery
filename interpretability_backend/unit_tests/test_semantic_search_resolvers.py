@@ -58,7 +58,7 @@ class FakeChroma:
             "embeddings": None,
         }
 
-    def get_collection(self, name, load_embedding_function=False):
+    def get_collection(self, name):
         return FakeCollection()
 
     def embed_query(self, collection_name, text, query_prompt=None):

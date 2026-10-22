@@ -189,7 +189,9 @@ def _store_feature_vectors(
     }
 
     # Create ChromaDB collection (no embedding function — vectors are pre-computed),
-    # replacing any previous one together with its HNSW index directory.
+    # replacing any previous one together with its HNSW index directory. None is
+    # passed explicitly: omitting it makes chromadb record its default 384-d
+    # embedder, which conflicts with any embedder attached at query time.
     try:
         chroma.delete_collection(collection_name)
     except NotFoundError:
@@ -197,6 +199,7 @@ def _store_feature_vectors(
     collection = chroma.client.create_collection(
         name=collection_name,
         metadata=collection_metadata,
+        embedding_function=None,
     )
 
     # Register in DuckDB datasets + vector_collections

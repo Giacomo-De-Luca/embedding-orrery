@@ -9,12 +9,20 @@ reporting, plus regression tests for resume on the local-text and vector paths.
 import importlib
 import json
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 
+import chromadb
 import pytest
+from chromadb.api.shared_system_client import SharedSystemClient
+from chromadb.config import Settings
+from chromadb.errors import NotFoundError
 
 from backend.embedding_functions.config import (
     DataType,
+    EmbeddingConfig,
     EmbeddingModelConfig,
+    EmbeddingProvider,
     LocalFileEmbeddingConfig,
 )
 from backend.embedding_functions.embedding_job import (
@@ -25,10 +33,14 @@ from backend.embedding_functions.embedding_job import (
 from backend.services import cancel_registry, job_state
 from backend.services.cancel_registry import CANCELLED_MESSAGE
 from backend.services.job_state import JobState, JobStateService, JobStatus
+from backend.utils.embedding_model_catalog import TASK_PREFIX_FORMAT
 
 # The package re-exports functions with the same names as these submodules.
 local_module = importlib.import_module("backend.embedding_functions.embed_local_file")
 vectors_module = importlib.import_module("backend.embedding_functions.embed_vectors")
+hf_module = importlib.import_module("backend.embedding_functions.embed_huggingface")
+
+SEARCH_QUERY = "task: search result | query: "
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +60,8 @@ def emitted(monkeypatch):
 
 
 class FakeCollection:
+    id = "fake-collection-id"
+
     def __init__(self, ids=()):
         self.ids = list(ids)
         self.added: list[str] = []
@@ -68,11 +82,16 @@ class FakeClient:
         self.existing = existing
         self.deleted: list[str] = []
         self.created: list[dict] = []
+        self.lookup_embedding_functions: list = []
 
     def get_collection(self, name, embedding_function=None):
+        self.lookup_embedding_functions.append(embedding_function)
         if self.existing is None:
-            raise ValueError(f"Collection {name} does not exist")
+            raise NotFoundError(f"Collection {name} does not exist")
         return self.existing
+
+    def get_settings(self):
+        return SimpleNamespace(is_persistent=False)  # no index directories to remove
 
     def delete_collection(self, name):
         self.deleted.append(name)
@@ -98,7 +117,7 @@ class TestOpenEmbeddingCollection:
         )
 
         assert existing_ids == set()
-        assert client.created == [{"name": "c", "metadata": {"a": 1}}]
+        assert client.created == [{"name": "c", "metadata": {"a": 1}, "embedding_function": None}]
         assert collection is client.existing
 
     def test_overwrite_deletes_existing(self):
@@ -120,10 +139,59 @@ class TestOpenEmbeddingCollection:
         assert collection is existing and existing_ids == {"x", "y"}
         assert client.created == [] and client.deleted == []
 
-    def test_passes_embedding_function_only_when_given(self):
+    def test_existence_check_attaches_no_embedding_function(self):
+        """Attaching the new embedder to a collection created with a different
+        one makes chromadb raise a conflict, so overwriting it would fail."""
+        client = FakeClient(existing=FakeCollection(["x"]))
+
+        open_embedding_collection(client, "c", resume=False, metadata={}, embedding_function="ef")
+        open_embedding_collection(client, "c", resume=True, metadata={}, embedding_function="ef")
+
+        lookups = client.lookup_embedding_functions
+        assert lookups and all(embedding_function is None for embedding_function in lookups)
+
+    def test_passes_the_embedding_function_through(self):
         client = FakeClient()
         open_embedding_collection(client, "c", resume=False, metadata={}, embedding_function="ef")
-        assert client.created[0]["embedding_function"] == "ef"
+        open_embedding_collection(client, "d", resume=False, metadata={})
+        # None is passed explicitly: omitting it makes chromadb record its default embedder
+        assert [c["embedding_function"] for c in client.created] == ["ef", None]
+
+
+class TestOpenEmbeddingCollectionOnDisk:
+    """Against a real temporary ChromaDB store."""
+
+    @pytest.fixture
+    def client(self, tmp_path: Path):
+        yield chromadb.PersistentClient(
+            path=str(tmp_path), settings=Settings(anonymized_telemetry=False)
+        )
+        SharedSystemClient.clear_system_cache()
+
+    @staticmethod
+    def _index_dirs(path: Path) -> set[str]:
+        return {entry.name for entry in path.iterdir() if entry.is_dir()}
+
+    def test_overwrite_removes_the_old_index_directory(self, client, tmp_path: Path):
+        first, _ = open_embedding_collection(client, "coll", resume=False, metadata={"v": 1})
+        first.add(ids=["a", "b"], embeddings=[[1.0, 0.0], [0.0, 1.0]])
+        [old_dir] = self._index_dirs(tmp_path)
+
+        second, existing_ids = open_embedding_collection(
+            client, "coll", resume=False, metadata={"v": 2}
+        )
+
+        assert existing_ids == set() and second.count() == 0
+        assert old_dir not in self._index_dirs(tmp_path)
+
+    def test_created_without_embedding_function_records_none(self, client):
+        """Not chromadb's default 384-d embedder, which it records when the
+        argument is omitted ({"type": "known", "name": "default"})."""
+        collection, _ = open_embedding_collection(client, "vecs", resume=False, metadata={"v": 1})
+
+        reopened = client.get_collection("vecs", embedding_function=None)
+        for handle in (collection, reopened):
+            assert handle.configuration_json.get("embedding_function") is None
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +323,145 @@ class TestLocalTextResume:
         assert result.total_embedded == 4
 
 
+class TestLocalTextTaskPrefix:
+    """The task prefix reaches the model input, never the stored document."""
+
+    ROWS = [
+        {"id": "a", "title": "Attention", "abstract": "We propose"},
+        {"id": "b", "title": None, "abstract": "No title here"},
+    ]
+
+    @pytest.fixture
+    def received(self, monkeypatch) -> list[str]:
+        texts: list[str] = []
+
+        def factory(model_config, device):
+            def embed(docs):
+                texts.extend(docs)
+                return [[0.0, 1.0, 0.0] for _ in docs]
+
+            return embed, 3
+
+        monkeypatch.setattr(local_module, "create_embedding_function", factory)
+        return texts
+
+    @pytest.fixture
+    def stored(self, monkeypatch) -> list[str]:
+        documents: list[str] = []
+        monkeypatch.setattr(local_module, "sync_dataset_and_collection", lambda *a, **k: "ds")
+        monkeypatch.setattr(
+            local_module, "sync_items", lambda ds, ids, docs, metas: documents.extend(docs)
+        )
+        return documents
+
+    @staticmethod
+    def _config(prompt="title: {title} | text: ", template=None, resume=False):
+        return LocalFileEmbeddingConfig(
+            file_path="f.csv",
+            collection_name="c",
+            columns=["abstract"],
+            text_template=template,
+            id_column="id",
+            batch_size=2,
+            resume=resume,
+            embedding_model=EmbeddingModelConfig(
+                provider=EmbeddingProvider.GEMINI,
+                model_name="gemini-embedding-2",
+                prompt=prompt,
+                task=SEARCH_QUERY,
+                prompt_format=TASK_PREFIX_FORMAT,
+            ),
+        )
+
+    def test_prefixed_input_and_plain_document(self, job_states, emitted, received, stored):
+        client = FakeClient()
+        result = local_module.embed_text_from_local(
+            client, self._config(), self.ROWS, 2, "cpu", 0.0
+        )
+
+        assert result.error is None
+        assert sorted(stored) == ["No title here", "We propose"]
+        assert sorted(received) == [
+            "title: Attention | text: We propose",
+            "title: none | text: No title here",
+        ]
+        metadata = client.created[0]["metadata"]
+        assert metadata["embedding_prompt_format"] == TASK_PREFIX_FORMAT
+        assert metadata["embedding_task"] == SEARCH_QUERY
+        assert metadata["embedding_prompt"] == "title: {title} | text: "
+
+    @pytest.mark.parametrize(
+        "prompt, template, unknown",
+        [
+            ("title: {headline} | text: ", None, "headline"),
+            ("title: {title} | text: ", "{abstract} ({year})", "year"),
+        ],
+    )
+    def test_bad_placeholders_fail_before_the_old_collection_is_replaced(
+        self, job_states, emitted, received, stored, prompt, template, unknown
+    ):
+        client = FakeClient(existing=FakeCollection(["old"]))
+        with pytest.raises(ValueError, match=unknown):
+            local_module.embed_text_from_local(
+                client, self._config(prompt, template), self.ROWS, 2, "cpu", 0.0
+            )
+        assert client.deleted == [] and client.created == []
+        assert received == [] and stored == []
+
+
+class TestHuggingFaceTaskPrefix:
+    def test_prefixed_input_and_plain_document(self, job_states, emitted, monkeypatch, tmp_path):
+        rows = [
+            {"title": "Attention", "abstract": "We propose"},
+            {"title": None, "abstract": "No title here"},
+        ]
+        received: list[str] = []
+        stored: list[str] = []
+
+        def factory(model_config, device):
+            def embed(docs):
+                received.extend(docs)
+                return [[0.0, 1.0, 0.0] for _ in docs]
+
+            return embed, 3
+
+        client = FakeClient()
+        monkeypatch.setattr(hf_module, "get_device", lambda: "cpu")
+        monkeypatch.setattr(
+            hf_module, "load_dataset_portion", lambda **kw: ([dict(r) for r in rows], 2)
+        )
+        monkeypatch.setattr(hf_module, "create_embedding_function", factory)
+        monkeypatch.setattr(hf_module, "sync_dataset_and_collection", lambda *a, **k: "ds")
+        monkeypatch.setattr(
+            hf_module, "sync_items", lambda ds, ids, docs, metas: stored.extend(docs)
+        )
+        monkeypatch.setattr(hf_module, "DB_PATH", tmp_path / "vector_db")
+        monkeypatch.setattr(hf_module.chromadb, "PersistentClient", lambda **kw: client)
+        config = EmbeddingConfig(
+            dataset_id="org/papers",
+            collection_name="papers",
+            columns=["abstract"],
+            batch_size=2,
+            embedding_model=EmbeddingModelConfig(
+                provider=EmbeddingProvider.GEMINI,
+                model_name="gemini-embedding-2",
+                prompt="title: {title} | text: ",
+                task=SEARCH_QUERY,
+                prompt_format=TASK_PREFIX_FORMAT,
+            ),
+        )
+
+        result = hf_module.embed_huggingface_dataset(config)
+
+        assert result.error is None
+        assert sorted(stored) == ["No title here", "We propose"]
+        assert sorted(received) == [
+            "title: Attention | text: We propose",
+            "title: none | text: No title here",
+        ]
+        assert client.created[0]["metadata"]["embedding_prompt_format"] == TASK_PREFIX_FORMAT
+
+
 class TestVectorEmbedCancelAndResume:
     def _config(self, resume: bool) -> LocalFileEmbeddingConfig:
         return LocalFileEmbeddingConfig(
@@ -265,6 +472,23 @@ class TestVectorEmbedCancelAndResume:
             id_column="id",
             resume=resume,
         )
+
+    def test_bad_template_fails_before_the_old_collection_is_replaced(
+        self, job_states, emitted, fake_duckdb_sync
+    ):
+        client = FakeClient(existing=FakeCollection(["old"]))
+        config = LocalFileEmbeddingConfig(
+            file_path="f.parquet",
+            collection_name="vecs",
+            data_type=DataType.VECTOR,
+            vector_column="vector",
+            columns=["text"],
+            text_template="{text} ({missing})",
+        )
+        rows = [{"id": "v0", "vector": [0.0, 1.0], "text": "t0"}]
+        with pytest.raises(ValueError, match="missing"):
+            vectors_module.embed_vectors(client, config, rows, 1, "cpu", 0.0)
+        assert client.deleted == [] and client.created == []
 
     def test_cancel_then_resume_finishes_the_rest(
         self, job_states, emitted, fake_duckdb_sync, monkeypatch

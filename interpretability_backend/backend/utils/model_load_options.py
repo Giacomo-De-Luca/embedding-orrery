@@ -2,8 +2,11 @@
 
 ``EmbeddingDtypePolicy`` follows the EmbeddingGemma model cards: bfloat16 on a
 bf16-capable CUDA device, float32 everywhere else, never float16 (it overflows
-EmbeddingGemma's activations into NaN or silently degraded vectors). It applies
-to every sentence-transformers model; on MPS and CPU that is float32, as before.
+EmbeddingGemma's activations into NaN or silently degraded vectors). On Apple
+GPUs (MPS, macOS 14+) a checkpoint saved in bfloat16 (EmbeddingGemma 2) keeps
+bfloat16 instead of being upcast, which doubled its weights and every attention
+tensor; float32 checkpoints (EmbeddingGemma 1) stay float32, so existing
+collections see no drift. CPU is always float32.
 
 ``SentenceTransformerLoadOptions`` disables the towers a job does not need. The
 catalog's ``encoders`` map names, per media modality, the model-config
@@ -18,8 +21,10 @@ from dataclasses import dataclass
 from typing import Self
 
 from .embedding_model_catalog import EmbeddingModelCatalog
+from .model_files import ModelConfigFiles
 
 SENTENCE_TRANSFORMERS = "sentence_transformers"
+BFLOAT16 = "bfloat16"
 
 
 def _cuda_bf16_supported() -> bool:
@@ -29,15 +34,45 @@ def _cuda_bf16_supported() -> bool:
     return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
 
 
+def _mps_bf16_supported() -> bool:
+    # Lazy for the same reason; MPS supports bfloat16 from macOS 14.
+    import torch
+
+    return bool(torch.backends.mps.is_macos_or_newer(14, 0))
+
+
+def _checkpoint_dtype(model_name: str) -> str | None:
+    """The dtype a checkpoint was saved in, from its config.json (None if unknown)."""
+    config = ModelConfigFiles.shared().read(model_name, "config.json") or {}
+    text_config = config.get("text_config")
+    nested = text_config if isinstance(text_config, dict) else {}
+    dtype = config.get("dtype") or config.get("torch_dtype") or nested.get("dtype")
+    return dtype if isinstance(dtype, str) else None
+
+
 class EmbeddingDtypePolicy:
-    """The dtype to load embedding models in, per device."""
+    """The dtype to load embedding models in, per device (and checkpoint, on MPS)."""
 
-    def __init__(self, cuda_bf16_supported: Callable[[], bool] = _cuda_bf16_supported):
+    def __init__(
+        self,
+        cuda_bf16_supported: Callable[[], bool] = _cuda_bf16_supported,
+        mps_bf16_supported: Callable[[], bool] = _mps_bf16_supported,
+        checkpoint_dtype: Callable[[str], str | None] = _checkpoint_dtype,
+    ):
         self._cuda_bf16_supported = cuda_bf16_supported
+        self._mps_bf16_supported = mps_bf16_supported
+        self._checkpoint_dtype = checkpoint_dtype
 
-    def for_device(self, device: str) -> str:
+    def for_device(self, device: str, model_name: str | None = None) -> str:
         if device.startswith("cuda") and self._cuda_bf16_supported():
-            return "bfloat16"
+            return BFLOAT16
+        if (
+            device == "mps"
+            and model_name is not None
+            and self._mps_bf16_supported()
+            and self._checkpoint_dtype(model_name) == BFLOAT16
+        ):
+            return BFLOAT16
         return "float32"
 
 
@@ -66,7 +101,7 @@ class SentenceTransformerLoadOptions:
         encoders = entry.encoders if entry is not None else {}
         needed = {encoders[m] for m in set(modalities) if m in encoders}
         disabled = tuple(sorted(set(encoders.values()) - needed))
-        return cls(model_name, device, dtype_policy.for_device(device), disabled)
+        return cls(model_name, device, dtype_policy.for_device(device, model_name), disabled)
 
     @property
     def cache_key(self) -> tuple[str, str, str, tuple[str, ...]]:

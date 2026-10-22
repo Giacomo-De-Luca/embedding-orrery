@@ -12,8 +12,31 @@ import type {
   HazeRendererKind,
 } from '../types/types';
 import { DEFAULT_COLOR_SCALE, defaultColorScaleForType } from '../types/types';
-import type { CategoryColorAlias } from '../utils/categoryColors';
+import type { CategoryColorAlias, CategoryColorPin } from '../utils/categoryColors';
+import type { TopicTreeLinkage } from '../graphql/mutations';
 import { IS_DEMO } from '../utils/demoMode';
+
+/**
+ * The Explore topic slider's cut of the collection's merge tree. Previewing
+ * replaces the topic fields in the browser (useTopicMergeTree); Apply saves
+ * the cut through `reduceTopics`. Collection-scoped: never persisted, reset
+ * on collection change and whenever the colour field changes.
+ */
+export interface TopicCutState {
+  linkage: TopicTreeLinkage;
+  /** Topics the slider shows, noise not counted; null = the saved topic count. */
+  nTopics: number | null;
+  previewing: boolean;
+  /** Density cuts only: move noise into the topics that absorb it. */
+  absorbNoise: boolean;
+}
+
+export const DEFAULT_TOPIC_CUT: TopicCutState = {
+  linkage: 'average',
+  nTopics: null,
+  previewing: false,
+  absorbNoise: false,
+};
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -40,6 +63,18 @@ export interface VisualizationStoreState {
    * deliberately not cleared by resetForCollectionChange. Not persisted.
    */
   categoryColorAliases: Record<string, CategoryColorAlias>;
+  /**
+   * Fields whose values take another value's colour (the topic-tree preview
+   * pins each group to its representative base topic). Owned by
+   * useTopicMergeTree, which replaces the whole map whenever its preview
+   * changes; read by useCategoryColorMap and the nested colour map. Kept
+   * separate from `categoryColorAliases` because useProbes replaces that map
+   * wholesale. Not persisted.
+   */
+  categoryColorPins: Record<string, CategoryColorPin>;
+
+  // Topic tree (Explore topic slider)
+  topicCut: TopicCutState;
 
   // Search / filter
   searchQuery: string;
@@ -100,6 +135,10 @@ interface VisualizationStoreActions {
   removeCategoryColorOverride: (field: string, category: string) => void;
   clearCategoryColorOverrides: (field?: string) => void;
   setCategoryColorAliases: (aliases: Record<string, CategoryColorAlias>) => void;
+  setCategoryColorPins: (pins: Record<string, CategoryColorPin>) => void;
+
+  // Topic tree
+  setTopicCut: (patch: Partial<TopicCutState>) => void;
 
   // Search / filter
   setSearchQuery: (query: string) => void;
@@ -151,6 +190,8 @@ export const useVisualizationStore = create<VisualizationStore>()(
     nestedColorMode: false,
     categoryColorOverrides: {},
     categoryColorAliases: {},
+    categoryColorPins: {},
+    topicCut: DEFAULT_TOPIC_CUT,
     searchQuery: '',
     textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
     distanceMetric: 'COSINE',
@@ -221,6 +262,9 @@ export const useVisualizationStore = create<VisualizationStore>()(
       return { categoryColorOverrides: next };
     }),
     setCategoryColorAliases: (aliases) => set({ categoryColorAliases: aliases }),
+    setCategoryColorPins: (pins) => set({ categoryColorPins: pins }),
+
+    setTopicCut: (patch) => set((prev) => ({ topicCut: { ...prev.topicCut, ...patch } })),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
     setTextSearchConfig: (config) => set({ textSearchConfig: config }),
@@ -255,6 +299,7 @@ export const useVisualizationStore = create<VisualizationStore>()(
       mutedPointOpacity: 0.20,
       missingPointOpacity: 1.0,
       textSearchConfig: { fields: null, mode: 'CONTAINS', caseSensitive: false, filters: [] },
+      topicCut: DEFAULT_TOPIC_CUT,
     }),
   }), {
     name: 'viz-preferences',
@@ -288,7 +333,25 @@ export const useVisualizationStore = create<VisualizationStore>()(
 useVisualizationStore.subscribe(
   (s) => s.colorByField,
   () => {
-    useVisualizationStore.setState({ mutedCategories: [], hideUnclustered: false, hideMissing: false, customNumericRange: null });
+    useVisualizationStore.setState((s) => ({
+      mutedCategories: [], hideUnclustered: false, hideMissing: false, customNumericRange: null,
+      // The topic-tree preview lives in the topic_label colouring (its controls do).
+      topicCut: { ...s.topicCut, previewing: false, nTopics: null },
+    }));
+  },
+);
+
+// Mutes are category labels: entering, moving or leaving a topic-tree preview
+// renames the topic categories, so mutes from before would mute the wrong
+// (or no) points.
+useVisualizationStore.subscribe(
+  (s) => (s.topicCut.previewing ? s.topicCut : null),
+  () => {
+    // Only when there is something to clear: a fresh array on every slider
+    // step would re-render the plots ahead of the deferred preview.
+    if (useVisualizationStore.getState().mutedCategories.length > 0) {
+      useVisualizationStore.setState({ mutedCategories: [] });
+    }
   },
 );
 

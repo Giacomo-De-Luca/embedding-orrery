@@ -26,7 +26,7 @@ vector-collection configuration. Its optional `include` object supports:
 |---|---:|---|
 | `vectors` | `true` | Chroma vectors and collection metadata |
 | `projections` | `true` | coordinates and projection metadata |
-| `topics` | `true` | extraction config, topic info, assignments |
+| `topics` | `true` | extraction config, topic info, assignments, centroids, merge trees |
 | `probes` | `false` | probe definitions and per-item scores |
 
 Disabled projections/topics also clear the corresponding collection flags in

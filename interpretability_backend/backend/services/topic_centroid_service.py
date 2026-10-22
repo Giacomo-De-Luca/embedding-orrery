@@ -5,8 +5,9 @@
 - ``refresh`` recomputes and stores the centroids of an extraction from its
   ``topic_assignments`` (topic level and, after a reduction, subtopic level).
   Called after topic extraction / reduction and by the backfill script.
-- ``centroids_for_assignments`` computes centroids for in-memory assignments,
-  in a requested row order (semantic topic reduction).
+- ``centroids_for_assignments`` / ``tables_for_assignments`` compute
+  centroids for in-memory assignments (topic reduction, merge trees of
+  extractions without stored centroids).
 - ``search`` ranks a collection's topics against a text query.
 
 Member vectors and queries are L2-normalised: centroids are mean directions,
@@ -91,17 +92,14 @@ class TopicCentroidService:
         topic_of = {item_id: int(topic_id) for item_id, topic_id, _ in rows}
         subtopic_of = {item_id: int(sub_id) for item_id, _, sub_id in rows if sub_id is not None}
 
-        topic_acc = TopicCentroidAccumulator(normalize=True)
-        subtopic_acc = TopicCentroidAccumulator(normalize=True)
-        for ids, vectors in self._batches(collection_name, preloaded):
-            topic_acc.add_mapped(ids, vectors, topic_of)
-            subtopic_acc.add_mapped(ids, vectors, subtopic_of)
-
-        topics = topic_acc.table()
+        tables = self.tables_for_assignments(
+            collection_name, [topic_of, subtopic_of] if subtopic_of else [topic_of], preloaded
+        )
+        topics = tables[0]
         records = self._records(TOPIC_LEVEL, topics)
         if subtopic_of:
             parents = self._subtopic_parents(rows)
-            records += self._records(SUBTOPIC_LEVEL, subtopic_acc.table(), parents)
+            records += self._records(SUBTOPIC_LEVEL, tables[1], parents)
 
         covered = int(topics.counts.sum())
         if covered < len(topic_of):
@@ -125,10 +123,35 @@ class TopicCentroidService:
         Raises:
             ValueError: a topic in ``order`` has no member with a vector.
         """
-        acc = TopicCentroidAccumulator(normalize=True)
+        return (
+            self._accumulate(collection_name, [item_topics], preloaded)[0].table(order=order).means
+        )
+
+    def tables_for_assignments(
+        self,
+        collection_name: str,
+        assignments: Sequence[Mapping[str, int]],
+        preloaded: Preloaded | None = None,
+    ) -> list[CentroidTable]:
+        """One centroid table per assignment map (all labels, sorted), from a
+        single pass over the vectors.
+
+        Raises:
+            ValueError: an assignment map has no member with a vector.
+        """
+        return [acc.table() for acc in self._accumulate(collection_name, assignments, preloaded)]
+
+    def _accumulate(
+        self,
+        collection_name: str,
+        assignments: Sequence[Mapping[str, int]],
+        preloaded: Preloaded | None,
+    ) -> list[TopicCentroidAccumulator]:
+        accumulators = [TopicCentroidAccumulator(normalize=True) for _ in assignments]
         for ids, vectors in self._batches(collection_name, preloaded):
-            acc.add_mapped(ids, vectors, item_topics)
-        return acc.table(order=order).means
+            for accumulator, label_of in zip(accumulators, assignments, strict=True):
+                accumulator.add_mapped(ids, vectors, label_of)
+        return accumulators
 
     def _batches(
         self, collection_name: str, preloaded: Preloaded | None
@@ -218,15 +241,16 @@ class TopicCentroidService:
         extraction_id = self._db.get_active_extraction_id(collection_name)
         if extraction_id is None:
             raise ValueError(f"Collection '{collection_name}' has no topics")
-        topics = self._table(extraction_id, TOPIC_LEVEL)
+        topics = self.stored_table(extraction_id, TOPIC_LEVEL)
         if topics is None:
             raise ValueError(
                 f"Topic centroids have not been computed for '{collection_name}'. "
                 "Re-run topic extraction or the topic-centroid backfill."
             )
-        return extraction_id, topics, self._table(extraction_id, SUBTOPIC_LEVEL)
+        return extraction_id, topics, self.stored_table(extraction_id, SUBTOPIC_LEVEL)
 
-    def _table(self, extraction_id: str, level: str) -> CentroidTable | None:
+    def stored_table(self, extraction_id: str, level: str) -> CentroidTable | None:
+        """An extraction's stored centroids at one level, or None."""
         data = self._db.get_topic_centroids(extraction_id, level)
         if data is None:
             return None

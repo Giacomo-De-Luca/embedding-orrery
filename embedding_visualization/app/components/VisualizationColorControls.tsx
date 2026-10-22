@@ -12,18 +12,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useVisualizationStore } from '@/lib/stores/useVisualizationStore';
 import { CATEGORY_PRESETS } from '@/lib/utils/categoryColors';
 import type { ColorFieldOption } from '@/lib/utils/fieldAnalysis';
+import type { UseTopicMergeTreeReturn } from '@/lib/hooks/useTopicMergeTree';
 import { ColorScaleSelector } from './ColorScaleSelector';
 import { SaveColorDefaultButton } from './SaveColorDefaultButton';
+import { TopicTreeControls } from './TopicTreeControls';
 
 const SECTION_HEADER = 'text-xs font-medium uppercase tracking-wider text-muted-foreground';
 
 /** Color section of the Controls panel: field, scale and hide/fade toggles. */
-export function VisualizationColorControls({ colorFieldOptions, collectionName, nestedColorAvailable, hasMissingValues, canFadeMissing }: {
+export function VisualizationColorControls({ colorFieldOptions, collectionName, nestedColorAvailable, hasMissingValues, canFadeMissing, topicTree }: {
   colorFieldOptions: ColorFieldOption[]; collectionName?: string | null; nestedColorAvailable?: boolean;
   /** Some points have no value for the colour field. */
   hasMissingValues?: boolean;
   /** The view draws those points as a "Missing values" group, so their opacity can be set. */
   canFadeMissing?: boolean;
+  /** The topic slider (merge tree of the collection's topics), shown while colouring by topic. */
+  topicTree?: UseTopicMergeTreeReturn | null;
 }) {
   const store = useVisualizationStore;
   const { colorByField, hideUnclustered, hideMissing, missingPointOpacity, nestedColorMode } = store(useShallow(s => ({
@@ -162,6 +166,9 @@ export function VisualizationColorControls({ colorFieldOptions, collectionName, 
               </Label>
             </div>
           )}
+
+          {/* Topic slider: preview a merge of the topics, Apply saves it */}
+          {colorByField === 'topic_label' && topicTree?.view && <TopicTreeControls topicTree={topicTree} />}
         </div>
 
   </>;

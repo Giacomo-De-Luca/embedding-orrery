@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getOnboardingAction,
+  planOnboarding,
   shouldShowMobileNotice,
+  tourFitsViewport,
   warmEmotionSearch,
   resetWarmEmotionSearchForTests,
   INTRO_STORAGE_KEY,
   TOUR_STORAGE_KEY,
   SAE_TOUR_STORAGE_KEY,
   MOBILE_NOTICE_STORAGE_KEY,
-  TOUR_MIN_VIEWPORT,
+  COMPACT_VIEWPORT_WIDTH,
 } from '../demoOnboarding';
 
 const base = {
@@ -20,7 +22,7 @@ const base = {
 };
 
 /** A phone-sized viewport that has already dismissed the desktop notice. */
-const narrowSeen = { viewportWidth: TOUR_MIN_VIEWPORT - 1, mobileNoticeSeen: true };
+const narrowSeen = { viewportWidth: COMPACT_VIEWPORT_WIDTH - 1, mobileNoticeSeen: true };
 
 describe('getOnboardingAction', () => {
   it('auto-opens the intro on a bare demo first visit', () => {
@@ -49,8 +51,8 @@ describe('getOnboardingAction', () => {
       .toBe('tour');
   });
 
-  it('?tour=1 downgrades to intro on narrow viewports', () => {
-    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=1' })).toBe('intro');
+  it('?tour=1 runs on phones too', () => {
+    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=1' })).toBe('tour');
   });
 
   it('?tour=1 wins over ?intro=1', () => {
@@ -62,7 +64,6 @@ describe('getOnboardingAction', () => {
     expect(
       getOnboardingAction({ ...base, search: '?tour=sae', isDemo: false, introSeen: true }),
     ).toBe('sae-tour');
-    // No downgrade here — the /sae page owns the viewport floor.
     expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=sae' })).toBe('sae-tour');
   });
 
@@ -76,34 +77,108 @@ describe('getOnboardingAction', () => {
     expect(
       getOnboardingAction({ ...base, search: '?tour=wordnet', isDemo: false, introSeen: true }),
     ).toBe('wordnet-tour');
-    // No downgrade here — the Explore page owns the viewport floor (same as sae).
     expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=probe' })).toBe(
       'probe-tour',
     );
   });
 
-  it('unknown ?tour values fall through to the ordinary gating', () => {
-    expect(getOnboardingAction({ ...base, search: '?tour=nope' })).toBeNull();
+  it('?tour=wordnet is desktop-only: a phone gets the welcome dialog instead', () => {
+    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=wordnet' })).toBe('intro');
+    // Even in a non-demo build with the intro already seen: the link asked for a tour.
+    expect(
+      getOnboardingAction({
+        ...base,
+        ...narrowSeen,
+        search: '?tour=wordnet',
+        isDemo: false,
+        introSeen: true,
+      }),
+    ).toBe('intro');
   });
+
+  it.each(['?tour=nope', '?tour=constructor', '?tour=__proto__'])(
+    'unknown %s falls through to the ordinary gating',
+    (search) => {
+      expect(getOnboardingAction({ ...base, search })).toBeNull();
+    },
+  );
 
   it('shows the mobile notice on a phone-sized demo first visit', () => {
     expect(
-      getOnboardingAction({ ...base, viewportWidth: TOUR_MIN_VIEWPORT - 1 }),
+      getOnboardingAction({ ...base, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
     ).toBe('mobile-notice');
   });
 
-  it.each(['?tour=1', '?intro=1', '?tour=sae', '?tour=wordnet', '?tour=probe'])(
-    'the mobile notice pre-empts %s',
-    (search) => {
-      expect(
-        getOnboardingAction({ ...base, search, viewportWidth: TOUR_MIN_VIEWPORT - 1 }),
-      ).toBe('mobile-notice');
-    },
-  );
+  it.each([
+    ['?tour=1', 'tour'],
+    ['?tour=sae', 'sae-tour'],
+    ['?tour=probe', 'probe-tour'],
+  ] as const)('a phone-fitting tour link %s wins over the mobile notice', (search, tour) => {
+    expect(
+      getOnboardingAction({ ...base, search, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
+    ).toBe(tour);
+  });
+
+  it.each(['?intro=1', '?tour=wordnet'])('the mobile notice pre-empts %s', (search) => {
+    expect(
+      getOnboardingAction({ ...base, search, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
+    ).toBe('mobile-notice');
+  });
 
   it('once dismissed, narrow viewports resume the ordinary gating', () => {
     expect(getOnboardingAction({ ...base, ...narrowSeen })).toBe('intro');
     expect(getOnboardingAction({ ...base, ...narrowSeen, introSeen: true })).toBeNull();
+  });
+});
+
+describe('planOnboarding', () => {
+  const phone = { ...base, viewportWidth: 390 };
+
+  it('follows the mobile notice with the welcome dialog it pre-empted', () => {
+    expect(planOnboarding(phone)).toEqual({ action: 'mobile-notice', afterNotice: 'intro' });
+    expect(planOnboarding({ ...phone, search: '?intro=1', introSeen: true })).toEqual({
+      action: 'mobile-notice',
+      afterNotice: 'intro',
+    });
+    // A desktop-only tour link downgrades to the dialog once the notice is gone.
+    expect(planOnboarding({ ...phone, search: '?tour=wordnet' })).toEqual({
+      action: 'mobile-notice',
+      afterNotice: 'intro',
+    });
+  });
+
+  it('follows the notice with nothing when no dialog was due', () => {
+    expect(planOnboarding({ ...phone, introSeen: true })).toEqual({
+      action: 'mobile-notice',
+      afterNotice: null,
+    });
+    expect(planOnboarding({ ...phone, search: '?collection=emotion' })).toEqual({
+      action: 'mobile-notice',
+      afterNotice: null,
+    });
+  });
+
+  it('has no follow-up when the notice does not show', () => {
+    expect(planOnboarding(base)).toEqual({ action: 'intro', afterNotice: null });
+    expect(planOnboarding({ ...phone, search: '?tour=1' })).toEqual({
+      action: 'tour',
+      afterNotice: null,
+    });
+  });
+});
+
+describe('tourFitsViewport', () => {
+  it('runs every tour on a desktop', () => {
+    for (const tour of ['tour', 'sae-tour', 'wordnet-tour', 'probe-tour'] as const) {
+      expect(tourFitsViewport(tour, COMPACT_VIEWPORT_WIDTH)).toBe(true);
+    }
+  });
+
+  it('keeps only the WordNet tour off phones', () => {
+    expect(tourFitsViewport('wordnet-tour', COMPACT_VIEWPORT_WIDTH - 1)).toBe(false);
+    for (const tour of ['tour', 'sae-tour', 'probe-tour'] as const) {
+      expect(tourFitsViewport(tour, 390)).toBe(true);
+    }
   });
 });
 
@@ -119,8 +194,8 @@ describe('shouldShowMobileNotice', () => {
   });
 
   it('does not fire at or above the viewport floor', () => {
-    expect(shouldShowMobileNotice({ ...narrow, viewportWidth: TOUR_MIN_VIEWPORT })).toBe(false);
-    expect(shouldShowMobileNotice({ ...narrow, viewportWidth: TOUR_MIN_VIEWPORT - 1 })).toBe(true);
+    expect(shouldShowMobileNotice({ ...narrow, viewportWidth: COMPACT_VIEWPORT_WIDTH })).toBe(false);
+    expect(shouldShowMobileNotice({ ...narrow, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 })).toBe(true);
   });
 
   it('does not fire once dismissed', () => {

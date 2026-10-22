@@ -16,10 +16,22 @@ from ..clients.local_data_client import (
 )
 from ..services.job_state import JobStatus, get_job_state_service
 from ..services.topic_centroid_service import TopicCentroidService
+from ..utils.embedding_model_catalog import EmbeddingModelCatalog
+from ..utils.known_dimensions import KnownDimensions
+from ..utils.media_settings import MediaEmbeddingSettings
+from ..utils.model_max_length import ModelMaxLengthResolver
+from ..utils.provider_list import EmbeddingProviderEnum
 from .chromadb_instance import get_chromadb_client
-from .converters import probe_info_from_record
+from .converters import (
+    embedding_model_catalog_entries,
+    media_settings_info,
+    probe_info_from_record,
+    task_prefix_table_from_catalog,
+    topic_merge_tree_info,
+)
 from .duckdb_instance import get_duckdb_client
-from .interpret_instance import get_interpret_service
+from .interpret_instance import peek_interpret_service
+from .read_only import is_read_only
 from .types import (
     # Chat history types
     ChatSessionDetail,
@@ -34,6 +46,9 @@ from .types import (
     DocumentRankingMode,
     EmbeddingItem,
     EmbeddingJob,
+    EmbeddingModelCatalogEntry,
+    EmbeddingModelMaxLength,
+    EmbeddingTaskPrefixTable,
     ExtractTopicsResult,
     FilterInput,
     HFConfigInfo,
@@ -43,6 +58,7 @@ from .types import (
     HFSplitInfo,
     LocalFileInfo,
     LocalFilePreview,
+    MediaEmbeddingSettingsInfo,
     # Interpret types
     ModelStatus,
     ProbeClassProbabilities,
@@ -62,6 +78,7 @@ from .types import (
     TextSearchResponse,
     TopicInfo,
     TopicKeyword,
+    TopicMergeTreeInfo,
     TopicSimilarityResult,
 )
 
@@ -355,6 +372,7 @@ class Query:
             rows=result.rows,
             total_rows=result.total_rows,
             error=result.error,
+            column_kinds=result.column_kinds,
         )
 
     @strawberry.field
@@ -634,7 +652,7 @@ class Query:
         embedding_map = {}
         if include_embeddings:
             client = get_chromadb_client()
-            collection = client.get_collection(collection_name, load_embedding_function=False)
+            collection = client.get_collection(collection_name)
             batch_ids = [r["id"] for r in rows_data]
             emb_result = collection.get(ids=batch_ids, include=["embeddings"])
             for eid, evec in zip(emb_result["ids"], emb_result["embeddings"], strict=True):
@@ -725,9 +743,7 @@ class Query:
             List of search results with similarities
         """
         # ChromaDB: get the embedding for the item
-        collection = get_chromadb_client().get_collection(
-            collection_name, load_embedding_function=False
-        )
+        collection = get_chromadb_client().get_collection(collection_name)
         item_data = collection.get(ids=[item_id], include=["embeddings"])
 
         if item_data is None or "embeddings" not in item_data or len(item_data["embeddings"]) == 0:
@@ -787,6 +803,29 @@ class Query:
 
         service = TopicOrderService.shared(get_duckdb_client())
         return await asyncio.to_thread(service.value_order, collection_name, field)
+
+    @strawberry.field
+    async def topic_merge_tree(
+        self,
+        collection_name: str,
+        linkage: str = "average",
+        include_noise: bool = False,
+        info=None,
+    ) -> TopicMergeTreeInfo | None:
+        """Merge tree over the active extraction's base topics, or null.
+
+        ``linkage``: "average" or "ward" (centred-semantic centroids) or
+        "density" (HDBSCAN's tree, offered in ``availableLinkages`` when the
+        extraction has one). ``includeNoise`` adds which merge absorbs each
+        noise item (density). Null without topics, with fewer than 3 base
+        topics, or with no centroids and too many items to compute them.
+        """
+        # Deferred: merge trees import scipy, which must stay out of the schema's import graph.
+        from ..services.topic_merge_tree_service import TopicMergeTreeService
+
+        service = TopicMergeTreeService.shared(get_duckdb_client())
+        view = await asyncio.to_thread(service.view, collection_name, linkage)
+        return topic_merge_tree_info(view, include_noise) if view is not None else None
 
     @strawberry.field
     def text_search(
@@ -976,14 +1015,62 @@ class Query:
             for g in groups
         ]
 
+    @strawberry.field
+    async def embedding_model_max_length(
+        self, provider: EmbeddingProviderEnum, model_name: str
+    ) -> EmbeddingModelMaxLength:
+        """A local model's input-length limit in tokens (the embed form's default cap).
+
+        From the catalog, else the model's own config files (read, not loaded;
+        a first lookup may download a few KB from the Hub, hence the thread).
+        The read-only demo never downloads: visitors could name any repo.
+        """
+        resolver = (
+            ModelMaxLengthResolver.cache_only()
+            if is_read_only()
+            else ModelMaxLengthResolver.shared()
+        )
+        limit = await asyncio.to_thread(resolver.resolve, provider.value, model_name.strip())
+        return EmbeddingModelMaxLength(max_length=limit.max_length, source=limit.source)
+
+    @strawberry.field
+    def embedding_task_prefixes(self) -> EmbeddingTaskPrefixTable:
+        """Task prefixes of the models that read their task from one
+        (EmbeddingGemma, Gemini Embedding 2; utils/embedding_tasks.py)."""
+        return task_prefix_table_from_catalog(EmbeddingModelCatalog.shipped())
+
+    @strawberry.field
+    def embedding_model_catalog(self) -> list[EmbeddingModelCatalogEntry]:
+        """Model-name suggestions for the embed forms: the catalog's models
+        (config/embedding_models.json) with known dimensions, then the models
+        existing collections use. The read-only demo shows the catalog only,
+        so local checkpoint paths never reach visitors."""
+        in_use = [] if is_read_only() else get_duckdb_client().embedding_models_in_use()
+        return embedding_model_catalog_entries(
+            EmbeddingModelCatalog.shipped(), KnownDimensions(), in_use
+        )
+
+    @strawberry.field
+    def media_embedding_settings(self) -> MediaEmbeddingSettingsInfo:
+        """Defaults and limits of the per-job media options (config/media_embedding.json)
+        and the multimodal default model."""
+        default = EmbeddingModelCatalog.shipped().default_model_for("multimodal").model
+        return media_settings_info(MediaEmbeddingSettings.shipped(), default)
+
     # ------------------------------------------------------------------
     # Interpret / SAE inference
     # ------------------------------------------------------------------
 
     @strawberry.field
     def model_status(self, info=None) -> ModelStatus:
-        """Check if the interpretability model is loaded."""
-        service = get_interpret_service()
+        """Check if the interpretability model is loaded.
+
+        Only reads an existing service: creating one imports torch and the
+        interpret toolkit, which a status poll must not do.
+        """
+        service = peek_interpret_service()
+        if service is None:
+            return ModelStatus(loaded=False)
         status = service.get_status()
         return ModelStatus(
             loaded=status.loaded,

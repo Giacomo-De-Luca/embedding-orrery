@@ -5,7 +5,7 @@ Interactive / notebook-facing tools for exploring SAE features.
 | File | Class / entry point | Purpose |
 |---|---|---|
 | `explore_neuronpedia.py` | `NeuronpediaExplorer`, `FeatureMatch`, `FeatureInfo`, `ActivationExample` | Reader over the raw Neuronpedia JSONL files in `resources/sae_labels/...`. Label search across layers, density filtering, top-activation-document retrieval. Features JSONL is cached in memory per layer; the ~1.9 GB activations JSONL is streamed. |
-| `prompt_explorer.py` | `PromptExplorer`, `PromptExplorerConfig`, `PromptResult`, `LayerResult`, `TokenFeatures`, `ActiveFeature`, `FeatureDetail` | Runs a prompt through Gemma with SAE hooks and returns per-token top-k features with Neuronpedia labels. Rich `_repr_html_` rendering for Jupyter. Wraps `HookManager` + `FeatureLabelStore` + `NeuronpediaExplorer`. |
+| `prompt_explorer.py` | `PromptExplorer`, `PromptExplorerConfig`, `SaeSpec`, `PromptResult`, `LayerResult`, `TokenFeatures`, `ActiveFeature`, `FeatureDetail` | Runs a prompt through Gemma with SAE hooks and returns per-token top-k features with Neuronpedia labels. Rich `_repr_html_` rendering for Jupyter. Wraps `HookManager` + `FeatureLabelStore` + `NeuronpediaExplorer`. Each hooked SAE is a `SaeSpec(layer, width, hook_type)` (a plain `(layer, width)` pair means the residual stream), and `PromptResult.layers` is keyed by it, so SAEs at the same layer with different widths or hook sites stay apart. `inspect_feature` reads residual-stream SAEs only (the Neuronpedia files it uses cover no other site). |
 | `explore_neuronpedia_book.ipynb` | — | Exploratory notebook. |
 
 Run the explorers standalone with:

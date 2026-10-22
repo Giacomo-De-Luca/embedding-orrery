@@ -14,6 +14,7 @@ import { useHighlightedIndices } from '../lib/hooks/useHighlightedIndices';
 import { useAppSearch } from '../lib/hooks/useAppSearch';
 import { useTopicSearch } from '../lib/hooks/useTopicSearch';
 import { useProbes } from '../lib/hooks/useProbes';
+import { useTopicMergeTree } from '../lib/hooks/useTopicMergeTree';
 import { useTextSearch, TEXT_SEARCH_GLOW_CAP } from '../lib/hooks/useTextSearch';
 import { usePromptHighlight, buildPromptHighlightResults } from '../lib/hooks/usePromptHighlight';
 import { useDocumentFeatureSearch } from '../lib/hooks/useDocumentFeatureSearch';
@@ -32,6 +33,7 @@ import {
   seedInitialColorState,
   resolveInitialCollection,
   presetStoreOps,
+  viewOverrideStoreOps,
   COLLECTION_VIEW_OVERRIDES,
   TOUR_PRESET_ID,
   WORDNET_PRESET_ID,
@@ -39,19 +41,21 @@ import {
   PROBE_PRESET_ID,
   PROBE_COLLECTION,
   type PresetDefinition,
-  type PresetFlagName,
+  type StoreOp,
 } from '../lib/utils/tourPresets';
 import {
-  getOnboardingAction,
+  planOnboarding,
+  isCompactWidth,
   readIntroSeen,
   readMobileNoticeSeen,
+  NO_ONBOARDING,
   TOUR_STORAGE_KEY,
   SAE_TOUR_STORAGE_KEY,
   WORDNET_TOUR_STORAGE_KEY,
   PROBE_TOUR_STORAGE_KEY,
-  TOUR_MIN_VIEWPORT,
-  type OnboardingAction,
+  type OnboardingPlan,
 } from '../lib/utils/demoOnboarding';
+import { supportedHazeRenderer } from '../lib/utils/densityHaze/support';
 import { IS_DEMO } from '../lib/utils/demoMode';
 import { DemoIntro } from './components/DemoIntro';
 import { MobileNotice } from './components/MobileNotice';
@@ -72,13 +76,16 @@ const TourController = dynamic(
 
 const EMPTY_METADATA: Record<string, unknown>[] = [];
 
-/** Execute a preset's store mutations (method/mode/flags) imperatively. */
-function runPresetStoreOps(preset: PresetDefinition) {
+/** Execute preset / collection-override store mutations imperatively. */
+function runStoreOps(ops: StoreOp[]) {
   const state = useVisualizationStore.getState();
-  for (const op of presetStoreOps(preset)) {
+  for (const op of ops) {
     if (op.kind === 'method') state.setMethod(op.value);
     else if (op.kind === 'mode') state.setMode(op.value);
-    else state.setFlag(op.flag, op.value);
+    else if (op.kind === 'flag') state.setFlag(op.flag, op.value);
+    // Density haze needs float render targets; without them store sprites
+    // rather than a choice the Controls panel shows as disabled.
+    else state.setHazeRenderer(supportedHazeRenderer(op.value));
   }
 }
 
@@ -141,14 +148,15 @@ function HomeContent() {
   const initialColorByRef = useRef(initialColorSeed.colorBy);
   const initialColorScaleRef = useRef(initialColorSeed.scale);
   const initialPaletteRef = useRef(initialColorSeed.palette);
-  // One-shot onboarding decision (mobile notice / `?tour=1` / `?intro=1` /
+  // One-shot onboarding decision (`?tour=…` / mobile notice / `?intro=1` /
   // demo first visit), latched before the URL-sync effect strips the one-shot
   // params. Every surface below derives its initial open state from this single
-  // value, so exactly one of them can auto-open.
-  const [onboarding] = useState<OnboardingAction>(() =>
+  // value, so exactly one of them can auto-open (the welcome dialog may follow
+  // the mobile notice once it is dismissed: `afterNotice`).
+  const [onboardingPlan] = useState<OnboardingPlan>(() =>
     typeof window === 'undefined'
-      ? null
-      : getOnboardingAction({
+      ? NO_ONBOARDING
+      : planOnboarding({
           isDemo: IS_DEMO,
           // useSearchParams, NOT window.location.search: on a client-side
           // router.push from /sae (the mission menu's tour buttons) the
@@ -161,31 +169,24 @@ function HomeContent() {
           mobileNoticeSeen: readMobileNoticeSeen(),
         }),
   );
+  const onboarding = onboardingPlan.action;
   const [introOpen, setIntroOpen] = useState(onboarding === 'intro');
   const [mobileNoticeOpen, setMobileNoticeOpen] = useState(onboarding === 'mobile-notice');
+  // Tour links run at any viewport they fit; the decision above already
+  // downgraded a desktop-only tour (WordNet) on a phone.
   const [tourRequested, setTourRequested] = useState(onboarding === 'tour');
   // "Inspect SAE" tour, segment 1: runs HERE on the label map, then hands
-  // off to /sae (`saeInspectPath`) when it finishes. Below the viewport
-  // floor the trigger is dropped, same as the main tour.
-  const [saeTourRequested, setSaeTourRequested] = useState(
-    () =>
-      onboarding === 'sae-tour' &&
-      typeof window !== 'undefined' &&
-      window.innerWidth >= TOUR_MIN_VIEWPORT,
-  );
-  // WordNet-galaxy and Glasgow-probing tours: single-page, same viewport gate.
-  const [wordnetTourRequested, setWordnetTourRequested] = useState(
-    () =>
-      onboarding === 'wordnet-tour' &&
-      typeof window !== 'undefined' &&
-      window.innerWidth >= TOUR_MIN_VIEWPORT,
-  );
-  const [probeTourRequested, setProbeTourRequested] = useState(
-    () =>
-      onboarding === 'probe-tour' &&
-      typeof window !== 'undefined' &&
-      window.innerWidth >= TOUR_MIN_VIEWPORT,
-  );
+  // off to /sae (`saeInspectPath`) when it finishes.
+  const [saeTourRequested, setSaeTourRequested] = useState(onboarding === 'sae-tour');
+  // WordNet-galaxy and Glasgow-probing tours: single-page.
+  const [wordnetTourRequested, setWordnetTourRequested] = useState(onboarding === 'wordnet-tour');
+  const [probeTourRequested, setProbeTourRequested] = useState(onboarding === 'probe-tour');
+  // A phone's first visit opens the desktop notice; the welcome dialog it
+  // pre-empted (and its tours) follows once the notice is dismissed.
+  const handleMobileNoticeOpenChange = useCallback((open: boolean) => {
+    setMobileNoticeOpen(open);
+    if (!open && onboardingPlan.afterNotice === 'intro') setIntroOpen(true);
+  }, [onboardingPlan]);
   // A preset applied mid-session (welcome-dialog buttons); its colour block is
   // applied by a dedicated effect once the collection's data has loaded.
   const [pendingPreset, setPendingPreset] = useState<PresetDefinition | null>(null);
@@ -195,7 +196,7 @@ function HomeContent() {
   useEffect(() => {
     const preset = initialPresetRef.current;
     if (!preset) return;
-    const apply = () => runPresetStoreOps(preset);
+    const apply = () => runStoreOps(presetStoreOps(preset));
     if (useVisualizationStore.persist.hasHydrated()) {
       apply();
       return;
@@ -233,7 +234,7 @@ function HomeContent() {
   const distanceMetric = store((s) => s.distanceMetric);
   const temporalRange = store((s) => s.temporalRange);
 
-  const { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection } = useEmbeddingData(
+  const { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection, reload } = useEmbeddingData(
     selectedCollection,
     method,
     mode,
@@ -293,7 +294,7 @@ function HomeContent() {
   // Topics for the selected collection: the canonical `collectionTopics`
   // query, with the manifest's legacy `topic_summary` blob as fallback (that
   // blob is empty on post-DuckDB-migration stores — see useCollectionTopics).
-  const { topics: fetchedTopics } = useCollectionTopics(selectedCollection);
+  const { topics: fetchedTopics, refetch: refetchTopics } = useCollectionTopics(selectedCollection);
   const selectedCollectionTopics = useMemo(() => {
     if (fetchedTopics) return fetchedTopics;
     if (!collections || !selectedCollection) return undefined;
@@ -314,7 +315,7 @@ function HomeContent() {
   // shots are tuned with panels closed, and each step manages its own.
   useEffect(() => {
     if (onboarding !== null && onboarding !== 'intro') return;
-    if (window.innerWidth < TOUR_MIN_VIEWPORT) return;
+    if (isCompactWidth(window.innerWidth)) return;
     setActivePanel('controls');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -338,11 +339,24 @@ function HomeContent() {
     selectedCollectionTopics,
     selectedCollection,
     queryPromptName,
-    data?.metadata?.embedding_prompt,
   );
 
+  // Topic slider (Controls panel): previews a cut of the topics' merge tree on
+  // the probe-augmented data; Apply saves it, renumbering every topic, so the
+  // item data, topics and topic search all reload.
+  const { clearAll: clearTopicSelection, reset: resetTopicSearch } = topicSearch;
+  const handleTopicsApplied = useCallback(async () => {
+    await Promise.all([reload(), refetchTopics()]);
+    resetTopicSearch();
+  }, [reload, refetchTopics, resetTopicSearch]);
+  const topicTree = useTopicMergeTree(selectedCollection, probes.augmentedData ?? data, {
+    enabled: colorByField === 'topic_label',
+    onPreviewStart: clearTopicSelection,
+    onApplied: handleTopicsApplied,
+  });
+
   const { points2d, points3d } = useVisualizationPoints(
-    probes.augmentedData ?? data,
+    topicTree.previewData ?? probes.augmentedData ?? data,
     { method, mode, searchQuery },
   );
 
@@ -370,7 +384,6 @@ function HomeContent() {
     colorByField ?? null,
     distanceMetric ?? 'COSINE',
     queryPromptName,
-    data?.metadata?.embedding_prompt,
     topicSearch.topicFilters,
     temporalRange,
     resolvePoint,
@@ -507,16 +520,12 @@ function HomeContent() {
     defaultsAppliedFor.current = selectedCollection;
 
     // Per-collection view overrides (e.g. Glasgow: nebula + cluster labels
-    // off; EMNLP: both on + a closer opening frame) — the flags are persisted
-    // global prefs, so a previous collection's view would otherwise leak in
-    // on ANY load path, and first-visit store defaults leave EMNLP bare.
+    // off; EMNLP: both on with density haze + a closer opening frame) — the
+    // flags and haze renderer are persisted global prefs, so a previous
+    // collection's view would otherwise leak in on ANY load path, and
+    // first-visit store defaults leave EMNLP bare.
     const viewOverride = COLLECTION_VIEW_OVERRIDES[selectedCollection];
-    if (viewOverride?.flags) {
-      const state = useVisualizationStore.getState();
-      for (const [flag, value] of Object.entries(viewOverride.flags)) {
-        if (value !== undefined) state.setFlag(flag as PresetFlagName, value);
-      }
-    }
+    if (viewOverride) runStoreOps(viewOverrideStoreOps(viewOverride));
     if (viewOverride?.camera) {
       // Through the reset path: a bump landing before the plot is ready is
       // latched and replayed once it mounts.
@@ -569,7 +578,7 @@ function HomeContent() {
     if (!preset || !collections?.[preset.collection]) return;
     setIntroOpen(false);
     setSelectedCollection(preset.collection);
-    runPresetStoreOps(preset);
+    runStoreOps(presetStoreOps(preset));
     setPendingPreset(preset);
   }, [collections]);
 
@@ -781,6 +790,7 @@ function HomeContent() {
     setShowClusterLabels: (on) =>
       useVisualizationStore.getState().setFlag('showClusterLabels', on),
     setActivePanel,
+    isCompactViewport: () => isCompactWidth(window.innerWidth),
     setShowLabels: (value: boolean) =>
       useVisualizationStore.getState().setFlag('showLabels', value),
     getLoadedCollection: () => loadedCollectionRef.current ?? null,
@@ -880,6 +890,7 @@ function HomeContent() {
                   colorFieldOptions={mergedColorFieldOptions}
                   collectionName={selectedCollection}
                   probes={probes}
+                  topicTree={topicTree}
                   textSearchResults={textSearchResults}
                   onTextResultClick={wrappedHandlePointClick}
                   activePanel={activePanel}
@@ -926,7 +937,7 @@ function HomeContent() {
           onStartProbeTour={startProbeTour}
           availableCollections={availableCollections}
         />
-        <MobileNotice open={mobileNoticeOpen} onOpenChange={setMobileNoticeOpen} />
+        <MobileNotice open={mobileNoticeOpen} onOpenChange={handleMobileNoticeOpenChange} />
         {tourRequested && (
           <TourController
             steps={TOUR_STEPS}

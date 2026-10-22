@@ -21,6 +21,9 @@ import { useColorScaleReady } from '../../lib/hooks/useColorScaleReady';
 import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
+import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
+import { CartesianPinchZoom } from '../../lib/utils/plotPinchZoom';
+import { CoalescedRedraw } from '../../lib/utils/coalescedRedraw';
 import { formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
@@ -85,6 +88,11 @@ interface ScatterPlot2DProps {
   onClusterLabelClick?: (topicId: number) => void;
   /** Map from topic label string → topic ID for click handling */
   topicLabelToIdMap?: Map<string, number> | null;
+  /**
+   * Cluster-label clicks without a topic id (e.g. a topic-tree preview's
+   * groups): toggle the category; returns whether the label was one.
+   */
+  onClusterCategoryClick?: (category: string, shiftKey: boolean) => boolean;
   /** Custom numeric range overrides for cmin/cmax */
   customNumericRange?: CustomNumericRange | null;
   /** Callback when a point is right-clicked (contextmenu) */
@@ -119,6 +127,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   showClusterLabels = false,
   onClusterLabelClick,
   topicLabelToIdMap,
+  onClusterCategoryClick,
   customNumericRange,
   onPointContextMenu,
   showAxes = false,
@@ -161,6 +170,10 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     return visibleX >= dataX * MAX_RANGE_MULTIPLIER || visibleY >= dataY * MAX_RANGE_MULTIPLIER;
   }, [bounds]);
   useZoomLimit(containerRef, isAtZoomOutLimit2D);
+
+  // Two-finger pinch replays as wheel zoom, so the zoom-out limit above covers it too
+  const [pinchZoom] = useState(() => new CartesianPinchZoom(graphDivRef));
+  usePinchZoom(containerRef, pinchZoom);
 
   // --- Cluster labels: canvas overlay refs and state ---
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -258,7 +271,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       active = Array.from(counts, ([name, count]) => ({
         name,
         count,
-        color: (nestedColorMap?.subtopicColors[name] ?? colorMap[name]) || '#7f7f7f',
+        color: (nestedColorMap?.topicColors[name] ?? colorMap[name]) || '#7f7f7f',
       }));
     }
     return assignCategoryChannels(active, isCategoricalField, isDark);
@@ -452,14 +465,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
   // --- Handle Plotly relayout (zoom/pan) to re-render the overlays.
   // `relayouting` fires continuously during drag/scroll so the density map and
-  // labels track the gesture live; `relayout` fires once at the end.
+  // labels track the gesture live; `relayout` fires once at the end. A pinch
+  // frame emits several, so both overlays coalesce them into one redraw.
+  const renderClusterLabelsRef = useRef(renderClusterLabels);
+  renderClusterLabelsRef.current = renderClusterLabels;
+  const [labelRedraw] = useState(() => new CoalescedRedraw(() => renderClusterLabelsRef.current()));
   const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
     scheduleDensityRender();
-    if (labelsActive) {
-      // Use rAF to let Plotly finish its layout update first
-      requestAnimationFrame(() => renderClusterLabels());
-    }
-  }, [labelsActive, renderClusterLabels, scheduleDensityRender]);
+    if (labelsActive) labelRedraw.request();
+  }, [labelsActive, labelRedraw, scheduleDensityRender]);
 
   // Re-render labels when cluster data, size, or theme changes
   useEffect(() => {
@@ -476,7 +490,8 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
   // --- Click handler for cluster labels (intercept before Plotly) ---
   const handleContainerClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!onClusterLabelClick || !topicLabelToIdMap || drawnLabelBoxesRef.current.length === 0) return;
+    const topicClicks = !!onClusterLabelClick && !!topicLabelToIdMap;
+    if ((!topicClicks && !onClusterCategoryClick) || drawnLabelBoxesRef.current.length === 0) return;
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -486,15 +501,19 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     for (const box of drawnLabelBoxesRef.current) {
       if (box.label === null) continue;
       if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
-        const topicId = topicLabelToIdMap.get(box.label);
-        if (topicId !== undefined) {
+        const topicId = topicLabelToIdMap?.get(box.label);
+        if (onClusterLabelClick && topicId !== undefined) {
           e.stopPropagation();
           onClusterLabelClick(topicId);
           return;
         }
+        if (onClusterCategoryClick?.(box.label, e.shiftKey)) {
+          e.stopPropagation();
+          return;
+        }
       }
     }
-  }, [onClusterLabelClick, topicLabelToIdMap]);
+  }, [onClusterLabelClick, topicLabelToIdMap, onClusterCategoryClick]);
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
@@ -658,17 +677,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         } else if (categoryField != null && categoryValues.length > 0) {
           // MODE: CATEGORICAL - preserve category colors with dimming
           if (nestedColorMap) {
-            // NESTED: group by subtopic_label, color from nestedColorMap
+            // NESTED: group by (topic, subtopic), color from nestedColorMap
             const pointsBySub: Record<string, Point2D[]> = {};
             filteredUnhighlightedPoints.forEach(point => {
-              const sub = CategoryKey.nested(point.metadata).subtopic;
-              if (!pointsBySub[sub]) pointsBySub[sub] = [];
-              pointsBySub[sub].push(point);
+              (pointsBySub[CategoryKey.nestedKey(point.metadata)] ??= []).push(point);
             });
 
-            Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
+            Object.entries(pointsBySub).forEach(([key, subPoints]) => {
               // Check if subtopic or its parent topic is muted
-              const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
+              const { topic: parentTopic, subtopic: sub } = CategoryKey.splitSubtopicKey(key);
               const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
               const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
               if (hideFilteredPoints && isMuted) return;
@@ -684,7 +701,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                     name: sub,
                     marker: {
                       size: markerStyle.size,
-                      color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                      color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[key] || '#7f7f7f'),
                       opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                     },
                     text: activePoints.map(formatHoverText),
@@ -720,7 +737,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   name: sub,
                   marker: {
                     size: markerStyle.size,
-                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[key] || '#7f7f7f'),
                     opacity: (isMuted ? mutedOp : dimOpacity) * fade,
                   },
                   text: subPoints.map(formatHoverText),
@@ -1125,16 +1142,14 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         }
       } else if (categoryField != null && categoryValues.length > 0) {
         if (nestedColorMap) {
-          // NESTED: group by subtopic_label
+          // NESTED: group by (topic, subtopic)
           const pointsBySub: Record<string, Point2D[]> = {};
           displayPoints.forEach(point => {
-            const sub = CategoryKey.nested(point.metadata).subtopic;
-            if (!pointsBySub[sub]) pointsBySub[sub] = [];
-            pointsBySub[sub].push(point);
+            (pointsBySub[CategoryKey.nestedKey(point.metadata)] ??= []).push(point);
           });
 
-          Object.entries(pointsBySub).forEach(([sub, subPoints]) => {
-            const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
+          Object.entries(pointsBySub).forEach(([key, subPoints]) => {
+            const { topic: parentTopic, subtopic: sub } = CategoryKey.splitSubtopicKey(key);
             const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
             const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
             if (hideFilteredPoints && isMuted) return;
@@ -1150,7 +1165,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                   name: sub,
                   marker: {
                     size: markerStyle.size,
-                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                    color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[key] || '#7f7f7f'),
                     opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                   },
                   text: activePoints.map(formatHoverText),
@@ -1185,7 +1200,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
                 name: sub,
                 marker: {
                   size: markerStyle.size,
-                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                  color: isMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[key] || '#7f7f7f'),
                   opacity: (isMuted ? mutedOp : markerStyle.opacity) * fade,
                 },
                 text: subPoints.map(formatHoverText),
@@ -1456,7 +1471,8 @@ return (
   <div
     ref={containerRef}
     className={className ?? 'h-full w-full'}
-    style={{ position: 'relative' }}
+    // touch-action: the plot handles every gesture (pan, pinch), never the page
+    style={{ position: 'relative', touchAction: 'none' }}
     onClickCapture={hasClusterLabels ? handleContainerClick : undefined}
     onContextMenu={(e) => {
       if (onPointContextMenu && hoveredPointRef.current) {

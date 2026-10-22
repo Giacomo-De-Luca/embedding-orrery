@@ -18,6 +18,8 @@ original implementation grouped semantic-search hits by `metadata.topic_id`
 `topic_id` in item JSON (never present, so topic-scoped search returned
 nothing). Semantic topic *reduction* had the same flaw: it looked members up
 with ChromaDB `where={"topic_id": …}`, got nothing, and averaged zero vectors.
+Reduction now cuts merge trees built from these centroids
+([TOPIC_MERGE_TREES.md](TOPIC_MERGE_TREES.md)).
 
 Topic search now compares the query with each topic's **embedding centroid**
 (the mean of its members' vectors), computed once per extraction and stored in
@@ -72,11 +74,16 @@ single code path, built on the numpy-only accumulator in
   slices (bounding per-step copies), and replaces the stored rows. Called after `extract_topics` (reusing the raw vectors already
   loaded for the default `cluster_umap`/`embedding` clustering) and after
   `reduce_existing_topics`. A failure is logged and never fails the job.
-- `centroids_for_assignments(collection, item_topics, order)` returns an
-  in-memory centroid matrix — what `TopicReducer` receives for semantic
-  reduction (`topic_embeddings`, rows in `sorted(topics_data)` order). If it
-  cannot be computed, reduction falls back to c-TF-IDF with a logged warning
-  and a progress message.
+- `tables_for_assignments(collection, [item_topics, …], preloaded)` returns
+  one in-memory `CentroidTable` per assignment map from a single pass over the
+  vectors (`refresh` uses it too). Topic reduction builds its merge trees from
+  these tables, or from the stored ones, in the centred space below
+  (`TopicMergeTreeService`, see [TOPIC_MERGE_TREES.md](TOPIC_MERGE_TREES.md)).
+- `centroids_for_assignments(collection, item_topics, order)` returns the raw
+  centroid matrix the legacy semantic reduction (`legacy_semantic`) receives;
+  if it cannot be computed, that reduction falls back to c-TF-IDF with a
+  logged warning and a progress message.
+- `stored_table(extraction_id, level)` reads one stored level by extraction id.
 
 **Backfill** for extractions created before centroids existed (backend stopped):
 

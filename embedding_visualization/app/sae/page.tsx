@@ -59,7 +59,7 @@ import {
 } from '@/lib/utils/saeTourSteps';
 import {
   SAE_TOUR_STORAGE_KEY,
-  TOUR_MIN_VIEWPORT,
+  tourFitsViewport,
   readMobileNoticeSeen,
   shouldShowMobileNotice,
 } from '@/lib/utils/demoOnboarding';
@@ -139,21 +139,22 @@ function FeaturesPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
 
-  // "Inspect SAE" tour — latched from ?tour=sae at mount; below the viewport
-  // floor the trigger is simply dropped (the mission menu is reachable from
-  // the header's `?` button, which needs no viewport floor).
+  // "Inspect SAE" tour — latched from ?tour=sae at mount, at any viewport it
+  // fits (phones included: only the WordNet tour is desktop-only).
   const [tourRequested, setTourRequested] = useState(
     () =>
       urlParams.tour === 'sae' &&
       typeof window !== 'undefined' &&
-      window.innerWidth >= TOUR_MIN_VIEWPORT,
+      tourFitsViewport('sae-tour', window.innerWidth),
   );
 
   // Same one-time desktop notice as Explore, sharing its storage key so a
   // visitor who dismissed it there never sees it again here. This page has no
   // `getOnboardingAction` call, so it applies the shared predicate directly.
+  // A running tour wins, as on Explore: the notice waits for a later visit.
   const [mobileNoticeOpen, setMobileNoticeOpen] = useState(
     () =>
+      !tourRequested &&
       typeof window !== 'undefined' &&
       shouldShowMobileNotice({
         isDemo: IS_DEMO,
@@ -528,7 +529,7 @@ function FeaturesPageContent() {
         }
         const saes = pairs.map((p) => {
           const parsed = parseSaeId(p.saeId);
-          return { layer: parsed.layerIndex, width: parsed.width };
+          return { layer: parsed.layerIndex, width: parsed.width, hookType: parsed.hookType };
         });
         const { data } = await apolloClient.mutate<{ runPromptActivations: PromptActivationsResult }>({
           mutation: RUN_PROMPT_ACTIVATIONS,

@@ -1,25 +1,22 @@
-"""Semantic topic reduction falls back to c-TF-IDF when centroids are unavailable.
+"""Legacy semantic topic reduction falls back to c-TF-IDF when centroids are unavailable.
 
-Covers ``topic_extraction_service._semantic_topic_centroids``: on success it
-returns the centroid matrix; on failure it reports the fallback on the job's
-progress stream and returns None, so the caller reduces with c-TF-IDF instead
-of failing (or, as before the fix, silently merging zero vectors).
+Covers ``TopicReductionService``'s ``legacy_semantic`` strategy: on success it
+reduces with the raw centroid matrix (rows in sorted topic order, noise
+first); on failure the plan reports the fallback, so the job's progress
+stream can say so, and reduces with c-TF-IDF instead of failing (or, as
+before the original fix, silently merging zero vectors).
 """
 
 import numpy as np
 
-from backend.services import topic_extraction_service
+from backend.services.topic_reduction_service import BaseTopics, TopicReductionService
+from backend.services.topic_reduction_types import ReductionRequest
 
 
-class _Service:
+class _Centroids:
     def __init__(self, result=None, error=None):
         self.result, self.error = result, error
         self.calls = []
-
-    def __call__(self, duckdb, vector_batches=None):
-        # vector_batches: the cancel-aware loader the reduction injects
-        self.vector_batches = vector_batches
-        return self
 
     def centroids_for_assignments(self, collection_name, item_topics, order, preloaded=None):
         self.calls.append({"order": order, "preloaded": preloaded})
@@ -28,45 +25,44 @@ class _Service:
         return self.result
 
 
-def _call(monkeypatch, service, **overrides):
-    events = []
-    monkeypatch.setattr(topic_extraction_service, "TopicCentroidService", service)
-    monkeypatch.setattr(topic_extraction_service, "_get_duckdb", lambda: None)
-    monkeypatch.setattr(
-        topic_extraction_service, "emit_progress", lambda **kwargs: events.append(kwargs)
+class _Trees:
+    def __init__(self, centroids):
+        self.centroids = centroids
+
+
+def _base() -> BaseTopics:
+    topics = [-1, -1, 0, 0, 0, 1, 1, 1, 2, 2]
+    documents = [f"word{t} shared text {i}" for i, t in enumerate(topics)]
+    keywords = {t: [(f"word{t}", 1.0)] for t in (-1, 0, 1, 2)}
+    ids = [f"i{i}" for i in range(len(topics))]
+    return BaseTopics.from_clustering(
+        "col", ids, documents, topics, keywords, config={}, preloaded=(ids, np.ones((10, 3)))
     )
-    kwargs = {
-        "job_id": "col",
-        "total_items": 10,
-        "current_batch": 2,
-        "total_batches": 5,
-        **overrides,
-    }
-    result = topic_extraction_service._semantic_topic_centroids(
-        "col", {"a": 0, "b": 1}, {1: [], -1: [], 0: []}, **kwargs
-    )
-    return result, events
 
 
-def test_returns_centroids_in_sorted_topic_order(monkeypatch):
-    matrix = np.eye(3)
-    service = _Service(result=matrix)
-
-    result, events = _call(monkeypatch, service, preloaded=(["a", "b"], np.ones((2, 3))))
-
-    assert result is matrix
-    assert service.calls[0]["order"] == [-1, 0, 1]
-    assert service.calls[0]["preloaded"] is not None
-    assert events == []
+def _plan(centroids):
+    request = ReductionRequest(strategy="legacy_semantic", n_topics=2)
+    return TopicReductionService(duckdb=None, trees=_Trees(centroids)).plan(_base(), request)
 
 
-def test_failure_reports_the_fallback_and_returns_none(monkeypatch):
-    service = _Service(error=ValueError("Could not open ChromaDB collection 'col'"))
+def test_reduces_with_centroids_in_sorted_topic_order():
+    # Topics 0 and 1 point the same way; 2 elsewhere. Noise row first.
+    matrix = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.99, 0.01, 0.0], [0.0, 1.0, 0.0]])
+    centroids = _Centroids(result=matrix)
 
-    result, events = _call(monkeypatch, service)
+    plan = _plan(centroids)
 
-    assert result is None
-    assert len(events) == 1
-    assert events[0]["job_id"] == "col"
-    assert events[0]["current_batch"] == 2
-    assert "c-TF-IDF" in events[0]["message"]
+    assert centroids.calls[0]["order"] == [-1, 0, 1, 2]
+    assert centroids.calls[0]["preloaded"] is not None
+    assert plan.fallback is None
+    assert plan.result.topic_mappings[0] == plan.result.topic_mappings[1]
+    assert plan.result.num_topics_after == 2
+
+
+def test_failure_reports_the_fallback_and_reduces_with_ctfidf():
+    centroids = _Centroids(error=ValueError("Could not open ChromaDB collection 'col'"))
+
+    plan = _plan(centroids)
+
+    assert "c-TF-IDF" in plan.fallback
+    assert plan.result.num_topics_after == 2

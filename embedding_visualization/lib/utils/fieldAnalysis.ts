@@ -4,6 +4,7 @@
  */
 
 import type { CategoryFieldOption, DisplayConfig } from '../types/types';
+import { CategoryKey } from './categoryKey';
 
 /**
  * Convert field name to human-readable display name (title case).
@@ -305,11 +306,78 @@ export function analyzeColorFields(
     });
   }
 
-  // Sort: categorical fields first (by unique count), then sequential
-  return results.sort((a, b) => {
-    if (a.recommendedScale !== b.recommendedScale) {
-      return a.recommendedScale === 'categorical' ? -1 : 1;
-    }
-    return a.uniqueCount - b.uniqueCount;
-  });
+  return results.sort(compareColorFieldOptions);
+}
+
+/** Option order of the colour-field select: categorical fields first (by unique count), then sequential. */
+function compareColorFieldOptions(a: ColorFieldOption, b: ColorFieldOption): number {
+  if (a.recommendedScale !== b.recommendedScale) {
+    return a.recommendedScale === 'categorical' ? -1 : 1;
+  }
+  return a.uniqueCount - b.uniqueCount;
+}
+
+/** The persisted `field_analysis` cache in a collection's metadata. */
+export interface FieldAnalysisCache {
+  display_config?: {
+    label_field: string | null;
+    category_field: string | null;
+    category_values: string[];
+    category_name: string;
+  };
+  color_field_options?: ColorFieldOption[];
+  default_tooltip_fields?: string[];
+}
+
+/**
+ * The topic fields' colour options. Topic fields are merged into item
+ * metadata from the active extraction at query time, so the persisted
+ * `field_analysis` cache goes stale after an extraction or reduction (a
+ * reduction adds the subtopic fields and changes every count).
+ */
+export class TopicFieldOptions {
+  static readonly FIELDS: ReadonlySet<string> = new Set(CategoryKey.TOPIC_FIELDS);
+
+  /**
+   * The field_analysis cache to keep after the collection's topics changed:
+   * the cached analysis (or, when a topic sync dropped it, the one in memory)
+   * with its topic-field options recomputed. Null when there is neither, so
+   * the caller runs a full analysis.
+   */
+  static refreshCache(
+    cached: FieldAnalysisCache | null | undefined,
+    current: { displayConfig: DisplayConfig; options: readonly ColorFieldOption[]; tooltipFields: readonly string[] },
+    availableFields: readonly string[],
+    itemMetadata: Record<string, unknown>[],
+  ): FieldAnalysisCache | null {
+    const base: FieldAnalysisCache | null = cached?.display_config && cached.color_field_options
+      ? cached
+      : current.options.length > 0
+        ? {
+            display_config: {
+              label_field: current.displayConfig.labelField,
+              category_field: current.displayConfig.categoryField,
+              category_values: current.displayConfig.categoryValues,
+              category_name: current.displayConfig.categoryName,
+            },
+            color_field_options: [...current.options],
+            default_tooltip_fields: [...current.tooltipFields],
+          }
+        : null;
+    if (!base) return null;
+    return {
+      ...base,
+      color_field_options: TopicFieldOptions.refresh(base.color_field_options ?? [], availableFields, itemMetadata),
+    };
+  }
+
+  /** `options` with the topic-field entries recomputed from `itemMetadata` (added, updated or dropped). */
+  static refresh(
+    options: readonly ColorFieldOption[],
+    availableFields: readonly string[],
+    itemMetadata: Record<string, unknown>[],
+  ): ColorFieldOption[] {
+    const fresh = analyzeColorFields(availableFields.filter((f) => TopicFieldOptions.FIELDS.has(f)), itemMetadata);
+    return [...options.filter((o) => !TopicFieldOptions.FIELDS.has(o.field)), ...fresh].sort(compareColorFieldOptions);
+  }
 }

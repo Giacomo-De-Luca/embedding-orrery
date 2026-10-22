@@ -4,6 +4,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils/utils';
 import type { LayerActivationsResult, ActiveFeatureResult } from '@/lib/graphql/mutations';
+import { describeSae, formatSaeLabel, type ParsedSaeId } from '@/lib/utils/saeCollections';
 
 export interface SelectedTokenInfo {
   tokenIdx: number;
@@ -19,6 +20,10 @@ export type TokenStripLayer = LayerActivationsResult & {
   modelId?: string;
   saeId?: string;
 };
+
+function layerSae(l: TokenStripLayer): ParsedSaeId {
+  return { layerIndex: l.layer, hookType: l.hookType, width: l.width };
+}
 
 interface PromptTokenActivationsProps {
   layers: TokenStripLayer[];
@@ -67,11 +72,13 @@ export function PromptTokenActivations({
     isFeatureHighlighted &&
     (!highlightedFeatureSaeId || layerData?.saeId === highlightedFeatureSaeId);
 
-  // Two widths at one layer are distinct tabs — disambiguate the labels
+  // Two widths or two hook sites at one layer are distinct tabs — label the
+  // tabs with whichever of those the SAEs on screen differ in
   const showWidth = useMemo(() => new Set(layers.map((l) => l.width)).size > 1, [layers]);
+  const showHook = useMemo(() => new Set(layers.map((l) => l.hookType)).size > 1, [layers]);
   const tabLabel = useCallback(
-    (l: TokenStripLayer) => (showWidth ? `${l.layer} · ${l.width}` : `${l.layer}`),
-    [showWidth],
+    (l: TokenStripLayer) => formatSaeLabel(layerSae(l), { hook: showHook, width: showWidth }),
+    [showHook, showWidth],
   );
 
   // Auto-focus the layer tab matching the highlighted feature's SAE — once
@@ -132,14 +139,14 @@ export function PromptTokenActivations({
 
   return (
     <div className="space-y-1">
-      {/* Layer selector (if multiple layers) */}
+      {/* SAE selector (if multiple SAEs) */}
       {layers.length > 1 && (
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-muted-foreground">Layer:</span>
+          <span className="text-[10px] text-muted-foreground">SAE:</span>
           <div className="flex gap-1 flex-wrap">
             {layers.map((l, i) => (
               <button
-                key={`${l.layer}-${l.width}`}
+                key={`${l.layer}-${l.hookType}-${l.width}`}
                 onClick={() => { setSelectedLayer(i); onTokenSelect?.(null); }}
                 className={cn(
                   'px-2 py-0.5 text-[10px] rounded border transition-colors',
@@ -158,8 +165,7 @@ export function PromptTokenActivations({
       {/* Token strip */}
       <div className="border rounded-md p-2 bg-card">
         <p className="text-[10px] text-muted-foreground mb-1">
-          Click a token to see its features (Layer {layerData.layer}
-          {showWidth ? `, ${layerData.width}` : ''})
+          Click a token to see its features ({describeSae(layerSae(layerData))})
         </p>
         <div className="relative leading-relaxed font-mono text-xs flex flex-wrap">
           {layerData.tokens.map((tokenData, i) => {

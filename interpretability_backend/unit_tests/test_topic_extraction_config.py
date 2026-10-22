@@ -6,6 +6,7 @@ Covers:
   clustering-space fields (``cluster_on`` + BERTopic UMAP params) that were
   previously dropped on the way from GraphQL to the service config.
 - ``_reduce_for_clustering`` helper: BERTopic-style UMAP reduction shape.
+- Reduction requests: strategy pass-through, validation, legacy defaults.
 """
 
 from types import SimpleNamespace
@@ -13,8 +14,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from backend.API.converters import build_topic_extraction_config
+from backend.API.converters import build_topic_extraction_config, reduction_request_from_input
 from backend.services.topic_extraction_service import _reduce_for_clustering
+from backend.services.topic_reduction_types import (
+    SETTINGS,
+    ReductionRequest,
+    TopicReductionSettings,
+)
 
 
 def _make_tc(**overrides):
@@ -94,3 +100,91 @@ def test_reduce_for_clustering_clamps_small_n():
 
     assert reduced.shape[0] == 8
     assert reduced.shape[1] <= 5
+
+
+def _reduction(**overrides):
+    base = {
+        "enabled": True,
+        "method": "fixed_n",
+        "n_topics": 5,
+        "strategy": None,
+        "use_ctfidf": True,
+        "distance_threshold": None,
+        "absorb_noise": False,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_converter_passes_the_reduction_strategy_through():
+    tc = _make_tc(reduction=_reduction(strategy="density", absorb_noise=True))
+    config = build_topic_extraction_config("c", tc)
+
+    assert config.reduce_topics
+    assert config.reduction_strategy == "density"
+    assert config.reduction_absorb_noise
+    assert config.nr_topics == 5
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"strategy": "single"}, "Unknown reduction strategy"),
+        ({"strategy": "ward", "method": "auto"}, "topic count"),
+        ({"n_topics": None}, "nTopics"),
+        ({"strategy": "average", "absorb_noise": True}, "absorbNoise"),
+        ({"strategy": "ward", "method": "auto", "distance_threshold": 0.5}, "topic count"),
+    ],
+)
+def test_converter_rejects_invalid_reductions(overrides, message):
+    tc = _make_tc(reduction=_reduction(**overrides))
+    with pytest.raises(ValueError, match=message):
+        build_topic_extraction_config("c", tc)
+
+
+def test_disabled_reduction_is_not_validated():
+    tc = _make_tc(reduction=_reduction(enabled=False, strategy="single"))
+    assert not build_topic_extraction_config("c", tc).reduce_topics
+
+
+class TestReductionRequest:
+    def test_null_strategy_is_the_legacy_one_use_ctfidf_picks(self):
+        ctfidf = ReductionRequest.create(strategy=None, method="auto", n_topics=None)
+        semantic = ReductionRequest.create(
+            strategy=None, method="auto", n_topics=None, use_ctfidf=False
+        )
+        assert ctfidf.strategy == "legacy_ctfidf"
+        assert semantic.strategy == "legacy_semantic"
+
+    def test_auto_average_takes_the_configured_threshold(self):
+        request = ReductionRequest.create(strategy="average", method="auto", n_topics=9)
+        assert request.distance_threshold == SETTINGS.auto_distance_threshold
+        assert request.n_topics is None
+
+    def test_from_graphql_input(self):
+        request = reduction_request_from_input(
+            SimpleNamespace(
+                strategy="ward",
+                method="fixed_n",
+                n_topics=4,
+                use_ctfidf=True,
+                distance_threshold=None,
+                absorb_noise=False,
+                regenerate_labels=True,
+                llm_provider="openai",
+                llm_model="gpt",
+            )
+        )
+        assert (request.strategy, request.n_topics, request.llm_provider) == ("ward", 4, "openai")
+        assert request.regenerate_labels
+
+    @pytest.mark.parametrize("threshold", [-0.1, 2.5])
+    def test_a_threshold_outside_cosine_distance_is_rejected(self, threshold):
+        with pytest.raises(ValueError, match="between 0 and 2"):
+            ReductionRequest.create(
+                strategy="average", method="auto", n_topics=None, distance_threshold=threshold
+            )
+
+    def test_settings_reject_a_threshold_outside_cosine_distance(self):
+        with pytest.raises(ValueError, match="auto_distance_threshold"):
+            TopicReductionSettings(auto_distance_threshold=3.0)

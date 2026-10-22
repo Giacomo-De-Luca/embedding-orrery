@@ -43,6 +43,7 @@ class JobProgress:
     total_batches: int
     error: str | None = None
     message: str | None = None  # Status message (e.g., "Sorting batches", "Loading model")
+    warning: str | None = None  # Non-cancelling issue (e.g. documents truncated at the cap)
 
 
 @strawberry.type
@@ -84,6 +85,7 @@ class Subscription:
                     total_batches=event.total_batches,
                     error=event.error,
                     message=event.message,
+                    warning=event.warning,
                 )
                 yield progress
 

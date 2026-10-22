@@ -14,15 +14,25 @@ import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
 import type { EmbeddingProvider, GeminiTaskType } from '@/lib/graphql/mutations';
-import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
+import { EMBEDDING_PROVIDERS, isLocalProvider } from '@/lib/utils/embeddingProviders';
 import { TopicConfigForm } from './TopicConfigForm';
 import type { EmbeddingModelState } from '../lib/useEmbeddingModelState';
+import { commitMaxLengthDraft, describeModelLimit, parseMaxLengthDraft } from '../lib/embeddingLimits';
+import { useModelMaxLength } from '../lib/useModelMaxLength';
+import { NO_TASK } from '../lib/taskPrefixes';
+import { TaskPrefixField } from './TaskPrefixField';
 
 interface EmbeddingModelFormProps {
   model: EmbeddingModelState;
   showTopics?: boolean;
   idPrefix?: string;
   title?: string;
+  /**
+   * Render the task prefix here, with these columns for its placeholders, in
+   * forms without a column section (SAE label maps). Otherwise the Column
+   * Configuration section holds it.
+   */
+  taskPrefixColumns?: string[];
 }
 
 export function EmbeddingModelForm({
@@ -30,11 +40,29 @@ export function EmbeddingModelForm({
   showTopics = true,
   idPrefix = '',
   title = 'Embedding Model',
+  taskPrefixColumns,
 }: EmbeddingModelFormProps) {
   // Draft so the field can be temporarily empty/invalid while typing; the
   // committed batchSize only updates on valid positive integers and the
   // field snaps back to the committed value on blur.
   const [batchSizeDraft, setBatchSizeDraft] = useState<string | null>(null);
+  // Length cap: the draft is committed on blur only (valid, or the previous
+  // value is kept); empty commits null (= the model limit).
+  const [maxLengthDraft, setMaxLengthDraft] = useState<string | null>(null);
+  const isLocal = isLocalProvider(model.embeddingProvider);
+  const modelLimit = useModelMaxLength(model.embeddingProvider, model.modelName);
+  const limit = modelLimit.limit?.maxLength ?? null;
+  const maxLengthError = maxLengthDraft !== null
+    ? parseMaxLengthDraft(maxLengthDraft, limit).error
+    : model.maxLength !== null && limit !== null && model.maxLength > limit
+      ? parseMaxLengthDraft(String(model.maxLength), limit).error
+      : null;
+  // Task-prefix models take neither prompt names nor the Gemini task type.
+  const prefixInfo = model.taskPrefixInfo;
+  const prefixValue = model.taskPrefix;
+  const taskLabel = prefixValue?.taskId === NO_TASK
+    ? 'None'
+    : prefixInfo?.tasks.find((t) => t.id === prefixValue?.taskId)?.label;
 
   return (
     <Card>
@@ -89,6 +117,36 @@ export function EmbeddingModelForm({
               onBlur={() => setBatchSizeDraft(null)}
               placeholder={model.batchSize.toString()}
             />
+            <p className="text-xs text-muted-foreground">
+              {isLocal
+                ? 'Texts per forward pass. Lower it for long documents: memory grows with batch × length.'
+                : 'Texts per API request.'}
+            </p>
+            {isLocal && (
+              <>
+                <Label htmlFor={`${idPrefix}max-length`}>Max Length (tokens)</Label>
+                <Input
+                  id={`${idPrefix}max-length`}
+                  type="number"
+                  min={1}
+                  max={limit ?? undefined}
+                  value={maxLengthDraft ?? (model.maxLength === null ? '' : model.maxLength.toString())}
+                  onChange={(e) => setMaxLengthDraft(e.target.value)}
+                  onBlur={() => {
+                    if (maxLengthDraft !== null) {
+                      model.setMaxLength(commitMaxLengthDraft(maxLengthDraft, limit, model.maxLength));
+                    }
+                    setMaxLengthDraft(null);
+                  }}
+                  placeholder={limit !== null ? limit.toString() : 'Model default'}
+                  aria-invalid={maxLengthError ? true : undefined}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {describeModelLimit(modelLimit.limit, modelLimit.loading)}
+                </p>
+                {maxLengthError && <p className="text-xs text-destructive">{maxLengthError}</p>}
+              </>
+            )}
           </div>
           {model.embeddingProvider === 'OLLAMA' && (
             <div className="space-y-2">
@@ -115,7 +173,27 @@ export function EmbeddingModelForm({
               </p>
             </div>
           )}
-          {model.embeddingProvider === 'GEMINI' && (
+          {prefixInfo && prefixValue && (
+            <div className="space-y-2 md:col-span-2">
+              {taskPrefixColumns ? (
+                <>
+                  <Label>Task Prefix</Label>
+                  <TaskPrefixField
+                    info={prefixInfo}
+                    value={prefixValue}
+                    onChange={model.setTaskPrefix}
+                    columns={taskPrefixColumns}
+                    idPrefix={idPrefix}
+                  />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Task prefix: <strong>{taskLabel}</strong>, set under Column Configuration.
+                </p>
+              )}
+            </div>
+          )}
+          {model.embeddingProvider === 'GEMINI' && !prefixInfo && (
             <div className="space-y-2">
               <Label htmlFor={`${idPrefix}gemini-task-type`}>Task Type</Label>
               <Select
@@ -141,7 +219,7 @@ export function EmbeddingModelForm({
               </p>
             </div>
           )}
-          {model.embeddingProvider === 'SENTENCE_TRANSFORMERS' && (
+          {model.embeddingProvider === 'SENTENCE_TRANSFORMERS' && !prefixInfo && (
             <>
               <div className="space-y-2">
                 <Label htmlFor={`${idPrefix}prompt-name`}>Prompt Name</Label>

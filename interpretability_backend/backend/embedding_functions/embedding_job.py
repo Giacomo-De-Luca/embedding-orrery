@@ -11,7 +11,9 @@ loop around their own row → (ids, documents, vectors) step:
   between batches, records progress after each batch (job state, WebSocket
   progress, optional callback) and builds the result: a cancelled run stops
   with the work done so far kept, the job left interrupted (resumable) and
-  ``CANCELLED_MESSAGE`` as the error;
+  ``CANCELLED_MESSAGE`` as the error. Documents the embedder truncated at its
+  length cap (its ``truncation`` tracker) become a non-cancelling warning on
+  the progress stream and in the result's ``warnings``;
 - ``report_embedding_failure`` turns an exception into the failed result,
   marking the job interrupted so it can be resumed.
 """
@@ -21,11 +23,13 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from chromadb.errors import NotFoundError
 from tqdm import tqdm
 
 from ..services.cancel_registry import CANCELLED_MESSAGE, is_cancelled, report_cancelled
 from ..services.job_state import get_job_state_service
 from ..services.progress_emitter import emit_progress_sync
+from ..utils.chroma_segments import ChromaSegmentJanitor
 from .config import EmbeddingModelConfig, EmbeddingResult
 
 
@@ -41,12 +45,17 @@ def open_embedding_collection(
 
     ``metadata`` (None values dropped, ChromaDB rejects them) is only used when
     a collection is created; a resumed collection keeps its own. Without an
-    ``embedding_function`` the collection is created without one, as the
-    image and vector paths always did.
+    ``embedding_function`` (image and vector paths) the collection records
+    none: ``None`` is passed explicitly, since omitting the argument makes
+    chromadb record its default 384-d embedder. A replaced collection is
+    deleted together with its HNSW index directory. The existence check
+    attaches no embedder (chromadb rejects one that differs from the
+    collection's, which would block overwriting it with another model); the
+    returned handle is only ever given explicit ``embeddings``.
     """
     try:
-        existing = client.get_collection(name=name, embedding_function=embedding_function)
-    except Exception:  # does not exist
+        existing = client.get_collection(name=name, embedding_function=None)
+    except NotFoundError:
         existing = None
 
     if existing is not None:
@@ -54,14 +63,13 @@ def open_embedding_collection(
             ids = set(existing.get(include=[])["ids"])
             print(f"Resuming {name}: found {len(ids)} existing embeddings")
             return existing, ids
-        client.delete_collection(name=name)
+        ChromaSegmentJanitor.delete_collection(client, name)
         print(f"Deleted existing collection: {name}")
 
-    kwargs = {"embedding_function": embedding_function} if embedding_function is not None else {}
     collection = client.create_collection(
         name=name,
         metadata={k: v for k, v in metadata.items() if v is not None},
-        **kwargs,
+        embedding_function=embedding_function,
     )
     print(f"Created collection: {name}")
     return collection, set()
@@ -95,7 +103,10 @@ class EmbeddingBatchJob:
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
         description: str = "Embedding batches",
+        truncation_source: Any = None,
     ):
+        """``truncation_source``: the embedding function; when it has a
+        ``truncation`` tracker, truncated documents are reported as warnings."""
         self.collection_name = collection_name
         self.job_type = job_type
         self.job_config = job_config
@@ -108,6 +119,8 @@ class EmbeddingBatchJob:
         self.cancel_event = cancel_event
         self.progress_callback = progress_callback
         self.description = description
+        self.truncation = getattr(truncation_source, "truncation", None)
+        self._truncated_reported = 0
 
         self.total_batches = (n_rows + batch_size - 1) // batch_size
         self.total_embedded = 0
@@ -159,9 +172,23 @@ class EmbeddingBatchJob:
             items_embedded=self.total_embedded,
             batches_completed=self.batches_completed,
         )
-        self._emit(status="running", current_batch=self.batches_completed)
+        self._emit(
+            status="running", current_batch=self.batches_completed, warning=self._new_warning()
+        )
         if self.progress_callback:
             self.progress_callback(end, self.n_rows)
+
+    def _new_warning(self) -> str | None:
+        """The truncation summary, when more documents were truncated since the last one."""
+        if self.truncation is None or self.truncation.truncated <= self._truncated_reported:
+            return None
+        self._truncated_reported = self.truncation.truncated
+        return self.truncation.warning()
+
+    def warnings(self) -> list[str]:
+        """Non-cancelling issues of the run so far (for the result)."""
+        summary = self.truncation.warning() if self.truncation is not None else None
+        return [summary] if summary else []
 
     def result(self) -> EmbeddingResult:
         duration = time.time() - self.start_time
@@ -181,9 +208,17 @@ class EmbeddingBatchJob:
             error=CANCELLED_MESSAGE if self.cancelled else None,
             embedding_provider=self.model_config.provider.value if self.model_config else None,
             embedding_model=self.model_config.model_name if self.model_config else None,
+            warnings=self.warnings(),
         )
 
-    def _emit(self, *, status: str, current_batch: int, message: str | None = None) -> None:
+    def _emit(
+        self,
+        *,
+        status: str,
+        current_batch: int,
+        message: str | None = None,
+        warning: str | None = None,
+    ) -> None:
         emit_progress_sync(
             job_id=self.collection_name,
             status=status,
@@ -192,6 +227,7 @@ class EmbeddingBatchJob:
             current_batch=current_batch,
             total_batches=self.total_batches,
             message=message,
+            warning=warning,
         )
 
 

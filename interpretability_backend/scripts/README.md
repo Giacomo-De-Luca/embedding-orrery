@@ -6,6 +6,12 @@ setup. Run Python entry points from the repository root with `uv run python`.
 - `backfill_topic_centroids.py` computes the embedding-space topic centroids
   that semantic topic search needs, for topic extractions created before they
   were stored (config: `backfill_topic_centroids_config.toml`; backend stopped).
+- `compare_embedding_dtypes.py` embeds the same texts with one model in float32
+  and bfloat16 (one load at a time) and prints their cosine agreement, top-k
+  neighbour agreement and the Metal memory each load held: the check behind
+  keeping bf16 checkpoints in bf16 on Apple GPUs (config:
+  `compare_embedding_dtypes_config.toml`; loads models, run with the backend
+  idle). See `documentation/BACKEND_MEMORY_REPORT.md`.
 - `prune_chroma_orphans.py` removes the HNSW index directories chromadb leaves
   on disk for deleted collections (config: `prune_chroma_orphans_config.toml`,
   dry run by default; backend stopped). See

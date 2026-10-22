@@ -21,6 +21,7 @@ import type { TopicSearchMode, TopicSearchResult } from '../../lib/hooks/useTopi
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
 import type { UseDocumentFeatureSearchReturn } from '../../lib/hooks/useDocumentFeatureSearch';
 import type { UseProbesReturn } from '../../lib/hooks/useProbes';
+import type { UseTopicMergeTreeReturn } from '../../lib/hooks/useTopicMergeTree';
 import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
 import { cn } from '@/lib/utils/utils';
 import { SAE_FEATURE_INDEX_FIELD } from '../../lib/utils/saeCollections';
@@ -44,6 +45,7 @@ import { NumericBins } from '@/lib/utils/numericBins';
 
 /** Bars in the continuous-scale legend's histogram. */
 const LEGEND_HISTOGRAM_BINS = 30;
+const EMPTY_COLOR_MAP: Record<string, string> = {};
 
 interface DashboardPanelProps {
   // Data
@@ -95,6 +97,9 @@ interface DashboardPanelProps {
   onFeatureSearchResultClick?: (rowIndex: number) => void;
   // Embedding-space probes (threaded to AnalyticsSidebar)
   probes?: UseProbesReturn | null;
+  // Topic slider (threaded to the Controls panel); while it previews a cut the
+  // points carry preview topics, so topic_label acts as a plain category
+  topicTree?: UseTopicMergeTreeReturn | null;
   // Topic search props (threaded to SearchSidebar)
   topics?: TopicInfo[];
   topicSearchMode?: TopicSearchMode;
@@ -157,6 +162,7 @@ export function DashboardPanel({
   onFeatureSearchResultClick,
   // Embedding-space probes
   probes,
+  topicTree,
   // Topic search props
   topics,
   topicSearchMode,
@@ -243,6 +249,10 @@ export function DashboardPanel({
 
   // Topic-mode detection: when coloring by topic_label, selectedTopicIds drives everything
   const isTopicColorField = colorByField === 'topic_label';
+  // A topic-tree preview renames the topics: no saved topic id matches its
+  // labels, so legend and cluster-label clicks mute categories instead.
+  const topicPreviewActive = isTopicColorField && (topicTree?.previewing ?? false);
+  const topicIdMuting = isTopicColorField && !topicPreviewActive;
 
   // Colour dots of the Search panel's topic rows: resolved exactly as the plots
   // and legend colour topic_label (same values, palette and overrides; nested
@@ -254,30 +264,31 @@ export function DashboardPanel({
   const flatTopicColorMap = useCategoryColorMap(
     'topic_label', isTopicColorField ? categoryValues : otherFieldTopicValues, categoricalPalette
   );
-  const topicColorMap = nestedColorMap?.topicColors ?? flatTopicColorMap;
+  // The Search panel lists the saved topics, which a preview does not draw: neutral dots.
+  const topicColorMap = topicPreviewActive ? EMPTY_COLOR_MAP : (nestedColorMap?.topicColors ?? flatTopicColorMap);
 
   // Maps between topic labels and topic IDs for legend ↔ topic selection sync
   const topicLabelToIdMap = useMemo(() => {
-    if (!isTopicColorField || !topics?.length) return null;
+    if (!topicIdMuting || !topics?.length) return null;
     const map = new Map<string, number>();
     for (const t of topics) {
       if (t.label) map.set(t.label, t.topicId);
     }
     return map;
-  }, [isTopicColorField, topics]);
+  }, [topicIdMuting, topics]);
 
   const topicIdToLabelMap = useMemo(() => {
-    if (!isTopicColorField || !topics?.length) return null;
+    if (!topicIdMuting || !topics?.length) return null;
     const map = new Map<number, string>();
     for (const t of topics) {
       if (t.label) map.set(t.topicId, t.label);
     }
     return map;
-  }, [isTopicColorField, topics]);
+  }, [topicIdMuting, topics]);
 
   // Derive effective muted categories: in topic mode, derive from selectedTopicIds (no state writes)
   const effectiveMutedCategories = useMemo(() => {
-    if (!isTopicColorField || !selectedTopicIds || selectedTopicIds.size === 0 || !topicIdToLabelMap) {
+    if (!topicIdMuting || !selectedTopicIds || selectedTopicIds.size === 0 || !topicIdToLabelMap) {
       return mutedCategories ?? [];
     }
     // Compute the set of labels that should NOT be muted (selected topics + their subtopics)
@@ -299,7 +310,7 @@ export function DashboardPanel({
       ? [...Object.keys(nestedColorMap.hierarchy), ...Object.values(nestedColorMap.hierarchy).flat()]
       : categoryValues;
     return allCategories.filter(c => !unmuted.has(c));
-  }, [isTopicColorField, selectedTopicIds, topicIdToLabelMap, mutedCategories, nestedColorMap, categoryValues]);
+  }, [topicIdMuting, selectedTopicIds, topicIdToLabelMap, mutedCategories, nestedColorMap, categoryValues]);
 
   // Temporal range filtering: compute indices of points outside the selected time range
   const deferredTemporalRange = useDeferredValue(temporalRange);
@@ -373,8 +384,9 @@ export function DashboardPanel({
       catCounts[key] = (catCounts[key] ?? 0) + 1;
       if (isNested) {
         const { topic, subtopic } = CategoryKey.nested(p.metadata);
+        const subKey = CategoryKey.subtopicKey(topic, subtopic);
         topCounts[topic] = (topCounts[topic] ?? 0) + 1;
-        subCounts[subtopic] = (subCounts[subtopic] ?? 0) + 1;
+        subCounts[subKey] = (subCounts[subKey] ?? 0) + 1;
       }
     }
     return {
@@ -431,7 +443,7 @@ export function DashboardPanel({
   const handleCategoryToggle = useCallback((category: string, shiftKey: boolean) => {
     // In topic color mode, delegate to selectedTopicIds (always multi-select toggle;
     // shiftKey distinction is not applicable — topics always use toggle behavior)
-    if (isTopicColorField && topicLabelToIdMap && onToggleTopic) {
+    if (topicIdMuting && topicLabelToIdMap && onToggleTopic) {
       // Look up topic ID from the category label
       let topicId = topicLabelToIdMap.get(category);
       // If not found directly, it might be a subtopic — find parent topic
@@ -449,7 +461,15 @@ export function DashboardPanel({
     }
 
     setMutedCategories(CategorySelection.toggle(category, shiftKey, mutedCategories ?? [], categoryValues, nestedColorMap));
-  }, [isTopicColorField, topicLabelToIdMap, onToggleTopic, selectedTopicIds, onClearAllTopics, nestedColorMap, mutedCategories, setMutedCategories, categoryValues]);
+  }, [topicIdMuting, topicLabelToIdMap, onToggleTopic, selectedTopicIds, onClearAllTopics, nestedColorMap, mutedCategories, setMutedCategories, categoryValues]);
+
+  // 2D cluster-label clicks while a topic-tree preview is shown: toggle the
+  // preview topic like a legend click (only labels that are categories).
+  const handleClusterCategoryClick = useCallback((label: string, shiftKey: boolean) => {
+    if (!categoryValues.includes(label)) return false;
+    handleCategoryToggle(label, shiftKey);
+    return true;
+  }, [categoryValues, handleCategoryToggle]);
 
   // Temporal range change handler
   const handleTemporalRangeChange = useCallback((range: TemporalRange | null) => {
@@ -458,10 +478,10 @@ export function DashboardPanel({
 
   // Double-click reset: show all categories
   const handleCategoryReset = useCallback(() => {
-    if (isTopicColorField && onClearAllTopics) onClearAllTopics();
+    if (topicIdMuting && onClearAllTopics) onClearAllTopics();
     // Topic mode can also hold category muting from non-topic entries (Missing)
     setMutedCategories([]);
-  }, [isTopicColorField, onClearAllTopics, setMutedCategories]);
+  }, [topicIdMuting, onClearAllTopics, setMutedCategories]);
 
   const handleColorOverride = useCallback((category: string, color: string) => {
     if (colorByField) setCategoryColorOverride(colorByField, category, color);
@@ -561,8 +581,9 @@ export function DashboardPanel({
       mutedPointOpacity={mutedPointOpacity}
       pointOpacity={pointOpacity}
       showClusterLabels={showClusterLabels}
-      onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
-      topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
+      onClusterLabelClick={topicIdMuting ? onToggleTopic : undefined}
+      topicLabelToIdMap={topicIdMuting ? topicLabelToIdMap : undefined}
+      onClusterCategoryClick={topicPreviewActive ? handleClusterCategoryClick : undefined}
       customNumericRange={customNumericRange}
       showAxes={showAxes}
       onScreenshot={handleScreenshot}
@@ -585,8 +606,8 @@ export function DashboardPanel({
       nestedColorMap={nestedColorMap}
       nebulaMode={nebulaMode}
       showClusterLabels={showClusterLabels}
-      onClusterLabelClick={isTopicColorField ? onToggleTopic : undefined}
-      topicLabelToIdMap={isTopicColorField ? topicLabelToIdMap : undefined}
+      onClusterLabelClick={topicIdMuting ? onToggleTopic : undefined}
+      topicLabelToIdMap={topicIdMuting ? topicLabelToIdMap : undefined}
       combinedMutedIndices={combinedMutedIndices}
       hideFilteredPoints={hideFilteredPoints}
       mutedPointOpacity={mutedPointOpacity}
@@ -618,11 +639,15 @@ export function DashboardPanel({
             the top-right (under the header + its resizable height), and a vertically
             centered card overlapped it; this parks cards just below. Lives
             inside the plot layer so it unmounts with it — joyride's
-            target-wait then covers collection loads. */}
+            target-wait then covers collection loads. On phones (below md,
+            the tours' compact width) it moves to the bottom-center: a
+            left-placed card no longer fits beside it, so joyride flips to
+            its first fallback ("top") and the card sits at the foot of the
+            screen, clear of the HF corner button, leaving the map above. */}
         <div
           data-tour="plot-side"
           aria-hidden
-          className="pointer-events-none absolute right-6 top-[62%] h-px w-px"
+          className="pointer-events-none absolute right-6 top-[62%] h-px w-px max-md:right-auto max-md:top-auto max-md:left-1/2 max-md:bottom-(--explore-corner-inset)"
         />
       </div>
 
@@ -766,6 +791,7 @@ export function DashboardPanel({
           collectionName={collectionName}
           hasActiveFilter={hasActiveFilter}
           hasHighlights={hasHighlights}
+          topicTree={topicTree}
           variant="floating"
           mobileSheet={false}
           data-tour="panel-controls"
@@ -799,6 +825,7 @@ export function DashboardPanel({
           onSelectAllTopics={onSelectAllTopics}
           onClearAllTopics={onClearAllTopics}
           topicColorMap={topicColorMap}
+          previewingTopicCut={topicPreviewActive}
           textSearchLoading={textSearchLoading}
           availableFields={availableFields}
           itemMetadata={itemMetadata}

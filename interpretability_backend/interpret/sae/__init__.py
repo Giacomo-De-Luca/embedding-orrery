@@ -17,7 +17,7 @@ from interpret.sae.activation_store import (
     ActivationStore,
     max_pool_feature_acts,
 )
-from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig
+from interpret.sae.exploration.prompt_explorer import PromptExplorer, PromptExplorerConfig, SaeSpec
 from interpret.sae.feature_labels import FeatureLabelStore
 from interpret.sae.hook_manager import HookManager
 from interpret.sae.loading import clear_sae_cache, load_sae
@@ -58,6 +58,7 @@ __all__ = [
     "QwenScopeSAEConfig",
     "SAEBase",
     "SAEConfig",
+    "SaeSpec",
     "SteeringMode",
     "SteeringOp",
     "TopKSAE",

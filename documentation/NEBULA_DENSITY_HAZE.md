@@ -87,7 +87,19 @@ renderer kind is read in `ScatterPlot3D`'s haze lifecycle effect through
 `createHazeRenderer` (`lib/utils/hazeRendering.ts`); the sliders retune the
 live renderer through `setTuning` without a rebuild. The `Density` option is
 disabled, and a persisted `density` preference reset to sprites, in browsers
-without WebGL2 float render targets (`densityHaze/support.ts`).
+without WebGL2 float render targets (`densityHaze/support.ts`; the one fallback
+rule is `supportedHazeRenderer`, shared by the Controls panel, the renderer
+factory and the per-collection overrides below).
+
+**Per-collection defaults.** `COLLECTION_VIEW_OVERRIDES` in
+`lib/utils/tourPresets.ts` can pin `hazeRenderer` per collection, applied once
+per collection switch alongside its nebula / cluster-label flags (manual changes
+stick until the next switch). The demo collections EMNLP
+(`acl_abstracts_emnlp_findings`), `emotion` and the SAE label map
+(`Gemma_9_16k_embedded`) open in density haze with cluster labels;
+`wordnet_senses_full` pins sprites, so the density renderer does not follow a
+visitor into the WordNet galaxy whose look and tour were tuned on sprites.
+Where float targets are missing, the override applies sprites instead.
 
 Constants not exposed in the UI live in `DEFAULT_DENSITY_HAZE_OPTIONS`
 (`DensityHazeRenderer.ts`): `kernelFrac` 0.8, `lift` 0.8, `haloWeight` 0.5,

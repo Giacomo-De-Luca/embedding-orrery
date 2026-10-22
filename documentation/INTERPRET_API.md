@@ -64,6 +64,7 @@ mutation RunPromptActivations($input: RunPromptActivationsInput!) {
     layers {
       layer
       width
+      hookType
       tokens {
         token
         position
@@ -87,21 +88,28 @@ mutation RunPromptActivations($input: RunPromptActivationsInput!) {
 | `prompt` | `String!` | — | Raw user prompt (chat template applied automatically) |
 | `layers` | `[Int!]` | `[9, 17, 22, 29]` | Which decoder layers to attach SAE hooks |
 | `width` | `String!` | `"16k"` | SAE width: `"16k"`, `"32k"`, `"65k"`, `"262k"` |
-| `saes` | `[SaeLayerSpecInput!]` | `null` | Explicit `(layer, width)` SAE specs — takes precedence over `layers` + `width`. Supports mixed widths, **including two widths at the same layer** (co-attached at one hook site), all captured in a single forward pass. |
+| `saes` | `[SaeLayerSpecInput!]` | `null` | Explicit `(layer, width, hookType)` SAE specs — takes precedence over `layers` + `width` (which hook the residual stream). Supports mixed widths and hook sites, **including two widths or two sites at the same layer**, all captured in a single forward pass. |
 | `topK` | `Int!` | `10` | Number of top features per token |
 
-`SaeLayerSpecInput`: `{ layer: Int!, width: String! = "16k" }`. Example — hook L9-16k, L9-65k and L22-16k at once:
+`SaeLayerSpecInput`: `{ layer: Int!, width: String! = "16k", hookType: HookTypeEnum! = RESID_POST }`, with `hookType` one of `RESID_POST`, `MLP_OUT`, `ATTN_OUT`. Example — hook the L9-16k residual and MLP SAEs, L9-65k and L22-16k at once:
 
 ```json
-{ "saes": [ {"layer": 9, "width": "16k"}, {"layer": 9, "width": "65k"}, {"layer": 22, "width": "16k"} ] }
+{ "saes": [
+  {"layer": 9, "width": "16k", "hookType": "RESID_POST"},
+  {"layer": 9, "width": "16k", "hookType": "MLP_OUT"},
+  {"layer": 9, "width": "65k"},
+  {"layer": 22, "width": "16k"}
+] }
 ```
 
-Each result entry in `layers[]` is identified by its `(layer, width)` pair. With multiple specs, leave `saeId` unset so each layer derives its own width-aware sae_id for DuckDB label lookup.
+Each result entry in `layers[]` is identified by its `(layer, hookType, width)`; entries are ordered by layer, then width, then site (residual, MLP, attention). With multiple specs, leave `saeId` unset so each entry derives its own sae_id (e.g. `9-gemmascope-2-mlp-16k`) for DuckDB label lookup. Qwen-scope SAEs are residual-only: a non-residual spec on a Qwen model returns an `error`.
+
+In the toolkit, `PromptExplorerConfig.saes` takes `SaeSpec(layer, width, hook_type)` values (or plain `(layer, width)` pairs for the residual stream), and `PromptResult.layers` is keyed by `SaeSpec`. Before October 2026 the specs had no hook site: every prompt search hooked the residual stream, so selecting an MLP SAE showed residual activations, labelled with the MLP SAE's feature labels when it was the only one selected.
 
 #### Response
 
 - `tokenStrings`: The tokenized prompt as string pieces (including BOS, chat template tokens)
-- `layers[]`: One entry per requested layer, each containing:
+- `layers[]`: One entry per hooked SAE, identified by `layer`, `width` and `hookType`, each containing:
   - `tokens[]`: One entry per token position, each containing:
     - `features[]`: Top-k active features sorted by activation descending
       - `index`: Feature index (maps to `featureIndex` in the feature explorer)
@@ -377,10 +385,17 @@ enum HookTypeEnum {
   ATTN_OUT
 }
 
+input SaeLayerSpecInput {
+  layer: Int!
+  width: String! = "16k"
+  hookType: HookTypeEnum! = RESID_POST
+}
+
 input RunPromptActivationsInput {
   prompt: String!
   layers: [Int!]
   width: String! = "16k"
+  saes: [SaeLayerSpecInput!]
   topK: Int! = 10
 }
 
@@ -428,6 +443,7 @@ type InterpretTokenFeatures {
 type InterpretLayerResult {
   layer: Int!
   width: String!
+  hookType: HookTypeEnum!
   tokens: [InterpretTokenFeatures!]!
 }
 

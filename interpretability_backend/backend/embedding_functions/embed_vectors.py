@@ -13,8 +13,9 @@ import numpy as np
 
 from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.embedding_tasks import EmbeddingTexts
 from ..utils.id_utils import IDDeduplicator
-from ..utils.text_processing import extract_metadata, format_text_for_embedding
+from ..utils.text_processing import extract_metadata
 from .config import (
     EMBEDDING_BATCH_SIZE,
     EmbeddingResult,
@@ -122,6 +123,16 @@ def embed_vectors(
 
     print(f"Using pre-computed vectors from column '{vector_column}' (dim={embedding_dim})")
 
+    # Determine text columns for document text
+    text_columns = config.columns or []
+    if not text_columns:
+        first_row = rows[0]
+        text_columns = [
+            k for k, v in first_row.items() if isinstance(v, str) and k != vector_column
+        ]
+    # A bad template fails here, before an old collection is replaced.
+    texts = EmbeddingTexts(text_columns, config.text_template if text_columns else None, None, None)
+
     # Create collection without embedding function (we provide embeddings)
     collection_metadata = {
         "description": f"Pre-computed embeddings from: {config.file_path}",
@@ -143,14 +154,6 @@ def embed_vectors(
         collection_metadata,
         embedding_dim=embedding_dim,
     )
-
-    # Determine text columns for document text
-    text_columns = config.columns or []
-    if not text_columns:
-        first_row = rows[0]
-        text_columns = [
-            k for k, v in first_row.items() if isinstance(v, str) and k != vector_column
-        ]
 
     # Determine metadata columns (exclude vector column and id column)
     metadata_columns = config.metadata_columns
@@ -205,11 +208,7 @@ def embed_vectors(
                 continue
 
             # Create document text
-            doc_text = (
-                format_text_for_embedding(row, text_columns, config.text_template)
-                if text_columns
-                else ""
-            )
+            doc_text = texts.document(row) if text_columns else ""
 
             # Extract metadata using shared function
             metadata = extract_metadata(row, metadata_columns)

@@ -12,6 +12,7 @@ import { Separator } from '@/lib/ui-primitives/separator';
 import { VisualizationControls } from './VisualizationControls';
 import type { Point2D, Point3D } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import type { UseTopicMergeTreeReturn } from '../../lib/hooks/useTopicMergeTree';
 
 interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   embeddingDim: number;
@@ -28,6 +29,7 @@ interface EmbeddingSidebarProps extends React.ComponentProps<typeof Sidebar> {
   collectionName?: string | null;
   hasActiveFilter?: boolean;
   hasHighlights?: boolean;
+  topicTree?: UseTopicMergeTreeReturn | null;
 }
 
 export function EmbeddingSidebar({
@@ -42,6 +44,7 @@ export function EmbeddingSidebar({
   collectionName,
   hasActiveFilter,
   hasHighlights,
+  topicTree,
   ...props
 }: EmbeddingSidebarProps) {
   const { className, ...rest } = props;
@@ -74,6 +77,7 @@ export function EmbeddingSidebar({
             collectionName={collectionName}
             hasActiveFilter={hasActiveFilter}
             hasHighlights={hasHighlights}
+            topicTree={topicTree}
           />
 
           {selectedPoint && (

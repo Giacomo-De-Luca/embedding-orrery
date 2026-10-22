@@ -1,15 +1,19 @@
 """
 Topic reduction for merging similar topics after extraction.
 
-Implements BERTopic-inspired reduction methods:
-- Fixed-N reduction: AgglomerativeClustering to target count
-- Auto reduction: HDBSCAN to automatically merge similar topics
-
-Supports both c-TF-IDF and semantic embeddings for topic similarity.
+Two kinds of reduction:
+- ``reduce_with_tree``: cut a merge tree over the topics (strategies average,
+  ward and density; see ``utils/topic_merge_tree.py``), at N topics or at a
+  distance threshold, optionally absorbing noise the tree assigns to merges.
+- Legacy BERTopic-style methods, kept only to compare against the trees:
+  ``reduce_to_n_topics`` (AgglomerativeClustering to a target count) and
+  ``auto_reduce_topics`` (HDBSCAN run on the topic vectors), on c-TF-IDF or
+  raw semantic vectors.
 """
 
 import logging
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,11 +21,11 @@ import pandas as pd
 import scipy.sparse as sp
 from hdbscan import HDBSCAN
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 
-from .cluster_and_label import ClassTfidfTransformer
+from ..utils.topic_merge_tree import TopicMergeTree, TopicTreeCut
+from .cluster_and_label import CtfidfKeywords
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -37,24 +41,26 @@ class TopicReductionResult:
     num_topics_before: int
     num_topics_after: int
     reduction_method: str  # "fixed_n" or "auto"
+    absorbed_noise: int = 0  # noise documents a tree cut moved into topics
 
 
 class TopicReducer:
     """
-    Reduces topics by clustering similar topics together.
+    Reduces topics by merging similar topics together.
 
     Supports:
-    - Fixed target count (AgglomerativeClustering)
-    - Automatic reduction (HDBSCAN with min_cluster_size=2)
-    - c-TF-IDF or semantic embeddings for similarity
+    - Merge-tree cuts at N topics or a distance threshold (``reduce_with_tree``)
+    - Legacy: fixed target count (AgglomerativeClustering) and automatic
+      reduction (HDBSCAN with min_cluster_size=2), on c-TF-IDF or semantic
+      vectors
     """
 
     def __init__(
         self,
         documents_df: pd.DataFrame,
         topics_data: dict[int, list[tuple[str, float]]],
-        ctfidf_matrix: sp.csr_matrix,
-        ctfidf_words: np.ndarray,
+        ctfidf_matrix: sp.csr_matrix | None = None,
+        ctfidf_words: np.ndarray | None = None,
         language: str | None = "english",
         topic_embeddings: np.ndarray | None = None,
     ):
@@ -63,10 +69,11 @@ class TopicReducer:
         Args:
             documents_df: DataFrame with Document_ID, Document, Topic columns
             topics_data: Dict of topic_id -> [(word, score), ...]
-            ctfidf_matrix: c-TF-IDF matrix from keyword extraction
+            ctfidf_matrix: c-TF-IDF matrix from keyword extraction (legacy
+                c-TF-IDF similarity only)
             ctfidf_words: Feature names from CountVectorizer
             language: Stop words language for re-extraction
-            topic_embeddings: Embedding-space topic centroids for semantic
+            topic_embeddings: Embedding-space topic centroids for legacy semantic
                 reduction, one row per ``sorted(topics_data)`` entry (noise
                 first when present); see ``TopicCentroidService``.
         """
@@ -91,6 +98,8 @@ class TopicReducer:
             topic_embeddings: (n_topics, embedding_dim) array
         """
         if use_ctfidf:
+            if self.ctfidf_matrix is None:
+                raise ValueError("c-TF-IDF reduction needs the c-TF-IDF matrix")
             logger.info("Computing topic embeddings from c-TF-IDF vectors")
             # Each row in ctfidf_matrix is already a topic embedding
             return self.ctfidf_matrix.toarray()
@@ -109,8 +118,107 @@ class TopicReducer:
             )
         return self.topic_embeddings
 
+    def reduce_with_tree(
+        self,
+        tree: TopicMergeTree,
+        n_topics: int | None = None,
+        distance_threshold: float | None = None,
+        noise_merges: Mapping[int, int] | None = None,
+        absorb_noise: bool = False,
+    ) -> TopicReductionResult:
+        """Cut a merge tree over this reducer's topics.
+
+        Args:
+            tree: Merge tree whose leaves are exactly the non-noise topics
+            n_topics: Topics to keep (noise not counted); or
+            distance_threshold: Apply every merge at or below this height
+            noise_merges: Document_ID of a noise document -> the merge row that
+                absorbs it (density trees)
+            absorb_noise: Move those documents into their group once its merge
+                is applied
+
+        New topic ids are numbered by size (documents, absorbed noise
+        included), largest first; ties go to the group with the lower
+        representative topic id. A cut that merges and absorbs nothing keeps
+        the topic ids.
+        """
+        if (n_topics is None) == (distance_threshold is None):
+            raise ValueError("Give exactly one of n_topics or distance_threshold")
+        topics = sorted(t for t in self.topics_data if t != -1)
+        if sorted(tree.leaf_ids.tolist()) != topics:
+            raise ValueError("Merge tree leaves do not match the topics being reduced")
+
+        cut = TopicTreeCut(tree)
+        if n_topics is not None:
+            n_merges = cut.merges_for(n_topics)
+        else:
+            n_merges = cut.merges_within(distance_threshold)
+        groups = cut.groups(n_merges)
+
+        doc_topics = self.documents_df["Topic"].tolist()
+        position = {doc_id: i for i, doc_id in enumerate(self.documents_df["Document_ID"])}
+        absorbed = {}
+        if absorb_noise and noise_merges:
+            absorbed = {
+                position[doc_id]: group
+                for doc_id, group in cut.absorbed(noise_merges, n_merges).items()
+                if doc_topics[position[doc_id]] == -1
+            }
+
+        group_size: dict[int, int] = defaultdict(int)
+        for topic_id, group in zip(tree.leaf_ids.tolist(), groups.tolist(), strict=True):
+            group_size[group] += self.topic_sizes.get(topic_id, 0)
+        for group in absorbed.values():
+            group_size[group] += 1
+        if n_merges == 0 and not absorbed:
+            # Nothing merged or absorbed: keep the ids, so trees stored for
+            # these topics (e.g. the density tree) still line up with them.
+            new_id = dict(zip(groups.tolist(), tree.leaf_ids.tolist(), strict=True))
+        else:
+            representatives = cut.representatives(groups)
+            order = sorted(group_size, key=lambda g: (-group_size[g], representatives[g]))
+            new_id = {group: index for index, group in enumerate(order)}
+
+        mapped_topics = {
+            topic_id: new_id[group]
+            for topic_id, group in zip(tree.leaf_ids.tolist(), groups.tolist(), strict=True)
+        }
+        if -1 in self.topics_data:
+            mapped_topics[-1] = -1
+        new_topics = [mapped_topics[t] for t in doc_topics]
+        for pos, group in absorbed.items():
+            new_topics[pos] = new_id[group]
+
+        documents_df, topics_data = self._merge_topics(new_topics, mapped_topics)
+
+        sizes = dict(zip(tree.leaf_ids.tolist(), tree.leaf_sizes.tolist(), strict=True))
+        topic_hierarchy: dict[int, list[int]] = defaultdict(list)
+        for topic_id in sorted(mapped_topics, key=lambda t: (-sizes.get(t, 0), t)):
+            if topic_id != -1:
+                topic_hierarchy[mapped_topics[topic_id]].append(topic_id)
+
+        logger.info(
+            "Cut a %s tree: %d -> %d topics, %d noise documents absorbed",
+            tree.linkage,
+            len(topics),
+            len(group_size),
+            len(absorbed),
+        )
+        return TopicReductionResult(
+            documents_df=documents_df,
+            topics_data=topics_data,
+            topic_mappings=mapped_topics,
+            topic_hierarchy=dict(sorted(topic_hierarchy.items())),
+            num_topics_before=len(topics),
+            num_topics_after=len(group_size),
+            reduction_method="fixed_n" if n_topics is not None else "auto",
+            absorbed_noise=len(absorbed),
+        )
+
     def reduce_to_n_topics(self, n_topics: int, use_ctfidf: bool = True) -> TopicReductionResult:
-        """Reduce to a fixed number of topics using AgglomerativeClustering.
+        """Legacy: reduce to a fixed number of topics using AgglomerativeClustering.
+
+        Kept only to compare against the merge trees (``reduce_with_tree``).
 
         Pipeline:
         1. Compute topic embeddings
@@ -212,7 +320,10 @@ class TopicReducer:
         )
 
     def auto_reduce_topics(self, use_ctfidf: bool = True) -> TopicReductionResult:
-        """Automatically reduce topics using HDBSCAN.
+        """Legacy: automatically reduce topics using HDBSCAN on the topic vectors.
+
+        Kept only to compare against the merge trees: on near-orthogonal
+        c-TF-IDF rows it labels every topic noise and merges nothing.
 
         Pipeline:
         1. Compute and L2-normalize topic embeddings
@@ -330,31 +441,9 @@ class TopicReducer:
         """
         logger.info("Merging topics and re-extracting keywords")
 
-        # Update documents_df with new topic assignments
         documents_df = self.documents_df.copy()
         documents_df["Topic"] = new_topics
-
-        # Group documents by new topic (mega-document step)
-        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
-
-        # Re-run CountVectorizer + c-TF-IDF on merged documents
-        count_vectorizer = CountVectorizer(stop_words=self.language, ngram_range=(1, 1))
-        X = count_vectorizer.fit_transform(docs_per_topic.Document.values)
-        words = count_vectorizer.get_feature_names_out()
-
-        # c-TF-IDF transformation
-        ctfidf = ClassTfidfTransformer()
-        ctfidf_matrix = ctfidf.fit_transform(X)
-
-        # Extract top keywords per topic
-        topics_data = {}
-        n_words = 10  # Match original extraction
-
-        for i, topic_id in enumerate(docs_per_topic.Topic.values):
-            row = ctfidf_matrix.getrow(i).toarray()[0]
-            top_indices = row.argsort()[-n_words:][::-1]
-            topic_keywords = [(words[idx], float(row[idx])) for idx in top_indices]
-            topics_data[int(topic_id)] = topic_keywords
+        topics_data = CtfidfKeywords(language=self.language).extract(documents_df).topics_data
 
         logger.info(f"Re-extracted keywords for {len(topics_data)} topics")
 

@@ -2,8 +2,16 @@ import numpy as np
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from FlagEmbedding import BGEM3FlagModel
 
+from ...utils.truncation import TruncationTracker
+
 
 class EmbedTextBGE(EmbeddingFunction[Documents]):
+    """BGE-M3 dense vectors on ``device``, ``batch_size`` texts per forward pass.
+
+    Texts longer than ``max_length`` tokens are truncated and counted in
+    ``truncation`` (the job reports them as a warning).
+    """
+
     def __init__(
         self,
         model: str = "BAAI/bge-m3",
@@ -14,17 +22,22 @@ class EmbedTextBGE(EmbeddingFunction[Documents]):
         pooling_method: str = "cls",
     ) -> None:
 
+        # FlagEmbedding takes `devices` (a `device` kwarg is silently ignored and
+        # the library auto-picks every CUDA GPU, else MPS, else CPU).
         self.model = BGEM3FlagModel(
-            model, device=device, pooling_method=pooling_method, use_fp16=use_fp16
+            model, devices=device, pooling_method=pooling_method, use_fp16=use_fp16
         )
         self.max_length = max_length
         self.batch_size = batch_size
+        self.truncation = TruncationTracker(max_length)
 
     def __call__(self, input: Documents) -> Embeddings:
+        texts = list(input)
+        self.truncation.count(getattr(self.model, "tokenizer", None), texts)
 
         embeddings = np.array(
             self.model.encode(
-                input,
+                texts,
                 batch_size=self.batch_size,
                 max_length=self.max_length,
             )["dense_vecs"]

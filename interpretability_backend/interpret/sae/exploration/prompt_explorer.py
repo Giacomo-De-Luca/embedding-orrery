@@ -25,18 +25,19 @@ Usage::
 from __future__ import annotations
 
 import html as html_module
+import sys
 import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 
 from interpret.sae.exploration.explore_neuronpedia import ActivationExample, NeuronpediaExplorer
 from interpret.sae.feature_labels import FeatureLabelStore
 from interpret.sae.hook_manager import HookManager
-from interpret.sae.sae_config import SAEConfig
+from interpret.sae.sae_config import WIDTH_TO_D_SAE, HookType, SAEConfig, parse_hook_type
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -50,6 +51,44 @@ _DEFAULT_LABELS_DIR = Path("resources/sae_labels/neuronpedia_gemma-3-4b-it")
 # ── Configuration ────────────────────────────────────────────────────────────
 
 
+class SaeSpec(NamedTuple):
+    """One SAE to hook: decoder layer, dictionary width and hook site.
+
+    :meth:`parse` builds one from loose values: a plain ``(layer, width)``
+    pair is the residual-stream SAE, and the hook site may be given as its
+    value (``"mlp_out"``), so callers written before hook sites keep working.
+    """
+
+    layer: int
+    width: str
+    hook_type: HookType = HookType.RESID_POST
+
+    @classmethod
+    def parse(
+        cls, layer: int, width: str, hook_type: HookType | str = HookType.RESID_POST
+    ) -> SaeSpec:
+        """A spec from loose values; the hook site may be a ``HookType`` or its value."""
+        return cls(int(layer), str(width), parse_hook_type(hook_type))
+
+    @classmethod
+    def of(cls, config: SAEConfig) -> SaeSpec:
+        """The spec an SAE config hooks."""
+        return cls(config.layer_index, config.width, config.hook_type)
+
+    def label(self) -> str:
+        """``"9/16k"`` for the residual stream, ``"9/16k/mlp_out"`` for other sites."""
+        base = f"{self.layer}/{self.width}"
+        return base if self.hook_type is HookType.RESID_POST else f"{base}/{self.hook_type.value}"
+
+    def sort_key(self) -> tuple[int, int, str, int]:
+        """Layer, then dictionary size, then hook site in ``HookType`` declaration order."""
+        size = WIDTH_TO_D_SAE.get(self.width, sys.maxsize)
+        return self.layer, size, self.width, _HOOK_ORDER[self.hook_type]
+
+
+_HOOK_ORDER: dict[HookType, int] = {hook: i for i, hook in enumerate(HookType)}
+
+
 @dataclass
 class PromptExplorerConfig:
     """Configuration for PromptExplorer. Edit fields or pass to constructor.
@@ -59,33 +98,36 @@ class PromptExplorerConfig:
     (``format_prompt``) and per-token pieces (``token_strings``), so this class
     stays family-agnostic.
 
-    SAEs to hook are given either as ``layers`` (all at the shared ``width``)
-    or, for mixed widths — including two widths at the same layer — as
-    explicit ``saes`` (layer, width) specs, which take precedence.
+    SAEs to hook are given either as ``layers`` (residual-stream SAEs at the
+    shared ``width``) or as explicit ``saes``, which take precedence:
+    :class:`SaeSpec` values, ``(layer, width, hook_type)`` tuples (the site as
+    a ``HookType`` or its value), or plain ``(layer, width)`` pairs for the
+    residual stream. Widths and hook sites can be mixed, including two widths
+    or two sites at the same layer.
 
-    ``sae_config_factory`` maps a ``(layer, width)`` pair to the SAE config to
-    hook. When ``None`` (the default, used by notebooks), a Gemma-scope config
-    is built. The service injects a family-aware factory (its ``_make_sae_config``)
+    ``sae_config_factory`` maps a :class:`SaeSpec` to the SAE config to hook.
+    When ``None`` (the default, used by notebooks), a Gemma-scope config is
+    built. The service injects a family-aware factory (its ``_make_sae_config``)
     so Qwen-scope configs are built for Qwen models.
     """
 
     wrapper: GemmaPytorchInference | Qwen3Inference
     layers: list[int] = field(default_factory=lambda: [9, 17, 22, 29])
     width: str = "16k"
-    saes: list[tuple[int, str]] | None = None
+    saes: list[SaeSpec | tuple[int, str] | tuple[int, str, HookType | str]] | None = None
     top_k: int = 10
     density_threshold: float = 0.01
     labels_dir: Path = _DEFAULT_LABELS_DIR
     skip_labels: bool = False
     model_size: str = "4b"
     variant: str = "it"
-    sae_config_factory: Callable[[int, str], SAEConfig] | None = None
+    sae_config_factory: Callable[[SaeSpec], SAEConfig] | None = None
 
-    def effective_saes(self) -> list[tuple[int, str]]:
-        """The (layer, width) specs to hook: explicit ``saes`` or layers × width."""
+    def effective_saes(self) -> list[SaeSpec]:
+        """The SAEs to hook: explicit ``saes``, or residual SAEs at layers × width."""
         if self.saes:
-            return list(self.saes)
-        return [(layer, self.width) for layer in self.layers]
+            return [SaeSpec.parse(*spec) for spec in self.saes]
+        return [SaeSpec(layer, self.width) for layer in self.layers]
 
 
 def _store_read_plan(
@@ -158,12 +200,18 @@ class TokenFeatures:
 
 @dataclass
 class LayerResult:
-    """Per-token features for one layer."""
+    """Per-token features for one hooked SAE (layer, width, hook site)."""
 
     layer: int
     width: str
     tokens: list[TokenFeatures]
     feature_acts: torch.Tensor  # raw (seq_len, d_sae) for further analysis
+    hook_type: HookType = HookType.RESID_POST
+
+    @property
+    def spec(self) -> SaeSpec:
+        """The SAE these features were read from."""
+        return SaeSpec(self.layer, self.width, self.hook_type)
 
     def token(self, position: int) -> TokenFeatures:
         return self.tokens[position]
@@ -177,15 +225,16 @@ class LayerResult:
     def __repr__(self) -> str:
         n_active = sum(len(t.features) for t in self.tokens)
         return (
-            f"LayerResult(layer={self.layer}, tokens={len(self.tokens)}, "
+            f"LayerResult(sae={self.spec.label()}, tokens={len(self.tokens)}, "
             f"total_active_features={n_active})"
         )
 
     def _repr_html_(self) -> str:
         esc = html_module.escape
+        site = "" if self.hook_type is HookType.RESID_POST else f", {self.hook_type.value}"
         header = (
             f"<h4 style='margin:8px 0 4px'>Layer {self.layer} "
-            f"({self.width}, {len(self.tokens)} tokens)</h4>"
+            f"({self.width}{site}, {len(self.tokens)} tokens)</h4>"
         )
         rows = []
         for tf in self.tokens:
@@ -220,48 +269,43 @@ class LayerResult:
 class PromptResult:
     """Top-level result from :meth:`PromptExplorer.run_prompt`.
 
-    ``layers`` is keyed by ``(layer_index, width)`` so two SAEs at the same
-    layer (e.g. L9 16k + L9 65k) hold separate entries.
+    ``layers`` is keyed by :class:`SaeSpec`, so two SAEs at the same layer
+    (L9 16k + L9 65k, or the L9 residual and MLP SAEs) hold separate entries.
     """
 
     prompt: str
     token_strings: list[str]
-    layers: dict[tuple[int, str], LayerResult]
+    layers: dict[SaeSpec, LayerResult]
     generated_text: str | None = None
 
     def layer(self, idx: int) -> LayerResult:
         """The unique LayerResult for a layer index.
 
-        Raises ``ValueError`` when the layer was hooked at several widths —
-        index ``layers[(layer, width)]`` directly in that case.
+        Raises ``ValueError`` when several SAEs (widths or hook sites) were
+        hooked at the layer — index ``layers[SaeSpec(...)]`` directly then.
         """
-        matches = [lr for (layer, _w), lr in self.layers.items() if layer == idx]
+        matches = [lr for spec, lr in self.layers.items() if spec.layer == idx]
         if not matches:
             raise KeyError(idx)
         if len(matches) > 1:
-            widths = sorted(w for layer, w in self.layers if layer == idx)
+            labels = sorted(spec.label() for spec in self.layers if spec.layer == idx)
             raise ValueError(
-                f"Layer {idx} has {len(matches)} SAEs (widths: {', '.join(widths)}); "
-                f"use PromptResult.layers[(layer, width)] instead."
+                f"Layer {idx} has {len(matches)} SAEs ({', '.join(labels)}); "
+                f"use PromptResult.layers[SaeSpec(layer, width, hook_type)] instead."
             )
         return matches[0]
 
-    def token(self, position: int) -> dict[tuple[int, str], TokenFeatures]:
+    def token(self, position: int) -> dict[SaeSpec, TokenFeatures]:
         """All hooked SAEs' features for one token position."""
-        return {key: lr.token(position) for key, lr in self.layers.items()}
-
-    @staticmethod
-    def _key_str(key: tuple[int, str]) -> str:
-        layer, width = key
-        return f"{layer}/{width}"
+        return {spec: lr.token(position) for spec, lr in self.layers.items()}
 
     def __repr__(self) -> str:
-        layer_strs = ", ".join(self._key_str(k) for k in sorted(self.layers))
+        layer_strs = ", ".join(s.label() for s in sorted(self.layers, key=SaeSpec.sort_key))
         return f"PromptResult({len(self.token_strings)} tokens, layers=[{layer_strs}])"
 
     def _repr_html_(self) -> str:
         esc = html_module.escape
-        layer_strs = ", ".join(self._key_str(k) for k in sorted(self.layers))
+        layer_strs = ", ".join(s.label() for s in sorted(self.layers, key=SaeSpec.sort_key))
         parts = [
             f"<div style='font-family:sans-serif'>"
             f"<h3>PromptExplorer result</h3>"
@@ -271,8 +315,8 @@ class PromptResult:
         ]
         if self.generated_text:
             parts.append(f"<p><b>Generated:</b> {esc(self.generated_text)}</p>")
-        for key in sorted(self.layers):
-            parts.append(self.layers[key]._repr_html_())
+        for spec in sorted(self.layers, key=SaeSpec.sort_key):
+            parts.append(self.layers[spec]._repr_html_())
         parts.append("</div>")
         return "\n".join(parts)
 
@@ -385,7 +429,7 @@ class PromptExplorer:
         self._wrapper = config.wrapper
         self._label_store: FeatureLabelStore | None = None
         self._neuronpedia: NeuronpediaExplorer | None = None
-        self._density_masks: dict[tuple[int, str], torch.Tensor] = {}
+        self._density_masks: dict[SaeSpec, torch.Tensor] = {}
 
     @property
     def config(self) -> PromptExplorerConfig:
@@ -403,7 +447,7 @@ class PromptExplorer:
             from interpret.sae.feature_labels import _width_as_int
 
             specs = self._config.effective_saes()
-            widths = {w for _, w in specs}
+            widths = {spec.width for spec in specs}
             if len(widths) != 1:
                 raise ValueError(
                     "NeuronpediaExplorer supports a single width; config resolves "
@@ -411,14 +455,14 @@ class PromptExplorer:
                     "PromptExplorerConfig for feature inspection."
                 )
             self._neuronpedia = NeuronpediaExplorer(
-                layers=[layer for layer, _ in specs],
+                layers=[spec.layer for spec in specs],
                 width=_width_as_int(next(iter(widths))),
                 labels_dir=self._config.labels_dir,
             )
         return self._neuronpedia
 
     def __repr__(self) -> str:
-        specs = ", ".join(f"{layer}/{w}" for layer, w in self._config.effective_saes())
+        specs = ", ".join(spec.label() for spec in self._config.effective_saes())
         return (
             f"PromptExplorer(saes=[{specs}], "
             f"top_k={self._config.top_k}, "
@@ -427,8 +471,8 @@ class PromptExplorer:
 
     # ── Prompt execution ─────────────────────────────────────────────────
 
-    def _build_sae_config(self, layer: int, width: str) -> SAEConfig:
-        """Build the SAE config to hook for one ``(layer, width)`` spec.
+    def _build_sae_config(self, spec: SaeSpec) -> SAEConfig:
+        """Build the SAE config to hook for one spec.
 
         Uses the injected ``sae_config_factory`` when present (the service
         supplies a family-aware one) so Qwen-scope configs are built for Qwen
@@ -436,10 +480,11 @@ class PromptExplorer:
         """
         factory = self._config.sae_config_factory
         if factory is not None:
-            return factory(layer, width)
+            return factory(spec)
         return SAEConfig(
-            layer_index=layer,
-            width=width,
+            layer_index=spec.layer,
+            hook_type=spec.hook_type,
+            width=spec.width,
             model_size=self._config.model_size,
             variant=self._config.variant,
             device=str(self._wrapper.device),
@@ -448,8 +493,8 @@ class PromptExplorer:
         )
 
     def _get_density_mask(self, sae_config: SAEConfig) -> torch.Tensor:
-        """Get or build a boolean density mask for a layer (True = keep)."""
-        key = (sae_config.layer_index, sae_config.width)
+        """Get or build a boolean density mask for an SAE (True = keep)."""
+        key = SaeSpec.of(sae_config)
         if key not in self._density_masks:
             params = FeatureLabelStore.params_from_config(sae_config)
             densities = self.label_store.get_densities(*params)
@@ -481,12 +526,12 @@ class PromptExplorer:
         """
         k = top_k if top_k is not None else self._config.top_k
 
-        # Build SAE configs and hook manager — one per (layer, width) spec.
-        # Two widths at the same layer co-attach at one site (read_only).
+        # Build SAE configs and hook manager — one per spec. Two widths at the
+        # same (layer, hook site) co-attach at one site (read_only).
         sae_configs: list[SAEConfig] = []
         manager = HookManager()
-        for layer, width in self._config.effective_saes():
-            cfg = self._build_sae_config(layer, width)
+        for spec in self._config.effective_saes():
+            cfg = self._build_sae_config(spec)
             sae_configs.append(cfg)
             manager.add_sae(cfg)
         read_plan = _store_read_plan(sae_configs)
@@ -508,8 +553,8 @@ class PromptExplorer:
                 output_len=output_len,
             )
 
-            # Collect per-SAE results, keyed by (layer, width)
-            layer_results: dict[tuple[int, str], LayerResult] = {}
+            # Collect per-SAE results, keyed by SaeSpec
+            layer_results: dict[SaeSpec, LayerResult] = {}
             for cfg, read_sae_id in read_plan:
                 record = store.prefill(
                     layer=cfg.layer_index,
@@ -523,7 +568,7 @@ class PromptExplorer:
                 feature_acts = record.feature_acts[0]
                 if feature_acts.shape[0] != len(token_strings):
                     warnings.warn(
-                        f"Layer {cfg.layer_index}: feature_acts has "
+                        f"SAE {SaeSpec.of(cfg).label()}: feature_acts has "
                         f"{feature_acts.shape[0]} positions but tokenizer "
                         f"produced {len(token_strings)} tokens — token labels "
                         f"may be misaligned.",
@@ -604,11 +649,12 @@ class PromptExplorer:
                         )
                     )
 
-                layer_results[(cfg.layer_index, cfg.width)] = LayerResult(
+                layer_results[SaeSpec.of(cfg)] = LayerResult(
                     layer=cfg.layer_index,
                     width=cfg.width,
                     tokens=tokens_list,
                     feature_acts=feature_acts.cpu(),
+                    hook_type=cfg.hook_type,
                 )
 
         return PromptResult(
@@ -706,6 +752,10 @@ class PromptExplorer:
         top_k_similar: int = 10,
     ) -> FeatureDetail:
         """Get detailed information about a specific SAE feature.
+
+        Reads the residual-stream SAE at ``layer`` and the config's ``width``
+        only: the Neuronpedia files behind :attr:`neuronpedia` cover residual
+        SAEs, so features of a hooked MLP or attention SAE can't be inspected here.
 
         Args:
             feature_index: The feature index within the SAE.

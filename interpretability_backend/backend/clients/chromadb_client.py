@@ -6,9 +6,11 @@ After the DuckDB migration, ChromaDB is used exclusively for:
   - Reading raw embeddings (for projection computation, topic reduction)
 
 All document storage, metadata, projections, and topic data are in DuckDB.
+Text queries are always embedded here, with the model recorded in the
+collection's metadata, and searched by vector: chromadb's own embedders are
+never used.
 """
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,25 +20,13 @@ from chromadb.config import Settings
 from chromadb.errors import InternalError
 
 from ..embedding_functions.config import EmbeddingModelConfig, EmbeddingProvider
-from ..embedding_functions.create_embedding_function import create_embedding_function, get_device
+from ..embedding_functions.create_embedding_function import create_embedding_function, device_for
 from ..utils.chroma_segments import ChromaSegmentJanitor
+from ..utils.embedding_prompts import QueryPromptResolver
 from ..utils.resource_paths import CHROMA_DB_PATH
-
-logger = logging.getLogger("orrery")
 
 # Ids per existence lookup when pruning a search scope (SQLite variable limit).
 _ID_LOOKUP_CHUNK = 10_000
-
-# Gemini task type mapping: document task type -> query task type
-GEMINI_QUERY_TASK_MAP = {
-    "RETRIEVAL_DOCUMENT": "RETRIEVAL_QUERY",
-}
-
-
-def _map_gemini_task_type_for_query(task_type: str | None) -> str | None:
-    if task_type is None:
-        return None
-    return GEMINI_QUERY_TASK_MAP.get(task_type, task_type)
 
 
 class ChromaDBClient:
@@ -53,41 +43,11 @@ class ChromaDBClient:
             path=str(self.db_path), settings=Settings(anonymized_telemetry=False)
         )
 
-    def get_collection(
-        self,
-        name: str,
-        load_embedding_function: bool = False,
-        for_query: bool = False,
-        query_prompt: str | None = None,
-    ):
-        """Get a collection by name.
-
-        Args:
-            name: Collection name
-            load_embedding_function: If True, loads the embedding function for query operations.
-                                     If False (default), returns collection without EF for read-only ops.
-            for_query: If True, configures EF for query embedding (QWEN adds instruction prefix)
-            query_prompt: Override prompt for query embedding
-
-        Returns:
-            ChromaDB collection (with or without embedding function)
-        """
+    def get_collection(self, name: str):
+        """Get a collection by name (no embedding function attached: callers
+        pass explicit vectors; text queries go through ``embed_query``)."""
         try:
-            if not load_embedding_function:
-                return self.client.get_collection(name=name)
-
-            # Load embedding function for semantic search with text
-            collection = self.client.get_collection(name=name)
-            try:
-                ef = self._embedding_function_for(
-                    collection.metadata or {}, for_query=for_query, query_prompt=query_prompt
-                )
-            except Exception as e:
-                logger.warning("Could not load embedding function for '%s': %s", name, e)
-                return collection
-            if ef is None:
-                return collection
-            return self.client.get_collection(name=name, embedding_function=ef)
+            return self.client.get_collection(name=name)
         except Exception as e:
             raise ValueError(f"Collection '{name}' not found: {e}") from e
 
@@ -106,8 +66,11 @@ class ChromaDBClient:
     ):
         """Build the embedding function recorded in a collection's metadata.
 
-        Returns None when the metadata names no provider/model. Raises if the
-        recorded provider is unknown or the function cannot be created.
+        The stored prompt, query prefix (``embedding_task``) and task-prefix
+        marker (``embedding_prompt_format``) rebuild the collection's config;
+        an explicit ``query_prompt`` goes to the factory on its own. Returns
+        None when the metadata names no provider/model. Raises if the recorded
+        provider is unknown or the function cannot be created.
         """
         provider_str = metadata.get("embedding_provider")
         model_name = metadata.get("embedding_model")
@@ -117,21 +80,39 @@ class ChromaDBClient:
         provider = EmbeddingProvider(provider_str)
         task_type = metadata.get("embedding_task_type")
         if for_query and provider == EmbeddingProvider.GEMINI:
-            task_type = _map_gemini_task_type_for_query(task_type)
+            task_type = QueryPromptResolver().task_type(task_type)
 
         config = EmbeddingModelConfig(
             provider=provider,
             model_name=model_name,
             task=metadata.get("embedding_task"),
             task_type=task_type,
-            prompt=query_prompt or metadata.get("embedding_prompt"),
+            prompt=metadata.get("embedding_prompt"),
+            prompt_format=metadata.get("embedding_prompt_format"),
         )
         ef, _ = create_embedding_function(
             config,
-            get_device(),
+            device_for(provider),
             known_dimension=metadata.get("embedding_dim"),
             is_query=for_query,
+            query_prompt=query_prompt,
         )
+        return ef
+
+    def _query_embedding_function(self, collection, query_prompt: str | None):
+        """The query-mode embedding function of a collection; raises without one.
+
+        Never falls back to ChromaDB's default embedder: a wrong-model query
+        vector would silently produce meaningless similarities.
+        """
+        ef = self._embedding_function_for(
+            collection.metadata or {}, for_query=True, query_prompt=query_prompt
+        )
+        if ef is None:
+            raise ValueError(
+                f"Collection '{collection.name}' records no embedding model; "
+                "cannot embed a text query"
+            )
         return ef
 
     def embed_query(
@@ -139,22 +120,11 @@ class ChromaDBClient:
     ) -> np.ndarray:
         """Embed a text query with the collection's own (query-mode) model.
 
-        Unlike ``get_collection(load_embedding_function=True)`` this never
-        falls back to ChromaDB's default embedder: a wrong-model query vector
-        would silently produce meaningless similarities.
-
         Raises:
             ValueError: the collection is missing or records no embedding model.
         """
         collection = self.get_collection(collection_name)
-        ef = self._embedding_function_for(
-            collection.metadata or {}, for_query=True, query_prompt=query_prompt
-        )
-        if ef is None:
-            raise ValueError(
-                f"Collection '{collection_name}' records no embedding model; "
-                "cannot embed a text query"
-            )
+        ef = self._query_embedding_function(collection, query_prompt)
         return np.asarray(ef([text])[0], dtype=np.float64)
 
     def semantic_search(
@@ -172,7 +142,9 @@ class ChromaDBClient:
 
         ``ids`` restricts the nearest-neighbour search to that subset (an
         empty list yields no hits); ``n_results`` is capped at its size, and
-        ids the collection holds no vector for are ignored.
+        ids the collection holds no vector for are ignored. Text queries are
+        embedded with the collection's own query-mode model (``query_prompt``
+        overrides its query prompt); that failing raises.
 
         Returns IDs, distances, and similarities. Documents and metadata
         should be enriched from DuckDB by the caller.
@@ -184,17 +156,13 @@ class ChromaDBClient:
         if ids is not None and not ids:
             return self._no_hits()
 
-        needs_ef = query_texts is not None
-        collection = self.get_collection(
-            collection_name,
-            load_embedding_function=needs_ef,
-            for_query=needs_ef,
-            query_prompt=query_prompt,
-        )
+        collection = self.get_collection(collection_name)
+        if query_texts is not None:
+            ef = self._query_embedding_function(collection, query_prompt)
+            query_embeddings = [np.asarray(v, dtype=np.float32) for v in ef(query_texts)]
 
         def run_query(scope: list[str] | None) -> dict[str, Any]:
             return collection.query(
-                query_texts=query_texts,
                 query_embeddings=query_embeddings,
                 n_results=n_results if scope is None else min(n_results, len(scope)),
                 where=where,

@@ -9,26 +9,29 @@ Tests topic reduction functionality including:
 - Edge cases (invalid inputs, single topic, etc.)
 """
 
-
 import numpy as np
 import pandas as pd
 import pytest
 import scipy.sparse as sp
 
+from interpretability_backend.backend.topic_extraction.cluster_and_label import CtfidfKeywords
 from interpretability_backend.backend.topic_extraction.topic_reducer import (
     TopicReducer,
     TopicReductionResult,
 )
+from interpretability_backend.backend.utils.topic_merge_tree import TopicMergeTree
 
 
 @pytest.fixture
 def sample_documents_df():
     """Create sample documents DataFrame with topics."""
-    return pd.DataFrame({
-        "Document_ID": range(100),
-        "Document": [f"document {i} with some text content" for i in range(100)],
-        "Topic": [i % 10 for i in range(100)]  # 10 topics (0-9)
-    })
+    return pd.DataFrame(
+        {
+            "Document_ID": range(100),
+            "Document": [f"document {i} with some text content" for i in range(100)],
+            "Topic": [i % 10 for i in range(100)],  # 10 topics (0-9)
+        }
+    )
 
 
 @pytest.fixture
@@ -50,7 +53,7 @@ def sample_topics_data():
 def sample_ctfidf_matrix():
     """Create sample c-TF-IDF sparse matrix."""
     # 10 topics x 50 words vocabulary
-    matrix = sp.random(10, 50, density=0.3, format='csr')
+    matrix = sp.random(10, 50, density=0.3, format="csr")
     return matrix
 
 
@@ -68,7 +71,7 @@ def reducer(sample_documents_df, sample_topics_data, sample_ctfidf_matrix, sampl
         topics_data=sample_topics_data,
         ctfidf_matrix=sample_ctfidf_matrix,
         ctfidf_words=sample_ctfidf_words,
-        language="english"
+        language="english",
     )
 
 
@@ -121,11 +124,13 @@ class TestComputeTopicEmbeddings:
 def _semantic_reducer(topic_ids, centroids):
     """Reducer over 5 docs per topic whose semantic centroids are given explicitly."""
     topics = [t for t in topic_ids for _ in range(5)]
-    documents_df = pd.DataFrame({
-        "Document_ID": range(len(topics)),
-        "Document": [f"topic{t} sample text number{i}" for i, t in enumerate(topics)],
-        "Topic": topics,
-    })
+    documents_df = pd.DataFrame(
+        {
+            "Document_ID": range(len(topics)),
+            "Document": [f"topic{t} sample text number{i}" for i, t in enumerate(topics)],
+            "Topic": topics,
+        }
+    )
     topics_data = {t: [(f"topic{t}", 0.9)] for t in topic_ids}
     matrix = sp.random(len(topic_ids), 20, density=0.5, format="csr", random_state=0)
     words = np.array([f"w{i}" for i in range(20)])
@@ -245,13 +250,9 @@ class TestAutoReduceTopics:
     def test_auto_reduce_with_single_topic(self):
         """Test auto reduction with only 1 topic (should skip)."""
         # Create dataset with only 1 topic
-        df = pd.DataFrame({
-            "Document_ID": range(10),
-            "Document": ["text"] * 10,
-            "Topic": [0] * 10
-        })
+        df = pd.DataFrame({"Document_ID": range(10), "Document": ["text"] * 10, "Topic": [0] * 10})
         topics_data = {0: [("word", 0.9)]}
-        matrix = sp.random(1, 10, density=0.5, format='csr')
+        matrix = sp.random(1, 10, density=0.5, format="csr")
         words = np.array([f"w{i}" for i in range(10)])
 
         reducer = TopicReducer(df, topics_data, matrix, words)
@@ -267,11 +268,13 @@ class TestNoiseClusterPreservation:
     @pytest.fixture
     def reducer_with_noise(self):
         """Create reducer with noise cluster."""
-        df = pd.DataFrame({
-            "Document_ID": range(50),
-            "Document": ["text"] * 50,
-            "Topic": [0] * 10 + [1] * 10 + [2] * 10 + [3] * 10 + [-1] * 10  # 4 topics + noise
-        })
+        df = pd.DataFrame(
+            {
+                "Document_ID": range(50),
+                "Document": ["text"] * 50,
+                "Topic": [0] * 10 + [1] * 10 + [2] * 10 + [3] * 10 + [-1] * 10,  # 4 topics + noise
+            }
+        )
         topics_data = {
             -1: [("unclustered", 0.5)],
             0: [("topic0", 0.9)],
@@ -279,7 +282,7 @@ class TestNoiseClusterPreservation:
             2: [("topic2", 0.9)],
             3: [("topic3", 0.9)],
         }
-        matrix = sp.random(5, 20, density=0.3, format='csr')
+        matrix = sp.random(5, 20, density=0.3, format="csr")
         words = np.array([f"w{i}" for i in range(20)])
 
         return TopicReducer(df, topics_data, matrix, words)
@@ -346,13 +349,11 @@ class TestEdgeCases:
 
     def test_single_document_per_topic(self):
         """Test with only 1 document per topic."""
-        df = pd.DataFrame({
-            "Document_ID": range(5),
-            "Document": [f"doc {i}" for i in range(5)],
-            "Topic": range(5)
-        })
+        df = pd.DataFrame(
+            {"Document_ID": range(5), "Document": [f"doc {i}" for i in range(5)], "Topic": range(5)}
+        )
         topics_data = {i: [(f"word{i}", 0.9)] for i in range(5)}
-        matrix = sp.random(5, 10, density=0.5, format='csr')
+        matrix = sp.random(5, 10, density=0.5, format="csr")
         words = np.array([f"w{i}" for i in range(10)])
 
         reducer = TopicReducer(df, topics_data, matrix, words)
@@ -394,12 +395,12 @@ class TestResultDataclass:
         """Test that result contains all required fields."""
         result = reducer.reduce_to_n_topics(n_topics=5, use_ctfidf=True)
 
-        assert hasattr(result, 'documents_df')
-        assert hasattr(result, 'topics_data')
-        assert hasattr(result, 'topic_mappings')
-        assert hasattr(result, 'num_topics_before')
-        assert hasattr(result, 'num_topics_after')
-        assert hasattr(result, 'reduction_method')
+        assert hasattr(result, "documents_df")
+        assert hasattr(result, "topics_data")
+        assert hasattr(result, "topic_mappings")
+        assert hasattr(result, "num_topics_before")
+        assert hasattr(result, "num_topics_after")
+        assert hasattr(result, "reduction_method")
 
     def test_result_method_label(self, reducer):
         """Test that reduction method is correctly labeled."""
@@ -408,3 +409,158 @@ class TestResultDataclass:
 
         assert result_fixed.reduction_method == "fixed_n"
         assert result_auto.reduction_method == "auto"
+
+
+def _tree_reducer():
+    """Topics 0-3 with 4, 3, 2 and 1 documents plus 3 noise documents; a merge
+    tree joins 0+1 first, then 2+3, then everything."""
+    topics = [0] * 4 + [1] * 3 + [2] * 2 + [3] + [-1] * 3
+    documents_df = pd.DataFrame(
+        {
+            "Document_ID": range(len(topics)),
+            "Document": [f"topic{t} shared words sample{i}" for i, t in enumerate(topics)],
+            "Topic": topics,
+        }
+    )
+    topics_data = {t: [(f"topic{t}", 0.9)] for t in (-1, 0, 1, 2, 3)}
+    tree = TopicMergeTree(
+        linkage="average",
+        leaf_ids=[0, 1, 2, 3],
+        leaf_sizes=[4, 3, 2, 1],
+        children=[[0, 1], [2, 3], [4, 5]],
+        heights=[0.2, 0.5, 0.9],
+    )
+    return TopicReducer(documents_df=documents_df, topics_data=topics_data), tree
+
+
+class TestReduceWithTree:
+    """Cutting a merge tree (strategies average, ward and density)."""
+
+    def test_cut_maps_topics_and_numbers_groups_by_size(self):
+        reducer, tree = _tree_reducer()
+        result = reducer.reduce_with_tree(tree, n_topics=2)
+
+        assert result.topic_mappings == {0: 0, 1: 0, 2: 1, 3: 1, -1: -1}
+        assert result.topic_hierarchy == {0: [0, 1], 1: [2, 3]}
+        assert result.num_topics_before == 4
+        assert result.num_topics_after == 2
+        assert result.reduction_method == "fixed_n"
+        assert result.documents_df["Topic"].tolist() == [0] * 7 + [1] * 3 + [-1] * 3
+
+    def test_keywords_are_extracted_for_the_merged_topics(self):
+        reducer, tree = _tree_reducer()
+        result = reducer.reduce_with_tree(tree, n_topics=2)
+
+        assert set(result.topics_data) == {-1, 0, 1}
+        words = {word for word, _ in result.topics_data[0]}
+        assert {"topic0", "topic1"} <= words
+
+    def test_threshold_cut_applies_the_merges_within_it(self):
+        reducer, tree = _tree_reducer()
+        result = reducer.reduce_with_tree(tree, distance_threshold=0.3)
+
+        assert result.num_topics_after == 3
+        assert result.reduction_method == "auto"
+        assert result.topic_mappings[0] == result.topic_mappings[1]
+
+    def test_full_tree_is_an_identity_cut(self):
+        reducer, tree = _tree_reducer()
+        result = reducer.reduce_with_tree(tree, n_topics=4)
+
+        assert result.topic_mappings == {0: 0, 1: 1, 2: 2, 3: 3, -1: -1}
+        assert result.topic_hierarchy == {0: [0], 1: [1], 2: [2], 3: [3]}
+
+    def test_a_cut_without_merges_keeps_the_topic_ids(self):
+        # Sizes ascend with the id: numbering by size would reverse them, and a
+        # stored density tree (leaves = these ids) would no longer line up.
+        topics = [0] * 2 + [1] * 3 + [2] * 5
+        documents_df = pd.DataFrame(
+            {
+                "Document_ID": range(len(topics)),
+                "Document": [f"word{t} text" for t in topics],
+                "Topic": topics,
+            }
+        )
+        reducer = TopicReducer(documents_df=documents_df, topics_data={t: [] for t in (0, 1, 2)})
+        tree = TopicMergeTree(
+            linkage="density",
+            leaf_ids=[0, 1, 2],
+            leaf_sizes=[2, 3, 5],
+            children=[[0, 1], [2, 3]],
+            heights=[0.5, 1.0],
+        )
+
+        result = reducer.reduce_with_tree(tree, n_topics=3)
+
+        assert result.topic_mappings == {0: 0, 1: 1, 2: 2}
+        assert result.documents_df["Topic"].tolist() == topics
+        assert result.topic_hierarchy == {0: [0], 1: [1], 2: [2]}
+
+    def test_noise_stays_noise_unless_absorption_is_asked_for(self):
+        reducer, tree = _tree_reducer()
+        # Documents 10 and 11 fell out of the 2+3 merge (row 1), 12 out of the root (row 2).
+        noise = {10: 1, 11: 1, 12: 2}
+
+        kept = reducer.reduce_with_tree(tree, n_topics=2, noise_merges=noise)
+        assert kept.absorbed_noise == 0
+        assert kept.documents_df["Topic"].tolist()[10:] == [-1, -1, -1]
+
+        absorbed = reducer.reduce_with_tree(tree, n_topics=2, noise_merges=noise, absorb_noise=True)
+        assert absorbed.absorbed_noise == 2
+        group = absorbed.topic_mappings[2]
+        assert absorbed.documents_df["Topic"].tolist()[10:] == [group, group, -1]
+
+    def test_absorbed_noise_counts_towards_group_size(self):
+        topics = [0] * 3 + [1] * 2 + [-1] * 4
+        documents_df = pd.DataFrame(
+            {
+                "Document_ID": range(len(topics)),
+                "Document": [f"word{t} text" for t in topics],
+                "Topic": topics,
+            }
+        )
+        reducer = TopicReducer(
+            documents_df=documents_df,
+            topics_data={t: [] for t in (-1, 0, 1)},
+        )
+        tree = TopicMergeTree(
+            linkage="density", leaf_ids=[0, 1], leaf_sizes=[3, 2], children=[[0, 1]], heights=[1.0]
+        )
+        result = reducer.reduce_with_tree(
+            tree, n_topics=1, noise_merges={5: 0, 6: 0, 7: 0, 8: 0}, absorb_noise=True
+        )
+        assert result.absorbed_noise == 4
+        assert set(result.documents_df["Topic"]) == {0}
+
+    def test_tree_must_cover_the_topics(self):
+        reducer, _ = _tree_reducer()
+        other = TopicMergeTree(
+            linkage="average", leaf_ids=[0, 1], leaf_sizes=[4, 3], children=[[0, 1]], heights=[0.1]
+        )
+        with pytest.raises(ValueError, match="do not match"):
+            reducer.reduce_with_tree(other, n_topics=1)
+
+    def test_needs_exactly_one_cut(self):
+        reducer, tree = _tree_reducer()
+        with pytest.raises(ValueError, match="exactly one"):
+            reducer.reduce_with_tree(tree)
+        with pytest.raises(ValueError, match="exactly one"):
+            reducer.reduce_with_tree(tree, n_topics=2, distance_threshold=0.3)
+
+
+class TestCtfidfKeywords:
+    def test_honours_language_and_word_count(self):
+        documents_df = pd.DataFrame(
+            {
+                "Document_ID": range(4),
+                "Document": ["the cats purr", "the cats nap", "the dogs bark", "the dogs dig"],
+                "Topic": [0, 0, 1, 1],
+            }
+        )
+        result = CtfidfKeywords(language="english", n_words=2).extract(documents_df)
+
+        assert result.topic_ids == [0, 1]
+        assert result.matrix.shape[0] == 2
+        assert all(len(words) == 2 for words in result.topics_data.values())
+        assert "the" not in {w for words in result.topics_data.values() for w, _ in words}
+        assert result.topics_data[0][0][0] == "cats"

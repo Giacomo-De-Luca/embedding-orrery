@@ -1,4 +1,4 @@
-import type { ColorScale, ProjectionMethod, DimensionMode } from '../types/types';
+import type { ColorScale, ProjectionMethod, DimensionMode, HazeRendererKind } from '../types/types';
 
 /**
  * Curated view presets for the demo (`?preset=<id>`), plus the initial-state
@@ -122,11 +122,13 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
     label: 'Map the model’s features',
     description:
       '16,384 SAE feature labels from gemma-3-4b-it embedded as their own map — right-click any point to inspect it.',
-    // No colour block: the label map ships without topic extraction (LLM
-    // topics are the planned 4b-pt upgrade), so the collection default rules.
+    // No colour block: the collection's saved default (its 279 LLM-labeled
+    // topics) already rules.
     method: 'umap',
     mode: '3d',
-    flags: { nebulaMode: false, showClusterLabels: false, densityMode: false },
+    // Same view as its COLLECTION_VIEW_OVERRIDES entry (density haze + topic
+    // labels), which the collection load applies after these flags anyway.
+    flags: { nebulaMode: true, showClusterLabels: true, densityMode: false },
   },
   'wordnet-pos': {
     id: 'wordnet-pos',
@@ -170,6 +172,12 @@ export const TOUR_PRESETS: Record<string, PresetDefinition> = {
 export interface CollectionViewOverride {
   flags?: Partial<Record<PresetFlagName, boolean>>;
   /**
+   * Nebula haze renderer. Also a persisted global preference, so it leaks
+   * across collections the same way the flags do: a collection whose haze
+   * look matters pins it.
+   */
+  hazeRenderer?: HazeRendererKind;
+  /**
    * Camera adjustment applied through the reset path once the collection
    * loads (structurally a `CameraViewAdjustment` — declared inline to keep
    * tourPresets import-free of tourSteps, which imports from here).
@@ -191,10 +199,28 @@ export const COLLECTION_VIEW_OVERRIDES: Record<string, CollectionViewOverride> =
   },
   // The flagship research-topics map must open in its full dress (nebula +
   // cluster labels — first-visit store defaults are both false) and a touch
-  // closer than the point-count default framing.
+  // closer than the point-count default framing. Density haze: the sprite
+  // haze's brightness follows topic size (~10× gap across EMNLP's topics).
   acl_abstracts_emnlp_findings: {
     flags: { nebulaMode: true, showClusterLabels: true },
+    hazeRenderer: 'density',
     camera: { zoom: 0.8 },
+  },
+  // Same dress as its preset (the 90-sec tour's finale lands here).
+  emotion: {
+    flags: { nebulaMode: true, showClusterLabels: true },
+    hazeRenderer: 'density',
+  },
+  // The SAE label map: 279 LLM-labeled feature topics, named at their
+  // centroids over a density haze.
+  Gemma_9_16k_embedded: {
+    flags: { nebulaMode: true, showClusterLabels: true },
+    hazeRenderer: 'density',
+  },
+  // The WordNet galaxy keeps the sprite haze its tour was tuned on; without
+  // the pin, the density renderer would follow a visitor here from EMNLP.
+  wordnet_senses_full: {
+    hazeRenderer: 'sprites',
   },
 };
 
@@ -268,20 +294,32 @@ export function resolveInitialCollection(args: {
 }
 
 /**
- * The store mutations a preset implies, as data — executed by callers against
+ * The store mutations a preset or collection view override implies, as data — executed by callers against
  * `useVisualizationStore.getState()` (kept pure here so it's unit-testable).
  */
 export type StoreOp =
   | { kind: 'method'; value: ProjectionMethod }
   | { kind: 'mode'; value: DimensionMode }
-  | { kind: 'flag'; flag: PresetFlagName; value: boolean };
+  | { kind: 'flag'; flag: PresetFlagName; value: boolean }
+  | { kind: 'hazeRenderer'; value: HazeRendererKind };
+
+function flagOps(flags: Partial<Record<PresetFlagName, boolean>> | undefined): StoreOp[] {
+  return Object.entries(flags ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([flag, value]): StoreOp => ({ kind: 'flag', flag: flag as PresetFlagName, value: value as boolean }));
+}
 
 export function presetStoreOps(preset: PresetDefinition): StoreOp[] {
   const ops: StoreOp[] = [];
   if (preset.method) ops.push({ kind: 'method', value: preset.method });
   if (preset.mode) ops.push({ kind: 'mode', value: preset.mode });
-  for (const [flag, value] of Object.entries(preset.flags ?? {})) {
-    ops.push({ kind: 'flag', flag: flag as PresetFlagName, value: value as boolean });
-  }
+  ops.push(...flagOps(preset.flags));
+  return ops;
+}
+
+/** The store mutations a collection view override implies (its camera is not a store op). */
+export function viewOverrideStoreOps(override: CollectionViewOverride): StoreOp[] {
+  const ops = flagOps(override.flags);
+  if (override.hazeRenderer) ops.push({ kind: 'hazeRenderer', value: override.hazeRenderer });
   return ops;
 }

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSubscription } from '@apollo/client/react';
 import { EMBEDDING_PROGRESS_SUBSCRIPTION } from '@/lib/graphql/queries';
 import type { JobProgress } from '@/lib/graphql/mutations';
-import { computePercent, nextEtaState, type EtaState } from './jobProgress';
+import { computePercent, foldWarning, nextEtaState, type EtaState } from './jobProgress';
 
 interface SubscriptionData {
   embeddingProgress: JobProgress;
@@ -24,6 +24,8 @@ export interface JobProgressState {
   /** Whether the item counter is meaningful */
   showItemCounter: boolean;
   isMultiStage: boolean;
+  /** Latest non-cancelling warning of the job (kept until the job changes) */
+  warning: string | null;
 }
 
 /**
@@ -38,6 +40,7 @@ export function useJobProgress(jobId: string | null): JobProgressState {
   const [elapsedMs, setElapsedMs] = useState(0);
   const etaRef = useRef<EtaState | null>(null);
   const [etaMs, setEtaMs] = useState<number | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const { data, error: subscriptionError } = useSubscription<SubscriptionData>(
     EMBEDDING_PROGRESS_SUBSCRIPTION,
@@ -54,6 +57,7 @@ export function useJobProgress(jobId: string | null): JobProgressState {
     setElapsedMs(0);
     etaRef.current = null;
     setEtaMs(null);
+    setWarning(null);
   }, [jobId]);
 
   // Fold subscription updates into progress + ETA state
@@ -61,6 +65,7 @@ export function useJobProgress(jobId: string | null): JobProgressState {
     if (data?.embeddingProgress) {
       const p = data.embeddingProgress;
       setProgress(p);
+      setWarning((previous) => foldWarning(previous, p));
       etaRef.current = nextEtaState(etaRef.current, p, Date.now());
       setEtaMs(etaRef.current?.etaMs ?? null);
     }
@@ -96,5 +101,6 @@ export function useJobProgress(jobId: string | null): JobProgressState {
     hasProgress,
     showItemCounter,
     isMultiStage,
+    warning,
   };
 }

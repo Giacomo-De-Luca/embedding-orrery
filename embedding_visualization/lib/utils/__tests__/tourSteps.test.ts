@@ -33,6 +33,7 @@ function makeRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     setNebulaMode: vi.fn(),
     setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
+    isCompactViewport: () => false,
     setShowLabels: vi.fn(),
     getLoadedCollection: () => TOUR_COLLECTION,
     getColorByField: () => 'topic_label',
@@ -223,6 +224,51 @@ describe('TOUR_STEPS', () => {
     // The parting view invites exploration: "how to draw" is left discoverable.
     expect(runtime.setActivePanel).toHaveBeenCalledWith('controls');
     expect(runtime.applyPreset).toHaveBeenCalledWith(FINALE_PRESET_ID);
+  });
+
+  describe('on a phone (compact viewport)', () => {
+    const phone = (overrides: Partial<TourRuntime> = {}) =>
+      makeRuntime({ isCompactViewport: () => true, ...overrides });
+
+    it.each(['map', 'search', 'focus-topic', 'temporal'])(
+      'the %s step keeps every panel closed so the map stays visible',
+      async (id) => {
+        const runtime = phone();
+        await step(id).prepare!(runtime);
+        expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+        expect(runtime.setActivePanel).not.toHaveBeenCalledWith(expect.any(String));
+      },
+    );
+
+    it('the finale keeps the Controls panel closed', async () => {
+      const runtime = phone({
+        getLoadedCollection: () => TOUR_PRESETS[FINALE_PRESET_ID].collection,
+      });
+      await step('finale').prepare!(runtime);
+      expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+      expect(runtime.applyPreset).toHaveBeenCalledWith(FINALE_PRESET_ID);
+    });
+
+    it('the feature-search step still opens the Search panel its anchor lives in', async () => {
+      const runtime = phone();
+      await step('feature-search').prepare!(runtime);
+      expect(runtime.setActivePanel).toHaveBeenCalledWith('search');
+    });
+
+    it('the temporal step still applies the window but never scrolls to the closed timeline', async () => {
+      const scrollIntoView = vi.fn();
+      vi.stubGlobal('document', {
+        querySelector: () => ({ getBoundingClientRect: () => ({ left: 0 }), scrollIntoView }),
+      });
+      try {
+        const runtime = phone();
+        await step('temporal').prepare!(runtime);
+        expect(runtime.applyTemporalWindow).toHaveBeenCalledWith(0, 1 / 3);
+        expect(scrollIntoView).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   it('suppresses the joyride wait-loader exactly on the steps where the page shows its own', () => {

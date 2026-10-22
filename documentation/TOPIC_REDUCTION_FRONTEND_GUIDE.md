@@ -1,5 +1,11 @@
 # Topic Reduction Frontend Integration Guide
 
+> **Superseded.** This guide describes the original reduction (`method`,
+> `useCtfidf`, label-keyed hierarchy, reductions that compound). Topic
+> reduction now cuts merge trees over the base topics, with a live slider on
+> Explore: see [TOPIC_MERGE_TREES.md](TOPIC_MERGE_TREES.md). Kept for the
+> history of the legacy strategies, which are scheduled for removal.
+
 ## Overview
 
 The backend now supports **topic reduction** functionality that allows users to merge similar topics after extraction. This guide explains how to integrate this feature into the frontend.

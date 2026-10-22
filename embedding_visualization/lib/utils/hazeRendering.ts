@@ -11,7 +11,7 @@ import type { ClusterData } from './clusterGeometry';
 import type { HazeRendererKind } from '../types/types';
 import { HazeRenderer } from './hazeRenderer';
 import { DensityHazeRenderer } from './densityHaze/DensityHazeRenderer';
-import { isDensityHazeSupported } from './densityHaze/support';
+import { supportedHazeRenderer } from './densityHaze/support';
 import { DEFAULT_DENSITY_HAZE_TUNING, type DensityHazeTuning } from './densityHaze/densityHazeMath';
 
 export interface HazeRendererLike {
@@ -47,7 +47,7 @@ export function createHazeRenderer(
   isDark: boolean,
   prefs?: HazeTuningPrefs,
 ): HazeRendererLike {
-  if (kind === 'density' && isDensityHazeSupported()) {
+  if (supportedHazeRenderer(kind) === 'density') {
     return new DensityHazeRenderer(canvas, isDark, prefs ? hazeTuningFromPrefs(prefs) : undefined);
   }
   return new HazeRenderer(canvas, isDark);

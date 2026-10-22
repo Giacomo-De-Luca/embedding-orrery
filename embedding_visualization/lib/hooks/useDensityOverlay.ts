@@ -4,11 +4,13 @@
  * Owns the DensityRenderer instance on an overlay canvas positioned over the
  * Plotly plot area, split lifecycle-vs-content like the 3D HazeRenderer:
  * creating/disposing the GL context is keyed only on enablement, while data
- * changes just re-upload buffers, and pan/zoom just re-renders (rAF-coalesced).
+ * changes just re-upload buffers, and pan/zoom just re-renders (coalesced by
+ * `CoalescedRedraw`).
  */
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Point2D } from '../types/types';
+import { CoalescedRedraw } from '../utils/coalescedRedraw';
 import { DensityRenderer } from '../utils/densityRenderer/DensityRenderer';
 import {
   approximateMaxDensity2D,
@@ -63,10 +65,6 @@ export function useDensityOverlay({
 
   const rendererRef = useRef<DensityRenderer | null>(null);
   const maxDensityRef = useRef(0);
-  const rafPendingRef = useRef(false);
-  // Set when a render is requested while a frame is already queued; drives the
-  // trailing render below so the final settled layout is never dropped.
-  const rafDirtyRef = useRef(false);
 
   const colorMatrix = useMemo(
     () => buildColorMatrix(channelAssignment.channelColors, GAMMA),
@@ -75,7 +73,6 @@ export function useDensityOverlay({
 
   // --- Per-frame render (reads live Plotly layout) ---
   const renderFrame = useCallback(() => {
-    rafPendingRef.current = false;
     const renderer = rendererRef.current;
     const canvas = canvasRef.current;
     const fl = graphDivRef.current?._fullLayout;
@@ -130,34 +127,14 @@ export function useDensityOverlay({
   const renderFrameRef = useRef(renderFrame);
   renderFrameRef.current = renderFrame;
 
-  // Runs the latest renderFrame, then — if another render was requested while
-  // this frame was in flight (rafDirtyRef) — queues one more. This guarantees a
-  // trailing render on a frame strictly after the settling `plotly_relayout`,
-  // so the density never sticks on a stale frame when the last event of a
-  // pan/zoom gesture is coalesced away. (renderFrame clears rafPendingRef.)
-  const runScheduledFrame = useCallback(() => {
-    renderFrameRef.current();
-    if (rafDirtyRef.current) {
-      rafDirtyRef.current = false;
-      rafPendingRef.current = true;
-      requestAnimationFrame(runScheduledFrameRef.current);
-    }
-  }, []);
-  const runScheduledFrameRef = useRef(runScheduledFrame);
-  runScheduledFrameRef.current = runScheduledFrame;
+  // One render per burst of requests, in the frame that drew the points. The
+  // render reads the live layout, so the settled range of a pan/zoom is never
+  // left on a stale frame.
+  const [redraw] = useState(() => new CoalescedRedraw(() => renderFrameRef.current()));
 
   const scheduleRender = useCallback(() => {
-    if (!rendererRef.current) return;
-    // A frame is already queued: mark dirty so a trailing frame runs after it
-    // instead of dropping this request (which could strand a stale frame when
-    // the layout keeps changing after the queued frame reads it).
-    if (rafPendingRef.current) {
-      rafDirtyRef.current = true;
-      return;
-    }
-    rafPendingRef.current = true;
-    requestAnimationFrame(runScheduledFrameRef.current);
-  }, []);
+    if (rendererRef.current) redraw.request();
+  }, [redraw]);
 
   // --- Renderer lifecycle ---
   useEffect(() => {
@@ -175,8 +152,7 @@ export function useDensityOverlay({
     return () => {
       renderer.dispose();
       rendererRef.current = null;
-      rafPendingRef.current = false;
-      rafDirtyRef.current = false;
+      redraw.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, supported]);

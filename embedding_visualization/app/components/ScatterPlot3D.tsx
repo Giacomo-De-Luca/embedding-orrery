@@ -11,6 +11,8 @@ import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crame
 import { useColorScaleReady } from '../../lib/hooks/useColorScaleReady';
 import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
+import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
+import { CameraPinchZoom } from '../../lib/utils/plotPinchZoom';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { useCameraFlyTo, animateCameraToRegion } from '../../lib/hooks/cameraAnimation';
 import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
@@ -253,6 +255,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const defaultCenter = { x: 0, y: 0, z: 0 };
   const pendingFlyToRef = useRef<Point3D | null>(null);
   const graphDivRef = useRef<PlotlyGraphDiv | null>(null);
+  // Two-finger pinch dollies the camera; its distance limits cap the zoom like the wheel's
+  const [pinchZoom] = useState(() => new CameraPinchZoom(graphDivRef));
+  usePinchZoom(containerRef, pinchZoom);
   const pointsRef = useRef(points);
   pointsRef.current = points;
   const [plotReady, setPlotReady] = useState(false);
@@ -573,16 +578,16 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     } else if (categoryField != null && categoryValues.length > 0) {
       if (nestedColorMap) {
         // --- MODE: NESTED CATEGORICAL ---
+        // Keyed by (topic, subtopic): one subtopic label under two topics is two groups
         const pointsBySub: Record<string, Point3D[]> = {};
         for (const point of displayPoints) {
-          const sub = CategoryKey.nested(point.metadata).subtopic;
-          (pointsBySub[sub] ??= []).push(point);
+          (pointsBySub[CategoryKey.nestedKey(point.metadata)] ??= []).push(point);
         }
-        for (const [sub, subPoints] of Object.entries(pointsBySub)) {
-          const parentTopic = CategoryKey.nested(subPoints[0]?.metadata).topic;
+        for (const [key, subPoints] of Object.entries(pointsBySub)) {
+          const { topic: parentTopic, subtopic: sub } = CategoryKey.splitSubtopicKey(key);
           const isMuted = mutedCategories.includes(sub) || mutedCategories.includes(parentTopic);
           const fade = CategoryKey.missingFade(parentTopic, missingPointOpacity);
-          pushCategoricalTraces(subPoints, sub, nestedColorMap.subtopicColors[sub] || '#7f7f7f', isMuted, fade);
+          pushCategoricalTraces(subPoints, sub, nestedColorMap.subtopicColors[key] || '#7f7f7f', isMuted, fade);
         }
       } else {
         // --- MODE: CATEGORICAL (Standard) ---
@@ -1679,7 +1684,8 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [hazeStrength, hazeEqualize]);
 
   return (
-    <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative' }}
+    // touch-action: the plot handles every gesture (rotate, pinch), never the page
+    <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative', touchAction: 'none' }}
       onContextMenu={(e) => {
         if (onPointContextMenu && hoveredPointRef.current) {
           e.preventDefault();

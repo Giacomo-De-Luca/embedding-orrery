@@ -9,6 +9,7 @@ heavy ``train_probe_for_collection`` import happens lazily inside the
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 PROBE_KINDS = (
     "ridge",
@@ -88,6 +89,16 @@ class ProbeConfig:
 def sanitize_field_key(name: str) -> str:
     """Make a name safe for metadata keys and path segments."""
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
+
+def probe_collection_dir(collection_name: str, root: Path) -> Path:
+    """Where a collection's probe artifacts live: ``<root>/collections/<name>/``.
+
+    ``root`` is ``PROBING_RESULTS_DIR``; artifacts sit below in
+    ``<field>/<kind>/``. Names are sanitised, so two collections can share
+    a folder (``my-poems`` and ``my_poems``).
+    """
+    return Path(root) / "collections" / sanitize_field_key(collection_name)
 
 
 def score_field_names(target_field: str, kind: str) -> tuple[str, str | None]:

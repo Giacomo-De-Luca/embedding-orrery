@@ -296,7 +296,7 @@ export type HighlightMap = Map<number, number>;
  * Topics define base hues; subtopics get lightness variations within that hue.
  */
 export interface NestedColorMap {
-  /** Map from subtopic label → hex color */
+  /** Subtopic → hex color, keyed by `CategoryKey.subtopicKey(topic, subtopic)` (one label under two topics stays two groups) */
   subtopicColors: Record<string, string>;
   /** Map from topic label → hex color (base hue) */
   topicColors: Record<string, string>;
@@ -304,7 +304,7 @@ export interface NestedColorMap {
   hierarchy: Record<string, string[]>;
   /** Map from topic label → total point count */
   topicCounts: Record<string, number>;
-  /** Map from subtopic label → point count */
+  /** Subtopic → point count, keyed like `subtopicColors` */
   subtopicCounts: Record<string, number>;
 }
 

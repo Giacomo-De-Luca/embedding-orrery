@@ -1,5 +1,6 @@
 'use client';
 
+import type { ApolloClient } from '@apollo/client';
 import { useQuery } from '@apollo/client/react';
 import { TOPIC_SIMILARITY_ORDER } from '../graphql/queries';
 import { AssociationFields } from '../utils/fieldAxis';
@@ -24,4 +25,17 @@ export function useTopicSimilarityOrder(
     skip,
   });
   return skip ? null : (data?.topicSimilarityOrder ?? null);
+}
+
+/**
+ * Drop every cached similarity order and refetch the active ones: a topic
+ * reduction renumbers the topics, so no stored order survives it.
+ */
+export async function refreshTopicSimilarityOrders(client: ApolloClient): Promise<void> {
+  await client.refetchQueries({
+    updateCache(cache) {
+      cache.evict({ fieldName: 'topicSimilarityOrder' });
+      cache.gc();
+    },
+  });
 }

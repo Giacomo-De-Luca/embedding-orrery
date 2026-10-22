@@ -23,15 +23,18 @@ from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
 from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.embedding_tasks import EmbeddingTexts
 from ..utils.id_utils import IDDeduplicator
-from ..utils.text_processing import extract_metadata, format_text_for_embedding
+from ..utils.text_processing import extract_metadata
 from .config import (
     DB_PATH,
+    DataType,
     EmbeddingConfig,
     EmbeddingModelConfig,
     EmbeddingResult,
 )
 from .create_embedding_function import create_embedding_function, get_device
+from .embed_media import MediaSource, MultimodalEmbeddingRun
 from .embedding_job import EmbeddingBatchJob, open_embedding_collection, report_embedding_failure
 
 # Reserved row key holding the source split during multi-split embedding.
@@ -75,6 +78,52 @@ def _portion_label(portion: PortionConfig | None) -> str:
     if portion.strategy == PortionStrategy.ROW_RANGE:
         return f"range_{portion.start}_{portion.end}"
     return "all"
+
+
+def _chroma_client():
+    db_path = str(DB_PATH.resolve())
+    DB_PATH.mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=db_path, settings=Settings(anonymized_telemetry=False))
+
+
+def _embed_media(
+    config: EmbeddingConfig,
+    splits: list[str],
+    rows: list[dict],
+    total_in_split: int,
+    device: str,
+    start_time: float,
+    progress_callback: Callable[[int, int], None] | None,
+    cancel_event: threading.Event | None,
+) -> EmbeddingResult:
+    """Embed the Image / Audio / Video (and optional text) columns of the loaded rows."""
+    source = MediaSource(
+        job_type="huggingface",
+        collection_metadata={
+            "description": f"Media embeddings from HuggingFace dataset: {config.dataset_id}",
+            "source_dataset": config.dataset_id,
+            "source_config": config.config or "",
+            "source_split": ", ".join(splits),
+            "portion_strategy": _portion_label(config.portion),
+            "total_in_split": total_in_split,
+        },
+        auto_id=lambda row, row_idx: (
+            f"{config.collection_name}_{row.get(_SPLIT_KEY, config.split)}_{row_idx}"
+        ),
+        excluded_columns=frozenset({_SPLIT_KEY}),
+        row_metadata=lambda row: {"source_split": row.get(_SPLIT_KEY, config.split)},
+    )
+    return MultimodalEmbeddingRun(
+        client=_chroma_client(),
+        config=config,
+        rows=rows,
+        total=total_in_split,
+        device=device,
+        start_time=start_time,
+        source=source,
+        progress_callback=progress_callback,
+        cancel_event=cancel_event,
+    ).run()
 
 
 def embed_huggingface_dataset(
@@ -131,6 +180,18 @@ def embed_huggingface_dataset(
                 embedding_model=model_config.model_name,
             )
 
+        if config.data_type == DataType.MULTIMODAL:
+            return _embed_media(
+                config,
+                splits,
+                rows,
+                total_in_split,
+                device,
+                start_time,
+                progress_callback,
+                cancel_event,
+            )
+
         # Determine columns to embed
         columns = config.columns
         if not columns:
@@ -150,6 +211,13 @@ def embed_huggingface_dataset(
                 )
         print(f"Embedding columns: {columns}")
 
+        # Stored documents vs model inputs (task prefix); fails on unknown
+        # placeholders before the model loads or an old collection is replaced.
+        texts = EmbeddingTexts(
+            columns, config.text_template, model_config.prompt_format, model_config.prompt
+        )
+        texts.validate(rows)
+
         # Calculate total batches early for progress messages
         total_batches = (len(rows) + config.batch_size - 1) // config.batch_size
 
@@ -165,18 +233,10 @@ def embed_huggingface_dataset(
         )
 
         # Sort rows by text length for efficient batching (reduces padding waste)
-        rows = sort_items_by_length(
-            rows, lambda row: format_text_for_embedding(row, columns, config.text_template)
-        )
+        rows = sort_items_by_length(rows, texts.document)
         print(f"Sorted {len(rows)} rows by text length for efficient batching")
 
-        # Initialize ChromaDB
-        db_path = str(DB_PATH.resolve())
-        DB_PATH.mkdir(parents=True, exist_ok=True)
-
-        client = chromadb.PersistentClient(
-            path=db_path, settings=Settings(anonymized_telemetry=False)
-        )
+        client = _chroma_client()
 
         # Emit status: loading model
         emit_progress_sync(
@@ -201,12 +261,7 @@ def embed_huggingface_dataset(
             "embedded_columns": json.dumps(columns),
             "portion_strategy": _portion_label(config.portion),
             "total_in_split": total_in_split,
-            "embedding_provider": model_config.provider.value,
-            "embedding_model": model_config.model_name,
-            "embedding_dim": embedding_dim,
-            "embedding_task": model_config.task,
-            "embedding_task_type": model_config.task_type,
-            "embedding_prompt": model_config.prompt,
+            **model_config.collection_metadata(embedding_dim),
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         collection, existing_ids = open_embedding_collection(
@@ -249,6 +304,7 @@ def embed_huggingface_dataset(
             model_config=model_config,
             cancel_event=cancel_event,
             progress_callback=progress_callback,
+            truncation_source=embedding_func,
         )
         job.start(already_embedded=len(existing_ids), resume=config.resume)
         id_deduplicator = IDDeduplicator()
@@ -256,6 +312,7 @@ def embed_huggingface_dataset(
         for batch_start, batch_end in job.batches():
             ids = []
             documents = []
+            model_inputs = []
             metadatas = []
 
             for row_idx in range(batch_start, batch_end):
@@ -274,7 +331,7 @@ def embed_huggingface_dataset(
                     continue
 
                 # Format text for embedding
-                text = format_text_for_embedding(row, columns, config.text_template)
+                text = texts.document(row)
 
                 # Skip empty texts
                 if not text.strip():
@@ -287,11 +344,12 @@ def embed_huggingface_dataset(
 
                 ids.append(doc_id)
                 documents.append(text)
+                model_inputs.append(texts.model_input(row, text))
                 metadatas.append(metadata)
 
             if ids:
                 # Compute embeddings explicitly; ChromaDB stores vectors only
-                collection.add(ids=ids, embeddings=embedding_func(documents))
+                collection.add(ids=ids, embeddings=embedding_func(model_inputs))
 
                 # DuckDB: documents + metadata
                 if _duckdb_dataset_name:

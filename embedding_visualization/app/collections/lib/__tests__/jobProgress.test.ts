@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computePercent,
+  foldWarning,
   formatElapsed,
   nextEtaState,
   type EtaState,
@@ -87,5 +88,21 @@ describe('nextEtaState', () => {
     // Same item count 10s later → avg time per item doubles → ETA doubles
     const s3 = nextEtaState(s2, counts({ itemsProcessed: 20, totalItems: 100 }), T0 + 20_000);
     expect(s3?.etaMs).toBe(160_000);
+  });
+});
+
+describe('foldWarning', () => {
+  it('starts with no warning', () => {
+    expect(foldWarning(null, { warning: null })).toBeNull();
+    expect(foldWarning(null, {})).toBeNull();
+  });
+
+  it('keeps the last warning through later events without one', () => {
+    const first = foldWarning(null, { warning: '3 of 100 documents exceeded the limit' });
+    expect(foldWarning(first, { warning: null })).toBe('3 of 100 documents exceeded the limit');
+  });
+
+  it('replaces it with a newer warning', () => {
+    expect(foldWarning('3 of 100', { warning: '5 of 200' })).toBe('5 of 200');
   });
 });

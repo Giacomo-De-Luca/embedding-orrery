@@ -9,8 +9,7 @@ export function useAppSearch(
   selectedCollection: string | null,
   colorByField: string | null,
   distanceMetric: DistanceMetric = 'COSINE',
-  queryPromptName?: string | null,  // null=none, 'auto'=auto-detect, or explicit value
-  embeddingPromptName?: string | null,  // From collection metadata, for auto-detect
+  queryPromptName?: string | null,  // null=none, 'auto'=the collection's own (backend), or explicit value
   topicFilters?: FilterInput[],  // Optional topic filters to scope semantic search
   temporalRange?: TemporalRange | null,  // Optional temporal range to scope semantic search
   resolvePoint?: (id: string) => (Point2D | Point3D) | undefined,  // Resolve result ID to point (for auto-select in same batch)
@@ -35,7 +34,7 @@ export function useAppSearch(
   }, [topicFilters, temporalRange]);
 
   const handleSemanticSearch = useCallback(async (query: string) => {
-    const effectivePromptName = resolveQueryPrompt(queryPromptName, embeddingPromptName);
+    const effectivePromptName = resolveQueryPrompt(queryPromptName);
 
     const requestId = ++searchRequestIdRef.current;
 
@@ -58,7 +57,7 @@ export function useAppSearch(
       if (searchRequestIdRef.current !== requestId) return;
       console.error('Search error:', error);
     }
-  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, embeddingPromptName, allFilters, resolvePoint]);
+  }, [findSimilarByQuery, colorByField, distanceMetric, queryPromptName, allFilters, resolvePoint]);
 
   const handlePointClick = useCallback(async (point: Point2D | Point3D) => {
     console.log('Point clicked:', point.label, 'metric:', distanceMetric);

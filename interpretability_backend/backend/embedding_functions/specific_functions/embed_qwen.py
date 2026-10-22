@@ -1,11 +1,20 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from torch import Tensor
 from transformers import AutoModel, AutoTokenizer
 
+from ...utils.truncation import TruncationTracker
+
 
 class EmbedTextQWEN(EmbeddingFunction[Documents]):
+    """Qwen3-Embedding: last-token pooling, ``batch_size`` texts per forward pass.
+
+    Texts longer than ``max_length`` tokens are truncated and counted in
+    ``truncation`` (the job reports them as a warning).
+    """
+
     def __init__(
         self,
         model: str = "Qwen/Qwen3-Embedding-0.6B",
@@ -23,6 +32,7 @@ class EmbedTextQWEN(EmbeddingFunction[Documents]):
         self.task = task
         self.device = device
         self.is_query = is_query
+        self.truncation = TruncationTracker(max_length)
 
         self.tokeniser = AutoTokenizer.from_pretrained(model, padding_side="left")
         # CUDA enables Flash Attention 2; MPS/CPU use the default attention impl.
@@ -55,14 +65,22 @@ class EmbedTextQWEN(EmbeddingFunction[Documents]):
     def __call__(self, input: Documents) -> Embeddings:
 
         ## We only add instructions for queries
+        texts = list(input)
         if self.is_query:
-            input = [
-                self.get_detailed_instruct(task_description=self.task, query=text) for text in input
+            texts = [
+                self.get_detailed_instruct(task_description=self.task, query=text) for text in texts
             ]
+        self.truncation.count(self.tokeniser, texts)
 
+        vectors: list[np.ndarray] = []
+        for start in range(0, len(texts), self.batch_size):
+            vectors.extend(self._embed_batch(texts[start : start + self.batch_size]))
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[np.ndarray]:
         # Tokenize the input texts
         batch_dict = self.tokeniser(
-            input,
+            texts,
             padding=True,
             truncation=True,
             max_length=self.max_length,

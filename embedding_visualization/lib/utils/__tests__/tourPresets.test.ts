@@ -9,6 +9,10 @@ import {
   seedInitialColorState,
   resolveInitialCollection,
   presetStoreOps,
+  viewOverrideStoreOps,
+  COLLECTION_VIEW_OVERRIDES,
+  SAE_MAP_COLLECTION,
+  WORDNET_COLLECTION,
 } from '../tourPresets';
 import { serializeColorScale, deserializeColorScale } from '../colorScaleUrl';
 
@@ -180,6 +184,57 @@ describe('presetStoreOps', () => {
       method: 'pca',
     });
     expect(ops).toEqual([{ kind: 'method', value: 'pca' }]);
+  });
+});
+
+describe('COLLECTION_VIEW_OVERRIDES', () => {
+  it('only references real demo collections', () => {
+    for (const collection of Object.keys(COLLECTION_VIEW_OVERRIDES)) {
+      expect(DEMO_COLLECTIONS).toContain(collection);
+    }
+  });
+
+  it('EMNLP, emotion and the SAE label map open in density haze with cluster labels', () => {
+    for (const collection of [TOUR_COLLECTION, 'emotion', SAE_MAP_COLLECTION]) {
+      const ops = viewOverrideStoreOps(COLLECTION_VIEW_OVERRIDES[collection]);
+      expect(ops).toContainEqual({ kind: 'flag', flag: 'nebulaMode', value: true });
+      expect(ops).toContainEqual({ kind: 'flag', flag: 'showClusterLabels', value: true });
+      expect(ops).toContainEqual({ kind: 'hazeRenderer', value: 'density' });
+    }
+  });
+
+  it('WordNet pins the sprite haze so the density renderer cannot follow a visitor in', () => {
+    expect(viewOverrideStoreOps(COLLECTION_VIEW_OVERRIDES[WORDNET_COLLECTION])).toEqual([
+      { kind: 'hazeRenderer', value: 'sprites' },
+    ]);
+  });
+
+  it('a preset never contradicts its collection override (the override lands last)', () => {
+    for (const preset of Object.values(TOUR_PRESETS)) {
+      const override = COLLECTION_VIEW_OVERRIDES[preset.collection];
+      for (const [flag, value] of Object.entries(override?.flags ?? {})) {
+        expect(preset.flags?.[flag as keyof typeof preset.flags]).toBe(value);
+      }
+    }
+  });
+});
+
+describe('viewOverrideStoreOps', () => {
+  it('emits flag ops, then the haze renderer; camera is not a store op', () => {
+    expect(
+      viewOverrideStoreOps({
+        flags: { nebulaMode: false, showClusterLabels: undefined },
+        hazeRenderer: 'density',
+        camera: { zoom: 0.8 },
+      }),
+    ).toEqual([
+      { kind: 'flag', flag: 'nebulaMode', value: false },
+      { kind: 'hazeRenderer', value: 'density' },
+    ]);
+  });
+
+  it('emits nothing for an empty override', () => {
+    expect(viewOverrideStoreOps({})).toEqual([]);
   });
 });
 

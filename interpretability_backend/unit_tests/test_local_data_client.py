@@ -138,12 +138,14 @@ class TestDataFrameRowConversion:
 
     def test_convert_basic_types(self):
         """Should preserve basic Python types."""
-        df = pd.DataFrame({
-            "str_col": ["hello", "world"],
-            "int_col": [1, 2],
-            "float_col": [1.5, 2.5],
-            "bool_col": [True, False],
-        })
+        df = pd.DataFrame(
+            {
+                "str_col": ["hello", "world"],
+                "int_col": [1, 2],
+                "float_col": [1.5, 2.5],
+                "bool_col": [True, False],
+            }
+        )
 
         rows = []
         for _, row in df.iterrows():
@@ -165,9 +167,11 @@ class TestDataFrameRowConversion:
 
     def test_handle_null_values(self):
         """Should convert NaN/None to None."""
-        df = pd.DataFrame({
-            "col": [1.0, None, 3.0],
-        })
+        df = pd.DataFrame(
+            {
+                "col": [1.0, None, 3.0],
+            }
+        )
 
         rows = []
         for _, row in df.iterrows():
@@ -187,17 +191,19 @@ class TestDataFrameRowConversion:
     def test_truncate_long_lists(self):
         """Should truncate lists longer than 10 items."""
         long_list = list(range(20))
-        df = pd.DataFrame({
-            "list_col": [long_list],
-        })
+        df = pd.DataFrame(
+            {
+                "list_col": [long_list],
+            }
+        )
 
         for _, row in df.iterrows():
             value = row["list_col"]
             if isinstance(value, list):
                 truncated = value[:10] if len(value) > 10 else value
 
-        assert len(truncated) == 10 # type: ignore
-        assert truncated == list(range(10)) # type: ignore
+        assert len(truncated) == 10  # type: ignore
+        assert truncated == list(range(10))  # type: ignore
 
 
 class TestEdgeCases:
@@ -219,3 +225,53 @@ class TestEdgeCases:
         """Should handle unicode in file paths."""
         assert _detect_file_type("/путь/файл.csv") == "csv"
         assert _detect_file_type("/路径/文件.json") == "json"
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+
+
+class TestMediaColumns:
+    """Media cells keep their raw value for the multimodal embedder."""
+
+    @staticmethod
+    def _parquet(tmp_path):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.table(
+            {
+                "caption": ["a cat", "a dog"],
+                "img": [PNG, PNG],
+                "hf_img": [{"bytes": PNG, "path": "cat.png"}, {"bytes": PNG, "path": "dog.png"}],
+                "clip": ["clips/a.mp4", "clips/b.mp4"],
+            }
+        )
+        path = tmp_path / "media.parquet"
+        pq.write_table(table, path)
+        return str(path)
+
+    def test_raw_columns_keep_bytes_and_dicts(self, tmp_path):
+        from backend.clients.local_data_client import load_local_file_portion
+
+        rows, total = load_local_file_portion(
+            self._parquet(tmp_path), raw_columns=["img", "hf_img"]
+        )
+        assert total == 2
+        assert rows[0]["img"] == PNG
+        assert rows[0]["hf_img"] == {"bytes": PNG, "path": "cat.png"}
+        assert rows[0]["clip"] == "clips/a.mp4"
+
+    def test_other_columns_are_converted_as_before(self, tmp_path):
+        from backend.clients.local_data_client import load_local_file_portion
+
+        rows, _ = load_local_file_portion(self._parquet(tmp_path))
+        assert isinstance(rows[0]["img"], str)
+
+    def test_preview_reports_media_kinds_and_placeholders(self, tmp_path):
+        from backend.clients.local_data_client import get_local_file_preview
+
+        preview = get_local_file_preview(self._parquet(tmp_path))
+        assert preview.column_kinds == {"img": "image", "hf_img": "image", "clip": "video"}
+        assert preview.rows[0]["img"] == "[image 48 B]"
+        assert preview.rows[0]["hf_img"] == "cat.png"
+        assert preview.rows[0]["caption"] == "a cat"

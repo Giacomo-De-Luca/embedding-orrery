@@ -83,6 +83,21 @@ class TestOverrides:
         assert options.to_dict()["video_fps"] == 2.0
 
 
+class TestProcessingKwargs:
+    def test_only_the_kinds_of_the_job(self):
+        options = MediaOptions(image_max_soft_tokens=70, video_max_soft_tokens=280)
+        assert options.processing_kwargs({MediaKind.IMAGE}) == {"image": {"max_soft_tokens": 70}}
+        assert options.processing_kwargs({MediaKind.AUDIO}) == {}
+
+    def test_pre_sampled_video_frames_are_not_sampled_again(self):
+        kwargs = MediaOptions().processing_kwargs({"video"})
+        assert kwargs == {"video": {"max_soft_tokens": 140, "do_sample_frames": False}}
+
+    def test_image_and_video_together(self):
+        kwargs = MediaOptions().processing_kwargs({MediaKind.IMAGE, MediaKind.VIDEO})
+        assert set(kwargs) == {"image", "video"}
+
+
 class TestTokenBudget:
     def test_estimate_counts_each_media_column(self, settings):
         options = settings.defaults

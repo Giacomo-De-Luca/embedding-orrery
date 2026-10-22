@@ -14,6 +14,7 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/lib/ui-primitives/popo
 import { X, RotateCcw } from 'lucide-react';
 import { useDebounceValue } from '@/lib/hooks/use-debounce-value';
 import { useCategoryColorMap } from '@/lib/hooks/useCategoryColorMap';
+import { CategoryKey } from '@/lib/utils/categoryKey';
 import type { NestedColorMap, ColorScale, HistogramBin, CustomNumericRange } from '../../lib/types/types';
 import { NumericRangeChart } from './charts/NumericRangeChart';
 import {
@@ -35,7 +36,7 @@ interface LegendProps {
   filteredCounts?: Record<string, number> | null;
   /** Per-topic filtered counts for nested legend mode. */
   filteredTopicCounts?: Record<string, number> | null;
-  /** Per-subtopic filtered counts for nested legend mode. */
+  /** Per-subtopic filtered counts for nested legend mode, keyed by `CategoryKey.subtopicKey`. */
   filteredSubtopicCounts?: Record<string, number> | null;
   mutedCategories?: string[];
   onCategoryToggle?: (category: string, shiftKey: boolean) => void;
@@ -180,16 +181,22 @@ export function Legend({
   const [debouncedFilter] = useDebounceValue(filterText, 200);
   const filterInputRef = useRef<HTMLInputElement>(null);
 
-  // Color picker popover state
-  const [pickerCategory, setPickerCategory] = useState<string | null>(null);
+  // Color picker popover state: the row it is open on (a category, or a
+  // nested subtopic's composite key, so a label shared by a topic and its
+  // subtopic opens one popover) and the category it recolours.
+  const [picker, setPicker] = useState<{ row: string; category: string } | null>(null);
+  const pickerRow = picker?.row ?? null;
+  const togglePicker = useCallback((row: string, category: string) => {
+    setPicker((current) => (current?.row === row ? null : { row, category }));
+  }, []);
 
   const hasOverrides = categoryColorOverrides && Object.keys(categoryColorOverrides).length > 0;
 
   const handleColorChange = useCallback((rgba: Parameters<typeof Color.rgb>[0]) => {
-    if (!pickerCategory || !onColorOverride) return;
+    if (!picker || !onColorOverride) return;
     const hex = Color.rgb(rgba).hex();
-    onColorOverride(pickerCategory, hex);
-  }, [pickerCategory, onColorOverride]);
+    onColorOverride(picker.category, hex);
+  }, [picker, onColorOverride]);
 
   useEffect(() => { setFilterText(''); }, [categoryField]);
 
@@ -289,7 +296,9 @@ export function Legend({
     for (const topic of sortedTopics) {
       const subs = source[topic];
       result[topic] = filteredSubtopicCounts
-        ? [...subs].sort((a, b) => (filteredSubtopicCounts[b] ?? 0) - (filteredSubtopicCounts[a] ?? 0))
+        ? [...subs].sort((a, b) =>
+            (filteredSubtopicCounts[CategoryKey.subtopicKey(topic, b)] ?? 0)
+            - (filteredSubtopicCounts[CategoryKey.subtopicKey(topic, a)] ?? 0))
         : subs;
     }
     return result;
@@ -411,7 +420,7 @@ export function Legend({
                     }
                   }}
                 >
-                  <Popover open={pickerCategory === topic} onOpenChange={(open) => setPickerCategory(open ? topic : null)}>
+                  <Popover open={pickerRow === topic} onOpenChange={(open) => setPicker(open ? { row: topic, category: topic } : null)}>
                     <PopoverAnchor asChild>
                       <span
                         className={cn(
@@ -427,12 +436,12 @@ export function Legend({
                           if (!onColorOverride) return;
                           e.preventDefault();
                           e.stopPropagation();
-                          setPickerCategory(pickerCategory === topic ? null : topic);
+                          togglePicker(topic, topic);
                         }}
                         aria-hidden="true"
                       />
                     </PopoverAnchor>
-                    {pickerCategory === topic && (
+                    {pickerRow === topic && (
                       <PopoverContent className="w-64 p-3" side="right" align="start" onOpenAutoFocus={(e) => e.preventDefault()} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                         <ColorPicker value={nestedColorMap.topicColors[topic] || '#7f7f7f'} onChange={handleColorChange} className="h-auto">
                           <ColorPickerSelection className="h-32 rounded-lg" />
@@ -467,7 +476,8 @@ export function Legend({
                 {/* Subtopic rows (hidden/collapsed when topic is muted) */}
                 {!isTopicMuted && subtopics.map((sub) => {
                   const isSubMuted = mutedCategories.includes(sub);
-                  const subCount = nestedColorMap.subtopicCounts[sub];
+                  const subKey = CategoryKey.subtopicKey(topic, sub);
+                  const subCount = nestedColorMap.subtopicCounts[subKey];
 
                   return (
                     <div
@@ -494,7 +504,7 @@ export function Legend({
                         }
                       }}
                     >
-                      <Popover open={pickerCategory === sub} onOpenChange={(open) => setPickerCategory(open ? sub : null)}>
+                      <Popover open={pickerRow === subKey} onOpenChange={(open) => setPicker(open ? { row: subKey, category: sub } : null)}>
                         <PopoverAnchor asChild>
                           <span
                             className={cn(
@@ -502,7 +512,7 @@ export function Legend({
                               onColorOverride && "cursor-context-menu hover:ring-2 hover:ring-foreground/40 hover:ring-offset-1 hover:scale-125"
                             )}
                             style={{
-                              backgroundColor: isSubMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[sub] || '#7f7f7f'),
+                              backgroundColor: isSubMuted ? '#9ca3af' : (nestedColorMap.subtopicColors[subKey] || '#7f7f7f'),
                               outline: categoryColorOverrides?.[sub] ? '1.5px solid currentColor' : undefined,
                               outlineOffset: '1px',
                             }}
@@ -510,14 +520,14 @@ export function Legend({
                               if (!onColorOverride) return;
                               e.preventDefault();
                               e.stopPropagation();
-                              setPickerCategory(pickerCategory === sub ? null : sub);
+                              togglePicker(subKey, sub);
                             }}
                             aria-hidden="true"
                           />
                         </PopoverAnchor>
-                        {pickerCategory === sub && (
+                        {pickerRow === subKey && (
                           <PopoverContent className="w-64 p-3" side="right" align="start" onOpenAutoFocus={(e) => e.preventDefault()} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                            <ColorPicker value={nestedColorMap.subtopicColors[sub] || '#7f7f7f'} onChange={handleColorChange} className="h-auto">
+                            <ColorPicker value={nestedColorMap.subtopicColors[subKey] || '#7f7f7f'} onChange={handleColorChange} className="h-auto">
                               <ColorPickerSelection className="h-32 rounded-lg" />
                               <ColorPickerHue />
                               <ColorPickerAlpha />
@@ -541,7 +551,7 @@ export function Legend({
                       {subCount !== undefined && (
                         <span className="text-xs text-muted-foreground tabular-nums">
                           {filteredSubtopicCounts
-                            ? `${formatCount(filteredSubtopicCounts[sub] ?? 0)} / ${formatCount(subCount)}`
+                            ? `${formatCount(filteredSubtopicCounts[subKey] ?? 0)} / ${formatCount(subCount)}`
                             : formatCount(subCount)}
                         </span>
                       )}
@@ -597,7 +607,7 @@ export function Legend({
                 }
               }}
             >
-              <Popover open={pickerCategory === value} onOpenChange={(open) => setPickerCategory(open ? value : null)}>
+              <Popover open={pickerRow === value} onOpenChange={(open) => setPicker(open ? { row: value, category: value } : null)}>
                 <PopoverAnchor asChild>
                   <span
                     className={cn(
@@ -613,12 +623,12 @@ export function Legend({
                       if (!onColorOverride) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      setPickerCategory(pickerCategory === value ? null : value);
+                      togglePicker(value, value);
                     }}
                     aria-hidden="true"
                   />
                 </PopoverAnchor>
-                {pickerCategory === value && (
+                {pickerRow === value && (
                   <PopoverContent className="w-64 p-3" side="right" align="start" onOpenAutoFocus={(e) => e.preventDefault()} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                     <ColorPicker value={colorMap[value] || '#7f7f7f'} onChange={handleColorChange} className="h-auto">
                       <ColorPickerSelection className="h-32 rounded-lg" />

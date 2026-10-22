@@ -8,6 +8,57 @@
     "RETRIEVAL_DOCUMENT": "RETRIEVAL_QUERY"
   },
   "extra_prompt_names": ["s2p", "s2s"],
+  "task_prefixes": {
+    "default_task": "search",
+    "tasks": [
+      {
+        "id": "search",
+        "label": "Search",
+        "query_prefix": "task: search result | query: ",
+        "document_prefix": "title: none | text: ",
+        "prompt_names": ["query", "Retrieval-query", "SearchQuery", "Retrieval", "Reranking", "BitextMining"]
+      },
+      {
+        "id": "question_answering",
+        "label": "Question answering",
+        "query_prefix": "task: question answering | query: ",
+        "document_prefix": "title: none | text: ",
+        "prompt_names": ["QuestionAnswering"]
+      },
+      {
+        "id": "fact_checking",
+        "label": "Fact checking",
+        "query_prefix": "task: fact checking | query: ",
+        "document_prefix": "title: none | text: ",
+        "prompt_names": ["FactChecking"]
+      },
+      {
+        "id": "code_retrieval",
+        "label": "Code retrieval",
+        "query_prefix": "task: code retrieval | query: ",
+        "document_prefix": "title: none | text: ",
+        "prompt_names": ["CodeRetrieval", "InstructionRetrieval"]
+      },
+      {
+        "id": "classification",
+        "label": "Classification",
+        "query_prefix": "task: classification | query: ",
+        "prompt_names": ["Classification", "MultilabelClassification"]
+      },
+      {
+        "id": "clustering",
+        "label": "Clustering",
+        "query_prefix": "task: clustering | query: ",
+        "prompt_names": ["Clustering"]
+      },
+      {
+        "id": "sentence_similarity",
+        "label": "Sentence similarity",
+        "query_prefix": "task: sentence similarity | query: ",
+        "prompt_names": ["STS", "SentenceSimilarity", "PairClassification"]
+      }
+    ]
+  },
   "providers": {
     "sentence_transformers": [
       {"model": "all-MiniLM-L6-v2", "description": "Small and fast; the default text model"},
@@ -25,7 +76,9 @@
           "InstructionRetrieval", "MultilabelClassification", "PairClassification",
           "Reranking", "Retrieval", "Retrieval-query", "Retrieval-document", "STS",
           "Summarization"
-        ]
+        ],
+        "prompt_format": "task_prefix",
+        "max_length": 2048
       },
       {
         "model": "google/embeddinggemma-2",
@@ -39,7 +92,9 @@
           "SearchQuery", "SentenceSimilarity", "Summarization"
         ],
         "default_for": ["multimodal"],
-        "encoders": {"image": "vision_config", "video": "vision_config", "audio": "audio_config"}
+        "encoders": {"image": "vision_config", "video": "vision_config", "audio": "audio_config"},
+        "prompt_format": "task_prefix",
+        "max_length": 8192
       }
     ],
     "openai": [
@@ -57,7 +112,11 @@
     ],
     "gemini": [
       {"model": "gemini-embedding-001"},
-      {"model": "gemini-embedding-2"}
+      {
+        "model": "gemini-embedding-2",
+        "description": "Gemini Embedding 2: text with task prefixes",
+        "prompt_format": "task_prefix"
+      }
     ],
     "bge": [
       {"model": "BAAI/bge-m3"}

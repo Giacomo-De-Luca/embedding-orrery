@@ -20,10 +20,11 @@ import {
 import { Slider } from '@/lib/ui-primitives/slider';
 import type { ProjectionMethod, DimensionMode, HazeRendererKind } from '../../lib/types/types';
 import type { ColorFieldOption } from '../../lib/utils/fieldAnalysis';
+import type { UseTopicMergeTreeReturn } from '../../lib/hooks/useTopicMergeTree';
 import { VisualizationColorControls } from './VisualizationColorControls';
 import { VisualizationPointControls } from './VisualizationPointControls';
 import { SliderRow } from './SliderRow';
-import { isDensityHazeSupported } from '../../lib/utils/densityHaze/support';
+import { isDensityHazeSupported, supportedHazeRenderer } from '../../lib/utils/densityHaze/support';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -49,6 +50,8 @@ interface VisualizationControlsProps {
   hasActiveFilter?: boolean;
   /** Search highlights exist — gates the highlight-dependent controls. */
   hasHighlights?: boolean;
+  /** The topic slider (Color section, while colouring by topic). */
+  topicTree?: UseTopicMergeTreeReturn | null;
 }
 
 export function VisualizationControls({
@@ -62,15 +65,17 @@ export function VisualizationControls({
   collectionName,
   hasActiveFilter,
   hasHighlights,
+  topicTree,
 }: VisualizationControlsProps) {
   const store = useVisualizationStore;
   // Density haze needs float render targets: probe after mount (SSR-safe) and
   // reset a persisted 'density' preference so no dead sliders are shown here.
   const [densityHazeSupported, setDensityHazeSupported] = React.useState(false);
   React.useEffect(() => {
-    const supported = isDensityHazeSupported();
-    setDensityHazeSupported(supported);
-    if (!supported && store.getState().hazeRenderer === 'density') store.getState().setHazeRenderer('sprites');
+    setDensityHazeSupported(isDensityHazeSupported());
+    const { hazeRenderer, setHazeRenderer } = store.getState();
+    const runnable = supportedHazeRenderer(hazeRenderer);
+    if (runnable !== hazeRenderer) setHazeRenderer(runnable);
   }, [store]);
   const {
     method, mode, colorByField, selectedDimensions,
@@ -312,7 +317,7 @@ export function VisualizationControls({
 
         <Separator />
 
-        <VisualizationColorControls colorFieldOptions={colorFieldOptions} collectionName={collectionName} nestedColorAvailable={nestedColorAvailable} hasMissingValues={hasMissingValues} canFadeMissing={canFadeMissing} />
+        <VisualizationColorControls colorFieldOptions={colorFieldOptions} collectionName={collectionName} nestedColorAvailable={nestedColorAvailable} hasMissingValues={hasMissingValues} canFadeMissing={canFadeMissing} topicTree={topicTree} />
 
         {/* Labels */}
         {showLabelsGroup && (

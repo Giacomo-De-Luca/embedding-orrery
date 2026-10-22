@@ -34,16 +34,17 @@ from interpret.sae.activation_store import max_pool_feature_acts
 from interpret.sae.exploration.prompt_explorer import (
     PromptExplorer,
     PromptExplorerConfig,
+    SaeSpec,
 )
 from interpret.sae.hook_manager import HookManager
 from interpret.sae.loading import clear_sae_cache
 from interpret.sae.sae_config import (
-    HOOK_TYPE_FROM_STR,
     QWEN_SCOPE_MODELS,
     WIDTH_TO_D_SAE,
     GemmaScopeSAEConfig,
     HookType,
     QwenScopeSAEConfig,
+    parse_hook_type,
 )
 from interpret.sae.source_ids import neuronpedia_source_id, qwen_source_id
 from interpret.sae.steering import SteeringMode, SteeringOp
@@ -141,6 +142,7 @@ class TokenFeaturesResult:
 class LayerActivationsResult:
     layer: int
     width: str
+    hook_type: str = HookType.RESID_POST.value
     tokens: list[TokenFeaturesResult] = field(default_factory=list)
 
 
@@ -310,13 +312,15 @@ class InterpretService:
         return base if self._variant == "pt" else f"{base}-{self._variant}"
 
     def unload_model(self) -> ModelStatusResult:
-        """Unload the model and free GPU memory."""
-        if self._wrapper is None:
-            return self.get_status()
+        """Unload the model and free GPU memory.
 
-        logger.info("Unloading model %s ...", self._model_name)
-        del self._wrapper
-        self._wrapper = None
+        The SAE cache and the device cache are released even with no model
+        set: a failed or partial load can leave SAEs cached behind.
+        """
+        if self._wrapper is not None:
+            logger.info("Unloading model %s ...", self._model_name)
+            del self._wrapper
+            self._wrapper = None
         self._prompt_explorer = None
         self._model_name = None
         self._family = "gemma"
@@ -403,7 +407,7 @@ class InterpretService:
                 )
                 continue
 
-            ht = self._parse_hook_type(spec.hook_type)
+            ht = parse_hook_type(spec.hook_type)
             d_sae = WIDTH_TO_D_SAE.get(spec.width)
             if d_sae is None:
                 raise ValueError(f"Unknown SAE width '{spec.width}'")
@@ -413,7 +417,12 @@ class InterpretService:
             sae_key = (spec.layer, spec.hook_type, spec.width)
             if sae_key not in seen_sae_keys:
                 seen_sae_keys.add(sae_key)
-                manager.add_sae(self._make_sae_config(spec.layer, spec.width, ht, device))
+                # Steering reads only the decoder row (resolved at attach) and
+                # keeps running every decode step; the SAE encode is recorded
+                # for the prefill only, not appended on device per token.
+                manager.add_sae(
+                    self._make_sae_config(spec.layer, spec.width, ht, device, prefill_only=True)
+                )
             manager.add_steering(
                 SteeringOp(
                     layer_index=spec.layer,
@@ -428,14 +437,14 @@ class InterpretService:
 
     def _get_prompt_explorer(
         self,
-        saes: list[tuple[int, str]],
+        saes: list[SaeSpec],
         top_k: int,
     ) -> PromptExplorer:
         """Return a PromptExplorer, creating one lazily.
 
-        A new explorer is created whenever the requested (layer, width)
-        specs or top_k differ from the cached one, or when no explorer
-        exists yet.
+        A new explorer is created whenever the requested SAE specs (layer,
+        width, hook site) or top_k differ from the cached one, or when no
+        explorer exists yet.
         """
         wrapper = self._require_model()
 
@@ -448,11 +457,11 @@ class InterpretService:
             device = str(wrapper.device)
 
             # Family-aware SAE config construction: reuse the single factory
-            # so Qwen models build QwenScopeSAEConfig (the prompt path hooks
-            # RESID_POST only). skip_labels=True → labels come from DuckDB.
-            def _sae_config_factory(layer: int, width: str):
+            # so Qwen models build QwenScopeSAEConfig (which rejects
+            # non-residual sites). skip_labels=True → labels come from DuckDB.
+            def _sae_config_factory(spec: SaeSpec):
                 return self._make_sae_config(
-                    layer, width, HookType.RESID_POST, device, prefill_only=True
+                    spec.layer, spec.width, spec.hook_type, device, prefill_only=True
                 )
 
             config = PromptExplorerConfig(
@@ -478,15 +487,6 @@ class InterpretService:
             self._prompt_explorer = PromptExplorer(config)
 
         return self._prompt_explorer
-
-    @staticmethod
-    def _parse_hook_type(hook_type: str) -> HookType:
-        ht = HOOK_TYPE_FROM_STR.get(hook_type)
-        if ht is None:
-            raise ValueError(
-                f"Unknown hook_type '{hook_type}'. Valid: {list(HOOK_TYPE_FROM_STR.keys())}"
-            )
-        return ht
 
     def _make_sae_config(
         self,
@@ -658,7 +658,7 @@ class InterpretService:
         db_sae_id: str | None = None,
         skip_chat_template: bool = False,
         filter_mode: str = "neuronpedia",
-        saes: list[tuple[int, str]] | None = None,
+        saes: list[tuple[int, str] | tuple[int, str, str]] | None = None,
     ) -> PromptActivationsResult:
         """Run a prompt through the model with SAE hooks.
 
@@ -669,28 +669,30 @@ class InterpretService:
             db_model_id: DuckDB model_id for label lookup (from frontend selector).
             db_sae_id: DuckDB sae_id for label lookup (from frontend selector).
                 Only meaningful for single-SAE calls; with multiple specs pass
-                ``None`` so each layer derives its own width-aware sae_id.
+                ``None`` so each spec derives its own sae_id.
             skip_chat_template: If True, treat the prompt as raw text even for
                 instruction-tuned models (skip BOS only, no chat wrapping).
             filter_mode: One of ``"neuronpedia"``, ``"coverage_bos"``,
                 ``"coverage_no_bos"``. Controls how features are filtered.
-            saes: Explicit (layer, width) SAE specs — hooks all of them in a
-                single forward pass (two widths at one layer co-attach).
-                Takes precedence over ``layers`` + ``width``.
+            saes: Explicit ``(layer, width, hook_type)`` SAE specs, the hook
+                type a ``HookType`` value such as ``"mlp_out"`` (residual
+                stream when left out) — hooks all of them in a single forward
+                pass (two widths at one site co-attach). Takes precedence over
+                ``layers`` + ``width``, which hook the residual stream.
         """
         from backend.API.duckdb_instance import get_duckdb_client
 
         self._require_model()
         if saes:
-            specs = [(int(layer), str(w)) for layer, w in saes]
+            specs = [SaeSpec.parse(*spec) for spec in saes]
         else:
             effective_layers = (
                 layers if layers else _DEFAULT_LAYERS_BY_SIZE.get(self._model_size, _DEFAULT_LAYERS)
             )
-            specs = [(layer, width) for layer in effective_layers]
+            specs = [SaeSpec(layer, width) for layer in effective_layers]
         if len(specs) > 1:
             # A single db_sae_id would mislabel every other spec — force the
-            # per-spec width-aware derivation below.
+            # per-spec (width- and site-aware) derivation below.
             db_sae_id = None
 
         # Mode-specific top-k: NEURONPEDIA caps at 50, coverage modes need all
@@ -715,9 +717,8 @@ class InterpretService:
         db = get_duckdb_client()
 
         layer_results: list[LayerActivationsResult] = []
-        for key in sorted(prompt_result.layers.keys()):
-            lr = prompt_result.layers[key]
-            layer_idx, layer_width = key
+        for spec in sorted(prompt_result.layers, key=SaeSpec.sort_key):
+            lr = prompt_result.layers[spec]
 
             # Filter to only prompt token positions
             prompt_tokens = [tf for tf in lr.tokens if prompt_start <= tf.position < prompt_end]
@@ -734,16 +735,17 @@ class InterpretService:
                 # an empty label_map — features show index + activation only).
                 sae_id = qwen_source_id(
                     QwenScopeSAEConfig(
-                        layer_index=layer_idx,
-                        width=layer_width,
+                        layer_index=spec.layer,
+                        width=spec.width,
                         model_size=self._model_size,
                     )
                 )
             else:
                 sae_id = neuronpedia_source_id(
                     GemmaScopeSAEConfig(
-                        layer_index=layer_idx,
-                        width=layer_width,
+                        layer_index=spec.layer,
+                        hook_type=spec.hook_type,
+                        width=spec.width,
                         model_size=self._model_size,
                         variant=self._variant,
                     )
@@ -791,6 +793,7 @@ class InterpretService:
                 LayerActivationsResult(
                     layer=lr.layer,
                     width=lr.width,
+                    hook_type=spec.hook_type.value,
                     tokens=token_results,
                 )
             )
@@ -945,7 +948,7 @@ class InterpretService:
         scatter plot collections.
         """
         wrapper = self._require_model()
-        ht = self._parse_hook_type(hook_type)
+        ht = parse_hook_type(hook_type)
         device = str(wrapper.device)
 
         sae_config = self._make_sae_config(layer, width, ht, device, prefill_only=True)
@@ -998,7 +1001,9 @@ class InterpretService:
             Optional ``(done, total)`` callback invoked after each document.
         result_callback:
             Optional ``(item_id, activations)`` callback invoked after each
-            document so callers can persist results incrementally.
+            document so callers can persist results incrementally. Results
+            handed to it are not also kept: the returned list is then empty,
+            so memory does not grow with the number of documents.
         cancel_event:
             Checked before each document; once set, the batch stops and the
             documents processed so far are returned.
@@ -1008,10 +1013,10 @@ class InterpretService:
         List of ``(item_id, activations)`` where *activations* is a list
         of :class:`FeatureActivation` for nonzero features (max-pooled over
         the document's own tokens — BOS/chat-template positions masked),
-        sorted by activation descending.
+        sorted by activation descending. Empty when ``result_callback`` is given.
         """
         wrapper = self._require_model()
-        ht = self._parse_hook_type(hook_type)
+        ht = parse_hook_type(hook_type)
         device = str(wrapper.device)
 
         sae_config = self._make_sae_config(layer, width, ht, device, prefill_only=True)
@@ -1042,16 +1047,11 @@ class InterpretService:
                 except Exception:
                     logger.exception("Failed inference for item %s (%d/%d)", item_id, i + 1, total)
                     activations = []
-                    results.append((item_id, activations))
-                    if result_callback:
-                        result_callback(item_id, activations)
-                    if progress_callback:
-                        progress_callback(i + 1, total)
-                    continue
 
-                results.append((item_id, activations))
                 if result_callback:
                     result_callback(item_id, activations)
+                else:
+                    results.append((item_id, activations))
 
                 if progress_callback:
                     progress_callback(i + 1, total)

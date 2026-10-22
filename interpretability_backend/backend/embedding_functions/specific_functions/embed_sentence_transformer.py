@@ -18,6 +18,10 @@ Differences from ChromaDB's implementation:
 - Secrets passed as load kwargs (the HF ``token``) are never returned by
   ``get_config()``, which ChromaDB persists.
 - A class-level single-slot model cache (see ``models``).
+- Text inputs honour the job's ``batch_size`` and input-length cap
+  (``max_length``). The cap goes to each ``encode()`` call as
+  ``processing_kwargs``, never onto the shared cached model, and documents
+  longer than it (prompt included) are counted in ``truncation``.
 """
 
 import gc
@@ -32,6 +36,7 @@ from chromadb.utils.embedding_functions.schemas import validate_config_schema
 from ...utils.chroma_config_scrubber import DEFAULT_SECRET_KEYS
 from ...utils.embedding_prompts import DocumentPromptResolver, QueryPromptResolver
 from ...utils.model_load_options import SentenceTransformerLoadOptions
+from ...utils.truncation import TruncationTracker
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -58,6 +63,8 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         modalities: Iterable[str] = ("text",),
         is_query: bool = False,
         query_prompt: str | None = None,
+        max_length: int | None = None,
+        batch_size: int | None = None,
         **kwargs: Any,
     ):
         """Initialize SentenceTransformerEmbeddingFunction.
@@ -70,6 +77,8 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             modalities: Input modalities this instance will embed ("text", "image", ...)
             is_query: Embed queries: map ``prompt`` to its query counterpart
             query_prompt: Explicit query prompt (only with ``is_query``), wins over the mapping
+            max_length: Input-length cap in tokens for text (None: the model's own setting)
+            batch_size: Texts per forward pass (None: sentence-transformers' default of 32)
             **kwargs: Extra SentenceTransformer constructor arguments (e.g. ``token``);
                 secrets among them are never returned by ``get_config()``.
         """
@@ -87,6 +96,9 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         self.prompt = prompt
         self.is_query = is_query
         self.query_prompt = query_prompt
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.truncation = TruncationTracker(max_length)
 
         for key, value in kwargs.items():
             if not isinstance(value, (str, int, float, bool, list, dict, tuple)):
@@ -118,6 +130,11 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             else prompt
         )
         self._resolved_prompt = DocumentPromptResolver().resolve(effective, model_prompts)
+        # Prepended to every text input by encode(), so it counts towards the cap.
+        resolved = self._resolved_prompt
+        self._prompt_prefix = (
+            model_prompts.get(resolved.name, "") if resolved.name else resolved.text or ""
+        )
 
     @classmethod
     def _evict_cached_models(cls) -> None:
@@ -149,13 +166,27 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate embeddings for the given text documents."""
+        texts = list(input)
+        if self.truncation.active:
+            prefixed = [self._prompt_prefix + text for text in texts]
+            self.truncation.count(getattr(self._model, "tokenizer", None), prefixed)
         embeddings = self._model.encode(
-            list(input),
+            texts,
             convert_to_numpy=True,
             normalize_embeddings=self.normalize_embeddings,
             **self._resolved_prompt.encode_kwargs(),
+            **self._text_limits(),
         )
         return [np.array(embedding, dtype=np.float32) for embedding in embeddings]
+
+    def _text_limits(self) -> dict[str, Any]:
+        """``encode()`` kwargs for the batch size and the per-call input-length cap."""
+        limits: dict[str, Any] = {}
+        if self.batch_size is not None:
+            limits["batch_size"] = self.batch_size
+        if self.max_length is not None:
+            limits["processing_kwargs"] = {"text": {"max_length": self.max_length}}
+        return limits
 
     def embed_inputs(
         self,

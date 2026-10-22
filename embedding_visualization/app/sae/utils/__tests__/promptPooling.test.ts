@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { LayerActivationsResult, ActiveFeatureResult } from '@/lib/graphql/mutations';
+import type { HookType } from '@/lib/utils/saeCollections';
 import {
   attachSaeIdentity,
   poolPromptFeatures,
@@ -24,20 +25,22 @@ function layer(
   layerIdx: number,
   width: string,
   tokens: ReturnType<typeof tok>[],
+  hookType: HookType = 'RESID_POST',
 ): LayerActivationsResult {
-  return { layer: layerIdx, width, tokens };
+  return { layer: layerIdx, width, hookType, tokens };
 }
 
 function saeLayer(
   layerIdx: number,
   width: string,
   tokens: ReturnType<typeof tok>[],
+  hookType: HookType = 'RESID_POST',
 ): SaeLayerActivations {
-  return attachSaeIdentity([layer(layerIdx, width, tokens)], 'gemma-3-4b-it', [])[0];
+  return attachSaeIdentity([layer(layerIdx, width, tokens, hookType)], 'gemma-3-4b-it', [])[0];
 }
 
 describe('attachSaeIdentity', () => {
-  it('resolves the exact saeId from the selection pairs by (layer, width)', () => {
+  it('resolves the exact saeId from the selection pairs by (layer, hook site, width)', () => {
     const pairs = [
       { modelId: 'gemma-3-4b-it', saeId: '9-gemmascope-2-res-16k' },
       { modelId: 'gemma-3-4b-it', saeId: '9-gemmascope-2-res-65k' },
@@ -55,6 +58,27 @@ describe('attachSaeIdentity', () => {
   it('falls back to the derived gemmascope saeId when no pair matches', () => {
     const result = attachSaeIdentity([layer(22, '16k', [])], 'gemma-3-4b-it', []);
     expect(result[0].saeId).toBe('22-gemmascope-2-res-16k');
+  });
+
+  it('tells residual and MLP SAEs at the same layer and width apart', () => {
+    const pairs = [
+      { modelId: 'gemma-3-4b-it', saeId: '9-gemmascope-2-res-16k' },
+      { modelId: 'gemma-3-4b-it', saeId: '9-gemmascope-2-mlp-16k' },
+    ];
+    const result = attachSaeIdentity(
+      [layer(9, '16k', [], 'MLP_OUT'), layer(9, '16k', [])],
+      'gemma-3-4b-it',
+      pairs,
+    );
+    expect(result.map((l) => l.saeId)).toEqual([
+      '9-gemmascope-2-mlp-16k',
+      '9-gemmascope-2-res-16k',
+    ]);
+  });
+
+  it("derives the fallback saeId from the layer's hook site", () => {
+    const result = attachSaeIdentity([layer(9, '16k', [], 'MLP_OUT')], 'gemma-3-4b-it', []);
+    expect(result[0].saeId).toBe('9-gemmascope-2-mlp-16k');
   });
 });
 
@@ -105,6 +129,18 @@ describe('poolPromptFeatures', () => {
     expect(rows.map((r) => r.saeId).sort()).toEqual([
       '9-gemmascope-2-res-16k',
       '9-gemmascope-2-res-65k',
+    ]);
+  });
+
+  it('keeps the same feature index distinct across hook sites at one layer and width', () => {
+    const layers = [
+      saeLayer(9, '16k', [tok(0, feat(5, 2.0))]),
+      saeLayer(9, '16k', [tok(0, feat(5, 8.0))], 'MLP_OUT'),
+    ];
+    const rows = poolPromptFeatures(layers, 'max', 0.01);
+    expect(rows.map((r) => r.saeId)).toEqual([
+      '9-gemmascope-2-mlp-16k',
+      '9-gemmascope-2-res-16k',
     ]);
   });
 

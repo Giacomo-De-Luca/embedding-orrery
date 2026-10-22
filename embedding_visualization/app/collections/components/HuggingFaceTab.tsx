@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Input } from '@/lib/ui-primitives/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
@@ -14,6 +14,7 @@ import { SplitSelector } from './SplitSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
+import { taskPrefixControlOf } from './TaskPrefixField';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
@@ -161,7 +162,7 @@ export function HuggingFaceTab({
 
   const datasetIdInvalid = datasetId.length > 0 && !datasetId.includes('/');
 
-  const validationIssues = useMemo(() => getEmbedValidationIssues({
+  const validationIssues = getEmbedValidationIssues({
     source: 'hf',
     datasetId,
     collectionName,
@@ -169,7 +170,9 @@ export function HuggingFaceTab({
     portionStrategy,
     rangeStart,
     rangeEnd,
-  }), [datasetId, collectionName, selectedEmbeddingColumns, portionStrategy, rangeStart, rangeEnd]);
+    placeholderIssues: form.placeholderIssues(columns.map(c => c.name)),
+    taskPrefixesLoading: model.taskPrefixesLoading,
+  });
 
   const embedSummary = buildEmbedSummary({
     collectionName,
@@ -286,6 +289,7 @@ export function HuggingFaceTab({
               onTemplateChange={setTextTemplate}
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
+              taskPrefix={taskPrefixControlOf(model)}
             />
           </CardContent>
         </Card>

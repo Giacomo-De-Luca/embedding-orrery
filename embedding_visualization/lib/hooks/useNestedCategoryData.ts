@@ -21,6 +21,11 @@ export function useNestedCategoryData(
   const topicOverrides = useVisualizationStore(
     (s) => s.categoryColorOverrides['topic_label']
   );
+  // Topic-tree preview: groups keep their representative topic's saved hue.
+  const pin = useVisualizationStore((s) => s.categoryColorPins['topic_label']);
+  const sourceOverrides = useVisualizationStore((s) =>
+    pin ? s.categoryColorOverrides[pin.sourceField] : undefined,
+  );
 
   const available = useMemo(
     () => isNestedColorAvailable(points, colorByField),
@@ -29,8 +34,8 @@ export function useNestedCategoryData(
 
   const nestedColorMap = useMemo(() => {
     if (!available || !nestedColorMode) return null;
-    return buildNestedColorMap(points, palette, topicOverrides);
-  }, [available, nestedColorMode, points, palette, topicOverrides]);
+    return buildNestedColorMap(points, palette, topicOverrides, pin ? { pin, sourceOverrides } : undefined);
+  }, [available, nestedColorMode, points, palette, topicOverrides, pin, sourceOverrides]);
 
   return { available, nestedColorMap };
 }

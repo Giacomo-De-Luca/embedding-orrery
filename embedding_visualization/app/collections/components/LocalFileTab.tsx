@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApolloClient } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { Button } from '@/lib/ui-primitives/button';
@@ -28,6 +28,7 @@ import { DataTypeSelector } from './DataTypeSelector';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
+import { taskPrefixControlOf } from './TaskPrefixField';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
@@ -244,20 +245,26 @@ export function LocalFileTab({
   const isVectorMode = dataType === 'VECTOR';
   const sourceDatasetInfo = sourceDataset ? collections.find(c => c.name === sourceDataset) : null;
 
-  const fileValidationIssues = useMemo(() => getEmbedValidationIssues({
+  // The template and task prefix only apply to text embeds.
+  const isTextEmbed = dataType === 'TEXT';
+  const fileValidationIssues = getEmbedValidationIssues({
     source: 'local-file',
     filePath,
     collectionName,
     embeddingColumns: selectedEmbeddingColumns,
     dataType,
     portionStrategy,
-  }), [filePath, collectionName, selectedEmbeddingColumns, dataType, portionStrategy]);
+    placeholderIssues: isTextEmbed ? form.placeholderIssues(columns.map(c => c.name)) : [],
+    taskPrefixesLoading: isTextEmbed && model.taskPrefixesLoading,
+  });
 
-  const reEmbedValidationIssues = useMemo(() => getEmbedValidationIssues({
+  const reEmbedValidationIssues = getEmbedValidationIssues({
     source: 'reembed',
     collectionName,
     embeddingColumns: selectedEmbeddingColumns,
-  }), [collectionName, selectedEmbeddingColumns]);
+    placeholderIssues: form.placeholderIssues(datasetColumns),
+    taskPrefixesLoading: model.taskPrefixesLoading,
+  });
 
   const fileEmbedSummary = buildEmbedSummary({
     collectionName,
@@ -428,6 +435,7 @@ export function LocalFileTab({
               onTemplateChange={setTextTemplate}
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
+              taskPrefix={dataType === 'TEXT' ? taskPrefixControlOf(model) : undefined}
             />
           </CardContent>
         </Card>
@@ -531,6 +539,7 @@ export function LocalFileTab({
                 onIdColumnChange={setIdColumn}
                 showMetadataColumns={false}
                 showIdColumn={false}
+                taskPrefix={taskPrefixControlOf(model)}
               />
               <p className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
                 All metadata fields and item IDs are carried over from the source dataset

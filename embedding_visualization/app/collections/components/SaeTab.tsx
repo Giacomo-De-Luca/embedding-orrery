@@ -21,6 +21,7 @@ import { isJobCancelled } from '@/lib/utils/jobCancellation';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { TopicConfigForm, toTopicConfigInput } from './TopicConfigForm';
 import { useEmbeddingModelState } from '../lib/useEmbeddingModelState';
+import { placeholderIssues } from '../lib/taskPrefixes';
 import { GET_SAE_MODELS } from '@/lib/graphql/queries';
 import {
   PREPARE_SAE_DATA,
@@ -131,6 +132,13 @@ export function SaeTab() {
   // Label mode only takes effect on layers that actually have labels
   const isLabelMode =
     collectionMode === 'LABEL_EMBEDDINGS' && activeModel.labelledLayers.has(layer);
+  // A label map's task prefix is static: there is no column section to name columns from.
+  const labelPrefixBlocked =
+    createCollection &&
+    isLabelMode &&
+    (embeddingModel.taskPrefixesLoading ||
+      placeholderIssues({ prefix: embeddingModel.taskPrefix?.documentPrefix, prefixColumns: [] })
+        .length > 0);
 
   // Job state
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -438,6 +446,7 @@ export function SaeTab() {
                   model={embeddingModel}
                   showTopics={false}
                   idPrefix="sae-"
+                  taskPrefixColumns={[]}
                 />
               )}
 
@@ -466,12 +475,19 @@ export function SaeTab() {
           <div className="flex items-center gap-3">
             <Button
               onClick={handleDownload}
-              disabled={prepareLoading || !!activeJobId}
+              disabled={prepareLoading || !!activeJobId || labelPrefixBlocked}
               size="sm"
             >
               <Download className="h-3.5 w-3.5 mr-1.5" />
               Download & Ingest
             </Button>
+            {labelPrefixBlocked && (
+              <span className="text-xs text-muted-foreground">
+                {embeddingModel.taskPrefixesLoading
+                  ? 'Loading the task prefixes'
+                  : 'The task prefix takes no {column} placeholders here'}
+              </span>
+            )}
           </div>
 
           {/* Result display */}

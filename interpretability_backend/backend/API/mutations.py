@@ -19,6 +19,7 @@ from ..services.cancel_registry import (
     report_cancelled,
     request_cancel,
 )
+from ..services.collection_deletion import CollectionBusyError, CollectionDeletionService
 from ..services.embedding_pipeline import (
     HuggingFaceEmbeddingPipeline,
     LocalFileEmbeddingPipeline,
@@ -43,6 +44,7 @@ from .converters import (
     build_topic_extraction_config,
     convert_topic_infos,
     probe_info_from_record,
+    reduction_request_from_input,
 )
 from .duckdb_instance import get_duckdb_client
 from .interpret_instance import get_interpret_service
@@ -65,6 +67,7 @@ from .types import (
     GenerateLlmLabelsInput,
     GenerateLlmLabelsResult,
     GenerateSteeredInput,
+    HookTypeEnum,
     IngestSaeActivationsInput,
     IngestSaeFeaturesInput,
     IngestSaeResult,
@@ -156,21 +159,27 @@ class Mutation:
 
     @strawberry.mutation
     async def delete_collection(self, collection_name: str, info=None) -> bool:
-        """Delete a collection from both DuckDB and ChromaDB."""
-        try:
-            # Delete from DuckDB (cascades items, projections, topics)
-            db = get_duckdb_client()
-            db.delete_dataset(collection_name)
+        """Delete one vector collection and everything derived from it.
 
-            # Delete from ChromaDB (vector storage + its HNSW index directory,
-            # hundreds of MB to remove: off the event loop)
-            client = get_chromadb_client()
-            try:
-                await asyncio.to_thread(client.delete_collection, collection_name)
-            except Exception:
-                pass  # ChromaDB collection may not exist
-            return True
+        Vectors and their index directory, its DuckDB rows (and its dataset once
+        no other collection uses it), probe artifacts, job records and an upload
+        nothing else uses: see ``CollectionDeletionService``. Returns False when
+        the collection exists in neither store or a step fails; a running job
+        of the collection is reported as an error (cancel it first).
+        """
+        service = CollectionDeletionService(
+            get_duckdb_client(), get_chromadb_client(), get_job_state_service()
+        )
+        try:
+            # Off the event loop: an HNSW directory of up to GBs, up to millions
+            # of SAE activation rows.
+            return await asyncio.to_thread(service.delete, collection_name)
+        except CollectionBusyError:
+            raise
         except Exception:
+            logging.getLogger("orrery.mutations").exception(
+                "Could not delete collection %r", collection_name
+            )
             return False
 
     @strawberry.mutation
@@ -229,7 +238,10 @@ class Mutation:
         # which must stay out of schema-build time (torch-free demo image).
         from ..services.probing_service import train_probe_for_collection
 
-        result = await asyncio.to_thread(train_probe_for_collection, config)
+        # Registered while it trains so deleting the collection waits for it
+        # (training itself does not check for cancellation).
+        with cancellable_job(JobIds.probe(input.collection_name)):
+            result = await asyncio.to_thread(train_probe_for_collection, config)
 
         probe = None
         if result.error is None:
@@ -259,16 +271,12 @@ class Mutation:
         """Reduce topics on an existing collection (standalone post-processing, cancellable)."""
         from ..services.topic_extraction_service import reduce_existing_topics
 
+        request = reduction_request_from_input(input)  # invalid input: a GraphQL error
         with cancellable_job(JobIds.topic_reduction(input.collection_name)) as cancel_event:
             result = await asyncio.to_thread(
                 reduce_existing_topics,
                 collection_name=input.collection_name,
-                method=input.method,
-                n_topics=input.n_topics,
-                use_ctfidf=input.use_ctfidf,
-                regenerate_labels=input.regenerate_labels,
-                llm_provider=input.llm_provider,
-                llm_model=input.llm_model,
+                request=request,
                 cancel_event=cancel_event,
             )
 
@@ -282,6 +290,7 @@ class Mutation:
             topic_mappings=topic_mappings,
             duration_seconds=result.duration_seconds,
             error=result.error,
+            absorbed_noise=result.absorbed_noise,
         )
 
     @strawberry.mutation
@@ -633,7 +642,7 @@ class Mutation:
     ) -> PromptActivationsResponse:
         """Run a prompt through the model with SAE hooks and return per-token features."""
         service = get_interpret_service()
-        saes = [(s.layer, s.width) for s in input.saes] if input.saes else None
+        saes = [(s.layer, s.width, s.hook_type.value) for s in input.saes] if input.saes else None
         try:
             async with service._lock:
                 result = await asyncio.wait_for(
@@ -983,6 +992,7 @@ async def _run_embedding_pipeline(pipeline_cls, config, input) -> EmbedDatasetRe
         error=result.error,
         embedding_provider=result.embedding_provider,
         embedding_model=result.embedding_model,
+        warnings=list(result.warnings),
     )
 
 
@@ -1371,6 +1381,7 @@ def _convert_prompt_activations(result) -> PromptActivationsResponse:
         InterpretLayerResult(
             layer=lr.layer,
             width=lr.width,
+            hook_type=HookTypeEnum(lr.hook_type),
             tokens=[
                 InterpretTokenFeatures(
                     token=tf.token,

@@ -412,10 +412,7 @@ function resolveCategoryPreset(categoryField: string | null): CategoryColorPrese
  * label -1 ("Unclustered") denotes noise points. Topics and subtopics share
  * the same convention (see backend `topic_extraction_service`).
  */
-const TOPIC_LIKE_FIELDS = new Set([
-  'topic', 'topic_id', 'topic_label',
-  'subtopic', 'subtopic_id', 'subtopic_label',
-]);
+const TOPIC_LIKE_FIELDS: ReadonlySet<string> = new Set(['topic', 'subtopic', ...CategoryKey.TOPIC_FIELDS]);
 
 /**
  * Tokens that denote unclustered/noise points (HDBSCAN label -1). Derived once
@@ -573,19 +570,50 @@ export function buildAliasedCategoryColorMap(
   sourceOverrides?: Record<string, string>,
   overrides?: Record<string, string>,
 ): Record<string, string> {
-  const sourceMap = buildCategoryColorMap(alias.sourceField, alias.domain, palette, sourceOverrides);
-  const unknown = values.filter((v) => !(v in sourceMap) && v !== CategoryKey.MISSING);
-  const used = alias.domain.filter((v) => v !== CategoryKey.MISSING).length;
-  const extra = unknown.length
-    ? generateCategoryColors(used + unknown.length, palette).slice(used)
-    : [];
+  return buildPinnedCategoryColorMap(null, { ...alias, valueMap: {} }, values, palette, sourceOverrides, overrides);
+}
 
+/**
+ * An alias whose values are renamed on the way: value `v` takes the colour
+ * `valueMap[v] ?? v` has in the source field. The Explore topic-tree preview
+ * pins each group ("Cats +2") to its representative base topic ("Cats"), so
+ * colours stay put while the slider moves. Published by useTopicMergeTree in
+ * the store's non-persisted `categoryColorPins`.
+ */
+export interface CategoryColorPin extends CategoryColorAlias {
+  valueMap: Record<string, string>;
+}
+
+/**
+ * Color map for a pinned field: values the field's own preset colours keep
+ * that colour (topic_label's noise stays the noise colour even when the source
+ * field has no preset), every other value takes its source value's colour over
+ * the source's full domain (with `sourceOverrides`), Missing stays grey.
+ * Values outside the domain get fresh palette slots after the domain's; the
+ * field's own `overrides` win last.
+ */
+export function buildPinnedCategoryColorMap(
+  field: string | null,
+  pin: CategoryColorPin,
+  values: string[],
+  palette?: string,
+  sourceOverrides?: Record<string, string>,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  const preset = resolveCategoryPreset(field);
+  const sourceMap = buildCategoryColorMap(pin.sourceField, pin.domain, palette, sourceOverrides);
   const colorMap: Record<string, string> = {};
+  const unknown: string[] = [];
   for (const value of values) {
-    if (value in sourceMap) colorMap[value] = sourceMap[value];
+    const source = pin.valueMap[value] ?? value;
+    if (value !== CategoryKey.MISSING && preset?.colors[value]) colorMap[value] = preset.colors[value];
+    else if (source in sourceMap) colorMap[value] = sourceMap[source];
     else if (value === CategoryKey.MISSING) colorMap[value] = MISSING_CATEGORY_COLOR;
-    else colorMap[value] = extra[unknown.indexOf(value)];
+    else unknown.push(value);
   }
+  const used = pin.domain.filter((v) => v !== CategoryKey.MISSING).length;
+  const extra = unknown.length ? generateCategoryColors(used + unknown.length, palette).slice(used) : [];
+  unknown.forEach((value, i) => { colorMap[value] = extra[i]; });
   if (overrides) {
     for (const [k, v] of Object.entries(overrides)) {
       if (k in colorMap) colorMap[k] = v;

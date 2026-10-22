@@ -2,15 +2,17 @@
 Local file text embedding using SentenceTransformers and other providers.
 
 This module handles embedding text from local files (parquet, JSON, CSV, TSV)
-into ChromaDB using various embedding providers, and dispatches image and
-pre-computed vector files to their own embedders. Every data type supports
-resume and cancellation through ``embedding_job``.
+into ChromaDB using various embedding providers, and dispatches multimodal
+(image / audio / video / mixed) and pre-computed vector files to their own
+embedders. Every data type supports resume and cancellation through
+``embedding_job``.
 """
 
 import json
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
@@ -20,8 +22,9 @@ from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
 from ..utils.color_preprocessing import preprocess_color_metadata
 from ..utils.duckdb_sync import sync_dataset_and_collection, sync_items
+from ..utils.embedding_tasks import EmbeddingTexts
 from ..utils.id_utils import IDDeduplicator
-from ..utils.text_processing import extract_metadata, format_text_for_embedding
+from ..utils.text_processing import extract_metadata
 from .config import (
     DB_PATH,
     TEXT_EMBEDDING_DIMENSIONS,
@@ -31,7 +34,7 @@ from .config import (
     LocalFileEmbeddingConfig,
 )
 from .create_embedding_function import create_embedding_function, get_device
-from .embed_images import embed_images
+from .embed_media import MediaSource, MultimodalEmbeddingRun
 from .embed_vectors import embed_vectors
 from .embedding_job import EmbeddingBatchJob, open_embedding_collection, report_embedding_failure
 
@@ -68,6 +71,9 @@ def embed_local_file(
             n_rows=config.n_rows,
             sample_n=config.sample_n,
             sample_seed=config.sample_seed,
+            raw_columns=config.media_columns or ()
+            if config.data_type == DataType.MULTIMODAL
+            else (),
         )
         print(f"Loaded {len(rows)} rows (total in file: {total})")
 
@@ -91,7 +97,7 @@ def embed_local_file(
 
         embedder = {
             DataType.VECTOR: embed_vectors,
-            DataType.IMAGE: embed_images,
+            DataType.MULTIMODAL: embed_media_from_local,
         }.get(config.data_type, embed_text_from_local)
         return embedder(
             client,
@@ -112,6 +118,43 @@ def embed_local_file(
             device=get_device(),
             embedding_dim=TEXT_EMBEDDING_DIMENSIONS,
         )
+
+
+def embed_media_from_local(
+    client,
+    config: LocalFileEmbeddingConfig,
+    rows: list[dict],
+    total: int,
+    device: str,
+    start_time: float,
+    progress_callback: Callable | None = None,
+    cancel_event: threading.Event | None = None,
+) -> EmbeddingResult:
+    """Embed the images / audio / video (and optional text) columns of a local file.
+
+    Relative media paths resolve against the data file's folder.
+    """
+    source = MediaSource(
+        job_type="local_file",
+        collection_metadata={
+            "description": f"Media embeddings from local file: {config.file_path}",
+            "source_file": config.file_path,
+            "total_in_file": total,
+        },
+        auto_id=lambda row, row_idx: f"{config.collection_name}_{row_idx}",
+        base_dir=Path(config.file_path).expanduser().parent,
+    )
+    return MultimodalEmbeddingRun(
+        client=client,
+        config=config,
+        rows=rows,
+        total=total,
+        device=device,
+        start_time=start_time,
+        source=source,
+        progress_callback=progress_callback,
+        cancel_event=cancel_event,
+    ).run()
 
 
 def embed_text_from_local(
@@ -162,6 +205,13 @@ def embed_text_from_local(
 
     print(f"Embedding columns: {columns}")
 
+    # Stored documents vs model inputs (task prefix); fails on unknown
+    # placeholders before the model loads or an old collection is replaced.
+    texts = EmbeddingTexts(
+        columns, config.text_template, model_config.prompt_format, model_config.prompt
+    )
+    texts.validate(rows)
+
     # Calculate total batches early for progress messages
     total_batches = (len(rows) + config.batch_size - 1) // config.batch_size
 
@@ -177,9 +227,7 @@ def embed_text_from_local(
     )
 
     # Sort rows by text length for efficient batching (reduces padding waste)
-    rows = sort_items_by_length(
-        rows, lambda row: format_text_for_embedding(row, columns, config.text_template)
-    )
+    rows = sort_items_by_length(rows, texts.document)
     print(f"Sorted {len(rows)} rows by text length for efficient batching")
 
     # Emit status: loading model
@@ -202,12 +250,7 @@ def embed_text_from_local(
         "source_file": config.file_path,
         "embedded_columns": json.dumps(columns),
         "data_type": "text",
-        "embedding_provider": model_config.provider.value,
-        "embedding_model": model_config.model_name,
-        "embedding_dim": embedding_dim,
-        "embedding_task": model_config.task,
-        "embedding_task_type": model_config.task_type,
-        "embedding_prompt": model_config.prompt,
+        **model_config.collection_metadata(embedding_dim),
         "total_in_file": total,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -248,6 +291,7 @@ def embed_text_from_local(
         model_config=model_config,
         cancel_event=cancel_event,
         progress_callback=progress_callback,
+        truncation_source=embedding_func,
     )
     job.start(already_embedded=len(existing_ids), resume=config.resume)
     id_deduplicator = IDDeduplicator()
@@ -255,6 +299,7 @@ def embed_text_from_local(
     for batch_start, batch_end in job.batches():
         ids = []
         documents = []
+        model_inputs = []
         metadatas = []
 
         for row_idx in range(batch_start, batch_end):
@@ -272,7 +317,7 @@ def embed_text_from_local(
                 continue
 
             # Format text
-            text = format_text_for_embedding(row, columns, config.text_template)
+            text = texts.document(row)
             if not text.strip():
                 continue
 
@@ -283,11 +328,12 @@ def embed_text_from_local(
 
             ids.append(doc_id)
             documents.append(text)
+            model_inputs.append(texts.model_input(row, text))
             metadatas.append(metadata)
 
         if ids:
             # Compute embeddings explicitly; ChromaDB stores vectors only
-            collection.add(ids=ids, embeddings=embedding_func(documents))
+            collection.add(ids=ids, embeddings=embedding_func(model_inputs))
 
             # DuckDB: documents + metadata
             if _duckdb_dataset_name:

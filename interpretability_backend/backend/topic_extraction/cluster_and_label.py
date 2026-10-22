@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,8 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import normalize
 from sklearn.utils import check_array
+
+from ..utils.topic_merge_tree import DensityTree, DensityTreeBuilder
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -118,15 +121,71 @@ class ClassTfidfTransformer(TfidfTransformer):
         return X
 
 
-def cluster_labels(
+@dataclass(frozen=True, eq=False)  # matrix fields: compare by identity
+class CtfidfResult:
+    """Keywords per topic, plus the c-TF-IDF matrix they came from."""
+
+    topics_data: dict[int, list[tuple[str, float]]]  # topic id -> [(word, score), ...]
+    topic_ids: list[int]  # topic of each matrix row (sorted, noise first when present)
+    matrix: sp.csr_matrix  # (topics, words)
+    words: np.ndarray
+
+
+class CtfidfKeywords:
+    """c-TF-IDF keywords: each topic's documents are joined into one class
+    document, counted (CountVectorizer) and weighted (ClassTfidfTransformer).
+
+    The single implementation behind extraction, reduction and re-labelling.
+    """
+
+    def __init__(
+        self,
+        language: str | None = "english",
+        ngram_range: tuple[int, int] = (1, 1),
+        n_words: int = 10,
+    ):
+        self.language = language
+        self.ngram_range = ngram_range
+        self.n_words = n_words
+
+    def extract(self, documents_df: pd.DataFrame) -> CtfidfResult:
+        """Keywords for every topic in ``documents_df`` (columns Document and Topic)."""
+        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
+        count_vectorizer = CountVectorizer(stop_words=self.language, ngram_range=self.ngram_range)
+        counts = count_vectorizer.fit_transform(docs_per_topic.Document.values)
+        words = count_vectorizer.get_feature_names_out()
+        matrix = ClassTfidfTransformer().fit_transform(counts)
+
+        topic_ids = [int(t) for t in docs_per_topic.Topic.values]
+        topics_data = {}
+        for row_index, topic_id in enumerate(topic_ids):
+            row = matrix.getrow(row_index).toarray()[0]
+            top = row.argsort()[-self.n_words :][::-1]
+            topics_data[topic_id] = [(words[i], float(row[i])) for i in top]
+        return CtfidfResult(
+            topics_data=topics_data, topic_ids=topic_ids, matrix=matrix, words=words
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class ClusteringOutcome:
+    """Per-point cluster labels (``-1`` = noise, HDBSCAN only) and, for HDBSCAN,
+    the density merge tree over the clusters (None with fewer than two)."""
+
+    labels: np.ndarray
+    density: DensityTree | None = None
+
+
+def cluster_points(
     points: np.ndarray,
     clustering_method: str = "hdbscan",
     min_topic_size: int = 10,
     n_clusters: int | None = None,
-) -> np.ndarray:
-    """Per-point cluster labels (``-1`` = noise, HDBSCAN only).
+) -> ClusteringOutcome:
+    """Cluster ``points`` with the configured method.
 
-    Module-level so it can run as a CancellableTask in a child process.
+    Module-level so it can run as a CancellableTask in a child process; the
+    density tree is built there because the fitted model stays in the child.
     """
     logger.info(f"Cluster - Start clustering with method='{clustering_method}'")
 
@@ -141,16 +200,30 @@ def cluster_labels(
             prediction_data=True,
             gen_min_span_tree=True,  # required for relative_validity_ (DBCV) after fit
         )
-        return model.fit(points).labels_
+        labels = model.fit(points).labels_
+        return ClusteringOutcome(labels=labels, density=_density_tree(model, labels))
     if clustering_method == "kmeans":
-        return KMeans(n_clusters=n_clusters, random_state=7, n_init=10).fit_predict(points)
-    if clustering_method == "gmm":
-        return GaussianMixture(n_components=n_clusters, random_state=7).fit_predict(points)
-    if clustering_method == "spectral":
-        return SpectralClustering(
+        labels = KMeans(n_clusters=n_clusters, random_state=7, n_init=10).fit_predict(points)
+    elif clustering_method == "gmm":
+        labels = GaussianMixture(n_components=n_clusters, random_state=7).fit_predict(points)
+    elif clustering_method == "spectral":
+        labels = SpectralClustering(
             n_clusters=n_clusters, random_state=7, affinity="nearest_neighbors"
         ).fit_predict(points)
-    raise ValueError(f"Unknown clustering method: {clustering_method}")
+    else:
+        raise ValueError(f"Unknown clustering method: {clustering_method}")
+    return ClusteringOutcome(labels=labels)
+
+
+def _density_tree(model: HDBSCAN, labels: np.ndarray) -> DensityTree | None:
+    """The fitted model's density merge tree; None (logged) when it has none."""
+    if int(labels.max(initial=-1)) < 1:
+        return None
+    try:
+        return DensityTreeBuilder().build(model.condensed_tree_.to_numpy(), labels)
+    except ValueError as exc:
+        logger.warning("No density merge tree for this clustering: %s", exc)
+        return None
 
 
 class GenerateTopics:
@@ -195,14 +268,14 @@ class GenerateTopics:
         Returns:
             documents_df: DataFrame with Document_ID, Document, and Topic columns
         """
-        labels = cluster_labels(
+        outcome = cluster_points(
             reduced_embeddings, self.clustering_method, self.min_topic_size, self.n_clusters
         )
-        return self.documents_frame(labels)
+        return self.documents_frame(outcome.labels)
 
     def documents_frame(self, labels) -> pd.DataFrame:
         """Document_ID / Document / Topic frame for per-document cluster labels
-        (computed by ``cluster_labels``, possibly in another process)."""
+        (computed by ``cluster_points``, possibly in another process)."""
         documents_df = pd.DataFrame(
             {"Document_ID": self.docs_id, "Document": self.documents, "Topic": labels}
         )
@@ -221,39 +294,16 @@ class GenerateTopics:
             topics: Dict where key is Topic ID and value is list of (word, score) tuples.
         """
         logger.info("Topics - Start extracting topic keywords")
+        result = CtfidfKeywords(
+            language=self.language, ngram_range=self.n_gram_range, n_words=n_words
+        ).extract(documents_df)
 
-        # A. Group documents by Topic (The "Mega-Document" step)
-        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
-
-        # B. Count Vectorizer (Bag of Words)
-        # We process the grouped text, not the individual documents!
-        count_vectorizer = CountVectorizer(stop_words=self.language, ngram_range=self.n_gram_range)
-        X = count_vectorizer.fit_transform(docs_per_topic.Document.values)
-        words = count_vectorizer.get_feature_names_out()
-
-        # C. c-TF-IDF (Importance Scores)
-        ctfidf = ClassTfidfTransformer()
-        ctfidf_matrix = ctfidf.fit_transform(X)
-
-        # Store for topic reduction
-        self.ctfidf_matrix = ctfidf_matrix
-        self.ctfidf_words = words
-
-        # D. Extract Top N Words per Topic
-        topics_data = {}
-        # Iterate over each topic row in the c-TF-IDF matrix
-        for i, topic_id in enumerate(docs_per_topic.Topic.values):
-            # Get that topic's row
-            row = ctfidf_matrix.getrow(i).toarray()[0]
-            # Sort indices by score (descending) and take top N
-            top_indices = row.argsort()[-n_words:][::-1]
-
-            # Map indices to words and scores
-            topic_keywords = [(words[idx], float(row[idx])) for idx in top_indices]
-            topics_data[topic_id] = topic_keywords
+        # Kept for the legacy c-TF-IDF topic reduction
+        self.ctfidf_matrix = result.matrix
+        self.ctfidf_words = result.words
 
         logger.info("Topics - Completed \u2713")
-        return topics_data
+        return result.topics_data
 
     @property
     def c_tf_idf_matrix(self) -> sp.csr_matrix:

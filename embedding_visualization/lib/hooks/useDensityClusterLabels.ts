@@ -98,8 +98,9 @@ export function useDensityClusterLabels({
           plotArea,
           (category) => {
             if (category === null) return neutral;
-            const nestedColors = labelField === 'topic_label' ? ncm?.topicColors
-              : labelField === 'subtopic_label' ? ncm?.subtopicColors : undefined;
+            // Nested subtopic colours are keyed by (topic, subtopic), which a
+            // blob's category alone cannot name: only the topic level applies.
+            const nestedColors = labelField === 'topic_label' ? ncm?.topicColors : undefined;
             return nestedColors?.[category] ?? cm[category] ?? neutral;
           },
         );

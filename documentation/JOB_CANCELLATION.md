@@ -11,7 +11,7 @@ Every progress modal on the Collections page has a Cancel button:
 |---|---|---|---|---|
 | Embed: HF, local text / image / vector file, re-embed | `{collection}` | between batches; projections and the embed pipeline's topic step stop mid-step | items embedded so far (DuckDB + ChromaDB), projections already stored | Jobs strip → Resume. A cancel after projections only skipped topic extraction: the collection is usable, so the job is closed |
 | Topic extraction | `{collection}` | the clustering UMAP / HDBSCAN fit stops mid-step; LLM labels between topics | nothing (the previous extraction stays active) | run it again |
-| Topic reduction | `{collection}_reduce` | between steps; the semantic-centroid load between batches; LLM relabels between topics | nothing | run it again |
+| Topic reduction | `{collection}_reduce` | between steps; centroid loads (merge trees without stored centroids, legacy semantic) between batches; LLM relabels between topics | nothing (the previous extraction stays active) | run it again |
 | Topic evaluation | `{collection}_evaluate` | c-TF-IDF and the metrics (gensim C_v) stop mid-step | nothing (stored scores unchanged) | run it again |
 | LLM topic labeling | `{collection}_llm_labeling` | before each topic / subtopic LLM call | labels saved after every call | Jobs strip → Resume |
 | SAE preparation (SAE tab) | `sae_prepare_{size}_{variant}_{layer}_{hook}_{width}` | the download / decoder extraction stops mid-step; DuckDB ingestion between steps; the optional collection creation like an embed | downloaded batch files, an extracted parquet | run it again (downloads resume per file) |

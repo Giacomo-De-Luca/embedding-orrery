@@ -59,7 +59,9 @@ topic_extractions
   config (JSON), extracted_at, topic_count
   reduction_applied, reduction_method, reduction_target
   num_topics_before_reduction, topic_hierarchy (JSON)
-  is_active            — only one active extraction per collection
+                       — reductions: {topic_id: [base subtopic ids]} (older: label-keyed)
+  is_active            — only one active extraction per collection; a new one is
+                         written inactive and activated last (activate_topic_extraction)
 
 topic_info
   extraction_id (FK), topic_id
@@ -76,6 +78,13 @@ topic_centroids        — embedding-space mean of each topic's / subtopic's mem
   parent_topic_id      — subtopic rows: the topic containing the subtopic
   member_count, centroid (FLOAT[])
   PK: (extraction_id, level, topic_id)
+
+topic_merge_trees      — merge tree over an extraction's base topics (density only;
+                         semantic trees are rebuilt from topic_centroids)
+  extraction_id (FK), linkage ('density')
+  leaf_ids, leaf_sizes, left_children, right_children (INTEGER[]), heights (DOUBLE[])
+  noise_item_ids (VARCHAR[]), noise_merges (INTEGER[]) — merge row absorbing each noise item
+  PK: (extraction_id, linkage)
 ```
 
 Topic fields (`topic_id`, `topic_label`, `subtopic_id`, `subtopic_label`) are
@@ -126,11 +135,19 @@ ChromaDB → read embeddings in 5k batches → PCA/UMAP → DuckDB projections t
 ### Topic Extraction
 ```
 DuckDB projections → HDBSCAN clustering → c-TF-IDF keywords → DuckDB topic tables
-                                                     ↓                    ↓
-                                              (optional LLM labeling)   topic_centroids
-                                                                        (ChromaDB vectors
-                                                                         averaged per topic)
+                          ↓                          ↓                    ↓
+                 density merge tree       (optional LLM labeling)   topic_centroids
+                 → topic_merge_trees                                (ChromaDB vectors
+                                                                     averaged per topic)
 ```
+
+### Topic Reduction
+```
+active extraction's base topics (subtopics once reduced) + their centroids
+  → merge tree (average / ward from topic_centroids, density from topic_merge_trees)
+  → cut at N topics → new extraction: topics = merged groups, subtopics = base topics
+```
+Details: [TOPIC_MERGE_TREES.md](TOPIC_MERGE_TREES.md).
 
 ### Semantic Topic Search
 ```
@@ -182,7 +199,7 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `list_datasets()` → `[{name, metadata, count}]`
 - `get_dataset(name)` → dataset dict or None
 - `update_dataset(name, **kwargs)`
-- `delete_dataset(name)` → drops items table, cascades all related data
+- `delete_dataset(name)` → deletes each of its vector collections (`delete_vector_collection`), then the dataset row and its items table
 
 ### Items
 - `insert_items_batch(dataset_name, ids, documents, metadatas)` → bulk insert via DataFrame
@@ -195,6 +212,8 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `register_vector_collection(dataset_name, backend, collection_name, vector_type, **embedding_info)`
 - `get_vector_collections(dataset_name)` → list
 - `get_vector_collection(collection_name)` → dict or None
+- `delete_vector_collection(collection_name)` → one collection's rows (topics, projections, SAE document activations, probes, registry row); its dataset and items stay
+- `delete_collection(collection_name)` → backs the `deleteCollection` mutation: the collection, plus its dataset and items once no other collection uses them (a re-embed shares its source's dataset); False when nothing matched. See `CHROMA_ORPHAN_INDEXES.md` "Related fixes"
 
 ### Projections
 - `insert_projections_batch(collection_name, item_ids, projection_type, coordinates)`
@@ -206,7 +225,10 @@ Singleton: `backend/API/duckdb_instance.py` → `get_duckdb_client()`
 - `text_search_bm25(dataset_name, query, limit)` → FTS BM25-scored results
 
 ### Topics
-- `create_topic_extraction(collection_name, dataset_name, config)` → extraction UUID
+- `create_topic_extraction(collection_name, dataset_name, config, activate=True)` → extraction UUID (`activate=False`: written inactive)
+- `activate_topic_extraction(collection_name, extraction_id)` (one statement) / `delete_topic_extraction(extraction_id)` (with its rows)
+- `get_assignment_documents(extraction_id, dataset_name)` → `(item_id, document, topic_id, topic_label, subtopic_id, subtopic_label)` in item order
+- `replace_topic_merge_tree(extraction_id, linkage, …)` / `get_topic_merge_tree(extraction_id, linkage)` → tree arrays
 - `insert_topic_info_batch(extraction_id, topics)`
 - `insert_topic_assignments_batch(extraction_id, assignments)`
 - `get_active_topics(collection_name)` → extraction + topic_info list

@@ -9,6 +9,7 @@ embedding-space topic clustering, probing and the topic-quality evaluator).
 import logging
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 
 import chromadb
 import numpy as np
@@ -23,16 +24,21 @@ DEFAULT_LOAD_BATCH_SIZE = 5000
 
 
 def iter_embedding_batches(
-    collection_name: str, batch_size: int = DEFAULT_LOAD_BATCH_SIZE
+    collection_name: str,
+    batch_size: int = DEFAULT_LOAD_BATCH_SIZE,
+    chroma_path: Path | None = None,
 ) -> Iterator[tuple[list[str], np.ndarray]]:
     """Yield ``(ids, vectors)`` batches covering every vector in a collection.
+
+    ``chroma_path``: another vector store than the live one (offline runners
+    on a copy).
 
     Raises:
         ValueError: if the collection cannot be opened.
     """
     try:
         client = chromadb.PersistentClient(
-            path=str(CHROMA_DB_PATH.resolve()),
+            path=str((chroma_path or CHROMA_DB_PATH).resolve()),
             settings=Settings(anonymized_telemetry=False),
         )
         collection = client.get_collection(name=collection_name, embedding_function=None)

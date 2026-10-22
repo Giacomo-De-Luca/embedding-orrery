@@ -200,6 +200,74 @@ class TestTopicExtraction:
         assert result.error is None and result.num_topics >= 2
         assert len(synced) == 1
 
+    def test_hdbscan_extraction_hands_its_density_tree_to_the_sync(self, monkeypatch, synced):
+        _use_settings(monkeypatch, INLINE)
+        db = FakeTopicExtractionDB(_blobs(dim=2))
+        monkeypatch.setattr(topic_service, "_get_duckdb", lambda: db)
+
+        result = topic_service.extract_topics(_extraction_config(), cancel_event=threading.Event())
+
+        assert result.error is None
+        call = synced[0]
+        assignments = call["topic_assignments"]
+        topics = sorted({t for t in assignments.values() if t != -1})
+        [tree] = call["merge_trees"]
+        assert tree.linkage == "density"
+        assert tree.leaf_ids.tolist() == topics
+        assert set(tree.noise_merges) <= {item for item, t in assignments.items() if t == -1}
+        assert call["config_snapshot"]["language"] == "english"
+
+    def test_inline_reduction_cuts_a_merge_tree(self, monkeypatch, synced):
+        _use_settings(monkeypatch, INLINE)
+        coords = _blobs(dim=2)
+        db = FakeTopicExtractionDB(coords)
+        monkeypatch.setattr(topic_service, "_get_duckdb", lambda: db)
+        monkeypatch.setattr(
+            topic_service, "cancellable_embedding_batches", lambda event: _fake_loader(coords)
+        )
+        config = _extraction_config(
+            reduce_topics=True,
+            reduction_strategy="average",
+            reduction_method="fixed_n",
+            nr_topics=1,
+        )
+
+        result = topic_service.extract_topics(config, cancel_event=threading.Event())
+
+        assert result.error is None
+        assert result.reduction_applied and result.num_topics == 1
+        call = synced[0]
+        assert set(call["subtopic_assignments"].values()) - {-1} == set(
+            range(result.num_topics_before_reduction)
+        )
+        assert call["config_snapshot"]["reduction"]["strategy"] == "average"
+
+    def test_inline_reduction_that_merges_nothing_keeps_the_cluster_ids(self, monkeypatch, synced):
+        # A no-op cut must not renumber the clusters: the stored density tree's
+        # leaves are the HDBSCAN labels and must still line up with them.
+        _use_settings(monkeypatch, INLINE)
+        coords = _blobs(dim=2)
+        db = FakeTopicExtractionDB(coords)
+        monkeypatch.setattr(topic_service, "_get_duckdb", lambda: db)
+        monkeypatch.setattr(
+            topic_service, "cancellable_embedding_batches", lambda event: _fake_loader(coords)
+        )
+        config = _extraction_config(
+            reduce_topics=True,
+            reduction_strategy="average",
+            reduction_method="fixed_n",
+            nr_topics=99,
+        )
+
+        result = topic_service.extract_topics(config, cancel_event=threading.Event())
+
+        assert result.error is None and not result.reduction_applied
+        call = synced[0]
+        assert call["subtopic_assignments"] is None
+        [tree] = call["merge_trees"]
+        sizes = pd.Series(list(call["topic_assignments"].values())).value_counts()
+        assert tree.leaf_sizes.tolist() == [int(sizes[t]) for t in tree.leaf_ids.tolist()]
+
     def test_llm_labels_stop_between_topics(self, monkeypatch):
         event = threading.Event()
         calls: list[int] = []
@@ -240,13 +308,16 @@ class FakeReductionDB:
             ],
         }
 
-    def get_items_columns(self, collection_name, columns):
+    def get_vector_collection(self, collection_name):
+        return {"dataset_name": collection_name}
+
+    def get_assignment_documents(self, extraction_id, dataset_name):
         if self.on_items:
             self.on_items()
-        return [(f"i{k}", f"word{k % 4} doc") for k in range(20)]
+        return [(f"i{k}", f"word{k % 4} doc", k % 4, f"t{k % 4}", None, None) for k in range(20)]
 
-    def get_topic_assignments_raw(self, extraction_id, columns):
-        return [(f"i{k}", k % 4) for k in range(20)]
+    def get_topic_merge_tree(self, extraction_id, linkage):
+        return None
 
 
 class TestTopicReduction:

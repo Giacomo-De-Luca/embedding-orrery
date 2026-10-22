@@ -166,6 +166,6 @@ nothing overlaps.
 ## Known gaps
 
 - On phones an open panel (full width there) covers the modebar until it is closed.
-- `useZoomLimit` is wheel-only, so pinch zoom is unbounded.
+- On touch screens that can also hover (touchscreen laptops), a 2D pinch only starts when both fingers land together; phones are unaffected. See `MOBILE_PINCH_ZOOM.md`, "Known gap".
 - The SAE context menu needs a right-click.
 - 3D + haze memory on mobile Safari is unmeasured.

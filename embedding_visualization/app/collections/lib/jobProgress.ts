@@ -11,6 +11,17 @@ export interface ProgressCounts {
   totalBatches: number;
 }
 
+/**
+ * Keep the latest non-cancelling warning of a job (e.g. "3 of 100 documents
+ * were truncated") visible while later progress events carry none.
+ */
+export function foldWarning(
+  previous: string | null,
+  progress: { warning?: string | null },
+): string | null {
+  return progress.warning ?? previous;
+}
+
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);

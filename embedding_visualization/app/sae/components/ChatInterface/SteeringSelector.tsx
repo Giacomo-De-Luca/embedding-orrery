@@ -14,6 +14,7 @@ import {
   ComboboxEmpty,
 } from '@/lib/ui-primitives/combobox';
 import { GET_SAE_MODELS } from '@/lib/graphql/queries';
+import { formatSaeLabel } from '@/lib/utils/saeCollections';
 
 interface SaeModelInfo {
   modelId: string;
@@ -26,12 +27,6 @@ interface SteeringSelectorProps {
   modelId: string | null;
   saeId: string | null;
   onSelect: (modelId: string, saeId: string) => void;
-}
-
-/** Extract a short layer label from saeId, e.g. "9-gemmascope-…" → "L9" */
-function layerLabel(saeId: string): string {
-  const match = saeId.match(/^(\d+)/);
-  return match ? `L${match[1]}` : saeId.slice(0, 12);
 }
 
 export function SteeringSelector({ modelId, saeId, onSelect }: SteeringSelectorProps) {
@@ -50,7 +45,7 @@ export function SteeringSelector({ modelId, saeId, onSelect }: SteeringSelectorP
   }, [data?.saeModels]);
 
   const currentLabel = modelId && saeId
-    ? `${modelId} / ${layerLabel(saeId)}`
+    ? `${modelId} / ${formatSaeLabel(saeId)}`
     : undefined;
 
   return (
@@ -86,7 +81,7 @@ export function SteeringSelector({ modelId, saeId, onSelect }: SteeringSelectorP
                   value={`${item.modelId}::${item.saeId}`}
                 >
                   <span className="flex items-center gap-2">
-                    <span className="font-mono text-xs">{layerLabel(item.saeId)}</span>
+                    <span className="font-mono text-xs">{formatSaeLabel(item.saeId)}</span>
                     <span className="text-muted-foreground text-[11px]">
                       {item.featureCount.toLocaleString()} features
                     </span>

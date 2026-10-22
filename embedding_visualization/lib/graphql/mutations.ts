@@ -5,6 +5,7 @@
 import { gql } from '@apollo/client';
 
 import type { ProbeInfo } from '../utils/probeFields';
+import type { HookType } from '../utils/saeCollections';
 import { PROBE_INFO_FIELDS } from './queries';
 
 // ========== HuggingFace Dataset Queries ==========
@@ -114,6 +115,7 @@ export const EMBED_HUGGINGFACE_DATASET = gql`
       error
       embeddingProvider
       embeddingModel
+      warnings
     }
   }
 `;
@@ -133,6 +135,7 @@ export const EMBED_LOCAL_FILE = gql`
       error
       embeddingProvider
       embeddingModel
+      warnings
     }
   }
 `;
@@ -152,6 +155,7 @@ export const RE_EMBED_DATASET = gql`
       error
       embeddingProvider
       embeddingModel
+      warnings
     }
   }
 `;
@@ -311,9 +315,10 @@ export interface EmbeddingModelInput {
   provider: EmbeddingProvider;
   modelName: string;
   ollamaUrl?: string; // Ollama: server URL (default: http://localhost:11434)
-  task?: string; // QWEN: Query instruction prefix (used at query time only)
-  taskType?: GeminiTaskType; // Gemini: Embedding optimization type
-  prompt?: string; // SentenceTransformers: Can be predefined name (e.g., "Retrieval-query") or custom string
+  task?: string; // Query time only: QWEN's instruction, or a task-prefix model's query prefix
+  taskType?: GeminiTaskType; // Gemini 001: Embedding optimization type (Gemini 2 takes none)
+  prompt?: string; // ST prompt name or custom string; a task-prefix model's document prefix template
+  maxLength?: number; // Local providers: input-length cap in tokens (omit = the model's limit)
 }
 
 export interface EmbedDatasetInput {
@@ -397,6 +402,8 @@ export interface EmbedDatasetResult {
   error: string | null;
   embeddingProvider: string | null;
   embeddingModel: string | null;
+  /** Non-cancelling issues, e.g. documents truncated at the length cap */
+  warnings?: string[];
 }
 
 export interface UpdateCollectionMetadataResult {
@@ -435,15 +442,28 @@ export interface JobProgress {
   totalBatches: number;
   error: string | null;
   message: string | null;
+  /** Non-cancelling issue (e.g. documents truncated at the length cap); stays shown */
+  warning?: string | null;
 }
 
 // ========== Topic Extraction Types ==========
 
+/** Linkages of a topic merge tree (`topicMergeTree` query, tree strategies). */
+export type TopicTreeLinkage = 'average' | 'ward' | 'density';
+
+/** Topic reduction strategies; the legacy ones are kept only for comparison. */
+export type ReductionStrategy = TopicTreeLinkage | 'legacy_ctfidf' | 'legacy_semantic';
+
+export type ReductionMethod = 'fixed_n' | 'auto';
+
 export interface TopicReductionInput {
   enabled: boolean;
-  method: string;       // "auto" or "fixed_n"
-  nTopics?: number;     // Required when method="fixed_n"
-  useCtfidf: boolean;   // true=c-TF-IDF (fast), false=semantic (better)
+  method: ReductionMethod;
+  nTopics?: number;     // Topics to keep, noise not counted; required for "fixed_n"
+  strategy?: ReductionStrategy | null; // null = the legacy strategy useCtfidf picks
+  useCtfidf?: boolean;  // Legacy only, ignored when strategy is set
+  distanceThreshold?: number; // "auto" + "average" only (backend default 0.7)
+  absorbNoise?: boolean;      // "density" only
 }
 
 export interface TopicConfigInput {
@@ -497,14 +517,18 @@ export interface EvaluateTopicsResult {
   error: string | null;
 }
 
+/** Standalone reduction; always cuts the extraction's base topics (reversible). */
 export interface ReduceTopicsInput {
   collectionName: string;
-  method: string;         // "auto" or "fixed_n"
-  nTopics?: number;       // Required when method="fixed_n"
-  useCtfidf: boolean;     // true=c-TF-IDF, false=semantic
-  regenerateLabels: boolean;
-  llmProvider: string;
-  llmModel: string;
+  method: ReductionMethod;
+  nTopics?: number;       // Topics to keep, noise not counted; required for "fixed_n"
+  strategy?: ReductionStrategy | null; // null = the legacy strategy useCtfidf picks
+  useCtfidf?: boolean;    // Legacy only, ignored when strategy is set
+  distanceThreshold?: number; // "auto" + "average" only (backend default 0.7)
+  absorbNoise?: boolean;      // "density" only
+  regenerateLabels: boolean;  // LLM-label merged topics (unmerged ones keep their label)
+  llmProvider?: string;
+  llmModel?: string;
 }
 
 export interface ReduceTopicsResult {
@@ -515,6 +539,40 @@ export interface ReduceTopicsResult {
   topicMappings: Record<string, number>;
   durationSeconds: number;
   error: string | null;
+  /** Noise documents moved into topics (density with absorbNoise). */
+  absorbedNoise: number;
+}
+
+// ========== Topic Merge Trees (topicMergeTree query) ==========
+
+/** A base topic of a merge tree (an original cluster of the extraction). */
+export interface TopicTreeLeaf {
+  topicId: number;
+  label: string;
+  size: number; // documents
+}
+
+/** One merge in scipy's linkage convention: indices below the leaf count are leaves, k + i is merge i. */
+export interface TopicTreeMerge {
+  left: number;
+  right: number;
+  height: number;
+  size: number; // documents under the merged node
+}
+
+/** `topicMergeTree` result; parsed by `TopicTreeView.fromGraphQL` (lib/utils/topicTreeCut.ts). */
+export interface TopicMergeTreeData {
+  extractionId: string;
+  linkage: TopicTreeLinkage;
+  /** "topic": base ids in items' topic_id; "subtopic" (a reduced extraction): in subtopic_id. */
+  baseLevel: 'topic' | 'subtopic';
+  leaves: TopicTreeLeaf[];
+  merges: TopicTreeMerge[];
+  noiseCount: number;
+  availableLinkages: TopicTreeLinkage[];
+  /** Density with includeNoise: noise item ids and the merge row that absorbs each. */
+  noiseItemIds: string[] | null;
+  noiseMerges: number[] | null;
 }
 
 export interface GenerateLlmLabelsInput {
@@ -823,6 +881,7 @@ export interface TokenFeaturesResult {
 export interface LayerActivationsResult {
   layer: number;
   width: string;
+  hookType: HookType;
   tokens: TokenFeaturesResult[];
 }
 
@@ -841,6 +900,7 @@ export const RUN_PROMPT_ACTIVATIONS = gql`
       layers {
         layer
         width
+        hookType
         tokens {
           token
           position

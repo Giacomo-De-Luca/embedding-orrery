@@ -1,5 +1,12 @@
 import type { TourAnchor, TourRuntime, TourStepDefinitionBase } from './tourSteps';
-import { TOUR_ANCHORS, delay, ensurePresetCollection, waitFor, waitForAnchor } from './tourSteps';
+import {
+  TOUR_ANCHORS,
+  delay,
+  ensurePresetCollection,
+  showPanelBesideMap,
+  waitFor,
+  waitForAnchor,
+} from './tourSteps';
 import { PROBE_COLLECTION, PROBE_PRESET_ID } from './tourPresets';
 
 /**
@@ -105,8 +112,8 @@ export const PROBE_TOUR_STEPS: ProbeTourStepDefinition[] = [
       if (!ready) return;
       // Open the Analytics panel from here on: it hosts the probing lab the
       // tour is walking toward, and its distribution charts track each
-      // recolor along the way.
-      runtime.setActivePanel('analytics');
+      // recolor along the way (desktop only: on a phone it would hide them).
+      showPanelBesideMap(runtime, 'analytics');
       // Same managua palette as the actual ratings, so the step reads as
       // "the picture barely changed" rather than a jarring recolor.
       runtime.setColorBy(PROBE_SCORE_FIELD, 'diverging', { scaleName: 'managua' });
@@ -126,6 +133,9 @@ export const PROBE_TOUR_STEPS: ProbeTourStepDefinition[] = [
     placement: 'left',
     prepare: async (runtime) => {
       if (runtime.getLoadedCollection() !== PROBE_COLLECTION) return;
+      // Re-asserted for Back-nav from the lab step, which opens the panel at
+      // every width: a phone closes it again here (a no-op on desktop).
+      showPanelBesideMap(runtime, 'analytics');
       if (!runtime.hasColorField(PROBE_RESIDUAL_FIELD)) return;
       // Diverging scale centered at zero: the midpoint must mean "no error"
       // (same convention as ProbeSection's Residual button).
@@ -145,6 +155,8 @@ export const PROBE_TOUR_STEPS: ProbeTourStepDefinition[] = [
     placement: 'left',
     prepare: async (runtime) => {
       if (runtime.getLoadedCollection() !== PROBE_COLLECTION) return;
+      // Same Back-nav guard as the residual step.
+      showPanelBesideMap(runtime, 'analytics');
       const ready = await waitFor(
         () => runtime.hasColorField(PROBE_VALENCE_FIELD),
         PROBE_FIELDS_TIMEOUT_MS,

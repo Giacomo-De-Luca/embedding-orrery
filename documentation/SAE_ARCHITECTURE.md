@@ -142,6 +142,9 @@ app/sae/
   components/
     FeatureHeader.tsx             — model/SAE selector, feature index nav (prev/next),
                                     text search input, "View in scatter plot" link
+    SaeMultiSelect.tsx            — model select + SAE chips multi-select, dropdown
+                                    grouped by hook site (see "SAE selector" below)
+    SaeSiteDot.tsx                — colour dot per hook site (residual, MLP, attention)
     FeatureDetailCard.tsx         — feature metadata: index badge, density, label,
                                     top/bottom logit bar charts
     LogitBarChart.tsx             — horizontal bar chart for logit entries
@@ -151,6 +154,19 @@ app/sae/
                                     (orange-red intensity, hover shows value)
     FeatureSearchResults.tsx      — tabular results with index, label, density columns
 ```
+
+### SAE selector
+
+An SAE is identified by layer, hook site and width: `9-gemmascope-2-res-16k` and `9-gemmascope-2-mlp-16k` share layer and width but are different SAEs. Every label on the page comes from the helpers in `lib/utils/saeCollections.ts`, so the site is never dropped:
+
+- `formatSaeLabel(sae, parts?)`: compact label `L9 mlp 16k`, used for chips, search-result badges and the token-strip tabs. `parts` drops a part every SAE on screen shares: the dropdown rows under a site header omit the site, and the token-strip tabs show the site or width only when the hooked SAEs differ in it.
+- `describeSae(sae)`: `L9 · MLP · 16k`, the chip tooltip and the token-strip caption.
+- `compareSaes` sorts by site (residual, MLP, attention), then layer, then numeric width (`16k < 262k < 1m`); `useSaeSelection` sorts the options with it.
+- `groupSaeIdsBySite` builds the grouped `items` for base-ui's Combobox; `matchesSaeQuery` is its filter (every typed term must occur in either label, so `9 mlp`, `L9 16k` and `residual` all match).
+
+Chips and site headers carry a `SaeSiteDot` (sky = residual, amber = MLP, pink = attention), always next to the site's name or abbreviation. The dropdown passes `items` to the Combobox: without them base-ui neither filters children nor hides `ComboboxEmpty`, so the old list ignored typing and always showed "No matching SAEs".
+
+Prompt search sends each selected SAE as `{layer, width, hookType}` (`SaeLayerSpecInput`, see `documentation/INTERPRET_API.md`), and each result layer reports its `hookType`; `attachSaeIdentity` (`app/sae/utils/promptPooling.ts`) matches results back to the selection by all three.
 
 ### TypeScript Types (`lib/types/types.ts`)
 

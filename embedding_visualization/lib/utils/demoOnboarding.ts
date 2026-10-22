@@ -1,4 +1,5 @@
 import { SEMANTIC_SEARCH } from '../graphql/queries';
+import { MOBILE_BREAKPOINT } from '../hooks/use-mobile';
 import { IS_DEMO } from './demoMode';
 import { SPACE_LOCAL_SEARCH_COLLECTION } from './tourPresets';
 import { stripQueryPrefix } from './urlViewParams';
@@ -20,20 +21,39 @@ export const MOBILE_NOTICE_STORAGE_KEY = 'orrery.demo-mobile-notice.v1';
 export type OnboardingMark = 'dismissed' | 'completed';
 
 /**
- * Below this viewport width the spotlight tour is too cramped — intro only.
- * Doubles as the "phone-sized" floor for the desktop-notice card, so the two
- * gates can never disagree about what counts as a small screen.
+ * Phone-sized viewports: below this width the Explore panels cover the map.
+ * It IS the app's mobile breakpoint (`md`, which also collapses the legend),
+ * so every small-screen rule shares one floor: the desktop-notice card, the
+ * tours' panel-free map steps (`TourRuntime.isCompactViewport`), and the
+ * desktop-only WordNet tour.
  */
-export const TOUR_MIN_VIEWPORT = 768;
+export const COMPACT_VIEWPORT_WIDTH = MOBILE_BREAKPOINT;
 
-export type OnboardingAction =
-  | 'intro'
-  | 'tour'
-  | 'sae-tour'
-  | 'wordnet-tour'
-  | 'probe-tour'
-  | 'mobile-notice'
-  | null;
+export function isCompactWidth(viewportWidth: number): boolean {
+  return viewportWidth < COMPACT_VIEWPORT_WIDTH;
+}
+
+export type TourAction = 'tour' | 'sae-tour' | 'wordnet-tour' | 'probe-tour';
+
+export type OnboardingAction = TourAction | 'intro' | 'mobile-notice' | null;
+
+/** `?tour=<value>` → the tour it starts. */
+const TOUR_PARAM_ACTIONS: ReadonlyMap<string, TourAction> = new Map([
+  ['1', 'tour'],
+  ['sae', 'sae-tour'],
+  ['wordnet', 'wordnet-tour'],
+  ['probe', 'probe-tour'],
+]);
+
+/**
+ * Tours that need a desktop: the WordNet galaxy loads 212,478 points in 3D
+ * with haze, too heavy for a phone. The others run at any width.
+ */
+const DESKTOP_ONLY_TOURS: ReadonlySet<TourAction> = new Set(['wordnet-tour']);
+
+export function tourFitsViewport(tour: TourAction, viewportWidth: number): boolean {
+  return !(DESKTOP_ONLY_TOURS.has(tour) && isCompactWidth(viewportWidth));
+}
 
 /**
  * Whether to show the one-time "best viewed on desktop" card. Demo builds only
@@ -47,26 +67,33 @@ export function shouldShowMobileNotice(args: {
   viewportWidth: number;
   mobileNoticeSeen: boolean;
 }): boolean {
-  return args.isDemo && args.viewportWidth < TOUR_MIN_VIEWPORT && !args.mobileNoticeSeen;
+  return args.isDemo && isCompactWidth(args.viewportWidth) && !args.mobileNoticeSeen;
 }
 
 /** URL params whose presence means the visitor followed a deep link (no auto-intro). */
 const DEEP_LINK_PARAMS = ['collection', 'colorBy', 'preset', 'tour'] as const;
 
+export interface OnboardingInputs {
+  isDemo: boolean;
+  search: string;
+  introSeen: boolean;
+  viewportWidth: number;
+  mobileNoticeSeen: boolean;
+}
+
 /**
  * Decide what to auto-present, from first-render inputs only.
- * - The mobile notice wins over everything, so a phone visitor is told about
- *   the layout before anything else competes for the screen. It deliberately
- *   pre-empts `?tour=1` / `?intro=1` / `?tour=sae`: the tours are already
- *   downgraded below `TOUR_MIN_VIEWPORT`, and a `?tour=sae` deep link stays on
- *   Explore rather than forwarding until the notice has been dismissed once.
- * - `?tour=sae` is the "Inspect SAE" tour: its first segment runs on the
- *   Explore page's label map (the page owns the viewport downgrade), then
- *   hands off to /sae for the inspection segment.
- * - `?tour=wordnet` / `?tour=probe` are the single-page WordNet-galaxy and
- *   Glasgow-probing tours (the page owns the viewport downgrade, same as sae).
- * - `?tour=1` starts the Explore tour in ANY build (dev testing included),
- *   downgraded to the intro on viewports too narrow for a spotlight tour.
+ * - A `?tour=` link starts its tour in ANY build (dev testing included) at
+ *   any viewport the tour fits, ahead of the mobile notice: the link is
+ *   explicit intent, and the notice waits for the next ordinary visit.
+ *   `?tour=1` is the Explore tour, `?tour=sae` the "Inspect SAE" tour (its
+ *   first segment runs on the Explore page's label map, then hands off to
+ *   /sae), `?tour=wordnet` / `?tour=probe` the single-page WordNet-galaxy and
+ *   Glasgow-probing tours.
+ * - Otherwise the mobile notice comes first on a phone, so the visitor is
+ *   told about the layout before anything else competes for the screen.
+ * - A tour too heavy for the viewport (WordNet on a phone) downgrades to the
+ *   welcome dialog, which offers the tours that do fit.
  * - `?intro=1` reopens the welcome dialog in any build, ignoring storage.
  * - Otherwise the intro auto-opens once per browser, demo builds only, and
  *   never on top of a deep link.
@@ -75,25 +102,36 @@ const DEEP_LINK_PARAMS = ['collection', 'colorBy', 'preset', 'tour'] as const;
  * the Explore page derives each dialog's initial open state from this one
  * value, so the notice and the welcome dialog can never both open.
  */
-export function getOnboardingAction(args: {
-  isDemo: boolean;
-  search: string;
-  introSeen: boolean;
-  viewportWidth: number;
-  mobileNoticeSeen: boolean;
-}): OnboardingAction {
-  if (shouldShowMobileNotice(args)) return 'mobile-notice';
+export function getOnboardingAction(args: OnboardingInputs): OnboardingAction {
   const params = new URLSearchParams(stripQueryPrefix(args.search));
-  if (params.get('tour') === 'sae') return 'sae-tour';
-  if (params.get('tour') === 'wordnet') return 'wordnet-tour';
-  if (params.get('tour') === 'probe') return 'probe-tour';
-  if (params.get('tour') === '1') {
-    return args.viewportWidth < TOUR_MIN_VIEWPORT ? 'intro' : 'tour';
-  }
+  const tour = TOUR_PARAM_ACTIONS.get(params.get('tour') ?? '') ?? null;
+  if (tour && tourFitsViewport(tour, args.viewportWidth)) return tour;
+  if (shouldShowMobileNotice(args)) return 'mobile-notice';
+  if (tour) return 'intro';
   if (params.get('intro') === '1') return 'intro';
   if (!args.isDemo || args.introSeen) return null;
   if (DEEP_LINK_PARAMS.some((p) => params.has(p))) return null;
   return 'intro';
+}
+
+export interface OnboardingPlan {
+  action: OnboardingAction;
+  /**
+   * What the mobile notice pre-empted, shown once it is dismissed: the same
+   * decision with the notice marked seen. Only ever the welcome dialog (a
+   * bare first visit, `?intro=1`, or a desktop-only tour link) or nothing,
+   * since a tour that fits the viewport wins over the notice in the first place.
+   */
+  afterNotice: 'intro' | null;
+}
+
+export const NO_ONBOARDING: OnboardingPlan = { action: null, afterNotice: null };
+
+export function planOnboarding(args: OnboardingInputs): OnboardingPlan {
+  const action = getOnboardingAction(args);
+  const pre =
+    action === 'mobile-notice' ? getOnboardingAction({ ...args, mobileNoticeSeen: true }) : null;
+  return { action, afterNotice: pre === 'intro' ? 'intro' : null };
 }
 
 function safeSet(key: string, value: OnboardingMark): void {

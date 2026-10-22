@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useLazyQuery, useMutation } from '@apollo/client/react';
+import { useApolloClient, useLazyQuery, useMutation } from '@apollo/client/react';
 import { GET_COLLECTION_DATA } from '../graphql/queries';
 import { UPDATE_COLLECTION_METADATA } from '../graphql/mutations';
 import type { EmbeddingData, ProjectionMethod, DimensionMode, DisplayConfig } from '../types/types';
 import {
   detectDisplayConfig,
   analyzeColorFields,
+  TopicFieldOptions,
   type ColorFieldOption,
+  type FieldAnalysisCache,
 } from '../utils/fieldAnalysis';
 import { ProjectionLoadPolicy } from '../utils/projectionLoadPolicy';
 import { LatestRequestGate } from '../utils/latestRequestGate';
@@ -26,6 +28,33 @@ function computeSmartDefaults(availableFields: string[]): string[] {
   return defaults;
 }
 
+/** Item data and collection metadata of a `collection` response that included the core. */
+function parseCollectionCore(collectionData: Record<string, unknown>) {
+  const meta = collectionData.metadata as Record<string, unknown>;
+  const embeddingMetadata: EmbeddingData['metadata'] = {
+    total_items: meta.totalItems as number,
+    embedding_dim: meta.embeddingDim as number,
+    timestamp: meta.timestamp as string,
+    pca_2d_variance: meta.pca2dVariance as number[] | undefined,
+    pca_3d_variance: meta.pca3dVariance as number[] | undefined,
+    source_dataset: meta.sourceDataset as string | undefined,
+    source_split: meta.sourceSplit as string | undefined,
+    source_file: meta.sourceFile as string | undefined,
+    has_projections: meta.hasProjections as boolean | undefined,
+    embedding_provider: meta.embeddingProvider as string | undefined,
+    embedding_model: meta.embeddingModel as string | undefined,
+    embedding_prompt: meta.embeddingPrompt as string | null | undefined,
+    sae_model_id: meta.saeModelId as string | null | undefined,
+    sae_id: meta.saeId as string | null | undefined,
+  };
+  return {
+    itemMetadata: (collectionData.itemMetadata as Record<string, unknown>[]) || [],
+    availableFields: (collectionData.availableFields as string[]) || [],
+    embeddingMetadata,
+    fieldAnalysis: meta.fieldAnalysis as FieldAnalysisCache | null,
+  };
+}
+
 interface UseEmbeddingDataResult {
   data: EmbeddingData | null;
   loading: boolean;
@@ -34,6 +63,13 @@ interface UseEmbeddingDataResult {
   defaultTooltipFields: string[];
   /** Collection the current data/colorFieldOptions belong to (null until loaded). */
   loadedCollection: string | null;
+  /**
+   * Refetch the loaded collection's item data (ids, documents, metadata) after
+   * its topics changed, keeping the cached projections, and recompute the
+   * topic-field colour options (the persisted field_analysis cache predates
+   * the change). Resolves false when nothing was reloaded.
+   */
+  reload: () => Promise<boolean>;
 }
 
 export function useEmbeddingData(
@@ -80,54 +116,33 @@ export function useEmbeddingData(
   });
 
   const [updateMetadata] = useMutation(UPDATE_COLLECTION_METADATA);
+  const client = useApolloClient();
+  const reloadGateRef = useRef<LatestRequestGate | null>(null);
+  if (reloadGateRef.current === null) {
+    reloadGateRef.current = new LatestRequestGate();
+  }
 
   // Process a GraphQL response and update state
   const processResponse = useCallback((
     collectionData: Record<string, unknown>,
     requestedProjections: string[],
     isNewCollection: boolean,
+    // reload(): new core for the same items, so the cached projections still fit
+    keepProjections = false,
   ) => {
     // If this is a new collection, reset projections and parse core data
     if (isNewCollection) {
-      projectionsRef.current = {
-        collection: collectionData._collectionName as string,
-        pca_2d: null, pca_3d: null, umap_2d: null, umap_3d: null,
-      };
+      if (!keepProjections) {
+        projectionsRef.current = {
+          collection: collectionData._collectionName as string,
+          pca_2d: null, pca_3d: null, umap_2d: null, umap_3d: null,
+        };
+      }
 
-      const itemMetadata: Record<string, unknown>[] =
-        (collectionData.itemMetadata as Record<string, unknown>[]) || [];
-      const availableFields: string[] =
-        (collectionData.availableFields as string[]) || [];
-      const meta = collectionData.metadata as Record<string, unknown>;
-
-      const embeddingMetadata: EmbeddingData['metadata'] = {
-        total_items: meta.totalItems as number,
-        embedding_dim: meta.embeddingDim as number,
-        timestamp: meta.timestamp as string,
-        pca_2d_variance: meta.pca2dVariance as number[] | undefined,
-        pca_3d_variance: meta.pca3dVariance as number[] | undefined,
-        source_dataset: meta.sourceDataset as string | undefined,
-        source_split: meta.sourceSplit as string | undefined,
-        source_file: meta.sourceFile as string | undefined,
-        has_projections: meta.hasProjections as boolean | undefined,
-        embedding_provider: meta.embeddingProvider as string | undefined,
-        embedding_model: meta.embeddingModel as string | undefined,
-        embedding_prompt: meta.embeddingPrompt as string | null | undefined,
-        sae_model_id: meta.saeModelId as string | null | undefined,
-        sae_id: meta.saeId as string | null | undefined,
-      };
+      const { itemMetadata, availableFields, embeddingMetadata, fieldAnalysis } =
+        parseCollectionCore(collectionData);
 
       // Phase 1: Determine display config — check field_analysis cache first
-      const fieldAnalysis = meta.fieldAnalysis as {
-        display_config?: {
-          label_field: string | null;
-          category_field: string | null;
-          category_values: string[];
-          category_name: string;
-        };
-        color_field_options?: ColorFieldOption[];
-        default_tooltip_fields?: string[];
-      } | null;
 
       let displayConfig: DisplayConfig;
 
@@ -353,5 +368,53 @@ export function useEmbeddingData(
     };
   }, [collectionName, method, mode, executeQuery, processResponse]);
 
-  return { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection };
+  const reload = useCallback(async (): Promise<boolean> => {
+    if (!collectionName || coreDataRef.current?.collection !== collectionName) return false;
+    const gate = reloadGateRef.current!;
+    const token = gate.begin();
+    // The resolver reads items through a projection: the current view's comes
+    // with the core.
+    const { projectionTypes } = ProjectionLoadPolicy.forView(method, mode, true);
+    // A separate request, not executeQuery: re-invoking a lazy-query executor
+    // aborts its in-flight projection fetch.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: response } = await client.query<{ collection: Record<string, any> | null }>({
+      query: GET_COLLECTION_DATA,
+      variables: { name: collectionName, projectionTypes, includeCore: true },
+      fetchPolicy: 'no-cache',
+    });
+    const collectionData = response?.collection;
+    const core = coreDataRef.current;
+    if (!gate.isLatest(token) || !collectionData || core?.collection !== collectionName) return false;
+
+    // Topic fields come from the active extraction, and a topic sync drops the
+    // field_analysis cache: rebuild it from the analysis in memory with fresh
+    // topic-field options, so the reload keeps the cached (fast) path instead
+    // of a full analysis, and store it for the next load.
+    const { itemMetadata, availableFields, fieldAnalysis } = parseCollectionCore(collectionData);
+    const cache = TopicFieldOptions.refreshCache(
+      fieldAnalysis,
+      { displayConfig: data?.displayConfig ?? core.displayConfig, options: colorFieldOptions, tooltipFields: defaultTooltipFields },
+      availableFields,
+      itemMetadata,
+    );
+    const metadata = collectionData.metadata as Record<string, unknown>;
+    // A reduction changes neither the items nor their coordinates: keep the
+    // cached projections unless the membership changed.
+    const sameItems = ((collectionData.itemSignature as string | null) || null) === core.itemSignature;
+    processResponse(
+      { ...collectionData, metadata: { ...metadata, fieldAnalysis: cache ?? metadata.fieldAnalysis }, _collectionName: collectionName },
+      projectionTypes,
+      true,
+      sameItems,
+    );
+    if (cache) {
+      updateMetadata({
+        variables: { collectionName, metadata: { field_analysis: JSON.stringify(cache) } },
+      }).catch((err: unknown) => console.warn('Failed to persist field analysis:', err));
+    }
+    return true;
+  }, [client, collectionName, method, mode, processResponse, updateMetadata, data, colorFieldOptions, defaultTooltipFields]);
+
+  return { data, loading, error, colorFieldOptions, defaultTooltipFields, loadedCollection, reload };
 }

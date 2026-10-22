@@ -83,6 +83,8 @@ interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentP
   onClearAllTopics?: () => void;
   /** Topic label → colour, from the same resolver as the plots and legend. */
   topicColorMap?: Record<string, string>;
+  /** A topic-tree preview is on the map (the topic section notes it lists the saved topics). */
+  previewingTopicCut?: boolean;
   // SAE prompt highlight
   saeInfo?: { modelId: string; saeId: string } | null;
   promptHighlightStatus?: 'idle' | 'loading_model' | 'running' | 'error';
@@ -123,6 +125,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
   topicSemanticLoading,
   topicSemanticError,
   topicColorMap,
+  previewingTopicCut,
   selectedTopicIds,
   onToggleTopic,
   onSelectAllTopics,
@@ -645,6 +648,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
               onSelectAll={onSelectAllTopics ?? (() => {})}
               onClearAll={onClearAllTopics ?? (() => {})}
               topicColorMap={topicColorMap ?? EMPTY_COLOR_MAP}
+              previewingTopicCut={previewingTopicCut}
             />
           )}
         </div>

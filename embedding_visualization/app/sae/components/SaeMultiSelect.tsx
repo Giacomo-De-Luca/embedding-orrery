@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Button } from '@/lib/ui-primitives/button';
 import {
@@ -14,14 +15,25 @@ import {
   ComboboxChip,
   ComboboxChips,
   ComboboxChipsInput,
+  ComboboxCollection,
   ComboboxContent,
   ComboboxEmpty,
+  ComboboxGroup,
   ComboboxItem,
+  ComboboxLabel,
   ComboboxList,
   useComboboxAnchor,
 } from '@/lib/ui-primitives/combobox';
-import { HOOK_TYPE_DISPLAY } from '@/lib/utils/saeCollections';
+import {
+  HOOK_TYPE_DISPLAY,
+  describeSae,
+  formatSaeLabel,
+  groupSaeIdsBySite,
+  matchesSaeQuery,
+  type SaeSiteGroup,
+} from '@/lib/utils/saeCollections';
 import type { SaeOption } from '../hooks/useSaeSelection';
+import { SaeSiteDot } from './SaeSiteDot';
 
 interface SaeMultiSelectProps {
   modelId: string | null;
@@ -32,13 +44,10 @@ interface SaeMultiSelectProps {
   onSaeIdsChange: (saeIds: string[]) => void;
 }
 
-function chipLabel(option: SaeOption): string {
-  return `L${option.parsed.layerIndex} ${option.parsed.width}`;
-}
-
 /**
  * Model single-select (model load is the expensive operation) plus a
- * chips multi-select over that model's SAEs, with All/Clear shortcuts.
+ * chips multi-select over that model's SAEs, grouped by hook site, with
+ * All/Clear shortcuts.
  */
 export function SaeMultiSelect({
   modelId,
@@ -50,6 +59,11 @@ export function SaeMultiSelect({
 }: SaeMultiSelectProps) {
   const chipsRef = useComboboxAnchor();
   const optionsById = new Map(saeOptions.map((o) => [o.saeId, o]));
+  // saeOptions are sorted site-first, so each group keeps layer → width order
+  const siteGroups = useMemo(
+    () => groupSaeIdsBySite(saeOptions.map((o) => o.saeId)),
+    [saeOptions],
+  );
   const allSelected = selectedSaeIds.length === saeOptions.length && saeOptions.length > 0;
 
   return (
@@ -73,13 +87,25 @@ export function SaeMultiSelect({
 
       {/* SAEs of the selected model */}
       <div className="flex-1 min-w-64 md:min-w-0 max-w-xl">
-        <Combobox<string, true> multiple value={selectedSaeIds} onValueChange={onSaeIdsChange}>
+        <Combobox<string, true>
+          multiple
+          value={selectedSaeIds}
+          onValueChange={onSaeIdsChange}
+          items={siteGroups}
+          itemToStringLabel={describeSae}
+          filter={matchesSaeQuery}
+        >
           <ComboboxChips ref={chipsRef} className="min-h-8">
             {selectedSaeIds.map((saeId) => {
               const option = optionsById.get(saeId);
               return (
-                <ComboboxChip key={saeId} className="font-mono text-[10px]">
-                  {option ? chipLabel(option) : saeId}
+                <ComboboxChip
+                  key={saeId}
+                  className="font-mono text-[10px]"
+                  title={option ? describeSae(option.parsed) : saeId}
+                >
+                  {option && <SaeSiteDot hookType={option.parsed.hookType} />}
+                  {option ? formatSaeLabel(option.parsed) : saeId}
                 </ComboboxChip>
               );
             })}
@@ -90,17 +116,30 @@ export function SaeMultiSelect({
           </ComboboxChips>
           <ComboboxContent anchor={chipsRef}>
             <ComboboxList>
-              {saeOptions.map((option) => (
-                <ComboboxItem key={option.saeId} value={option.saeId}>
-                  <span className="truncate flex-1 text-xs">
-                    L{option.parsed.layerIndex} · {HOOK_TYPE_DISPLAY[option.parsed.hookType]} ·{' '}
-                    {option.parsed.width}
-                  </span>
-                  <span className="text-muted-foreground text-[10px] ml-auto shrink-0">
-                    {option.featureCount.toLocaleString()}
-                  </span>
-                </ComboboxItem>
-              ))}
+              {(group: SaeSiteGroup) => (
+                <ComboboxGroup key={group.value} items={group.items}>
+                  <ComboboxLabel className="flex items-center gap-1.5">
+                    <SaeSiteDot hookType={group.value} />
+                    {HOOK_TYPE_DISPLAY[group.value]}
+                  </ComboboxLabel>
+                  <ComboboxCollection>
+                    {(saeId: string) => {
+                      const option = optionsById.get(saeId);
+                      if (!option) return null;
+                      return (
+                        <ComboboxItem key={saeId} value={saeId}>
+                          <span className="truncate flex-1 text-xs">
+                            {formatSaeLabel(option.parsed, { hook: false })}
+                          </span>
+                          <span className="text-muted-foreground text-[10px] ml-auto shrink-0">
+                            {option.featureCount.toLocaleString()}
+                          </span>
+                        </ComboboxItem>
+                      );
+                    }}
+                  </ComboboxCollection>
+                </ComboboxGroup>
+              )}
             </ComboboxList>
             <ComboboxEmpty>No matching SAEs</ComboboxEmpty>
           </ComboboxContent>

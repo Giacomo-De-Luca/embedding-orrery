@@ -2,7 +2,7 @@
 
 import type { SaeFeatureSearchResult } from '@/lib/types/types';
 import { Badge } from '@/lib/ui-primitives/badge';
-import { parseSaeId, HOOK_TYPE_SHORT } from '@/lib/utils/saeCollections';
+import { formatSaeLabel } from '@/lib/utils/saeCollections';
 
 export interface SemanticFeatureResult {
   featureIndex: number;
@@ -39,12 +39,6 @@ interface FeatureSearchResultsProps {
   showSaeBadge?: boolean;
 }
 
-/** Build a compact badge label from a saeId, e.g. "L9 res 16k". */
-function saeLabel(saeId: string): string {
-  const p = parseSaeId(saeId);
-  return `L${p.layerIndex} ${HOOK_TYPE_SHORT[p.hookType] ?? p.hookType} ${p.width}`;
-}
-
 /**
  * Table of feature search results. Click a row to navigate to that feature.
  * Supports text mode (shows density) and semantic mode (shows similarity).
@@ -68,7 +62,7 @@ export function FeatureSearchResults({
         value: r.similarity,
         modelId: r.modelId,
         saeId: r.saeId,
-        saeBadge: r.saeId ? saeLabel(r.saeId) : undefined,
+        saeBadge: r.saeId ? formatSaeLabel(r.saeId) : undefined,
       }))
     : results.map((r) => ({
         featureIndex: r.feature.featureIndex,
@@ -76,7 +70,7 @@ export function FeatureSearchResults({
         value: r.feature.density,
         modelId: r.feature.modelId,
         saeId: r.feature.saeId,
-        saeBadge: r.feature.saeId ? saeLabel(r.feature.saeId) : undefined,
+        saeBadge: r.feature.saeId ? formatSaeLabel(r.feature.saeId) : undefined,
       }));
 
   if (rows.length === 0) {

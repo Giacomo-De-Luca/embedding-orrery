@@ -56,6 +56,7 @@ export function JobProgressBody({
     hasProgress,
     showItemCounter,
     isMultiStage,
+    warning,
   } = useJobProgress(jobId);
 
   const cancelJob = useCancelJob();
@@ -120,6 +121,13 @@ export function JobProgressBody({
       {progress?.message && (
         <p className="text-sm text-muted-foreground">
           {progress.message}
+        </p>
+      )}
+
+      {/* Non-cancelling warning (e.g. truncated documents): the job keeps running */}
+      {warning && (
+        <p role="status" className="text-sm text-amber-600 dark:text-amber-400">
+          {warning}
         </p>
       )}
 

@@ -7,12 +7,20 @@ calculations live in `lib/utils/` or `app/utils/`.
 - Collection and embedding hooks load datasets, active projections, topics,
   and visualization points. Category/color hooks derive plotting and legend data.
 - Search hooks manage semantic, text, topic, prompt, and document-feature search.
+- `useTopicMergeTree.ts` drives the Explore topic slider: the `topicMergeTree`
+  query, the store's `topicCut`, the deferred preview metadata, the colour pins
+  and Apply (`reduceTopics`). `useEmbeddingData.reload()`,
+  `useCollectionTopics().refetch` and `refreshTopicSimilarityOrders` reload what
+  an Apply replaces (`../../../documentation/TOPIC_MERGE_TREES.md`).
 - Chat and steering hooks manage chat sessions and streamed model responses.
 - Browser/layout hooks manage resizing, scrolling, theme, zoom, and URL syncing.
+  `useZoomLimit.ts` caps 2D wheel zoom-out; `usePinchZoom.ts` adds two-finger
+  pinch zoom to both scatter plots (`../../../documentation/MOBILE_PINCH_ZOOM.md`).
 - `useDensityOverlay.ts` owns the 2D density renderer lifecycle.
   `useDensityClusterLabels.ts` produces `DensityLabelPlacement[]` asynchronously,
   or `null` while disabled, rebuilding, or using centroid fallback.
-- `__tests__/` covers steering helpers and semantic-search abort races.
+- `__tests__/` covers steering helpers and semantic-search abort races (the
+  store's topic-cut lifecycle is tested in `../stores/__tests__/topicCut.test.ts`).
 
 Density label field selection and regression tests are documented in
 `../../../documentation/DENSITY_LABELS.md`.

@@ -64,6 +64,83 @@ cons per option are in sections 4 and 5, the plan in section 6.
 ChromaDB for 16 collections (section 9). The ChromaDB distance-space plan
 already removes it; rotate the token regardless.
 
+## Implementation status (2026-10-19)
+
+Sections 1 to 9 are the analysis as written; their line numbers refer to the
+code before the changes below.
+
+**Done by commit e6d28a4 (another session):** text-only loading of multimodal
+towers (P3, `utils/model_load_options.py`) and the Hugging Face token kept out
+of ChromaDB's stored config (section 9). Projections, clustering and SAE
+preparation now run in `CancellableTask` child processes.
+
+**Implemented here:**
+
+- **Length cap and real batch size** (P1; P2 without the token budget yet).
+  - `max_length` per model in `config/embedding_models.json` (EmbeddingGemma 2:
+    8,192; EmbeddingGemma 1: 2,048). `ModelMaxLengthResolver`
+    (`utils/model_max_length.py`) looks it up in order: catalog,
+    `sentence_bert_config.json`, the tokenizer (its 1e30 "no limit" sentinel is
+    ignored), `config.json`'s `max_position_embeddings`. Model files are read
+    without loading the model (`utils/model_files.py`).
+  - `EmbeddingModelConfig.max_length` / `batch_size`; GraphQL
+    `EmbeddingModelInput.maxLength` and the `embeddingModelMaxLength(provider,
+    modelName)` query, which the embed form uses to show the model's limit. An
+    empty field means the model's limit; a value above it is rejected by the
+    form and by the backend.
+  - SentenceTransformers: the cap goes to each `encode()` call
+    (`processing_kwargs`), never onto the shared cached model, and the batch
+    size is passed through. QWEN embeds in batches of `batch_size` (it used to
+    run the whole 100-document chunk in one pass). BGE now runs on the job's
+    device (it was always MPS).
+  - Every local embedder counts the documents it truncates
+    (`utils/truncation.py`, prompt tokens included). The job keeps running;
+    the count reaches the progress modal as a `warning` and the result as
+    `EmbedDatasetResult.warnings`, shown as a toast.
+  - The form's batch size is now texts per forward pass for local models;
+    defaults are 32 (BGE 12) for local providers and 100 for APIs.
+- **bf16 on Apple GPUs** (P4): `EmbeddingDtypePolicy` keeps checkpoints saved
+  in bf16 (EmbeddingGemma 2) in bf16 on MPS from macOS 14; float32 checkpoints
+  stay float32. `scripts/compare_embedding_dtypes.py` measures the agreement
+  and memory of both dtypes on a machine. EmbeddingGemma 2 collections embedded
+  in float32 since e6d28a4 now get bf16 query vectors (expected drift: cosine
+  around 0.999; run the script to confirm).
+- **DuckDB memory limit** (P7): `config/duckdb.json`, default 25% of RAM,
+  applied to every `DuckDBClient` connection (`utils/duckdb_settings.py`).
+- **Small fixes** (P6): `modelStatus` no longer creates the interpretability
+  service (a status poll imported torch); semantic search on Gemini/OpenAI
+  collections no longer probes the device (`device_for`); `unload_model`
+  clears the SAE cache even without a model; steering SAEs record the prefill
+  only; `run_batch_highlight` no longer keeps the results it hands to its
+  callback.
+
+**After code review:**
+
+- BGE passes `devices=` (FlagEmbedding's actual parameter; `device=` was
+  silently ignored and the library picked every CUDA GPU, else MPS).
+- A tokenizer limit is capped by the model's position table, as
+  sentence-transformers does. Qwen3-Embedding's tokenizer claims 131,072 and
+  its config 32,768, so QWEN's default cap is now 32,768 instead of the old
+  hard-coded 8,192. Add `"max_length": 8192` to its catalog entry to keep the
+  old cap.
+- Model files: only definitive answers are cached (a parsed file, or a file
+  the model doesn't have). Offline, timeout and gated failures are retried, so
+  a transient failure no longer pins a checkpoint to float32 until a restart.
+  The read-only demo resolves limits from the Hub cache only and never
+  downloads.
+- The "%" DuckDB limit resolves against the container's cgroup memory limit,
+  not the host's RAM, and never below 64 MiB. Zero sizes are rejected.
+- Truncation counting goes through `TruncationTracker.count`, which disables
+  itself instead of failing the job when a model's tokenizer can't count.
+- The embed form commits the length cap on blur only, so an invalid entry
+  ("9000" against 8,192) no longer leaves a prefix ("900") committed. Provider
+  and model name are debounced together for the limit lookup.
+
+**Still open:** R1 (release after every GPU job), R2 (allocator watermarks),
+R3 (idle unload, SAE cache budget, QWEN/BGE caching, ChromaDB reset), R4
+(embedding jobs in a child process), the P2 token budget, P5, the remaining
+P7 items, and a length cap for document activations.
+
 ## 1. What was measured
 
 From the other agent's session on the 16 GB machine (`footprint` on the

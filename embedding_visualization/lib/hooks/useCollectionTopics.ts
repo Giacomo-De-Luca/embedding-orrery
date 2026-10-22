@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { GET_COLLECTION_TOPICS } from '../graphql/queries';
 import type { TopicInfo } from '../types/types';
@@ -22,11 +23,16 @@ interface CollectionTopicsData {
 export function useCollectionTopics(collectionName: string | null): {
   topics: TopicInfo[] | undefined;
   loading: boolean;
+  /** Reload the topics from the server (after a reduction replaced them). */
+  refetch: () => Promise<void>;
 } {
-  const { data, loading } = useQuery<CollectionTopicsData>(GET_COLLECTION_TOPICS, {
+  const { data, loading, refetch: refetchQuery } = useQuery<CollectionTopicsData>(GET_COLLECTION_TOPICS, {
     variables: { collectionName: collectionName ?? '' },
     skip: !collectionName,
   });
+  const refetch = useCallback(async () => {
+    if (collectionName) await refetchQuery({ collectionName });
+  }, [collectionName, refetchQuery]);
   const topics = data?.collectionTopics?.topics;
-  return { topics: topics && topics.length > 0 ? topics : undefined, loading };
+  return { topics: topics && topics.length > 0 ? topics : undefined, loading, refetch };
 }

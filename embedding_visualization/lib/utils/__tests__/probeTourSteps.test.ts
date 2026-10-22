@@ -26,6 +26,7 @@ function makeRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     setNebulaMode: vi.fn(),
     setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
+    isCompactViewport: () => false,
     setShowLabels: vi.fn(),
     getLoadedCollection: () => PROBE_COLLECTION,
     getColorByField: () => 'concreteness',
@@ -98,6 +99,28 @@ describe('PROBE_TOUR_STEPS', () => {
       scaleName: 'managua',
     });
   });
+
+  it('on a phone, probe-score recolors with the panel closed; probe-panel still opens it', async () => {
+    const runtime = makeRuntime({ isCompactViewport: () => true });
+    await runPrepare('probe-score', runtime);
+    expect(runtime.setActivePanel).toHaveBeenCalledWith(null);
+    expect(runtime.setColorBy).toHaveBeenCalledWith(PROBE_SCORE_FIELD, 'diverging', {
+      scaleName: 'managua',
+    });
+    // The probing lab is IN the panel: its step must open it at any width.
+    await runPrepare('probe-panel', runtime);
+    expect(runtime.setActivePanel).toHaveBeenLastCalledWith('analytics');
+  });
+
+  it.each(['probe-residual', 'probe-valence'])(
+    'on a phone, Back from the lab into %s closes the panel over the map again',
+    async (id) => {
+      const runtime = makeRuntime({ isCompactViewport: () => true });
+      await runPrepare('probe-panel', runtime);
+      await runPrepare(id, runtime);
+      expect(runtime.setActivePanel).toHaveBeenLastCalledWith(null);
+    },
+  );
 
   it('probe-panel drops the overlay and rings the settings + the active probe row', () => {
     const panel = step('probe-panel');

@@ -1,13 +1,16 @@
 """Local data file client for loading parquet, JSON, CSV and TSV files."""
 
 import json as json_module
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+
+from ..utils.media_kinds import MediaKind, MediaKindDetector, MediaReference
 
 
 @dataclass
@@ -31,6 +34,8 @@ class LocalFilePreview:
     rows: list[dict[str, Any]]
     total_rows: int
     error: str | None = None
+    # Media columns of the preview: column -> "image" / "audio" / "video".
+    column_kinds: dict[str, str] = field(default_factory=dict)
 
 
 def _detect_file_type(file_path: str) -> str:
@@ -199,8 +204,18 @@ def get_local_file_info(file_path: str) -> LocalFileInfo:
         )
 
 
+def _is_missing(value: Any) -> bool:
+    """None or a float NaN (pandas' missing value); bytes and dicts never are."""
+    return value is None or (isinstance(value, float) and np.isnan(value))
+
+
 def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
-    """Get preview rows from a local data file."""
+    """Get preview rows from a local data file.
+
+    ``column_kinds`` names the columns holding media (``"image"`` / ``"audio"``
+    / ``"video"``, detected from the preview rows); their cells show a path or
+    a placeholder such as ``[image 34 KB]`` instead of raw bytes.
+    """
     try:
         # Optimization: Only load necessary rows for preview
         # This now uses the optimized load_local_dataframe inside
@@ -208,6 +223,12 @@ def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
 
         # Get preview rows
         preview_df = df.head(n_rows)
+        detector = MediaKindDetector()
+        column_kinds = {}
+        for col in df.columns:
+            kind = detector.kind_of_column(v for v in preview_df[col] if not _is_missing(v))
+            if kind is not None:
+                column_kinds[col] = kind.value
 
         # Convert to list of dicts, handling non-serializable types
         rows = []
@@ -215,9 +236,14 @@ def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
             row_dict = {}
             for col in df.columns:
                 value = row[col]
+                if col in column_kinds and not _is_missing(value):
+                    kind = MediaKind(column_kinds[col])
+                    row_dict[col] = MediaReference.of(value) or MediaReference.placeholder(
+                        value, kind
+                    )
                 # Check array-like types BEFORE pd.isna() to avoid
                 # "truth value of array is ambiguous" error
-                if isinstance(value, np.ndarray):
+                elif isinstance(value, np.ndarray):
                     row_dict[col] = value[:10].tolist() if len(value) > 10 else value.tolist()
                 elif isinstance(value, list):
                     row_dict[col] = value[:10] if len(value) > 10 else value
@@ -236,6 +262,7 @@ def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
             total_rows=len(df),  # Logic might be weird if we only loaded partial.
             # But Preview doesn't strictly need total_rows if Info provides it.
             # We can leave it as len(df) which is partial.
+            column_kinds=column_kinds,
         )
     except Exception as e:
         return LocalFilePreview(
@@ -250,10 +277,16 @@ def load_local_file_portion(
     end_row: int | None = None,
     sample_n: int | None = None,
     sample_seed: int = 42,
+    raw_columns: Iterable[str] = (),
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Load a portion of a local data file.
+
+    Cells of ``raw_columns`` (the media columns of a multimodal job) keep their
+    value as read (bytes, ``{"bytes", "path"}`` dicts, paths); every other
+    non-primitive cell is converted to a list or string as before.
     """
+    raw = set(raw_columns)
     # For embedding, we likely need to read more.
     # If standard load, it reads all then samples.
     # Future optimization: push down limit to read_parquet/csv
@@ -283,9 +316,11 @@ def load_local_file_portion(
         row_dict = {}
         for col in df.columns:
             value = row[col]
+            if col in raw:
+                row_dict[col] = None if _is_missing(value) else value
             # Check array-like types BEFORE pd.isna() to avoid
             # "truth value of array is ambiguous" error
-            if isinstance(value, np.ndarray):
+            elif isinstance(value, np.ndarray):
                 row_dict[col] = value.tolist()
             elif isinstance(value, list):
                 row_dict[col] = value

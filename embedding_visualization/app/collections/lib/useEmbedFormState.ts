@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import type { PortionStrategy } from '@/lib/graphql/mutations';
 import { useEmbeddingModelState, type EmbeddingModelState } from './useEmbeddingModelState';
 import { saeLinkFromParams, updateTextTemplate, type CommonEmbedFormValues } from './embeddingFormUtils';
+import { placeholderIssues as findPlaceholderIssues } from './taskPrefixes';
 
 export interface EmbedFormState {
   /** Model + topic configuration (shared hook) */
@@ -36,6 +37,11 @@ export interface EmbedFormState {
 
   /** Snapshot of the shared values consumed by the pure input builders */
   commonValues: () => CommonEmbedFormValues;
+  /**
+   * Text template / task prefix problems the backend would reject; the
+   * prefix may name any of `prefixColumns` (the source's columns).
+   */
+  placeholderIssues: (prefixColumns: string[]) => string[];
 }
 
 /**
@@ -87,6 +93,13 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     saeLink: saeLinkFromParams(model.getSaePostParams()),
   });
 
+  const placeholderIssues = (prefixColumns: string[]): string[] => findPlaceholderIssues({
+    template: textTemplate,
+    embeddingColumns: selectedEmbeddingColumns,
+    prefix: model.taskPrefix?.documentPrefix,
+    prefixColumns,
+  });
+
   return {
     model,
     collectionName,
@@ -111,5 +124,6 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     randomSeed,
     setRandomSeed,
     commonValues,
+    placeholderIssues,
   };
 }

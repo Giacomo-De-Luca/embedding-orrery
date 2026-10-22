@@ -34,6 +34,16 @@ class HookType(Enum):
 HOOK_TYPE_FROM_STR: dict[str, HookType] = {ht.value: ht for ht in HookType}
 
 
+def parse_hook_type(value: HookType | str) -> HookType:
+    """The ``HookType`` for a member or its value (``"mlp_out"``); ValueError otherwise."""
+    if isinstance(value, HookType):
+        return value
+    hook_type = HOOK_TYPE_FROM_STR.get(value)
+    if hook_type is None:
+        raise ValueError(f"Unknown hook_type '{value}'. Valid: {list(HOOK_TYPE_FROM_STR.keys())}")
+    return hook_type
+
+
 # d_sae value for each width suffix, shared across SAE families. Gemma-scope
 # uses 16k/32k/65k/262k; Qwen-scope adds 64k/80k/128k. Width *labels* differ per
 # family (e.g. Gemma "65k" vs Qwen "64k") but each resolves to a latent count.

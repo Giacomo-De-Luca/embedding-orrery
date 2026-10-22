@@ -1,0 +1,35 @@
+# Compare a model's float32 and bfloat16 embeddings on this machine (the check
+# behind keeping bf16 checkpoints in bf16 on Apple GPUs).
+#
+# Loads the model twice, one dtype at a time; run it while the backend is idle:
+#   uv run python -m interpretability_backend.scripts.compare_embedding_dtypes
+# Point at another config with ORRERY_DTYPE_COMPARISON_CONFIG=/path/to/config.toml
+
+model = "google/embeddinggemma-2"
+device = "mps"          # "mps", "cuda" or "cpu"
+batch_size = 16
+neighbours = 10         # top-k neighbours compared per text
+# prompt = "Retrieval-document"   # optional prompt name of the model
+# max_length = 2048               # optional input-length cap in tokens
+
+# One text per line in a file (preferred: use a sample of a real dataset), or
+# the inline list below.
+# texts_file = "~/samples/abstracts.txt"
+texts = [
+  "The cat sat quietly on the warm windowsill.",
+  "A kitten was resting on the sunny ledge of the window.",
+  "Quarterly revenue grew by twelve percent year over year.",
+  "The company's earnings rose sharply in the last quarter.",
+  "Photosynthesis converts light energy into chemical energy.",
+  "Plants use sunlight to make sugars from carbon dioxide and water.",
+  "The orchestra performed Beethoven's ninth symphony last night.",
+  "A symphony concert featuring classical works sold out quickly.",
+  "Neural networks learn representations from large datasets.",
+  "Deep learning models are trained on vast amounts of data.",
+  "The hiking trail climbs steeply through a pine forest.",
+  "Mountain paths wind upward between tall evergreen trees.",
+  "Inflation pressures led the central bank to raise interest rates.",
+  "Il gatto dorme sul divano tutto il pomeriggio.",
+  "Le chat dort sur le canapé tout l'après-midi.",
+  "def add(a, b):\n    return a + b",
+]

@@ -44,6 +44,8 @@ interface TopicSearchSectionProps {
    * resolve topic_label colours (see DashboardPanel), so each dot matches its points.
    */
   topicColorMap: Record<string, string>;
+  /** A topic-tree preview is on the map: these are still the saved topics. */
+  previewingTopicCut?: boolean;
 }
 
 const FALLBACK_TOPIC_COLOR = '#888';
@@ -70,6 +72,7 @@ export function TopicSearchSection({
   onSelectAll,
   onClearAll,
   topicColorMap,
+  previewingTopicCut = false,
 }: TopicSearchSectionProps) {
   const handleSemanticKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -82,6 +85,11 @@ export function TopicSearchSection({
     <div className="space-y-3">
       <Separator />
       <Label className="text-base">Topics</Label>
+      {previewingTopicCut && (
+        <p className="text-xs text-muted-foreground">
+          The map previews a topic cut: topic search and filters still use the saved topics.
+        </p>
+      )}
 
       {/* Mode: segmented control (same style as the Controls panel segments) */}
       <ToggleGroup

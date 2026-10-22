@@ -37,6 +37,7 @@ import {
 } from '../graphql/mutations';
 import { GET_COLLECTIONS, EXTRACT_TOPICS, REDUCE_TOPICS, GENERATE_LLM_LABELS, GET_COLLECTION_TOPICS } from '../graphql/queries';
 import { announceJobOutcome, jobOutcome } from '../utils/jobCancellation';
+import { runDeleteCollection } from '../utils/collectionDeletion';
 
 // ========== Hook Return Types ==========
 
@@ -53,6 +54,8 @@ function notifyEmbedOutcome(result: EmbedDatasetResult | null) {
     succeeded: (r) =>
       `Embedded ${r.totalEmbedded.toLocaleString()} items into "${r.collectionName}" in ${r.durationSeconds.toFixed(1)}s`,
   }, toast);
+  // Non-cancelling issues (e.g. documents truncated at the length cap).
+  for (const warning of result?.warnings ?? []) toast.warning(warning);
 }
 
 /** Embedding runs can take minutes: allow 10 before the request times out. */
@@ -527,6 +530,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       if (outcome === 'failed') setError(result!.error!);
 
       setLastReduceResult(result);
+      // The reduction replaced the active extraction: reload its topic list and
+      // quality scores (the pane only refetches them on a collection change).
+      if (outcome === 'succeeded') {
+        const topics = await getCollectionTopics({ variables: { collectionName: input.collectionName } })
+          .then((r) => r.data?.collectionTopics ?? null, () => null);
+        if (topics) setLastTopicsResult(topics);
+      }
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to reduce topics';
@@ -534,7 +544,7 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
       toast.error(message);
       return null;
     }
-  }, [reduceTopicsMutation]);
+  }, [reduceTopicsMutation, getCollectionTopics]);
 
   // ========== LLM Label Generation ==========
 
@@ -706,26 +716,13 @@ export function useEmbedDataset(): UseEmbedDatasetReturn {
 
   // ========== Collection Operations ==========
 
-  const deleteCollection = useCallback(async (collectionName: string): Promise<boolean> => {
-    setError(null);
-
-    try {
-      const { data, error } = await deleteMutation({
-        variables: { collectionName }
-      });
-
-      if (error) {
-        setError(error.message);
-        return false;
-      }
-
-      return data?.deleteCollection ?? false;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete collection';
-      setError(message);
-      return false;
-    }
-  }, [deleteMutation]);
+  // Rejects with the server's message (e.g. a running job to cancel first);
+  // the delete dialog shows it. Not the hook-wide `error`: that one is
+  // rendered by the topic card.
+  const deleteCollection = useCallback(
+    (collectionName: string): Promise<boolean> => runDeleteCollection(deleteMutation, collectionName),
+    [deleteMutation],
+  );
 
   const updateCollectionMetadata = useCallback(async (
     collectionName: string,

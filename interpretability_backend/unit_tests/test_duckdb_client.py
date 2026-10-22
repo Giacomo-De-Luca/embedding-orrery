@@ -3,6 +3,7 @@
 
 import duckdb
 import numpy as np
+import pandas as pd
 import pytest
 
 from backend.clients.duckdb_client import DuckDBClient
@@ -92,6 +93,170 @@ class TestDatasets:
 
     def test_delete_nonexistent(self, db: DuckDBClient):
         assert db.delete_dataset("nope") is False
+
+
+class TestDeleteCollection:
+    """One vector collection's rows go; its dataset only with its last collection."""
+
+    # A source collection and a re-embed of the same dataset (shared items).
+    COLLECTIONS = ("ds", "ds_gemini")
+    TABLES = (
+        "vector_collections", "projections", "projection_metadata", "topic_extractions",
+        "sae_document_activations", "probes", "probe_scores",
+    )
+    # Keyed by extraction, not collection.
+    EXTRACTION_TABLES = ("topic_info", "topic_assignments", "topic_centroids")
+
+    def _setup(self, db: DuckDBClient) -> None:
+        db.create_dataset("ds")
+        db.insert_items_batch("ds", ["i1", "i2"], ["doc1", "doc2"], [{"a": 1}, {"a": 2}])
+        for name in self.COLLECTIONS:
+            db.register_vector_collection("ds", "chromadb", name, "dense")
+            db.insert_projections_batch(name, ["i1", "i2"], "pca_2d", [[1.0, 2.0], [3.0, 4.0]])
+            db.upsert_projection_metadata(name, "pca_2d")
+            extraction = db.create_topic_extraction(name, "ds")
+            db.insert_topic_info_batch(extraction, [{"topic_id": 0, "label": "t", "count": 2}])
+            db.insert_topic_assignments_batch(
+                extraction, [{"item_id": "i1", "topic_id": 0}, {"item_id": "i2", "topic_id": 0}]
+            )
+            db.replace_topic_centroids(
+                extraction,
+                [{"level": "topic", "topic_id": 0, "member_count": 2, "centroid": [1.0, 0.0]}],
+            )
+            db.insert_document_activations_batch(name, "i1", [(7, 0.5)])
+            db.upsert_probe(
+                name, "a", "ridge", config={}, metrics={}, direction=[0.1],
+                scaler_mean=[0.0], scaler_scale=[1.0], intercept=0.0,
+                artifact_path="/tmp/probe", n_train=1, n_val=1,
+            )
+            db.insert_probe_scores_bulk(
+                name, "a", "ridge", pd.DataFrame({"item_id": ["i1"], "score": [1.0]})
+            )
+
+    def _collections_in(self, db: DuckDBClient, table: str) -> set[str]:
+        rows = db._conn.execute(f"SELECT DISTINCT collection_name FROM {table}").fetchall()
+        return {row[0] for row in rows}
+
+    def _extraction_collections(self, db: DuckDBClient, table: str) -> set[str]:
+        """Collections owning ``table``'s rows, through their topic extraction.
+
+        fetchall, never fetchone: a half-read result on the connection makes
+        DuckDB reject the next foreign-key parent delete.
+        """
+        joined = db._conn.execute(
+            f"SELECT e.collection_name FROM {table} t "
+            "JOIN topic_extractions e ON e.id = t.extraction_id"
+        ).fetchall()
+        total = db._conn.execute(f"SELECT count(*) FROM {table}").fetchall()[0][0]
+        assert total == len(joined), f"{table} rows left without their extraction"
+        return {row[0] for row in joined}
+
+    def _assert_only(self, db: DuckDBClient, expected: set[str]) -> None:
+        for table in self.TABLES:
+            assert self._collections_in(db, table) == expected, table
+        for table in self.EXTRACTION_TABLES:
+            assert self._extraction_collections(db, table) == expected, table
+
+    def test_deleting_a_reembed_keeps_the_dataset_and_its_source(self, db: DuckDBClient):
+        self._setup(db)
+
+        assert db.delete_collection("ds_gemini") is True
+
+        self._assert_only(db, {"ds"})
+        assert db.get_dataset("ds") is not None
+        assert {item["id"] for item in db.get_items_by_ids("ds", ["i1", "i2"])} == {"i1", "i2"}
+
+    def test_deleting_the_source_keeps_its_reembeds(self, db: DuckDBClient):
+        """Same name as the dataset, but the dataset still backs ds_gemini."""
+        self._setup(db)
+
+        assert db.delete_collection("ds") is True
+
+        self._assert_only(db, {"ds_gemini"})
+        assert db.get_dataset("ds") is not None
+
+    def test_deleting_the_last_collection_deletes_the_dataset(self, db: DuckDBClient):
+        self._setup(db)
+
+        assert db.delete_collection("ds_gemini") is True
+        assert db.delete_collection("ds") is True
+
+        self._assert_only(db, set())
+        assert db.get_dataset("ds") is None
+        tables = {t[0] for t in db._conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchall()}
+        assert "items_ds" not in tables
+
+    def test_failed_dataset_row_delete_keeps_the_items(self, db: DuckDBClient, monkeypatch):
+        """The dataset row goes before its items table: if that delete fails
+        (DuckDB can reject a parent delete while another read is open), the
+        dataset is left whole and deletable by its own name, not half-dropped."""
+        self._setup(db)
+        assert db.delete_collection("ds_gemini") is True
+        real_exec = db._exec
+
+        def failing_dataset_delete(sql, params=None):
+            if sql.startswith("DELETE FROM datasets"):
+                raise duckdb.ConstraintException("still referenced")
+            return real_exec(sql, params)
+
+        db._rebuild_fts_for_dataset("ds")
+        monkeypatch.setattr(db, "_exec", failing_dataset_delete)
+        with pytest.raises(duckdb.ConstraintException):
+            db.delete_collection("ds")
+        monkeypatch.undo()
+
+        assert "ds" in db._fts_dirty  # its index went first: rebuilt on the next search
+        assert db.get_dataset("ds") is not None
+        assert {item["id"] for item in db.get_items_by_ids("ds", ["i1", "i2"])} == {"i1", "i2"}
+        assert db.delete_collection("ds") is True  # no collection left: deleted by name
+        assert db.get_dataset("ds") is None
+
+    def test_fulltext_index_goes_with_the_dataset(self, db: DuckDBClient):
+        """DuckDB keeps an FTS index (a tokenised copy of every document) after
+        its table is dropped, so the dataset delete must drop it."""
+        self._setup(db)
+        db._rebuild_fts_for_dataset("ds")
+        schemas = lambda: {  # noqa: E731
+            row[0] for row in db._conn.execute(
+                "SELECT schema_name FROM information_schema.schemata"
+            ).fetchall()
+        }
+        assert "fts_main_items_ds" in schemas()
+
+        db.delete_collection("ds_gemini")
+        assert "fts_main_items_ds" in schemas()  # the dataset still backs "ds"
+        db.delete_collection("ds")
+        assert "fts_main_items_ds" not in schemas()
+
+    def test_collection_names_and_dataset_source_files(self, db: DuckDBClient):
+        self._setup(db)
+        db.create_dataset("other", source_file="/uploads/other.csv")
+
+        assert sorted(db.list_vector_collection_names()) == ["ds", "ds_gemini"]
+        assert db.dataset_source_files() == ["/uploads/other.csv"]
+
+    def test_dataset_without_registered_collections(self, db: DuckDBClient):
+        """Datasets from before the vector_collections registry."""
+        db.create_dataset("legacy")
+
+        assert db.delete_collection("legacy") is True
+        assert db.get_dataset("legacy") is None
+
+    def test_unknown_collection(self, db: DuckDBClient):
+        self._setup(db)
+
+        assert db.delete_collection("nope") is False
+        self._assert_only(db, set(self.COLLECTIONS))
+
+    def test_delete_dataset_still_removes_every_collection(self, db: DuckDBClient):
+        self._setup(db)
+
+        assert db.delete_dataset("ds") is True
+
+        self._assert_only(db, set())
+        assert db.get_dataset("ds") is None
 
 
 # ------------------------------------------------------------------

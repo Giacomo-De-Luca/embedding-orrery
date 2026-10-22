@@ -16,9 +16,6 @@ from .embedding_functions.config import (
     # Constants
     DB_PATH,
     EMBEDDING_BATCH_SIZE,
-    IMAGE_BATCH_SIZE,
-    IMAGE_EMBEDDING_DIMENSIONS,
-    IMAGE_MODEL_NAME,
     TEXT_EMBEDDING_DIMENSIONS,
     TEXT_MODEL_NAME,
     # Enums
@@ -50,11 +47,8 @@ __all__ = [
     # Constants
     "DB_PATH",
     "TEXT_MODEL_NAME",
-    "IMAGE_MODEL_NAME",
     "TEXT_EMBEDDING_DIMENSIONS",
-    "IMAGE_EMBEDDING_DIMENSIONS",
     "EMBEDDING_BATCH_SIZE",
-    "IMAGE_BATCH_SIZE",
     # Enums
     "DataType",
     "EmbeddingProvider",

@@ -1,15 +1,14 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery } from '@apollo/client/react';
 import { Button } from '@/lib/ui-primitives/button';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
-import { Slider } from '@/lib/ui-primitives/slider';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
-import { ToggleGroup, ToggleGroupItem } from '@/lib/ui-primitives/toggle-group';
 import {
   Select,
   SelectContent,
@@ -17,7 +16,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/lib/ui-primitives/select';
-import type { ReduceTopicsInput, ReduceTopicsResult } from '@/lib/graphql/mutations';
+import { TOPIC_MERGE_TREE } from '@/lib/graphql/queries';
+import type { ReduceTopicsInput, ReduceTopicsResult, TopicMergeTreeData } from '@/lib/graphql/mutations';
+import { DEFAULT_REDUCTION_CHOICE, ReductionInputs, type ReductionChoice } from '../../lib/topicConfigInput';
+import { ReductionStrategyFields } from './ReductionStrategyFields';
+
+/** Slider maximum while the collection's base topic count is unknown. */
+const FALLBACK_MAX_TOPICS = 50;
+
+interface TopicTreeSummaryData {
+  topicMergeTree: Pick<TopicMergeTreeData, 'availableLinkages' | 'leaves'> | null;
+}
 
 interface ReduceTopicsSectionProps {
   collectionName: string;
@@ -29,7 +38,12 @@ interface ReduceTopicsSectionProps {
   onReduced: () => void;
 }
 
-/** "Reduce Topics" controls + result summary. Owns its own form state. */
+/**
+ * "Reduce Topics" controls + result summary. Owns its own form state. A
+ * reduction always cuts the extraction's base topics (its original clusters),
+ * so the "Topics" slider goes up to their count (from the merge-tree query)
+ * and a second reduction never compounds the first.
+ */
 export function ReduceTopicsSection({
   collectionName,
   reduceTopics,
@@ -38,83 +52,53 @@ export function ReduceTopicsSection({
   lastReduceResult,
   onReduced,
 }: ReduceTopicsSectionProps) {
-  const [reduceMethod, setReduceMethod] = useState<string>('fixed_n');
-  const [reduceNTopics, setReduceNTopics] = useState<number>(10);
-  const [reduceUseCtfidf, setReduceUseCtfidf] = useState<boolean>(true);
+  const [choice, setChoice] = useState<ReductionChoice>(DEFAULT_REDUCTION_CHOICE);
   const [reduceRegenerateLabels, setReduceRegenerateLabels] = useState<boolean>(false);
   const [reduceLlmProvider, setReduceLlmProvider] = useState<string>('gemini');
   const [reduceLlmModel, setReduceLlmModel] = useState<string>('gemini-3-flash-preview');
 
+  // Base topics and the linkages this collection offers (density needs an
+  // HDBSCAN extraction made with density trees).
+  const { data: treeData, refetch: refetchTree } = useQuery<TopicTreeSummaryData>(TOPIC_MERGE_TREE, {
+    variables: { collectionName, linkage: 'average', includeNoise: false },
+    fetchPolicy: 'network-only',
+  });
+  const tree = treeData?.topicMergeTree ?? null;
+  const densityAvailable = tree?.availableLinkages.includes('density') ?? false;
+  const maxTopics = tree?.leaves.length ?? FALLBACK_MAX_TOPICS;
+
   const handleReduce = async () => {
-    const result = await reduceTopics({
-      collectionName,
-      method: reduceMethod,
-      nTopics: reduceMethod === 'fixed_n' ? reduceNTopics : undefined,
-      useCtfidf: reduceUseCtfidf,
+    const input = ReductionInputs.reduceTopics(collectionName, choice, {
       regenerateLabels: reduceRegenerateLabels,
       llmProvider: reduceLlmProvider,
       llmModel: reduceLlmModel,
-    });
+    }, densityAvailable);
+    const result = await reduceTopics(input);
     if (result && !result.error) {
       onReduced();
+      void refetchTree();
     }
   };
+
+  // The hook's last result is shared by every collection's pane: only show ours.
+  const result = lastReduceResult?.collectionName === collectionName && !lastReduceResult.error
+    ? lastReduceResult
+    : null;
 
   return (
     <div className="space-y-4">
       <h4 className="text-sm font-medium">Reduce Topics</h4>
       <p className="text-xs text-muted-foreground">
-        Merge similar topics to reduce the total count.
+        Merge similar topics. Reductions start from the original clusters, which stay available as subtopics.
       </p>
 
       <div className="space-y-3">
-        <div className="space-y-2">
-          <Label>Method</Label>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={reduceMethod}
-            onValueChange={(v) => { if (v) setReduceMethod(v); }}
-          >
-            <ToggleGroupItem value="fixed_n" className="text-xs">Fixed N</ToggleGroupItem>
-            <ToggleGroupItem value="auto" className="text-xs">Auto</ToggleGroupItem>
-          </ToggleGroup>
-        </div>
-
-        {reduceMethod === 'fixed_n' && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="reduce-n-topics">Target Topics</Label>
-              <span className="text-sm text-muted-foreground">{reduceNTopics}</span>
-            </div>
-            <Slider
-              id="reduce-n-topics"
-              min={2}
-              max={50}
-              step={1}
-              value={[reduceNTopics]}
-              onValueChange={([v]) => setReduceNTopics(v)}
-            />
-          </div>
-        )}
-
-        <div className="space-y-2">
-          <Label>Similarity Method</Label>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={reduceUseCtfidf ? 'ctfidf' : 'semantic'}
-            onValueChange={(v) => {
-              if (v) setReduceUseCtfidf(v === 'ctfidf');
-            }}
-          >
-            <ToggleGroupItem value="ctfidf" className="text-xs">c-TF-IDF</ToggleGroupItem>
-            <ToggleGroupItem value="semantic" className="text-xs">Semantic</ToggleGroupItem>
-          </ToggleGroup>
-          <p className="text-xs text-muted-foreground">
-            c-TF-IDF is fast. Semantic uses embeddings for better quality but is slower.
-          </p>
-        </div>
+        <ReductionStrategyFields
+          value={choice}
+          onChange={setChoice}
+          densityAvailable={densityAvailable}
+          maxTopics={maxTopics}
+        />
 
         <div className="space-y-3">
           <div className="flex items-center gap-2">
@@ -124,7 +108,7 @@ export function ReduceTopicsSection({
               onCheckedChange={(checked) => setReduceRegenerateLabels(checked === true)}
             />
             <Label htmlFor="reduce-regenerate-labels" className="cursor-pointer">
-              Regenerate LLM labels after merging
+              LLM labels for merged topics
             </Label>
           </div>
 
@@ -174,18 +158,21 @@ export function ReduceTopicsSection({
       </div>
 
       {/* Reduction Results */}
-      {lastReduceResult && !lastReduceResult.error && (
+      {result && (
         <div className="space-y-3">
           <Separator />
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">
-              {lastReduceResult.numTopicsBefore} → {lastReduceResult.numTopicsAfter} topics
+              {result.numTopicsBefore} → {result.numTopicsAfter} topics
             </Badge>
-            <Badge variant="outline">{lastReduceResult.durationSeconds.toFixed(1)}s</Badge>
+            {result.absorbedNoise > 0 && (
+              <Badge variant="secondary">{result.absorbedNoise.toLocaleString()} noise documents absorbed</Badge>
+            )}
+            <Badge variant="outline">{result.durationSeconds.toFixed(1)}s</Badge>
           </div>
 
           <div className="space-y-2">
-            {lastReduceResult.topics.slice(0, 5).map((topic) => (
+            {result.topics.slice(0, 5).map((topic) => (
               <div key={topic.topicId} className="text-sm border rounded-md p-2">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-medium">
@@ -200,9 +187,9 @@ export function ReduceTopicsSection({
                 </p>
               </div>
             ))}
-            {lastReduceResult.topics.length > 5 && (
+            {result.topics.length > 5 && (
               <p className="text-xs text-muted-foreground">
-                +{lastReduceResult.topics.length - 5} more topics
+                +{result.topics.length - 5} more topics
               </p>
             )}
           </div>

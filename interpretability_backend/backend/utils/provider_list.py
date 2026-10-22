@@ -22,6 +22,11 @@ PROVIDER_DESCRIPTIONS = {
 }
 
 
+# Providers whose models run inside the backend process (torch, a tokenizer we
+# can count with); the others call a remote API or server.
+LOCAL_PROVIDER_VALUES = frozenset({"sentence_transformers", "qwen", "bge"})
+
+
 @strawberry.enum
 class EmbeddingProviderEnum(Enum):
     """Embedding model provider.

@@ -5,6 +5,8 @@
  * renderer.
  */
 
+import type { HazeRendererKind } from '../../types/types';
+
 let cached: boolean | null = null;
 
 export function isDensityHazeSupported(): boolean {
@@ -21,4 +23,9 @@ export function isDensityHazeSupported(): boolean {
   }
   cached = ok;
   return ok;
+}
+
+/** The renderer this browser can run: `density` degrades to sprites without float targets. */
+export function supportedHazeRenderer(kind: HazeRendererKind): HazeRendererKind {
+  return kind === 'density' && !isDensityHazeSupported() ? 'sprites' : kind;
 }

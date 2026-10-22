@@ -22,3 +22,14 @@ def test_sae_prepare_id():
         JobIds.sae_prepare("4b", "it", 9, "resid_post", "16k")
         == "sae_prepare_4b_it_9_resid_post_16k"
     )
+
+
+def test_for_collection_lists_every_collection_scoped_id_once():
+    assert JobIds.for_collection("col") == (
+        "col",
+        "col_reduce",
+        "col_evaluate",
+        "col_llm_labeling",
+        "col_sae_activations",
+        "col_probe",
+    )

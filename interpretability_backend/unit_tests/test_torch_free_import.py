@@ -36,6 +36,33 @@ if heavy:
 """
 
 
+_STATUS_POLL_SNIPPET = """
+import sys
+
+from interpretability_backend.backend.API import schema
+
+result = schema.execute_sync("{ modelStatus { loaded } }")
+assert result.errors is None, result.errors
+assert result.data["modelStatus"]["loaded"] is False
+if "torch" in sys.modules:
+    print("the modelStatus query imported torch")
+    sys.exit(1)
+"""
+
+
+def test_model_status_poll_imports_no_torch():
+    result = subprocess.run(
+        [sys.executable, "-c", _STATUS_POLL_SNIPPET],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        "Polling modelStatus without a loaded model imported torch.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
 def test_schema_import_loads_no_heavy_modules():
     result = subprocess.run(
         [sys.executable, "-c", _CHECK_SNIPPET],

@@ -1,6 +1,12 @@
 import { hsl } from 'd3-color';
 import type { MetadataPoint, NestedColorMap } from '../types/types';
-import { generateCategoryColors, MISSING_CATEGORY_COLOR, UNCLUSTERED_COLOR } from './categoryColors';
+import {
+  buildPinnedCategoryColorMap,
+  generateCategoryColors,
+  MISSING_CATEGORY_COLOR,
+  UNCLUSTERED_COLOR,
+  type CategoryColorPin,
+} from './categoryColors';
 import { CategoryKey } from './categoryKey';
 
 /** Topics with a fixed color, listed in this order after every real topic. */
@@ -23,18 +29,30 @@ export function isNestedColorAvailable(
   return points.some(p => !CategoryKey.isMissing(p.metadata?.['subtopic_label']));
 }
 
+/** A colour pin for the topic level (the topic-tree preview) and its source field's overrides. */
+export interface NestedTopicPinning {
+  pin: CategoryColorPin;
+  sourceOverrides?: Record<string, string>;
+}
+
 /**
  * Build a nested color map: topics get base hues, subtopics get lightness variations.
  *
  * 1. Groups subtopic_label values by their co-occurring topic_label
- * 2. Assigns base hues per topic via generateCategoryColors()
+ * 2. Assigns base hues per topic via generateCategoryColors(), or through
+ *    `pinning` (each preview group takes its representative's saved colour)
  * 3. For each topic's subtopics, generates HSL lightness variations (30%-72%)
  * 4. Noise topic ("Unclustered") and points without a topic (Missing) keep fixed colors
+ *
+ * Subtopic colours and counts are keyed by `CategoryKey.subtopicKey(topic,
+ * subtopic)`: noise a density cut absorbed into a topic keeps its
+ * "Unclustered" subtopic label and must not recolour the real noise.
  */
 export function buildNestedColorMap(
   points: MetadataPoint[],
   palette?: string,
   topicOverrides?: Record<string, string>,
+  pinning?: NestedTopicPinning,
 ): NestedColorMap {
   // Build hierarchy: topic → Set<subtopic>, and counts
   const hierarchySet: Record<string, Set<string>> = {};
@@ -48,7 +66,8 @@ export function buildNestedColorMap(
     hierarchySet[topic].add(subtopic);
 
     topicCounts[topic] = (topicCounts[topic] ?? 0) + 1;
-    subtopicCounts[subtopic] = (subtopicCounts[subtopic] ?? 0) + 1;
+    const key = CategoryKey.subtopicKey(topic, subtopic);
+    subtopicCounts[key] = (subtopicCounts[key] ?? 0) + 1;
   }
 
   // Sort topics, but put the fixed-color topics (Unclustered, Missing) last
@@ -62,7 +81,12 @@ export function buildNestedColorMap(
 
   // Generate base topic colors (fixed-color topics take no hue)
   const colorTopics = topics.filter(t => !FIXED_TOPIC_COLORS.has(t));
-  const baseColors = generateCategoryColors(colorTopics.length, palette);
+  const pinned = pinning && buildPinnedCategoryColorMap(
+    'topic_label', pinning.pin, colorTopics, palette, pinning.sourceOverrides, topicOverrides,
+  );
+  const baseColors = pinned
+    ? colorTopics.map((topic) => pinned[topic])
+    : generateCategoryColors(colorTopics.length, palette);
 
   const topicColors: Record<string, string> = {};
   const subtopicColors: Record<string, string> = {};
@@ -72,7 +96,7 @@ export function buildNestedColorMap(
     if (!hierarchy[topic]) continue;
     topicColors[topic] = color;
     for (const sub of hierarchy[topic]) {
-      subtopicColors[sub] = color;
+      subtopicColors[CategoryKey.subtopicKey(topic, sub)] = color;
     }
   }
 
@@ -84,7 +108,7 @@ export function buildNestedColorMap(
     const subs = hierarchy[topic];
     if (subs.length === 1) {
       // Single subtopic gets the base color
-      subtopicColors[subs[0]] = baseHex;
+      subtopicColors[CategoryKey.subtopicKey(topic, subs[0])] = baseHex;
     } else {
       // Multiple subtopics: vary lightness around the base hue
       const baseHSL = hsl(baseHex);
@@ -96,7 +120,7 @@ export function buildNestedColorMap(
         const t = subs.length > 1 ? j / (subs.length - 1) : 0.5;
         const l = 0.30 + t * 0.42;
         const subHSL = hsl(h, s, l);
-        subtopicColors[sub] = subHSL.formatHex();
+        subtopicColors[CategoryKey.subtopicKey(topic, sub)] = subHSL.formatHex();
       });
     }
   });

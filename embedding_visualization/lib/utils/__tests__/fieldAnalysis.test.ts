@@ -13,6 +13,8 @@ import {
   detectDisplayConfig,
   getFieldValues,
   CategoricalFields,
+  TopicFieldOptions,
+  analyzeColorFields,
   type ColorFieldOption,
 } from '../fieldAnalysis';
 
@@ -288,5 +290,87 @@ describe('CategoricalFields', () => {
 
   it('rejects an empty field name', () => {
     expect(CategoricalFields.includes(null, options, 2)).toBe(false);
+  });
+});
+
+describe('TopicFieldOptions.refresh', () => {
+  // A cached field analysis from before a reduction: one topic level, three topics.
+  const cached: ColorFieldOption[] = [
+    { field: 'topic_label', displayName: 'Topic Label', valueType: 'string', uniqueCount: 3, recommendedScale: 'categorical' },
+    { field: 'pos', displayName: 'Part of Speech', valueType: 'string', uniqueCount: 4, recommendedScale: 'categorical' },
+    { field: 'year', displayName: 'Year', valueType: 'numeric', uniqueCount: 40, recommendedScale: 'sequential', min: 1980, max: 2020 },
+  ];
+  // After the reduction: two topics, the three originals kept as subtopics.
+  const itemMetadata = [
+    { topic_label: 'A +1', subtopic_label: 'A', pos: 'n' },
+    { topic_label: 'A +1', subtopic_label: 'B', pos: 'v' },
+    { topic_label: 'C', subtopic_label: 'C', pos: 'a' },
+  ];
+  const fields = ['pos', 'subtopic_label', 'topic_label', 'year'];
+
+  it('recomputes the topic fields from the item metadata and keeps the others', () => {
+    const refreshed = TopicFieldOptions.refresh(cached, fields, itemMetadata);
+    expect(refreshed.find((o) => o.field === 'topic_label')?.uniqueCount).toBe(2);
+    expect(refreshed.find((o) => o.field === 'subtopic_label')?.uniqueCount).toBe(3);
+    expect(refreshed.find((o) => o.field === 'pos')).toBe(cached[1]);
+    expect(refreshed.find((o) => o.field === 'year')).toBe(cached[2]);
+  });
+
+  it('orders the options like a full analysis', () => {
+    const order = (options: ColorFieldOption[]) => options.map((o) => o.field);
+    const refreshed = TopicFieldOptions.refresh(cached, fields, itemMetadata);
+    expect(order(refreshed)).toEqual(['topic_label', 'subtopic_label', 'pos', 'year']);
+    expect(order(refreshed).slice(0, 2)).toEqual(order(analyzeColorFields(['subtopic_label', 'topic_label'], itemMetadata)));
+  });
+
+  it('drops topic fields the collection no longer has', () => {
+    const refreshed = TopicFieldOptions.refresh(cached, ['pos', 'year'], [{ pos: 'n' }, { pos: 'v' }]);
+    expect(refreshed.map((o) => o.field)).toEqual(['pos', 'year']);
+  });
+});
+
+describe('TopicFieldOptions.refreshCache', () => {
+  const displayConfig = { labelField: 'word', categoryField: 'pos', categoryValues: ['n', 'v'], categoryName: 'Part of Speech' };
+  const options: ColorFieldOption[] = [
+    { field: 'topic_label', displayName: 'Topic Label', valueType: 'string', uniqueCount: 3, recommendedScale: 'categorical' },
+    { field: 'pos', displayName: 'Part of Speech', valueType: 'string', uniqueCount: 4, recommendedScale: 'categorical' },
+  ];
+  const itemMetadata = [
+    { topic_label: 'A +1', subtopic_label: 'A', pos: 'n' },
+    { topic_label: 'A +1', subtopic_label: 'B', pos: 'v' },
+    { topic_label: 'C', subtopic_label: 'C', pos: 'a' },
+  ];
+  const fields = ['pos', 'subtopic_label', 'topic_label'];
+  const current = { displayConfig, options, tooltipFields: ['topic_label'] };
+
+  it('rebuilds a dropped cache from the options in memory, with fresh topic fields', () => {
+    // A topic sync drops the dataset's field_analysis cache before the reload.
+    const cache = TopicFieldOptions.refreshCache(null, current, fields, itemMetadata);
+    expect(cache?.display_config).toEqual({
+      label_field: 'word', category_field: 'pos', category_values: ['n', 'v'], category_name: 'Part of Speech',
+    });
+    expect(cache?.default_tooltip_fields).toEqual(['topic_label']);
+    expect(cache?.color_field_options?.map((o) => [o.field, o.uniqueCount])).toEqual([
+      ['topic_label', 2], ['subtopic_label', 3], ['pos', 4],
+    ]);
+  });
+
+  it('refreshes the topic fields of a cache the response still carries', () => {
+    const stored = {
+      display_config: { label_field: null, category_field: null, category_values: [], category_name: 'Category' },
+      color_field_options: [options[1]],
+      default_tooltip_fields: [],
+    };
+    const cache = TopicFieldOptions.refreshCache(stored, current, fields, itemMetadata);
+    expect(cache?.display_config).toBe(stored.display_config);
+    expect(cache?.color_field_options?.map((o) => o.field)).toEqual(['topic_label', 'subtopic_label', 'pos']);
+  });
+
+  it('has nothing to rebuild from before the first analysis finished', () => {
+    expect(TopicFieldOptions.refreshCache(null, { ...current, options: [] }, fields, itemMetadata)).toBeNull();
+  });
+
+  it('knows the four topic fields from CategoryKey', () => {
+    expect([...TopicFieldOptions.FIELDS]).toEqual(['topic_id', 'topic_label', 'subtopic_id', 'subtopic_label']);
   });
 });

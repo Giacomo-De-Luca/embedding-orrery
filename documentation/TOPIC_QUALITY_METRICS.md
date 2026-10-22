@@ -209,9 +209,12 @@ subsampled to 10k, cluster space `projection/umap_2d`):
 | topic (merged) | 19 | −0.379 | — | 0.340 | — |
 
 The subtopics score better than the merged topics on every geometric measure:
-reduction merges topics in **c-TF-IDF space**, which does not preserve geometric
-separation in the projection. When reduction has been applied, evaluate at
-`level="subtopic"` to judge the clustering itself.
+reduction merged topics in **c-TF-IDF space** (the legacy method of that
+extraction), which does not preserve geometric separation in the projection.
+When reduction has been applied, evaluate at `level="subtopic"` to judge the
+clustering itself. Reductions now cut merge trees built in the embedding space;
+`evaluation/run_reduction_comparison.py` scores every strategy side by side
+([TOPIC_MERGE_TREES.md](TOPIC_MERGE_TREES.md)).
 
 Both collections' negative or near-zero silhouettes on the *stored viz
 projection* are the expected consequence of measuring in a `min_dist=0.1` space —

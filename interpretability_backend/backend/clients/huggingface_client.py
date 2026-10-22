@@ -1,8 +1,11 @@
 """HuggingFace dataset client for fetching dataset information and embedding datasets."""
 
+import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+from ..utils.media_kinds import MediaKind, MediaReference
 
 
 @dataclass
@@ -93,8 +96,44 @@ def _dtype_to_string(dtype: Any) -> str:
         return "image"
     elif "Audio" in dtype_str:
         return "audio"
+    elif "Video" in dtype_str:
+        return "video"
     else:
         return dtype_str
+
+
+class HFMediaFeatures:
+    """Read a dataset's Image / Audio / Video columns undecoded.
+
+    datasets 4.x decodes Audio and Video with torchcodec (not installed: it
+    needs a system FFmpeg), so a dataset with such a column failed to load even
+    when the column wasn't embedded. Cast to ``decode=False``, every media cell
+    arrives as ``{"bytes", "path"}``, which the media decoder
+    (``utils/media_decoding.py``) reads and the previews summarise.
+    """
+
+    FEATURE_KINDS = {"Image": "image", "Audio": "audio", "Video": "video"}
+
+    @classmethod
+    def kinds(cls, features: Any) -> dict[str, str]:
+        """Top-level media columns of ``features``: column -> "image" / "audio" / "video"."""
+        if not features:
+            return {}
+        return {
+            name: cls.FEATURE_KINDS[type(feature).__name__]
+            for name, feature in features.items()
+            if type(feature).__name__ in cls.FEATURE_KINDS
+        }
+
+    @classmethod
+    def undecoded(cls, dataset: Any) -> Any:
+        """``dataset`` with every media feature cast to ``decode=False``."""
+        features = getattr(dataset, "features", None)
+        for name in cls.kinds(features):
+            feature = features[name]
+            if getattr(feature, "decode", False):
+                dataset = dataset.cast_column(name, dataclasses.replace(feature, decode=False))
+        return dataset
 
 
 def get_dataset_info(dataset_id: str) -> DatasetInfo:
@@ -128,7 +167,9 @@ def get_dataset_info(dataset_id: str) -> DatasetInfo:
                 license_info = getattr(hub_info.card_data, "license", None)
                 # Handle case where license is a list
                 if isinstance(license_info, list):
-                    license_info = ", ".join(str(lic) for lic in license_info) if license_info else None
+                    license_info = (
+                        ", ".join(str(lic) for lic in license_info) if license_info else None
+                    )
             if hub_info.description:
                 description = hub_info.description[:500]
         except Exception:
@@ -224,10 +265,13 @@ def get_dataset_preview(
 
     try:
         config_name = config if config and config != "default" else None
-        dataset = load_dataset(dataset_id, name=config_name, split=split, streaming=True)
+        dataset = HFMediaFeatures.undecoded(
+            load_dataset(dataset_id, name=config_name, split=split, streaming=True)
+        )
 
         features = getattr(dataset, "features", None)
         columns = list(features.keys()) if features else []
+        media_kinds = HFMediaFeatures.kinds(features)
 
         rows = []
         for i, row in enumerate(dataset):
@@ -235,7 +279,12 @@ def get_dataset_preview(
                 break
             row_dict = {}
             for key, value in row.items():
-                if isinstance(value, (str, int, float, bool, type(None))):
+                if key in media_kinds and value is not None:
+                    kind = MediaKind(media_kinds[key])
+                    row_dict[key] = MediaReference.of(value) or MediaReference.placeholder(
+                        value, kind
+                    )
+                elif isinstance(value, (str, int, float, bool, type(None))):
                     row_dict[key] = value
                 elif isinstance(value, list):
                     row_dict[key] = value[:10] if len(value) > 10 else value
@@ -304,7 +353,9 @@ def load_dataset_portion(
     config_name = config if config and config != "default" else None
 
     if portion.strategy == PortionStrategy.FIRST_N:
-        dataset = load_dataset(dataset_id, name=config_name, split=split, streaming=True)
+        dataset = HFMediaFeatures.undecoded(
+            load_dataset(dataset_id, name=config_name, split=split, streaming=True)
+        )
 
         rows = []
         for i, row in enumerate(dataset):
@@ -326,7 +377,7 @@ def load_dataset_portion(
         return rows, total or len(rows)
 
     elif portion.strategy == PortionStrategy.RANDOM_SAMPLE:
-        dataset = load_dataset(dataset_id, name=config_name, split=split)
+        dataset = HFMediaFeatures.undecoded(load_dataset(dataset_id, name=config_name, split=split))
 
         total = len(dataset)
         n = min(portion.n, total)
@@ -338,7 +389,7 @@ def load_dataset_portion(
         return rows, total
 
     elif portion.strategy == PortionStrategy.ROW_RANGE:
-        dataset = load_dataset(dataset_id, name=config_name, split=split)
+        dataset = HFMediaFeatures.undecoded(load_dataset(dataset_id, name=config_name, split=split))
 
         total = len(dataset)
         start = max(0, portion.start or 0)
@@ -348,7 +399,7 @@ def load_dataset_portion(
         return rows, total
 
     else:  # ALL
-        dataset = load_dataset(dataset_id, name=config_name, split=split)
+        dataset = HFMediaFeatures.undecoded(load_dataset(dataset_id, name=config_name, split=split))
 
         total = len(dataset)
         rows = [dict(row) for row in dataset]

@@ -17,7 +17,7 @@ from chromadb.config import Settings
 
 from ..services.progress_emitter import emit_progress_sync
 from ..utils.batch_utils import sort_items_by_length
-from ..utils.text_processing import format_text_for_embedding
+from ..utils.embedding_tasks import EmbeddingTexts
 from .config import (
     DB_PATH,
     EMBEDDING_BATCH_SIZE,
@@ -27,6 +27,9 @@ from .config import (
 )
 from .create_embedding_function import create_embedding_function, get_device
 from .embedding_job import EmbeddingBatchJob, open_embedding_collection, report_embedding_failure
+
+# The column name of an item's source document (the re-embed form lists it).
+DOCUMENT_FIELD = "__document__"
 
 
 def embed_existing_dataset(
@@ -107,33 +110,38 @@ def embed_existing_dataset(
             message="Sorting by document length...",
         )
 
-        # Determine text composition strategy
-        use_columns = bool(config.columns)
-        if use_columns:
+        # Determine text composition strategy: metadata columns (``__document__``
+        # names the source document), else the source document itself.
+        if config.columns:
             print(f"Composing text from metadata columns: {config.columns}")
-
-        def _get_text(item: dict) -> str:
-            """Get the text to embed from an item."""
-            if use_columns:
-                # Compose text from metadata columns using format_text_for_embedding
-                meta = item.get("metadata") or {}
-                # Build a row-like dict from metadata for format_text_for_embedding
-                row = dict(meta)
-                # Also include document as a possible field
-                row["__document__"] = item.get("document") or ""
-                return format_text_for_embedding(row, config.columns, config.text_template)
-            return item.get("document") or ""
+        texts = EmbeddingTexts(
+            config.columns or [DOCUMENT_FIELD],
+            config.text_template if config.columns else None,
+            model_config.prompt_format,
+            model_config.prompt,
+        )
+        # Each item as a row: its metadata plus its document (also what a task
+        # prefix reads); validated before the model loads.
+        items = [
+            (
+                item["id"],
+                {**(item.get("metadata") or {}), DOCUMENT_FIELD: item.get("document") or ""},
+            )
+            for item in all_items
+        ]
+        del all_items  # the rows replace the items (large datasets)
+        texts.validate(row for _, row in items)
 
         # Step 2: Sort by text length for efficient batching
-        all_items = sort_items_by_length(all_items, _get_text)
-        print(f"Sorted {len(all_items)} items by text length")
+        items = sort_items_by_length(items, lambda item: texts.document(item[1]))
+        print(f"Sorted {len(items)} items by text length")
 
         # Emit status: loading model
         emit_progress_sync(
             job_id=config.collection_name,
             status="running",
             items_processed=0,
-            total_items=len(all_items),
+            total_items=len(items),
             current_batch=0,
             total_batches=total_batches,
             message=f"Loading embedding model ({model_config.model_name})...",
@@ -157,12 +165,7 @@ def embed_existing_dataset(
                 "description": f"Re-embedding of dataset '{config.source_dataset_name}'",
                 "source_dataset": config.source_dataset_name,
                 "data_type": "text",
-                "embedding_provider": model_config.provider.value,
-                "embedding_model": model_config.model_name,
-                "embedding_dim": embedding_dim,
-                "embedding_task": model_config.task,
-                "embedding_task_type": model_config.task_type,
-                "embedding_prompt": model_config.prompt,
+                **model_config.collection_metadata(embedding_dim),
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             },
             embedding_function=embedding_func,
@@ -189,7 +192,7 @@ def embed_existing_dataset(
             collection_name=config.collection_name,
             job_type="re_embed",
             job_config=config.to_job_config(),
-            n_rows=len(all_items),
+            n_rows=len(items),
             batch_size=batch_size,
             embedding_dim=embedding_dim,
             device=device,
@@ -198,30 +201,29 @@ def embed_existing_dataset(
             cancel_event=cancel_event,
             progress_callback=progress_callback,
             description="Re-embedding batches",
+            truncation_source=embedding_func,
         )
         job.start(already_embedded=len(existing_ids), resume=config.resume)
 
         for batch_start, batch_end in job.batches():
             ids = []
-            documents = []
+            model_inputs = []
 
-            for item in all_items[batch_start:batch_end]:
-                doc_id = item["id"]
-
+            for doc_id, row in items[batch_start:batch_end]:
                 # Skip if already embedded (resume mode)
                 if doc_id in existing_ids:
                     continue
 
-                text = _get_text(item)
+                text = texts.document(row)
                 if not text.strip():
                     continue
 
                 ids.append(doc_id)
-                documents.append(text)
+                model_inputs.append(texts.model_input(row, text))
 
             if ids:
                 # Write to ChromaDB only (items already exist in DuckDB)
-                collection.add(ids=ids, embeddings=embedding_func(documents))
+                collection.add(ids=ids, embeddings=embedding_func(model_inputs))
 
             job.record(added=len(ids), end=batch_end)
 

@@ -709,12 +709,14 @@ class DuckDBSnapshotExporter:
             counts["topic_assignments"] = self._copy_topic_children(
                 connection, "topic_assignments", topic_names
             )
-            # Sources predating topic centroids lack the table (attached read-only).
-            counts["topic_centroids"] = (
-                self._copy_topic_children(connection, "topic_centroids", topic_names)
-                if self._source_has_table(connection, "topic_centroids")
-                else 0
-            )
+            # Sources predating topic centroids / merge trees lack the tables
+            # (attached read-only).
+            for table in ("topic_centroids", "topic_merge_trees"):
+                counts[table] = (
+                    self._copy_topic_children(connection, table, topic_names)
+                    if self._source_has_table(connection, table)
+                    else 0
+                )
 
             probe_names = self._selected(config, "probes")
             counts["probes"] = self._copy_filtered(

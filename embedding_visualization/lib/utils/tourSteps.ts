@@ -56,6 +56,8 @@ export const TOUR_ANCHORS = {
 
 export type TourAnchor = keyof typeof TOUR_ANCHORS;
 
+export type ExplorePanel = 'controls' | 'search' | 'analytics';
+
 /** Optional adjustment applied on top of the default camera framing. */
 export interface CameraViewAdjustment {
   /** Orbit around the vertical axis, degrees. Positive = counterclockwise from above. */
@@ -142,7 +144,12 @@ export interface TourRuntime {
   setNebulaMode: (on: boolean) => void;
   /** Toggle topic-name labels at cluster centroids. */
   setShowClusterLabels: (on: boolean) => void;
-  setActivePanel: (panel: 'controls' | 'search' | 'analytics' | null) => void;
+  setActivePanel: (panel: ExplorePanel | null) => void;
+  /**
+   * Phone-sized viewport (`isCompactWidth`): the panels open full-width over
+   * the map, so steps narrating the map keep them closed (`showPanelBesideMap`).
+   */
+  isCompactViewport: () => boolean;
   setShowLabels: (value: boolean) => void;
   getLoadedCollection: () => string | null;
   getColorByField: () => string | null;
@@ -220,6 +227,19 @@ export function waitFor(
     };
     tick();
   });
+}
+
+/**
+ * Open a panel beside the map a step narrates. On desktop the panel sits to
+ * the map's left; on a phone it would cover the map entirely, so all panels
+ * stay closed there. Steps whose anchor lives INSIDE a panel open it with
+ * `setActivePanel` directly.
+ */
+export function showPanelBesideMap(
+  runtime: Pick<TourRuntime, 'setActivePanel' | 'isCompactViewport'>,
+  panel: ExplorePanel,
+): void {
+  runtime.setActivePanel(runtime.isCompactViewport() ? null : panel);
 }
 
 /** Promise that resolves after `ms` (shared by every tour's settle waits). */
@@ -353,7 +373,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       // Open the Controls panel: the step invites rotating/zooming, and the
       // panel shows where "how to draw" lives from the very first beat. Also
       // swaps out the Search panel on Back-nav from the search step.
-      runtime.setActivePanel('controls');
+      showPanelBesideMap(runtime, 'controls');
       // MANDATORY, not a nicety: having any prepare at all disables joyride's
       // own target polling (see waitForAnchor), and this step's anchor only
       // mounts once the tour collection has loaded. Without this wait the
@@ -383,7 +403,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       // move the header input the spotlight is anchored to — no reposition
       // wait needed (unlike the feature-search step, whose anchor lives
       // inside the panel). It also stays open into that next step.
-      runtime.setActivePanel('search');
+      showPanelBesideMap(runtime, 'search');
       runtime.setShowLabels(true);
       // Deliberately NOT awaited: the tooltip appears immediately, the search
       // input's own spinner (inside the spotlight) shows progress, and the
@@ -441,7 +461,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       // the plot's right edge, so they never collide. The 400 ms settle below
       // covers the panel's 300 ms slide-in — and the anchor is outside the
       // panel, so nothing needs to wait on it.
-      runtime.setActivePanel('analytics');
+      showPanelBesideMap(runtime, 'analytics');
       // Topics arrive via their own query after the collection loads; on a
       // fast path they're long since present and the first call isolates.
       // Otherwise poll until they land (each failed attempt is a no-op).
@@ -476,8 +496,11 @@ export const TOUR_STEPS: TourStepDefinition[] = [
       runtime.clearTopicSelection();
       // Back-navigation from the 2D density step re-enters here — restore 3D.
       runtime.setDensityView(false);
-      runtime.setActivePanel('analytics');
+      showPanelBesideMap(runtime, 'analytics');
       runtime.applyTemporalWindow(0, 1 / 3);
+      // On a phone the panel stays closed (the fading map is the payoff), so
+      // there is no timeline to wait for or scroll to.
+      if (runtime.isCompactViewport()) return;
       // The panel is always mounted, slid offscreen; wait out its transition
       // so the chart is on-screen before we scroll to it.
       await waitForAnchor(TOUR_ANCHORS.temporalChart, 2000);
@@ -537,7 +560,7 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     prepare: async (runtime) => {
       // Parting view doubles as an invitation to keep exploring: the Controls
       // panel is open so "how to draw" is discoverable the moment the tour ends.
-      runtime.setActivePanel('controls');
+      showPanelBesideMap(runtime, 'controls');
       // The preset restores 3D and pins densityMode off (see tourPresets).
       runtime.applyPreset(FINALE_PRESET_ID);
       await waitFor(

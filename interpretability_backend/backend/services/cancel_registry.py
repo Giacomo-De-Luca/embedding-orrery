@@ -11,7 +11,7 @@ resumable.
 """
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 
 from .job_state import get_job_state_service
@@ -23,7 +23,21 @@ from .progress_emitter import emit_progress_sync
 CANCELLED_MESSAGE = "Cancelled by user"
 
 _active_cancel_events: dict[str, threading.Event] = {}
+# Ids no job may start under (their collection is being deleted).
+_reserved_job_ids: set[str] = set()
 _lock = threading.Lock()
+
+
+class JobIdReservedError(RuntimeError):
+    """A job cannot start: its id is reserved while its collection is deleted."""
+
+
+class JobIdsActiveError(RuntimeError):
+    """Ids could not be reserved: jobs are running under them."""
+
+    def __init__(self, job_ids: list[str]) -> None:
+        super().__init__(", ".join(job_ids))
+        self.job_ids = job_ids
 
 
 class JobCancelled(BaseException):  # noqa: N818 - mirrors asyncio.CancelledError
@@ -40,11 +54,42 @@ class JobCancelled(BaseException):  # noqa: N818 - mirrors asyncio.CancelledErro
 
 
 def register_cancel_event(job_id: str, event: threading.Event | None = None) -> threading.Event:
-    """Store a cancel event for a job (a new one unless ``event`` is given). Returns it."""
+    """Store a cancel event for a job (a new one unless ``event`` is given). Returns it.
+
+    Raises ``JobIdReservedError`` while the id is reserved (``reserved_job_ids``).
+    """
     event = event or threading.Event()
     with _lock:
+        if job_id in _reserved_job_ids:
+            raise JobIdReservedError(
+                f"Job '{job_id}' cannot start while its collection is being deleted"
+            )
         _active_cancel_events[job_id] = event
     return event
+
+
+@contextmanager
+def reserved_job_ids(job_ids: Iterable[str]) -> Iterator[None]:
+    """Keep jobs from starting under ``job_ids`` while the block runs.
+
+    Raises ``JobIdsActiveError`` (naming them) when jobs already run under any
+    of the ids, and ``JobIdReservedError`` when another block holds one.
+    Checked and reserved under one lock, so no job slips in between.
+    """
+    job_ids = tuple(job_ids)
+    with _lock:
+        held = [job_id for job_id in job_ids if job_id in _reserved_job_ids]
+        if held:
+            raise JobIdReservedError(f"Already being deleted: {', '.join(held)}")
+        active = [job_id for job_id in job_ids if job_id in _active_cancel_events]
+        if active:
+            raise JobIdsActiveError(active)
+        _reserved_job_ids.update(job_ids)
+    try:
+        yield
+    finally:
+        with _lock:
+            _reserved_job_ids.difference_update(job_ids)
 
 
 def request_cancel(job_id: str) -> bool:
@@ -55,6 +100,12 @@ def request_cancel(job_id: str) -> bool:
         event.set()
         return True
     return False
+
+
+def is_active(job_id: str) -> bool:
+    """Whether a job is registered under ``job_id`` (registered while it runs)."""
+    with _lock:
+        return job_id in _active_cancel_events
 
 
 def unregister_cancel_event(job_id: str, event: threading.Event | None = None) -> None:

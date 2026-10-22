@@ -103,7 +103,7 @@ class EmbeddingModelInput:
     Model names are free-form strings - any valid model for the provider works.
 
     Examples:
-    - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "google/gemma-embedding-001"
+    - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "google/embeddinggemma-2"
     - OpenAI: "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
     - Cohere: "embed-english-v3.0", "embed-multilingual-v3.0"
     - Ollama: "nomic-embed-text", "mxbai-embed-large"
@@ -116,14 +116,92 @@ class EmbeddingModelInput:
     model_name: str
     # Provider-specific options
     ollama_url: str | None = None  # Ollama: server URL (default: http://localhost:11434)
-    task: str | None = None  # QWEN: Query instruction prefix (used at query time only)
+    # Query time only: QWEN's query instruction, or the query prefix of a
+    # task-prefix model (EmbeddingGemma, Gemini Embedding 2; utils/embedding_tasks.py).
+    task: str | None = None
     task_type: str | None = (
-        None  # Gemini: Embedding optimization (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
+        None  # Gemini 001: Embedding optimization (SEMANTIC_SIMILARITY, ...); dropped for Gemini 2
     )
-    # SentenceTransformers: Prompt support for models like EmbeddingGemma
-    prompt: str | None = (
-        None  # Single field - can be predefined name (e.g., "Retrieval-query") or custom string
-    )
+    # SentenceTransformers: a predefined prompt name (e.g. "Retrieval-query") or
+    # custom string; for task-prefix models the document prefix template
+    # ("title: {title} | text: "), rendered per row into the model input only.
+    prompt: str | None = None
+    # Local providers: input-length cap in tokens. Omitted = the model's own limit
+    # (see the embeddingModelMaxLength query); above it the job is rejected.
+    max_length: int | None = None
+
+
+@strawberry.type
+class EmbeddingModelMaxLength:
+    """A local model's input-length limit in tokens, and where it was found.
+
+    ``source``: "catalog" (config/embedding_models.json),
+    "sentence_transformers_config", "tokenizer" or "model_config"; both fields
+    are null when the limit is unknown or the provider is a remote API.
+    """
+
+    max_length: int | None = None
+    source: str | None = None
+
+
+@strawberry.type
+class EmbeddingModelCatalogEntry:
+    """A model suggestion for the embed forms (``embeddingModelCatalog`` query).
+
+    ``suggested``: listed in ``config/embedding_models.json``. ``collection_count``:
+    how many existing collections use it (models only used, such as local
+    checkpoint paths, appear with ``suggested`` false). ``default_for``: the
+    data types whose default model this is (``"multimodal"``).
+    """
+
+    provider: EmbeddingProviderEnum
+    model_name: str
+    description: str | None = None
+    modalities: list[str] = strawberry.field(default_factory=lambda: ["text"])
+    prompts: list[str] = strawberry.field(default_factory=list)
+    dimension: int | None = None
+    default_for: list[str] = strawberry.field(default_factory=list)
+    suggested: bool = True
+    collection_count: int = 0
+
+
+@strawberry.input
+class MediaOptionsInput:
+    """Per-job media options of a multimodal embed; omitted values keep the
+    defaults of ``config/media_embedding.json`` (``mediaEmbeddingSettings``)."""
+
+    image_max_soft_tokens: int | None = None
+    video_fps: float | None = None
+    video_max_frames: int | None = None
+    video_max_soft_tokens: int | None = None
+    max_audio_seconds: float | None = None
+
+
+@strawberry.type
+class MediaOptionsInfo:
+    """Effective media options (a job's, or the defaults)."""
+
+    image_max_soft_tokens: int
+    video_fps: float
+    video_max_frames: int
+    video_max_soft_tokens: int
+    max_audio_seconds: float
+
+
+@strawberry.type
+class MediaEmbeddingSettingsInfo:
+    """Defaults and limits of the media options, and the token-budget constants
+    the embed form uses to estimate a row's size (``mediaEmbeddingSettings``)."""
+
+    defaults: MediaOptionsInfo
+    soft_token_budgets: list[int]
+    video_fps_limit: float
+    video_frames_limit: int
+    audio_seconds_limit: float
+    context_tokens: int
+    reserved_tokens: int
+    audio_tokens_per_second: int
+    default_model: str
 
 
 # ========== Topic Extraction Types ==========
@@ -150,12 +228,17 @@ class TopicInfo:
 
 @strawberry.input
 class TopicReductionInput:
-    """Configuration for topic reduction."""
+    """Configuration for topic reduction (strategies: services/topic_reduction_types.py)."""
 
     enabled: bool = False
     method: str = "auto"  # "auto" or "fixed_n"
-    n_topics: int | None = None  # Required when method="fixed_n"
-    use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
+    n_topics: int | None = None  # Topics to keep (noise not counted); required for "fixed_n"
+    # "average" | "ward" | "density" | "legacy_ctfidf" | "legacy_semantic";
+    # null = the legacy strategy use_ctfidf picks.
+    strategy: str | None = None
+    use_ctfidf: bool = True  # Legacy: True=c-TF-IDF, False=raw semantic centroids
+    distance_threshold: float | None = None  # "auto" + "average": centred cosine distance
+    absorb_noise: bool = False  # "density": move noise into the topics that absorb it
 
 
 @strawberry.input
@@ -250,14 +333,23 @@ class EvaluateTopicsResult:
 
 @strawberry.input
 class ReduceTopicsInput:
-    """Input for standalone topic reduction mutation."""
+    """Input for standalone topic reduction mutation.
+
+    Always reduces the extraction's base topics (its original clusters), so
+    reductions are reversible and never compound; see TopicReductionInput.
+    """
 
     collection_name: str
     method: str = "auto"  # "auto" or "fixed_n"
-    n_topics: int | None = None  # Required when method="fixed_n"
-    use_ctfidf: bool = True  # True=c-TF-IDF (fast), False=semantic (better quality)
+    n_topics: int | None = None  # Topics to keep (noise not counted); required for "fixed_n"
+    # "average" | "ward" | "density" | "legacy_ctfidf" | "legacy_semantic";
+    # null = the legacy strategy use_ctfidf picks.
+    strategy: str | None = None
+    use_ctfidf: bool = True  # Legacy: True=c-TF-IDF, False=raw semantic centroids
+    distance_threshold: float | None = None  # "auto" + "average": centred cosine distance
+    absorb_noise: bool = False  # "density": move noise into the topics that absorb it
 
-    # Re-labeling after reduction
+    # Re-labeling after reduction (merged topics only; unmerged ones keep their label)
     regenerate_labels: bool = False
     llm_provider: str = "gemini"
     llm_model: str = "gemini-3-flash-preview"
@@ -274,6 +366,7 @@ class ReduceTopicsResult:
     topic_mappings: JSON  # {old_id: new_id}
     duration_seconds: float
     error: str | None = None
+    absorbed_noise: int = 0  # noise documents moved into topics (density)
 
 
 @strawberry.input
@@ -320,6 +413,16 @@ class RenameTopicLabelResult:
     error: str | None = None
 
 
+@strawberry.enum
+class DataTypeEnum(Enum):
+    """Type of data to embed."""
+
+    TEXT = "text"
+    # Images, audio, video and rows mixing them with text (EmbeddingGemma 2)
+    MULTIMODAL = "multimodal"
+    VECTOR = "vector"
+
+
 @strawberry.input
 class EmbedDatasetInput:
     """Input for embedding a HuggingFace dataset."""
@@ -331,7 +434,12 @@ class EmbedDatasetInput:
     # Embed several splits into one collection in a single pass (each item gets
     # a `source_split` metadata value). Takes precedence over `split` when set.
     splits: list[str] | None = None
-    columns: list[str] | None = None  # Columns to embed
+    # TEXT or MULTIMODAL (VECTOR is local files only)
+    data_type: DataTypeEnum = DataTypeEnum.TEXT
+    columns: list[str] | None = None  # Columns to embed (MULTIMODAL: optional text)
+    # MULTIMODAL: the Image / Audio / Video columns, embedded with `columns`
+    media_columns: list[str] | None = None
+    media_options: MediaOptionsInput | None = None
     text_template: str | None = None  # Template for combining columns
     id_column: str | None = None  # Column to use as document ID
     portion: PortionInput | None = None
@@ -363,6 +471,8 @@ class EmbedDatasetResult:
     # Model information
     embedding_provider: str | None = None
     embedding_model: str | None = None
+    # Non-cancelling issues, e.g. documents truncated at the length cap
+    warnings: list[str] = strawberry.field(default_factory=list)
 
 
 # ========== Local File Types ==========
@@ -389,15 +499,8 @@ class LocalFilePreview:
     rows: list[JSON]
     total_rows: int
     error: str | None = None
-
-
-@strawberry.enum
-class DataTypeEnum(Enum):
-    """Type of data to embed."""
-
-    TEXT = "text"
-    IMAGE = "image"
-    VECTOR = "vector"
+    # Media columns of the preview: {column: "image" | "audio" | "video"}
+    column_kinds: JSON = strawberry.field(default_factory=dict)
 
 
 @strawberry.input
@@ -407,9 +510,11 @@ class EmbedLocalFileInput:
     file_path: str
     collection_name: str
     data_type: DataTypeEnum = DataTypeEnum.TEXT
-    columns: list[str] | None = None  # Columns to embed (for text)
+    columns: list[str] | None = None  # Columns to embed (MULTIMODAL: optional text)
     text_template: str | None = None
-    image_column: str | None = None  # Column containing image data
+    # MULTIMODAL: the image / audio / video columns, embedded with `columns`
+    media_columns: list[str] | None = None
+    media_options: MediaOptionsInput | None = None
     vector_column: str | None = None  # Column containing pre-computed vectors
     id_column: str | None = None
     metadata_columns: list[str] | None = None
@@ -418,8 +523,8 @@ class EmbedLocalFileInput:
     sample_seed: int = 42
     compute_projections: bool = True
     batch_size: int | None = 100
-    # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2)
-    # Only used for TEXT data_type; IMAGE uses ViT, VECTOR uses pre-computed
+    # Embedding model configuration (default: SentenceTransformers with all-MiniLM-L6-v2;
+    # MULTIMODAL: the catalog's multimodal default, EmbeddingGemma 2). VECTOR uses none.
     embedding_model: EmbeddingModelInput | None = None
     # Resume an interrupted job instead of starting fresh
     resume: bool = False
@@ -545,7 +650,9 @@ class CollectionMetadata:
     topic_count: int | None = None
     topics_extracted_at: str | None = None
     topics: list[TopicInfo] | None = None  # Topic summary with keywords
-    topic_hierarchy: JSON | None = None  # {reduced_label: [subtopic_labels]}
+    # Reduced extractions: {topic_id: [base subtopic ids]} (older ones:
+    # {reduced_label: [subtopic_labels]}); set means the topics have subtopics.
+    topic_hierarchy: JSON | None = None
     # Pre-computed field analysis (cached for fast frontend loading)
     field_analysis: JSON | None = None
     # SAE linkage (set via updateCollectionMetadata to connect scatter plot to feature explorer)
@@ -608,6 +715,48 @@ class TopicSimilarityResult:
     similarity: float
     matched_subtopic_id: int | None = None
     matched_subtopic_label: str | None = None
+
+
+@strawberry.type
+class TopicTreeLeaf:
+    """A base topic of a merge tree (an original cluster of the extraction)."""
+
+    topic_id: int
+    label: str
+    size: int  # documents
+
+
+@strawberry.type
+class TopicTreeMerge:
+    """One merge of a topic tree, in scipy's linkage convention: ``left`` and
+    ``right`` below the leaf count are leaves, ``leafCount + i`` is merge ``i``."""
+
+    left: int
+    right: int
+    height: float
+    size: int  # documents under the merged node
+
+
+@strawberry.type(name="TopicMergeTree")
+class TopicMergeTreeInfo:
+    """Merge tree over a collection's base topics, for the live topic slider.
+
+    Cutting at N topics applies the first ``leafCount - N`` merges. Base topic
+    ids are in the items' ``topic_id`` field, or ``subtopic_id`` when
+    ``baseLevel`` is "subtopic" (a reduced extraction). ``noiseItemIds`` /
+    ``noiseMerges`` (density trees, on request): the merge whose cut absorbs
+    each noise item.
+    """
+
+    extraction_id: str
+    linkage: str  # "average" | "ward" | "density"
+    base_level: str  # "topic" | "subtopic"
+    leaves: list[TopicTreeLeaf]
+    merges: list[TopicTreeMerge]
+    noise_count: int
+    available_linkages: list[str]
+    noise_item_ids: list[str] | None = None
+    noise_merges: list[int] | None = None
 
 
 @strawberry.type
@@ -1077,19 +1226,21 @@ class SteeringInput:
 
 @strawberry.input
 class SaeLayerSpecInput:
-    """One SAE to hook during prompt activations: a (layer, width) pair."""
+    """One SAE to hook during prompt activations: layer, width and hook site."""
 
     layer: int
     width: str = "16k"
+    hook_type: HookTypeEnum = HookTypeEnum.RESID_POST
 
 
 @strawberry.input
 class RunPromptActivationsInput:
     """Input for running a prompt through the model with SAE hooks.
 
-    SAEs are given either as ``layers`` (all at the shared ``width``) or as
-    explicit ``saes`` specs, which take precedence and support mixed widths —
-    including two widths at the same layer — in a single forward pass.
+    SAEs are given either as ``layers`` (residual-stream SAEs at the shared
+    ``width``) or as explicit ``saes`` specs, which take precedence and support
+    mixed widths and hook sites — including two widths or two sites at the
+    same layer — in a single forward pass.
     """
 
     prompt: str
@@ -1158,10 +1309,11 @@ class InterpretTokenFeatures:
 
 @strawberry.type
 class InterpretLayerResult:
-    """Per-token features for one layer."""
+    """Per-token features for one hooked SAE (layer, width, hook site)."""
 
     layer: int
     width: str
+    hook_type: HookTypeEnum
     tokens: list[InterpretTokenFeatures]
 
 
@@ -1310,3 +1462,34 @@ class SaveChatMessageInput:
     content: str
     parts: JSON | None = None
     steering_snapshot: JSON | None = None
+
+
+@strawberry.type
+class EmbeddingTaskPrefix:
+    """One task of the task-prefix table (``task_prefixes`` in config/embedding_models.json).
+
+    Symmetric tasks embed queries and documents with the same prefix.
+    """
+
+    id: str
+    label: str
+    query_prefix: str
+    document_prefix: str
+    symmetric: bool
+
+
+@strawberry.type
+class EmbeddingTaskPrefixModel:
+    """A model that reads its task from a task prefix (EmbeddingGemma, Gemini Embedding 2)."""
+
+    provider: EmbeddingProviderEnum
+    model_name: str
+
+
+@strawberry.type
+class EmbeddingTaskPrefixTable:
+    """The task prefixes of the embed forms, and the models that take them."""
+
+    default_task: str
+    tasks: list[EmbeddingTaskPrefix]
+    models: list[EmbeddingTaskPrefixModel]

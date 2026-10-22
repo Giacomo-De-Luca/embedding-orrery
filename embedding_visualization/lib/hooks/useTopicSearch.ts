@@ -41,6 +41,8 @@ export interface UseTopicSearchReturn {
   toggleTopic: (topicId: number) => void;
   selectAll: () => void;
   clearAll: () => void;
+  /** Drop the selection and the similarity results (the collection's topics were replaced). */
+  reset: () => void;
   // Outputs for integration
   topicFilters: FilterInput[] | undefined;
 }
@@ -54,7 +56,6 @@ export function useTopicSearch(
   topics: TopicInfo[] | undefined,
   collectionName: string | null,
   queryPromptName?: string | null,
-  embeddingPromptName?: string | null,
 ): UseTopicSearchReturn {
   const client = useApolloClient();
   const [mode, setMode] = useState<TopicSearchMode>('direct');
@@ -66,15 +67,21 @@ export function useTopicSearch(
   const [semanticError, setSemanticError] = useState<string | null>(null);
   const requestGate = useRef(new LatestRequestGate());
 
-  // Topic ids are per collection: a selection carried over would scope searches
-  // in the next collection to unrelated topics.
-  useEffect(() => {
+  // Drops the selection and the similarity results: topic ids are per
+  // collection (and per extraction: a reduction renumbers them).
+  const reset = useCallback(() => {
     requestGate.current.invalidate();
     setSelectedTopicIds(new Set());
     setSemanticResults(null);
     setSemanticError(null);
     setSemanticLoading(false);
-  }, [collectionName]);
+  }, []);
+
+  // A selection carried over would scope searches in the next collection to
+  // unrelated topics.
+  useEffect(() => {
+    reset();
+  }, [collectionName, reset]);
 
   // Direct search: filter topics by label + keywords (case-insensitive substring)
   const filteredTopics = useMemo(() => {
@@ -101,7 +108,7 @@ export function useTopicSearch(
           collectionName,
           query: semanticQuery,
           limit: TOPIC_SEARCH_LIMIT,
-          queryPrompt: resolveQueryPrompt(queryPromptName, embeddingPromptName),
+          queryPrompt: resolveQueryPrompt(queryPromptName),
         },
         fetchPolicy: 'no-cache',
       });
@@ -115,7 +122,7 @@ export function useTopicSearch(
     } finally {
       if (requestGate.current.isLatest(token)) setSemanticLoading(false);
     }
-  }, [client, collectionName, semanticQuery, topics, queryPromptName, embeddingPromptName]);
+  }, [client, collectionName, semanticQuery, topics, queryPromptName]);
 
   // Selection handlers
   const toggleTopic = useCallback((topicId: number) => {
@@ -163,6 +170,7 @@ export function useTopicSearch(
     toggleTopic,
     selectAll,
     clearAll,
+    reset,
     topicFilters,
   };
 }

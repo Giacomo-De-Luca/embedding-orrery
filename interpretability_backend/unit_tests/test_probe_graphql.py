@@ -12,7 +12,8 @@ import pytest
 
 from backend.API import mutations, queries, schema
 from backend.API.read_only import READ_ONLY_ENV
-from backend.services import probing_service
+from backend.services import cancel_registry, probing_service
+from backend.services.job_ids import JobIds
 from backend.services.probing_service import ProbeRunResult
 
 MULTICLASS_CONFIG = {
@@ -193,3 +194,25 @@ def test_train_probe_without_persisted_row_returns_no_probe(monkeypatch):
 def test_failed_training_returns_the_error(monkeypatch):
     result = _run_train(monkeypatch, None, error="too few values")
     assert result == {"error": "too few values", "probe": None}
+
+
+def test_training_is_registered_as_a_running_job(monkeypatch):
+    """Deleting the collection is refused while its probe trains: the probe
+    would write its rows and artifacts back."""
+    seen = []
+
+    def fake_train(config):
+        seen.append(cancel_registry.is_active(JobIds.probe(config.collection_name)))
+        return ProbeRunResult(
+            collection_name=config.collection_name,
+            target_field=config.target_field,
+            kind=config.kind,
+            error="stopped early",
+        )
+
+    monkeypatch.setattr(probing_service, "train_probe_for_collection", fake_train)
+    variables = {"input": {"collectionName": "col", "targetField": "category", "kind": "logreg"}}
+    _execute(TRAIN_MUTATION, **variables)
+
+    assert seen == [True]
+    assert not cancel_registry.is_active(JobIds.probe("col"))

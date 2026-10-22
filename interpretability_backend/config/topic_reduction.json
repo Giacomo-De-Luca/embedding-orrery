@@ -1,0 +1,6 @@
+{
+  "auto_distance_threshold": 0.7,
+  "max_tree_topics": 3000,
+  "tree_cache_size": 32,
+  "fallback_centroid_max_items": 200000
+}

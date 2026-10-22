@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 
+from ..utils.duckdb_settings import SETTINGS as DUCKDB_SETTINGS, DuckDBSettings
 from ..utils.resource_paths import DUCKDB_PATH
 
 logger = logging.getLogger("orrery." + __name__)
@@ -40,6 +41,10 @@ _TOPIC_KEYS = frozenset(
         "ctfidf_subtopic_map",
     }
 )
+
+# Tables holding rows of one topic extraction (keyed by extraction_id), deleted
+# before their topic_extractions row (foreign keys).
+_TOPIC_CHILD_TABLES = ("topic_assignments", "topic_info", "topic_centroids", "topic_merge_trees")
 
 # Filterable topic fields: their values live in topic_assignments (keyed by the
 # collection's active extraction), never in item metadata JSON. Maps the field
@@ -89,7 +94,7 @@ class DuckDBClient:
     Items are stored in per-dataset tables: "items_{dataset_id}".
     """
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(self, db_path: str | None = None, settings: DuckDBSettings | None = None):
         if db_path is None:
             db_path = str(DUCKDB_PATH.resolve())
         elif db_path == ":memory:":
@@ -98,7 +103,8 @@ class DuckDBClient:
             db_path = str(Path(db_path).resolve())
 
         self.db_path = db_path
-        self._conn = duckdb.connect(db_path)
+        # Memory cap and threads from config/duckdb.json (utils/duckdb_settings.py).
+        self._conn = duckdb.connect(db_path, config=(settings or DUCKDB_SETTINGS).connect_config())
         # Lock for DataFrame-based inserts that must use self._conn.execute()
         # directly (DuckDB's replacement scan only finds Python variables in
         # the immediate caller's frame — cursor-based _exec adds an extra frame).
@@ -293,6 +299,25 @@ class DuckDBClient:
             )
         """)
 
+        # Merge tree over an extraction's base topics, one per linkage. Only
+        # density trees (from the HDBSCAN fit) are stored; semantic trees are
+        # rebuilt from topic_centroids. A new table, like topic_centroids.
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS topic_merge_trees (
+                extraction_id   VARCHAR NOT NULL REFERENCES topic_extractions(id),
+                linkage         VARCHAR NOT NULL,
+                leaf_ids        INTEGER[] NOT NULL,
+                leaf_sizes      INTEGER[] NOT NULL,
+                left_children   INTEGER[] NOT NULL,
+                right_children  INTEGER[] NOT NULL,
+                heights         DOUBLE[] NOT NULL,
+                noise_item_ids  VARCHAR[],
+                noise_merges    INTEGER[],
+                created_at      TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (extraction_id, linkage)
+            )
+        """)
+
         # -- SAE (Sparse Autoencoder) tables --
 
         self._exec("""
@@ -351,8 +376,8 @@ class DuckDBClient:
         """)
 
         # -- Probe tables (embedding-space probes on numeric metadata fields) --
-        # No FK to vector_collections: delete_dataset cleans up manually in
-        # dependency order (mirrors sae_document_activations).
+        # No FK to vector_collections: delete_vector_collection cleans up
+        # manually in dependency order (mirrors sae_document_activations).
         self._exec("""
             CREATE TABLE IF NOT EXISTS probes (
                 collection_name VARCHAR NOT NULL,
@@ -635,90 +660,78 @@ class DuckDBClient:
         )
 
     def delete_dataset(self, name: str) -> bool:
-        """Delete dataset, its items table, and all related data."""
+        """Delete dataset, its items table, and all its vector collections' rows."""
         ds = self.get_dataset(name)
         if not ds:
             return False
 
-        # Delete in dependency order
-        self._exec(
-            """
-            DELETE FROM topic_assignments WHERE extraction_id IN (
-                SELECT id FROM topic_extractions WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-        self._exec(
-            """
-            DELETE FROM topic_info WHERE extraction_id IN (
-                SELECT id FROM topic_extractions WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-        self._exec(
-            """
-            DELETE FROM topic_centroids WHERE extraction_id IN (
-                SELECT id FROM topic_extractions WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-        self._exec("DELETE FROM topic_extractions WHERE dataset_name = ?", [name])
+        for collection in self.get_vector_collections(name):
+            self.delete_vector_collection(collection["collection_name"])
 
-        self._exec(
-            """
-            DELETE FROM projection_metadata WHERE collection_name IN (
-                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-        self._exec(
-            """
-            DELETE FROM projections WHERE collection_name IN (
-                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-
-        self._exec(
-            """
-            DELETE FROM sae_document_activations WHERE collection_name IN (
-                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-
-        self._exec(
-            """
-            DELETE FROM probe_scores WHERE collection_name IN (
-                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-        self._exec(
-            """
-            DELETE FROM probes WHERE collection_name IN (
-                SELECT collection_name FROM vector_collections WHERE dataset_name = ?
-            )
-        """,
-            [name],
-        )
-
-        self._exec("DELETE FROM vector_collections WHERE dataset_name = ?", [name])
-
-        # Drop per-dataset items table
+        # Full-text index, then the row, then the items table. Dropping the
+        # table leaves the index behind. DuckDB can reject the row delete (a
+        # foreign-key parent) while another read is open; the dataset must
+        # then stay whole, deletable by name: its items kept, its index
+        # rebuilt on the next search.
+        self._drop_fts_index(name)
+        try:
+            self._exec("DELETE FROM datasets WHERE name = ?", [name])
+        except duckdb.Error:
+            self._fts_dirty.add(name)
+            raise
         self._exec(f"DROP TABLE IF EXISTS {self._items_table(name)}")
-
-        self._exec("DELETE FROM datasets WHERE name = ?", [name])
 
         self._fts_dirty.discard(name)
         logger.info("Deleted dataset %r", name)
+        return True
+
+    def delete_vector_collection(self, collection_name: str) -> bool:
+        """Delete one vector collection's rows: topics, projections, SAE document
+        activations, probes and its registry row. Its dataset and items stay.
+
+        Returns False when no such collection is registered.
+        """
+        if self.get_vector_collection(collection_name) is None:
+            return False
+
+        # Children before parents (foreign keys), in dependency order.
+        extractions = "SELECT id FROM topic_extractions WHERE collection_name = ?"
+        for table in _TOPIC_CHILD_TABLES:
+            self._exec(
+                f"DELETE FROM {table} WHERE extraction_id IN ({extractions})", [collection_name]
+            )
+        for table in (
+            "topic_extractions",
+            "projection_metadata",
+            "projections",
+            "sae_document_activations",
+            "probe_scores",
+            "probes",
+            "vector_collections",
+        ):
+            self._exec(f"DELETE FROM {table} WHERE collection_name = ?", [collection_name])
+        return True
+
+    def delete_collection(self, collection_name: str) -> bool:
+        """Delete a vector collection; its dataset too when it was the last one.
+
+        A re-embedded collection shares its dataset (the items) with its sibling
+        collections, so only the collection's own rows go while siblings remain;
+        with no collection left the dataset and its items go as well. A dataset
+        named like the collection with no registered collections (it predates
+        the registry) is deleted too. Returns False when nothing matched.
+        """
+        dataset_name = self.get_dataset_name_for_collection(collection_name)
+        if dataset_name is None:
+            unregistered = self.get_dataset(collection_name) is not None and not (
+                self.get_vector_collections(collection_name)
+            )
+            return self.delete_dataset(collection_name) if unregistered else False
+
+        self.delete_vector_collection(collection_name)
+        if not self.get_vector_collections(dataset_name):
+            self.delete_dataset(dataset_name)
+        logger.info("Deleted vector collection %r", collection_name)
         return True
 
     # ------------------------------------------------------------------
@@ -1065,6 +1078,30 @@ class DuckDBClient:
         columns = [desc[0] for desc in cur.description]
         return dict(zip(columns, rows[0], strict=True))
 
+    def embedding_models_in_use(self) -> list[tuple[str, str, int]]:
+        """``(provider, model, collection count)`` of every model existing collections use."""
+        return self._exec(
+            """
+            SELECT embedding_provider, embedding_model, COUNT(*)
+            FROM vector_collections
+            WHERE embedding_provider IS NOT NULL AND embedding_model IS NOT NULL
+            GROUP BY embedding_provider, embedding_model
+            ORDER BY embedding_provider, embedding_model
+            """
+        ).fetchall()
+
+    def list_vector_collection_names(self) -> list[str]:
+        """Names of every registered vector collection."""
+        rows = self._exec("SELECT collection_name FROM vector_collections").fetchall()
+        return [row[0] for row in rows]
+
+    def dataset_source_files(self) -> list[str]:
+        """The local source files datasets were embedded from (distinct)."""
+        rows = self._exec(
+            "SELECT DISTINCT source_file FROM datasets WHERE source_file IS NOT NULL"
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def get_dataset_name_for_collection(self, collection_name: str) -> str | None:
         """Return the dataset_name for a vector collection, or None."""
         row = self._exec(
@@ -1116,6 +1153,30 @@ class DuckDBClient:
         col_str = ", ".join(columns) if columns else "*"
         return self._exec(
             f"SELECT {col_str} FROM topic_assignments WHERE extraction_id = ?",
+            [extraction_id],
+        ).fetchall()
+
+    def count_topic_assignments(self, extraction_id: str) -> int:
+        """Items an extraction assigns."""
+        return self._exec(
+            "SELECT count(*) FROM topic_assignments WHERE extraction_id = ?", [extraction_id]
+        ).fetchone()[0]
+
+    def get_assignment_documents(self, extraction_id: str, dataset_name: str) -> list[tuple]:
+        """``(item_id, document, topic_id, topic_label, subtopic_id, subtopic_label)``
+        of every item an extraction assigns, in item order.
+
+        One join instead of an ``IN`` list of every assigned id.
+        """
+        table = self._items_table(dataset_name)
+        return self._exec(
+            f"""
+            SELECT a.item_id, i.document, a.topic_id, a.topic_label,
+                   a.subtopic_id, a.subtopic_label
+            FROM topic_assignments a JOIN {table} i ON i.id = a.item_id
+            WHERE a.extraction_id = ?
+            ORDER BY i.row_index NULLS LAST, i.rowid
+            """,
             [extraction_id],
         ).fetchall()
 
@@ -1337,6 +1398,19 @@ class DuckDBClient:
     # Text Search (per-dataset, no cross-dataset pollution)
     # ------------------------------------------------------------------
 
+    def _drop_fts_index(self, dataset_name: str) -> None:
+        """Drop a dataset's FTS index (schema ``fts_main_<items table>``), if any.
+
+        Checked first: ``drop_fts_index`` raises for a dataset never indexed.
+        """
+        table_unquoted = self._items_table_name(dataset_name)
+        exists = self._exec(
+            "SELECT count(*) FROM information_schema.schemata WHERE schema_name = ?",
+            [f"fts_main_{table_unquoted}"],
+        ).fetchall()[0][0]
+        if exists:
+            self._exec(f"PRAGMA drop_fts_index('{table_unquoted}')")
+
     def _rebuild_fts_for_dataset(self, dataset_name: str):
         """Rebuild the FTS index for one dataset's items table."""
         table = self._items_table(dataset_name)
@@ -1346,10 +1420,7 @@ class DuckDBClient:
         if count == 0:
             return
 
-        try:
-            self._exec(f"PRAGMA drop_fts_index('{table_unquoted}')")
-        except duckdb.CatalogException:
-            pass
+        self._drop_fts_index(dataset_name)
 
         self._exec(f"""
             PRAGMA create_fts_index('{table_unquoted}', 'id', 'document',
@@ -1566,26 +1637,55 @@ class DuckDBClient:
     # ------------------------------------------------------------------
 
     def create_topic_extraction(
-        self, collection_name: str, dataset_name: str, config: dict = None
+        self, collection_name: str, dataset_name: str, config: dict = None, activate: bool = True
     ) -> str:
-        """Create a new topic extraction. Deactivates previous."""
-        self._exec(
-            """
-            UPDATE topic_extractions SET is_active = FALSE
-            WHERE collection_name = ? AND is_active = TRUE
-        """,
-            [collection_name],
-        )
+        """Create a new topic extraction.
+
+        With ``activate`` (the default) it replaces the active one right away.
+        Without, it starts inactive: fill its rows, then call
+        ``activate_topic_extraction``, so a failure half-way leaves the
+        previous extraction active.
+        """
+        if activate:
+            self._exec(
+                """
+                UPDATE topic_extractions SET is_active = FALSE
+                WHERE collection_name = ? AND is_active = TRUE
+            """,
+                [collection_name],
+            )
 
         extraction_id = str(uuid.uuid4())
         self._exec(
             """
             INSERT INTO topic_extractions (id, collection_name, dataset_name, config, is_active)
-            VALUES (?, ?, ?, ?, TRUE)
+            VALUES (?, ?, ?, ?, ?)
         """,
-            [extraction_id, collection_name, dataset_name, json.dumps(config) if config else None],
+            [
+                extraction_id,
+                collection_name,
+                dataset_name,
+                json.dumps(config) if config else None,
+                activate,
+            ],
         )
         return extraction_id
+
+    def activate_topic_extraction(self, collection_name: str, extraction_id: str) -> None:
+        """Make ``extraction_id`` the collection's only active extraction.
+
+        One statement, so readers never see zero or two active extractions.
+        """
+        self._exec(
+            "UPDATE topic_extractions SET is_active = (id = ?) WHERE collection_name = ?",
+            [extraction_id, collection_name],
+        )
+
+    def delete_topic_extraction(self, extraction_id: str) -> None:
+        """Delete one extraction and its rows (e.g. one whose sync failed half-way)."""
+        for table in _TOPIC_CHILD_TABLES:
+            self._exec(f"DELETE FROM {table} WHERE extraction_id = ?", [extraction_id])
+        self._exec("DELETE FROM topic_extractions WHERE id = ?", [extraction_id])
 
     def insert_topic_info_batch(self, extraction_id: str, topics: list[dict]) -> int:
         """Insert topic info records."""
@@ -1857,6 +1957,78 @@ class DuckDBClient:
             ),
             "counts": np.array([r[2] for r in rows], dtype=np.int64),
             "means": np.array([r[3] for r in rows], dtype=np.float64),
+        }
+
+    def replace_topic_merge_tree(
+        self,
+        extraction_id: str,
+        linkage: str,
+        leaf_ids,
+        leaf_sizes,
+        children,
+        heights,
+        noise_item_ids=(),
+        noise_merges=(),
+    ) -> None:
+        """Store (or replace) an extraction's merge tree for one linkage.
+
+        ``children`` is the ``(k - 1, 2)`` merge table; noise items map to the
+        merge row that absorbs them (density trees).
+        """
+        children = np.asarray(children, dtype=np.int64).reshape(-1, 2)
+        values = [
+            extraction_id,
+            linkage,
+            [int(v) for v in leaf_ids],
+            [int(v) for v in leaf_sizes],
+            children[:, 0].tolist(),
+            children[:, 1].tolist(),
+            [float(v) for v in heights],
+            [str(v) for v in noise_item_ids],
+            [int(v) for v in noise_merges],
+        ]
+        with self._write_lock:
+            self._conn.begin()
+            try:
+                self._conn.execute(
+                    "DELETE FROM topic_merge_trees WHERE extraction_id = ? AND linkage = ?",
+                    [extraction_id, linkage],
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO topic_merge_trees (extraction_id, linkage, leaf_ids, leaf_sizes,
+                        left_children, right_children, heights, noise_item_ids, noise_merges)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def get_topic_merge_tree(self, extraction_id: str, linkage: str) -> dict[str, Any] | None:
+        """An extraction's stored merge tree for ``linkage``, or None.
+
+        Returns ``{"leaf_ids", "leaf_sizes", "children", "heights",
+        "noise_item_ids", "noise_merges"}`` (numpy arrays; ids a list).
+        """
+        row = self._exec(
+            "SELECT leaf_ids, leaf_sizes, left_children, right_children, heights, "
+            "noise_item_ids, noise_merges FROM topic_merge_trees "
+            "WHERE extraction_id = ? AND linkage = ?",
+            [extraction_id, linkage],
+        ).fetchone()
+        if row is None:
+            return None
+        leaf_ids, leaf_sizes, left, right, heights, noise_ids, noise_rows = row
+        return {
+            "leaf_ids": np.array(leaf_ids, dtype=np.int64),
+            "leaf_sizes": np.array(leaf_sizes, dtype=np.int64),
+            "children": np.array([left, right], dtype=np.int64).T.reshape(-1, 2),
+            "heights": np.array(heights, dtype=np.float64),
+            "noise_item_ids": list(noise_ids or []),
+            "noise_merges": np.array(noise_rows or [], dtype=np.int64),
         }
 
     # ------------------------------------------------------------------

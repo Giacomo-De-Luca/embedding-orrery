@@ -43,3 +43,17 @@ class JobIds:
     @staticmethod
     def sae_prepare(model_size: str, variant: str, layer: int, hook_type: str, width: str) -> str:
         return f"sae_prepare_{model_size}_{variant}_{layer}_{hook_type}_{width}"
+
+    @classmethod
+    def for_collection(cls, collection_name: str) -> tuple[str, ...]:
+        """Every id a job on ``collection_name`` can run under (no duplicates)."""
+        builders = (
+            cls.embedding,
+            cls.topic_extraction,
+            cls.topic_reduction,
+            cls.topic_evaluation,
+            cls.llm_labeling,
+            cls.sae_activations,
+            cls.probe,
+        )
+        return tuple(dict.fromkeys(build(collection_name) for build in builders))

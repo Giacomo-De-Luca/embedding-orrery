@@ -19,7 +19,10 @@ Every delete leaked this way:
 - re-ingesting SAE explanation vectors
 
 By 2026-10-19 the live store held **65 orphan directories, 3.22 GB**,
-alongside 71 live ones. The oldest dated from January 2026.
+alongside 71 live ones. The oldest dated from January 2026. They were pruned
+that day with the backend stopped, and the store went from 10 GB to 7.2 GB.
+All 71 live directories were still present afterwards, and self-queries on
+sample collections returned each item as its own nearest neighbour.
 
 ## Upstream status
 
@@ -70,9 +73,11 @@ Delete paths using it:
 
 | Path | Status |
 |---|---|
-| `API/mutations.py` `deleteCollection` | uses `ChromaDBClient.delete_collection` |
+| `API/mutations.py` `deleteCollection` | `CollectionDeletionService` (in a worker thread) → `ChromaDBClient.delete_collection`, then `DuckDBClient.delete_collection` (see `COLLECTION_DELETION.md`) |
 | `embedding_functions/ingest_sae.py` (replaces the explanation collection) | uses `ChromaDBClient.delete_collection` |
-| `embedding_functions/embedding_job.py` `open_embedding_collection` (overwrite on a fresh embed) | **still calls `client.delete_collection(name=…)`**: switch to `ChromaSegmentJanitor.delete_collection(client, name)` once the pipeline refactor that owns this file is committed |
+| `embedding_functions/embedding_job.py` `open_embedding_collection` (overwrite on a fresh embed) | uses `ChromaSegmentJanitor.delete_collection(client, name)` |
+
+No other code path calls chromadb's `delete_collection`.
 
 Tests: `unit_tests/test_chroma_segments.py`.
 - They pin the upstream bug. If that test starts failing after a chromadb
@@ -129,3 +134,48 @@ segment.
 Removing the directories frees their disk space immediately.
 `chroma.sqlite3` itself never shrinks after deletions (freed pages are only
 reused); a `VACUUM` with the backend stopped would compact it.
+
+## Related fixes (2026-10-19)
+
+Deleting a collection now removes everything derived from it, not just the
+vectors and rows below. See `COLLECTION_DELETION.md`.
+
+- **`deleteCollection` deleted the wrong DuckDB rows and always reported
+  success** (audit `AUDIT_2026-07-02.md`, HIGH). It passed the collection name
+  to `delete_dataset` and ignored the result:
+  - Deleting a re-embedded collection (dataset name ≠ collection name) left
+    its DuckDB rows behind.
+  - Deleting a source collection wiped every sibling collection's rows along
+    with the dataset.
+
+  The fix:
+  - `DuckDBClient.delete_vector_collection(name)` removes one collection's
+    rows: topics, projections, SAE document activations, probes and its
+    registry row. `delete_dataset` now reuses it for each of its collections.
+  - `DuckDBClient.delete_collection(name)` removes that collection, plus the
+    dataset and items once no collection uses them. Legacy datasets with no
+    registered collection are deleted by name.
+  - The mutation deletes the vectors first, then the rows, both in worker
+    threads. If the DuckDB step fails, the collection stays listed and
+    deleting it again finishes the job.
+  - When the last collection's dataset goes, its row is deleted before its
+    items table is dropped. DuckDB can reject that foreign-key parent delete
+    while another read is open, and a failure then leaves the dataset whole,
+    deletable by its own name, rather than a dataset row without items.
+  - It returns False when the collection exists in neither store or a step
+    fails, and logs the error.
+  - Tests: `unit_tests/test_duckdb_client.py::TestDeleteCollection`,
+    `unit_tests/test_delete_collection_mutation.py`.
+- **Collections created without an embedding function recorded chromadb's
+  default 384-d embedder.** The default parameter value of
+  `create_collection(embedding_function=…)` stamps
+  `{"type": "known", "name": "default"}`. `ingest_sae` and
+  `open_embedding_collection` (image and vector paths) now pass
+  `embedding_function=None` explicitly, so nothing is recorded. Tests:
+  `unit_tests/test_ingest_sae_vectors.py`, `unit_tests/test_embedding_job.py`.
+- **Overwriting a collection with a different embedding model failed.**
+  `open_embedding_collection` checked for an existing collection by attaching
+  the *new* embedding function, and chromadb rejects one that differs from
+  the collection's. The check now attaches none; the returned handle only ever
+  receives explicit `embeddings`. Test:
+  `unit_tests/test_embedding_job.py::TestOpenEmbeddingCollection::test_existence_check_attaches_no_embedding_function`.

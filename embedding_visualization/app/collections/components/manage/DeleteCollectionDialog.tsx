@@ -54,8 +54,10 @@ export function DeleteCollectionDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete collection?</AlertDialogTitle>
           <AlertDialogDescription>
-            This will remove <strong>{collectionName}</strong> and its{' '}
-            {numItems.toLocaleString()} embeddings. This action cannot be undone.
+            This will remove <strong>{collectionName}</strong>, its{' '}
+            {numItems.toLocaleString()} embeddings and everything computed from them: projections,
+            topics, probes and SAE activations. Its items and uploaded source file go too unless
+            another collection still uses them. This action cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -13,6 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/lib/ui-primitives/select';
+import { placeholderIssues, templateFields } from '../lib/taskPrefixes';
+import { TaskPrefixField, type TaskPrefixControl } from './TaskPrefixField';
 
 interface ColumnInfo {
   name: string;
@@ -36,6 +38,8 @@ interface ColumnSelectorProps {
    */
   showMetadataColumns?: boolean;
   showIdColumn?: boolean;
+  /** Task prefix of the selected model (text mode); its placeholders may name any column. */
+  taskPrefix?: TaskPrefixControl;
 }
 
 export function ColumnSelector({
@@ -51,27 +55,18 @@ export function ColumnSelector({
   dataType = 'TEXT',
   showMetadataColumns = true,
   showIdColumn = true,
+  taskPrefix,
 }: ColumnSelectorProps) {
   const isVectorMode = dataType === 'VECTOR';
-  // Validation: check if template references non-selected columns
+  // Validation: same grammar and rules as the backend (taskPrefixes.ts)
   const templateValidation = useMemo(() => {
     if (!textTemplate) return null;
 
-    const matches = textTemplate.match(/\{(\w+)\}/g);
-    if (!matches) {
+    const [issue] = placeholderIssues({ template: textTemplate, embeddingColumns: selectedEmbeddingColumns });
+    if (issue) return { valid: false, message: issue };
+    if (templateFields(textTemplate).fields.length === 0) {
       return { valid: false, message: 'Template should include {column_name} placeholders' };
     }
-
-    const referencedColumns = matches.map(m => m.slice(1, -1));
-    const invalidColumns = referencedColumns.filter(col => !selectedEmbeddingColumns.includes(col));
-
-    if (invalidColumns.length > 0) {
-      return {
-        valid: false,
-        message: `Template references non-selected columns: ${invalidColumns.join(', ')}`,
-      };
-    }
-
     return { valid: true, message: null };
   }, [textTemplate, selectedEmbeddingColumns]);
 
@@ -215,6 +210,28 @@ export function ColumnSelector({
               Multiple columns selected: <strong>{selectedEmbeddingColumns.join(', ')}</strong> will be
               embedded and <strong>also added to metadata</strong> to preserve original data
             </>
+          )}
+        </div>
+      )}
+
+      {/* Task prefix of the model, before the text it prefixes (TEXT mode only) */}
+      {!isVectorMode && taskPrefix && (
+        <div className="space-y-2">
+          <Label className="text-base">Task Prefix</Label>
+          {taskPrefix.info && taskPrefix.value ? (
+            <TaskPrefixField
+              info={taskPrefix.info}
+              value={taskPrefix.value}
+              onChange={taskPrefix.onChange}
+              columns={columns.map((col) => col.name)}
+              template={textTemplate}
+              embeddingColumns={selectedEmbeddingColumns}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Not used by the selected model. EmbeddingGemma and Gemini Embedding 2 read their task
+              from a prefix: pick one of them under Embedding Model to set it here.
+            </p>
           )}
         </div>
       )}

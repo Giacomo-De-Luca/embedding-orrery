@@ -44,9 +44,10 @@ export function MobileNotice({ open, onOpenChange }: MobileNoticeProps) {
           </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          On a phone you can still pan and zoom the map, run a semantic search, and open the
-          controls, search, and analytics panels — but they cover most of the view, and the
-          guided tour is unavailable. For the full experience, open this page on a laptop.
+          On a phone you can still pan and zoom the map, run a semantic search, take the guided
+          tours, and open the controls, search, and analytics panels, though the panels cover
+          most of the view. The WordNet galaxy needs a desktop. For the full experience, open
+          this page on a laptop.
         </p>
         <Button onClick={() => handleOpenChange(false)}>Got it — continue</Button>
       </DialogContent>

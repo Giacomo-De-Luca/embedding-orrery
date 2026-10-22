@@ -15,7 +15,12 @@ import { GET_SAE_MODELS } from '@/lib/graphql/queries';
 import type { SaeModelInfo } from '@/lib/types/types';
 import { apolloClient } from '@/lib/utils/apollo-client';
 import { IS_DEMO } from '@/lib/utils/demoMode';
-import { markIntro, warmEmotionSearch, TOUR_MIN_VIEWPORT } from '@/lib/utils/demoOnboarding';
+import {
+  markIntro,
+  warmEmotionSearch,
+  tourFitsViewport,
+  type TourAction,
+} from '@/lib/utils/demoOnboarding';
 import {
   TOUR_PRESETS,
   TOUR_PRESET_ID,
@@ -87,8 +92,9 @@ export function DemoIntro({
     if (open) warmEmotionSearch(apolloClient);
   }, [open]);
 
-  // The spotlight tour is too cramped below tablet width — offer presets only.
-  const tourFits = typeof window === 'undefined' || window.innerWidth >= TOUR_MIN_VIEWPORT;
+  // Desktop-only tours (the WordNet galaxy, 212k points) are hidden on phones.
+  const fits = (tour: TourAction) =>
+    typeof window === 'undefined' || tourFitsViewport(tour, window.innerWidth);
 
   // Buttons stay disabled while the manifest loads or (outside the demo seed)
   // when their collection simply doesn't exist — a click would no-op silently.
@@ -119,7 +125,7 @@ export function DemoIntro({
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
-          {tourFits && (
+          {fits('tour') && (
             <EntryButton
               icon={<GraduationCap className="h-4 w-4" />}
               title="Take the 90-second tour"
@@ -131,7 +137,7 @@ export function DemoIntro({
               }}
             />
           )}
-          {tourFits && (
+          {fits('probe-tour') && (
             <EntryButton
               icon={<FlaskConical className="h-4 w-4" />}
               title={TOUR_PRESETS[PROBE_PRESET_ID].label}
@@ -143,7 +149,7 @@ export function DemoIntro({
               }}
             />
           )}
-          {tourFits && (
+          {fits('sae-tour') && (
             <EntryButton
               icon={<Microscope className="h-4 w-4" />}
               title="Inspect SAE features"
@@ -155,7 +161,7 @@ export function DemoIntro({
               }}
             />
           )}
-          {tourFits && (
+          {fits('wordnet-tour') && (
             <EntryButton
               icon={<Orbit className="h-4 w-4" />}
               title="Explore in Nebula Mode"

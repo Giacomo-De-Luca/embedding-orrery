@@ -209,3 +209,81 @@ export function buildSaeId(
 ): string {
   return `${layerIndex}-${scope}-${HOOK_TYPE_SHORT[hookType]}-${width}`;
 }
+
+// ── SAE labels, order and grouping ─────────────────────────────────
+
+/** Hook sites in display order: residual stream first. */
+export const HOOK_TYPE_ORDER: readonly HookType[] = ['RESID_POST', 'MLP_OUT', 'ATTN_OUT'];
+
+function toParsed(sae: string | ParsedSaeId): ParsedSaeId {
+  return typeof sae === 'string' ? parseSaeId(sae) : sae;
+}
+
+/** Parts of {@link formatSaeLabel} to show; both default to true. */
+export interface SaeLabelParts {
+  hook?: boolean;
+  width?: boolean;
+}
+
+/**
+ * Compact SAE label, e.g. "L9 res 16k" (chips, badges, tabs). Pass
+ * `hook: false` or `width: false` to drop a part every SAE on screen shares,
+ * such as the rows under a hook-site header.
+ */
+export function formatSaeLabel(sae: string | ParsedSaeId, parts: SaeLabelParts = {}): string {
+  const { layerIndex, hookType, width } = toParsed(sae);
+  const { hook = true, width: showWidth = true } = parts;
+  return [`L${layerIndex}`, hook && HOOK_TYPE_SHORT[hookType], showWidth && width]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** SAE label with the hook site spelled out, e.g. "L9 · MLP · 16k". */
+export function describeSae(sae: string | ParsedSaeId): string {
+  const { layerIndex, hookType, width } = toParsed(sae);
+  return `L${layerIndex} · ${HOOK_TYPE_DISPLAY[hookType]} · ${width}`;
+}
+
+/**
+ * Combobox filter: every whitespace-separated query term must occur in the
+ * compact or the spelled-out label, so "9 mlp", "L9 16k" and "residual" match.
+ */
+export function matchesSaeQuery(sae: string | ParsedSaeId, query: string): boolean {
+  const text = `${formatSaeLabel(sae)} ${describeSae(sae)}`.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => text.includes(term));
+}
+
+const WIDTH_UNITS: Record<string, number> = { '': 1, k: 1e3, m: 1e6 };
+
+/** Dictionary width as a number, for ordering: "16k" → 16000, "1m" → 1e6. */
+function widthValue(width: string): number {
+  const match = /^(\d+(?:\.\d+)?)([km]?)$/i.exec(width);
+  return match ? Number(match[1]) * WIDTH_UNITS[match[2].toLowerCase()] : Number.MAX_VALUE;
+}
+
+/** Order of the SAE selector: hook site, then layer, then width. */
+export function compareSaes(a: ParsedSaeId, b: ParsedSaeId): number {
+  return (
+    HOOK_TYPE_ORDER.indexOf(a.hookType) - HOOK_TYPE_ORDER.indexOf(b.hookType) ||
+    a.layerIndex - b.layerIndex ||
+    widthValue(a.width) - widthValue(b.width)
+  );
+}
+
+/** The saeIds at one hook site, in the shape base-ui's grouped Combobox takes. */
+export interface SaeSiteGroup {
+  value: HookType;
+  items: string[];
+}
+
+/** Group saeIds by hook site (residual first), keeping their order within a site. */
+export function groupSaeIdsBySite(saeIds: readonly string[]): SaeSiteGroup[] {
+  return HOOK_TYPE_ORDER.map((hookType) => ({
+    value: hookType,
+    items: saeIds.filter((saeId) => parseSaeId(saeId).hookType === hookType),
+  })).filter((group) => group.items.length > 0);
+}

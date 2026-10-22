@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { SaeModelInfo } from '@/lib/types/types';
-import { parseSaeId, type ParsedSaeId } from '@/lib/utils/saeCollections';
+import { compareSaes, parseSaeId, type ParsedSaeId } from '@/lib/utils/saeCollections';
 import { resolveSelectionFromParams, type SelectionUrlParams } from '../utils/saeSelection';
 
 // ── Types ────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ export interface UseSaeSelectionReturn {
   selectSingle: (modelId: string, saeId: string) => void;
 
   modelOptions: string[];
-  /** SAE options for the selected model, sorted by layer then width. */
+  /** SAE options for the selected model, sorted by hook site, layer, then width. */
   saeOptions: SaeOption[];
 
   /** The selected (modelId, saeId) pairs. */
@@ -88,11 +88,7 @@ export function useSaeSelection(
           parsed: parseSaeId(m.saeId),
           featureCount: m.featureCount,
         }))
-        .sort(
-          (a, b) =>
-            a.parsed.layerIndex - b.parsed.layerIndex ||
-            parseInt(a.parsed.width, 10) - parseInt(b.parsed.width, 10),
-        ),
+        .sort((a, b) => compareSaes(a.parsed, b.parsed)),
     [models, modelId],
   );
 

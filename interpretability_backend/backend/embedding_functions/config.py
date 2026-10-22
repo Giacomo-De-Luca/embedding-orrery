@@ -2,35 +2,34 @@
 Configuration for embedding datasets.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ..clients.huggingface_client import PortionConfig
+from ..utils.media_settings import MediaOptions
 from ..utils.resource_paths import CHROMA_DB_PATH as DB_PATH, DUCKDB_PATH  # noqa: F401
 
 # ========== Configuration Constants ==========
 TEXT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-IMAGE_MODEL_NAME = "google/vit-base-patch16-384"
 
 
 ###TODO: this is terrible, it should be dynamic based on model used
 ## at the moment it's only used for errors
 TEXT_EMBEDDING_DIMENSIONS = 384
-IMAGE_EMBEDDING_DIMENSIONS = 768
 
 # TODO: make these automatically adjust
 # first call for the amount of available memory
 # second, check how much memory the model takes
 # third, automatically set up batch size
 EMBEDDING_BATCH_SIZE = 100
-IMAGE_BATCH_SIZE = 16
 
 
 class DataType(Enum):
     """Type of data to embed."""
 
     TEXT = "text"
-    IMAGE = "image"
+    # Images, audio, video and rows mixing them with text (embed_media.py).
+    MULTIMODAL = "multimodal"
     VECTOR = "vector"  # Pre-computed embeddings
 
 
@@ -56,12 +55,22 @@ class EmbeddingModelConfig:
     provider: EmbeddingProvider = EmbeddingProvider.SENTENCE_TRANSFORMERS
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     ollama_url: str | None = None  # Default: http://localhost:11434
-    task: str | None = None  # QWEN: Query instruction prefix (used at query time only)
+    # Query-time only: QWEN's query instruction, or the query prefix of a
+    # task-prefix model (task: search result | query: ).
+    task: str | None = None
     task_type: str | None = (
-        None  # Gemini: Embedding optimization type (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
+        None  # Gemini 001: Embedding optimization type (SEMANTIC_SIMILARITY, RETRIEVAL_DOCUMENT, etc.)
     )
-    # SentenceTransformers: Prompt support for models like EmbeddingGemma
-    prompt: str | None = None  # Single field - can be predefined name or custom string
+    # SentenceTransformers prompt (a predefined name or custom string), or the
+    # document prefix template of a task-prefix model (title: {title} | text: ).
+    prompt: str | None = None
+    # Local providers (sentence-transformers, QWEN, BGE): input-length cap in
+    # tokens (None: the model's own limit, see utils/model_max_length.py) and
+    # texts per forward pass (None: the embedder's default).
+    max_length: int | None = None
+    batch_size: int | None = None
+    # TASK_PREFIX_FORMAT when prompt/task are task prefixes (utils/embedding_tasks.py).
+    prompt_format: str | None = None
 
     def to_job_config(self) -> dict:
         """JSON form stored in job state (see BaseConfig.to_job_config)."""
@@ -72,6 +81,21 @@ class EmbeddingModelConfig:
             "task": self.task,
             "task_type": self.task_type,
             "prompt": self.prompt,
+            "prompt_format": self.prompt_format,
+            "max_length": self.max_length,
+        }
+
+    def collection_metadata(self, embedding_dim: int) -> dict:
+        """The model keys of a new collection's metadata (ChromaDB and the
+        DuckDB registry); the query path rebuilds the config from them."""
+        return {
+            "embedding_provider": self.provider.value,
+            "embedding_model": self.model_name,
+            "embedding_dim": embedding_dim,
+            "embedding_task": self.task,
+            "embedding_task_type": self.task_type,
+            "embedding_prompt": self.prompt,
+            "embedding_prompt_format": self.prompt_format,
         }
 
 
@@ -87,6 +111,8 @@ class EmbeddingResult:
     error: str | None = None
     embedding_provider: str | None = None
     embedding_model: str | None = None
+    # Non-cancelling issues the run met, e.g. documents truncated at the length cap.
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)
@@ -129,7 +155,30 @@ class BaseConfig:
 
 
 @dataclass(kw_only=True)
-class EmbeddingConfig(BaseConfig):
+class MediaSourceConfig(BaseConfig):
+    """A source whose rows may hold media: local files and HuggingFace datasets.
+
+    With ``DataType.MULTIMODAL`` the ``media_columns`` (images, audio, video)
+    are embedded together with the text ``columns`` (optional) into one
+    vector per row (``embed_media.py``); ``media_options`` are the effective
+    token budgets and sampling settings (defaults from
+    ``config/media_embedding.json``, resolved by the converters).
+    """
+
+    data_type: DataType = DataType.TEXT
+    media_columns: list[str] | None = None
+    media_options: MediaOptions | None = None
+
+    def _media_job_config(self) -> dict:
+        return {
+            "data_type": self.data_type.value,
+            "media_columns": self.media_columns,
+            "media_options": self.media_options.to_dict() if self.media_options else None,
+        }
+
+
+@dataclass(kw_only=True)
+class EmbeddingConfig(MediaSourceConfig):
     """Configuration for embedding a HuggingFace dataset."""
 
     dataset_id: str
@@ -157,16 +206,15 @@ class EmbeddingConfig(BaseConfig):
             "split": self.split,
             "splits": self.splits,
             "portion": portion,
+            **self._media_job_config(),
         }
 
 
 @dataclass(kw_only=True)
-class LocalFileEmbeddingConfig(BaseConfig):
+class LocalFileEmbeddingConfig(MediaSourceConfig):
     """Configuration for embedding a local file."""
 
     file_path: str
-    data_type: DataType = DataType.TEXT
-    image_column: str | None = None  # Column containing image data/paths
     vector_column: str | None = None  # Column containing pre-computed vectors
     n_rows: int | None = None  # Limit rows
     sample_n: int | None = None  # Random sample
@@ -175,8 +223,7 @@ class LocalFileEmbeddingConfig(BaseConfig):
     def _source_job_config(self) -> dict:
         return {
             "file_path": self.file_path,
-            "data_type": self.data_type.value,
-            "image_column": self.image_column,
+            **self._media_job_config(),
             "vector_column": self.vector_column,
             "n_rows": self.n_rows,
             "sample_n": self.sample_n,

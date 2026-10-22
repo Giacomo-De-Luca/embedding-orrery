@@ -353,10 +353,16 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    `emnlp-topics`, `xkcd-manifold`, `emotion`, `sae-map`, `wordnet-pos`,
    `glasgow-norms`. The param persists while the user stays on the preset's
    collection and is dropped on switch. In demo builds the bare-URL default
-   collection is `emotion` (small, and its MiniLM search model runs inside
-   the Space — no Gemini quota). Presets are deep-link-only: the welcome
+   collection is the EMNLP map (`DEMO_DEFAULT_COLLECTION`; the search warm-up
+   still targets `emotion`, whose MiniLM model runs inside the Space). Presets are deep-link-only: the welcome
    dialog lists guided tours, not raw preset views (the former EMNLP/xkcd
    preset buttons were removed; their ids remain for links).
+   **Per-collection view overrides** (`COLLECTION_VIEW_OVERRIDES`, same
+   module) apply on every load path, once per collection switch, after any
+   preset: EMNLP, `emotion` and the SAE label map open with nebula haze in the
+   **density** renderer plus cluster labels (the label map's 279 LLM-named
+   feature topics), Glasgow with both off, and WordNet pins the sprite
+   renderer (`documentation/NEBULA_DENSITY_HAZE.md` "Per-collection defaults").
 2. **First-visit welcome dialog** (`app/components/DemoIntro.tsx`). Auto-opens
    once per browser (`localStorage` key `orrery.demo-intro.v1`), demo builds
    only, never on top of a deep link (any `collection`/`colorBy`/`preset`/
@@ -364,7 +370,8 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    "Inspect SAE features" (gated on both the SAE pair and the label-map
    collection being present), "Decode human ratings" (the probing tour, gated
    on the Glasgow collection), "Tour the WordNet galaxy" (gated on the
-   WordNet collection; its copy carries the heavy-load warning), or dismiss.
+   WordNet collection; its copy carries the heavy-load warning, and it is
+   hidden on phones), or dismiss.
    Reopenable via `?intro=1` (any build) and the
    header `?` button. Opening it fires a one-shot warm-up query so the
    emotion search model cold-starts before the tour reaches the search step.
@@ -416,8 +423,8 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    suppress joyride's built-in waiting spinner (`suppressWaitLoader` in
    `tourSteps.ts`) — the page's own full-screen loader covers the
    collection-switching waits, and both at once read as a bug.
-   Completion/dismissal is recorded under `orrery.demo-tour.v1`; on
-   viewports below 768 px the tour downgrades to the dialog. Demo builds
+   Completion/dismissal is recorded under `orrery.demo-tour.v1`. The tour
+   also runs on phones (see "Tours on phones" below). Demo builds
    also default to **dark mode** (`providers.tsx`) and label search results
    out of the box (`showLabels` store default). Demo builds use a
    **two-row header** kept clear of the HuggingFace pill that `header: mini`
@@ -485,16 +492,30 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
 - **Phone-sized viewports** get a fourth surface: a one-time "Best viewed on
   desktop" card (`app/components/MobileNotice.tsx`), mounted on both `/` and
   `/sae`. Gating is the shared `shouldShowMobileNotice` predicate in
-  `demoOnboarding.ts` — demo builds only, `viewportWidth < TOUR_MIN_VIEWPORT`
-  (768), and not yet dismissed (`orrery.demo-mobile-notice.v1`, one key across
-  both pages). It is **dismissible, not blocking**: the app is usable on a
-  phone, just cramped. `getOnboardingAction` checks it **first**, so on a
-  phone it pre-empts `?tour=1` / `?intro=1` / `?tour=sae` / `?tour=wordnet` /
-  `?tour=probe` — the tours are
-  already downgraded below 768 px anyway, and a `?tour=sae` deep link stays on
-  Explore rather than forwarding until the card has been dismissed once. On
-  the next visit the ordinary gating resumes (so a phone visitor sees the
-  welcome dialog then, not a second copy of the card).
+  `demoOnboarding.ts` — demo builds only, `isCompactWidth(viewportWidth)`
+  (below `COMPACT_VIEWPORT_WIDTH` = 768), and not yet dismissed
+  (`orrery.demo-mobile-notice.v1`, one key across both pages). It is
+  **dismissible, not blocking**: the app is usable on a phone, just cramped.
+  A `?tour=` link that fits the viewport wins over it (explicit intent; the
+  card waits for a later visit, and /sae skips it while its tour segment
+  runs). Otherwise it comes first, and `planOnboarding` records what it
+  pre-empted (`afterNotice`): on a bare first visit, `?intro=1` or a
+  desktop-only tour link the welcome dialog opens once the card is dismissed,
+  so phone visitors still find the tours.
+- **Tours on phones** (below 768 px). The 90-second, probing and "Inspect
+  SAE" tours run at any width; the WordNet galaxy (212,478 points in 3D with
+  haze) is desktop-only (`tourFitsViewport`): its welcome-dialog entry is
+  hidden and `?tour=wordnet` downgrades to the welcome dialog. Two layout
+  rules keep the map visible: (1) steps that narrate the map open their
+  panel through `showPanelBesideMap` (`tourSteps.ts`), which keeps every panel
+  closed on a phone (`TourRuntime.isCompactViewport`), since a phone panel is
+  full-width over the map; steps whose anchor is inside a panel
+  (feature-search, the probing lab) still open it; (2) the `plot-side` anchor
+  moves to the plot's bottom-center below `md`, so the cards' `left`
+  placement no longer fits and joyride flips to its first fallback, `top`:
+  the card sits at the foot of the screen. Logic is unit-tested; the phone
+  layout (card sizes, /sae's chat sidebar, the SAE tour's right-click copy on
+  touch screens) still needs a check on a real device.
   Mobile support is otherwise deliberately partial — see "Known exposures".
 - **Unknown URL params survive**: the Explore page's URL sync merges its
   owned params into the existing query string (`lib/utils/urlViewParams.ts`)
@@ -524,8 +545,7 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
   three panels open as near-full-width overlays, and the desktop-notice card
   sets expectations — but the plot chrome is still laid out for a desktop:
   the legend and Plotly modebar keep their fixed `right-4` / `top: 80px`
-  offsets and overlap an open panel, the `useZoomLimit` clamp only listens for
-  `wheel` so pinch-zoom is unbounded, the SAE context menu needs a right-click,
+  offsets and overlap an open panel, the SAE context menu needs a right-click,
   and the 3D GL scene + Three.js haze overlay are untested for memory on
   mobile Safari. Fixing those (plus defaulting to 2D on small screens) is the
   scoped follow-up; nothing here is load-bearing for the demo's desktop path.

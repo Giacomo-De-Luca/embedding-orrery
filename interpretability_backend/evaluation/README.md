@@ -7,7 +7,7 @@ which persists results on the `topic_extractions.quality_metrics` JSON column
 (keyed by level) and is shared by the GraphQL `evaluateTopics` mutation and the
 TOML runner below.
 
-Two independent evaluators live here:
+Three independent evaluators live here:
 
 1. **Topic quality** — `TopicQualityEvaluator` (this file, below).
 2. **Projection fidelity** — `ProjectionFidelityEvaluator`: how faithfully a
@@ -16,6 +16,12 @@ Two independent evaluators live here:
    section at the end of this README and
    [`documentation/PROJECTION_FIDELITY.md`](../../documentation/PROJECTION_FIDELITY.md)
    for methodology + results.
+3. **Topic-reduction comparison** — `ReductionComparison`: every reduction
+   strategy (merge trees and the legacy methods) cut at the configured topic
+   counts and thresholds through the app's `TopicReductionService.plan`, scored
+   on sizes, noise, keyword diversity / coherence, silhouette and agreement
+   with a ground-truth field. Stores nothing. See
+   [`documentation/TOPIC_MERGE_TREES.md`](../../documentation/TOPIC_MERGE_TREES.md).
 
 ## Structure
 
@@ -29,6 +35,10 @@ Two independent evaluators live here:
 | `run_projection_fidelity.py` | Config-driven fidelity runner: loads projections + item metadata + embeddings, evaluates, prints a report, writes JSON. |
 | `projection_fidelity_config.toml` | Collections, projections, colour field, and Mantel parameters. |
 | `projection_fidelity_results.json` | Projection-fidelity output (generated). |
+| `reduction_comparison.py` | `ReductionComparison` (strategies x cuts, scored per partition) and `PartitionStats` (sizes, size entropy, ARI / NMI; pure). |
+| `run_reduction_comparison.py` | Config-driven reduction comparison: wires DuckDB + vectors (optionally a copy), writes JSON and a Markdown report. |
+| `reduction_comparison.toml` | Collections, strategies, topic counts, thresholds, metrics, ground-truth fields, optional store paths. |
+| `utils/runner_common.py` | Config path / TOML loading / JSON writing shared by the runners. |
 
 ## Run
 
@@ -40,6 +50,15 @@ ORRERY_EVAL_CONFIG=/path/to/config.toml uv run python -m interpretability_backen
 
 The runner evaluates the **current active** topic extraction of each collection
 listed in `eval_config.toml`.
+
+Topic-reduction comparison (backend stopped, or `duckdb_path` / `chroma_path`
+pointing at a copy such as the seed snapshot):
+
+```bash
+uv run python -m interpretability_backend.evaluation.run_reduction_comparison
+# custom config:
+ORRERY_REDUCTION_COMPARISON_CONFIG=/path/to/config.toml uv run python -m interpretability_backend.evaluation.run_reduction_comparison
+```
 
 ## Metrics
 

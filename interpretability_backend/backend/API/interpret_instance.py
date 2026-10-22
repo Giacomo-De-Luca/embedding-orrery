@@ -24,3 +24,8 @@ def get_interpret_service() -> "InterpretService":
 
         _interpret_service = InterpretService()
     return _interpret_service
+
+
+def peek_interpret_service() -> "InterpretService | None":
+    """The shared InterpretService if one exists, without creating it (no torch import)."""
+    return _interpret_service

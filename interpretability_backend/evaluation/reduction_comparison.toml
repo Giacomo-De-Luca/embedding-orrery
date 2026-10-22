@@ -1,0 +1,44 @@
+# Topic-reduction strategy comparison config.
+# Run: uv run python -m interpretability_backend.evaluation.run_reduction_comparison
+# Override path with the ORRERY_REDUCTION_COMPARISON_CONFIG env var.
+# Nothing is written to the database; run with the backend stopped, or point
+# duckdb_path / chroma_path at a copy (e.g. of resources/seed/).
+
+# Collections with an active topic extraction (and projections, for silhouette).
+collections = ["emotion", "xkcd_hilbert_gemini"]
+
+# Strategies to compare: "average", "ward", "density" (HDBSCAN extractions made
+# after merge trees existed), "legacy_ctfidf", "legacy_semantic".
+strategies = ["average", "ward", "density", "legacy_ctfidf", "legacy_semantic"]
+
+# Topic counts to cut at (noise not counted; skipped when >= the base topics).
+n_topics = [3, 5, 8]
+
+# "auto" average-linkage cuts: merge up to this centred cosine distance.
+distance_thresholds = [0.5, 0.6, 0.7, 0.8]
+
+# Also run the legacy "auto" method (HDBSCAN on the topic vectors).
+legacy_auto = true
+
+# Also run each density cut with noise absorption.
+absorb_noise = true
+
+# Optional metric selection; omit for all of:
+#   "silhouette", "diversity", "coherence_cv", "coherence_umass" ("dbcv" is null here)
+metrics = ["silhouette", "diversity", "coherence_cv", "coherence_umass"]
+
+# Max points used for silhouette, and keywords per topic for diversity / coherence.
+sample_size = 10000
+n_keywords = 10
+
+# Optional stores (default: the live resources/main.duckdb and vector_db/):
+# duckdb_path = "/path/to/copy/main.duckdb"
+# chroma_path = "/path/to/copy/vector_db"
+
+# JSON results; the Markdown report goes next to it (.md).
+# output_path = "interpretability_backend/evaluation/reduction_comparison_results.json"
+
+# Tables last (TOML: keys after a [table] belong to it).
+# Optional item-metadata field per collection to compare against (NMI / ARI).
+[ground_truth]
+emotion = "label"

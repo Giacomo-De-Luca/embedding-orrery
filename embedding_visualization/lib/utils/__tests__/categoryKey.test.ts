@@ -91,3 +91,29 @@ describe('CategoryKey.missingLast', () => {
     expect(['b', MISSING, 'a'].sort(CategoryKey.missingLast)).toEqual(['b', 'a', MISSING]);
   });
 });
+
+describe('CategoryKey.subtopicKey', () => {
+  it('keys a subtopic within its topic, so one label under two topics stays two groups', () => {
+    const absorbed = CategoryKey.subtopicKey('Ten +1', 'Unclustered');
+    const noise = CategoryKey.subtopicKey('Unclustered', 'Unclustered');
+    expect(absorbed).not.toBe(noise);
+    expect(CategoryKey.splitSubtopicKey(absorbed)).toEqual({ topic: 'Ten +1', subtopic: 'Unclustered' });
+  });
+
+  it('keys a point through its nested topic and subtopic', () => {
+    expect(CategoryKey.nestedKey({ topic_label: 'Arts' })).toBe(CategoryKey.subtopicKey('Arts', 'Arts'));
+    expect(CategoryKey.nestedKey(undefined)).toBe(CategoryKey.subtopicKey(MISSING, MISSING));
+  });
+});
+
+describe('CategoryKey.valuesOf', () => {
+  it('lists the sorted category keys of a field over metadata records', () => {
+    const records = [{ category: 'b' }, {}, { category: 'a' }, { category: 'b' }];
+    expect(CategoryKey.valuesOf(records, 'category')).toEqual(['a', 'b', MISSING]);
+  });
+
+  it('matches the values CategoryKey.count lists for the same points', () => {
+    expect(CategoryKey.valuesOf(points.map((p) => p.metadata), 'category'))
+      .toEqual(CategoryKey.count(points, 'category').categoryValues);
+  });
+});

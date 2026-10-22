@@ -8,8 +8,8 @@ dataclass a ``from_file`` constructor with the shared rules:
 - unknown keys are rejected, so a typo cannot silently fall back to a default;
 - JSON lists become tuples for the fields named in ``TUPLE_FIELDS``;
 - wrong value types surface as ``ValueError``, like the range checks the
-  dataclass runs in ``__post_init__`` (``require_bool`` / ``require_int``
-  are the shared checks for those).
+  dataclass runs in ``__post_init__`` (``require_bool`` / ``require_int`` /
+  ``require_number`` are the shared checks for those).
 """
 
 import json
@@ -60,10 +60,17 @@ class JsonFileSettings:
 
     def require_int(self, name: str, minimum: int, maximum: int | None = None) -> None:
         """Raise ``ValueError`` unless field ``name`` is an int (not a bool) in range."""
+        self._require_range(name, int, "an integer", minimum, maximum)
+
+    def require_number(self, name: str, minimum: float, maximum: float | None = None) -> None:
+        """Raise ``ValueError`` unless field ``name`` is a number (not a bool) in range."""
+        self._require_range(name, int | float, "a number", minimum, maximum)
+
+    def _require_range(self, name: str, kind, description: str, minimum, maximum) -> None:
         value = getattr(self, name)
-        in_range = isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+        in_range = isinstance(value, kind) and not isinstance(value, bool) and value >= minimum
         if maximum is not None:
             in_range = in_range and value <= maximum
         if not in_range:
             bound = f"in {minimum}..{maximum}" if maximum is not None else f">= {minimum}"
-            raise ValueError(f"{name} must be an integer {bound}, got {value!r}")
+            raise ValueError(f"{name} must be {description} {bound}, got {value!r}")

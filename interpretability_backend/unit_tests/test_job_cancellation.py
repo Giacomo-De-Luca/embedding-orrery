@@ -13,11 +13,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from chromadb.errors import NotFoundError
 
 from backend.API import mutations, schema
 from backend.embedding_functions import embed_existing_dataset as reembed_module
 from backend.embedding_functions.config import (
     EmbeddingModelConfig,
+    EmbeddingProvider,
     EmbeddingResult,
     ReEmbedConfig,
 )
@@ -37,6 +39,7 @@ from backend.services.cancel_registry import (
 )
 from backend.services.job_ids import JobIds
 from backend.services.job_state import JobStateService, JobStatus
+from backend.utils.embedding_model_catalog import TASK_PREFIX_FORMAT
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "embedding_visualization"
 
@@ -290,7 +293,7 @@ class _FakeChromaClient:
         self._collection = collection
 
     def get_collection(self, **kwargs):
-        raise ValueError("does not exist")
+        raise NotFoundError("does not exist")  # what chromadb raises
 
     def create_collection(self, **kwargs):
         return self._collection
@@ -328,6 +331,74 @@ class TestReEmbedLoopCancel:
         assert result.total_embedded == 2
         assert job_states.get_job("ds_new").status is JobStatus.INTERRUPTED
         assert emitted[-1]["error"] == CANCELLED_MESSAGE
+
+
+class TestReEmbedTaskPrefix:
+    """The prefix row is the item's metadata plus ``__document__``, in both branches."""
+
+    ITEMS = [
+        {"id": "a", "document": "doc a", "metadata": {"title": "Alpha", "abstract": "abs a"}},
+        # extract_metadata drops None values, so this item has no title key at all.
+        {"id": "b", "document": "doc b", "metadata": {"abstract": "abs b"}},
+    ]
+
+    def _run(self, monkeypatch, tmp_path, prompt, columns=None):
+        received: list[str] = []
+        collection = _FakeChromaCollection(on_add=lambda: None)
+        db = _FakeReEmbedDB(n_items=0)
+        db.items = [dict(item) for item in self.ITEMS]
+        monkeypatch.setattr("backend.API.duckdb_instance.get_duckdb_client", lambda: db)
+        monkeypatch.setattr(reembed_module, "get_device", lambda: "cpu")
+
+        def factory(model_config, device):
+            def embed(docs):
+                received.extend(docs)
+                return [[0.0, 0.0, 0.0] for _ in docs]
+
+            return embed, 3
+
+        monkeypatch.setattr(reembed_module, "create_embedding_function", factory)
+        monkeypatch.setattr(reembed_module, "DB_PATH", tmp_path / "vector_db")
+        monkeypatch.setattr(
+            reembed_module.chromadb, "PersistentClient", lambda **kw: _FakeChromaClient(collection)
+        )
+        config = ReEmbedConfig(
+            source_dataset_name="ds",
+            collection_name="ds_new",
+            columns=columns,
+            batch_size=10,
+            embedding_model=EmbeddingModelConfig(
+                provider=EmbeddingProvider.GEMINI,
+                model_name="gemini-embedding-2",
+                prompt=prompt,
+                task="task: search result | query: ",
+                prompt_format=TASK_PREFIX_FORMAT,
+            ),
+        )
+        return reembed_module.embed_existing_dataset(config), received, collection
+
+    def test_prefix_on_the_stored_documents(self, job_states, emitted, monkeypatch, tmp_path):
+        result, received, _ = self._run(monkeypatch, tmp_path, "title: {title} | text: ")
+        assert result.error is None
+        assert sorted(received) == ["title: Alpha | text: doc a", "title: none | text: doc b"]
+
+    def test_prefix_on_text_composed_from_metadata(
+        self, job_states, emitted, monkeypatch, tmp_path
+    ):
+        result, received, _ = self._run(
+            monkeypatch, tmp_path, "title: {title} | text: ", columns=["abstract"]
+        )
+        assert result.error is None
+        assert sorted(received) == ["title: Alpha | text: abs a", "title: none | text: abs b"]
+
+    def test_unknown_prefix_column_fails_before_any_vector(
+        self, job_states, emitted, monkeypatch, tmp_path
+    ):
+        result, received, collection = self._run(
+            monkeypatch, tmp_path, "title: {headline} | text: "
+        )
+        assert "headline" in result.error
+        assert received == [] and collection.added == []
 
 
 # ---------------------------------------------------------------------------

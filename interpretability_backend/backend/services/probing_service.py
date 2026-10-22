@@ -52,6 +52,7 @@ from .probing_types import (
     PROBE_KINDS,
     ProbeConfig,
     ProbeTask,
+    probe_collection_dir,
     sanitize_field_key,
     score_field_names,
 )
@@ -764,9 +765,7 @@ def train_probe_for_collection(config: ProbeConfig) -> ProbeRunResult:
             message += " (SVC calibrates class probabilities — this can take a few minutes)"
         _progress(2, message)
         output_dir = (
-            Path(PROBING_RESULTS_DIR)
-            / "collections"
-            / sanitize_field_key(config.collection_name)
+            probe_collection_dir(config.collection_name, PROBING_RESULTS_DIR)
             / sanitize_field_key(config.target_field)
             / config.kind
         )

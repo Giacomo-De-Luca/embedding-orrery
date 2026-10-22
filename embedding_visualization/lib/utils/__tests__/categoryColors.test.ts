@@ -18,6 +18,8 @@ import {
   CORRECTNESS_PRESET,
   CORRECTNESS_LABELS,
   buildAliasedCategoryColorMap,
+  buildPinnedCategoryColorMap,
+  UNCLUSTERED_COLOR,
 } from '../categoryColors';
 import { CategoryKey } from '../categoryKey';
 import { CATEGORY_PALETTES, BUILTIN_PALETTE_NAMES, getPaletteColors } from '../categoryPalettes';
@@ -449,5 +451,51 @@ describe('buildAliasedCategoryColorMap', () => {
   it('follows the chosen palette', () => {
     const colorMap = buildAliasedCategoryColorMap(alias, ['HYPERBOLE'], 'emberGalaxy');
     expect(colorMap.HYPERBOLE).toBe(buildCategoryColorMap('category', alias.domain, 'emberGalaxy').HYPERBOLE);
+  });
+});
+
+describe('buildPinnedCategoryColorMap (topic-tree preview)', () => {
+  // Saved topics of an unreduced extraction; the preview merged Alpha + Beta.
+  const domain = ['Alpha', 'Beta', 'Delta', 'Gamma', 'Unclustered'];
+  const pin = { sourceField: 'topic_label', domain, valueMap: { 'Alpha +1': 'Alpha' } };
+  const saved = buildCategoryColorMap('topic_label', domain);
+
+  it("gives a group its representative's saved colour and keeps the others put", () => {
+    const colorMap = buildPinnedCategoryColorMap('topic_label', pin, ['Alpha +1', 'Delta', 'Gamma', 'Unclustered']);
+    expect(colorMap).toEqual({
+      'Alpha +1': saved.Alpha,
+      Delta: saved.Delta,
+      Gamma: saved.Gamma,
+      Unclustered: UNCLUSTERED_COLOR,
+    });
+    // Positional colours would shift Delta and Gamma once Beta is gone.
+    expect(buildCategoryColorMap('topic_label', ['Alpha +1', 'Delta', 'Gamma']).Delta).not.toBe(saved.Delta);
+  });
+
+  it("keeps the pinned field's own preset for noise when the source field has none", () => {
+    const subtopics = ['Cats', 'Dogs', 'Unclustered'];
+    const reduced = { sourceField: 'subtopic_label', domain: subtopics, valueMap: { 'Cats +1': 'Cats' } };
+    const colorMap = buildPinnedCategoryColorMap('topic_label', reduced, ['Cats +1', 'Unclustered']);
+    expect(colorMap['Cats +1']).toBe(buildCategoryColorMap('subtopic_label', subtopics).Cats);
+    expect(colorMap.Unclustered).toBe(UNCLUSTERED_COLOR);
+  });
+
+  it("applies the representative's saved override, then the field's own", () => {
+    const viaSource = buildPinnedCategoryColorMap(
+      'topic_label', { ...pin, sourceField: 'topic_label' }, ['Alpha +1', 'Gamma'], undefined,
+      { Alpha: '#111111' }, { Gamma: '#222222' },
+    );
+    expect(viaSource).toEqual({ 'Alpha +1': '#111111', Gamma: '#222222' });
+  });
+
+  it('keeps Missing grey and gives values outside the domain fresh slots', () => {
+    const colorMap = buildPinnedCategoryColorMap('topic_label', pin, ['Alpha +1', 'New', CategoryKey.MISSING]);
+    expect(colorMap[CategoryKey.MISSING]).toBe(MISSING_CATEGORY_COLOR);
+    expect(colorMap.New).toBe(generateCategoryColors(domain.length + 1)[domain.length]);
+  });
+
+  it('follows the chosen palette', () => {
+    const colorMap = buildPinnedCategoryColorMap('topic_label', pin, ['Alpha +1'], 'emberGalaxy');
+    expect(colorMap['Alpha +1']).toBe(buildCategoryColorMap('topic_label', domain, 'emberGalaxy').Alpha);
   });
 });

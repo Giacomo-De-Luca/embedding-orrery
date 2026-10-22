@@ -72,10 +72,16 @@ export function TopicExtractionCard({
 }: TopicExtractionCardProps) {
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<TopicConfigState>(DEFAULT_TOPIC_CONFIG);
+  // The hook's last result is shared by every collection's pane: only show ours.
+  const topicsResult = lastTopicsResult?.collectionName === collectionName ? lastTopicsResult : null;
+  // Bumped by every extraction: the reduction form re-reads the new
+  // extraction's base topics and whether it has a density tree.
+  const [extractionVersion, setExtractionVersion] = useState(0);
 
   const handleExtract = async () => {
     const result = await extractTopics(collectionName, toTopicConfigInput(config));
     if (result && !result.error) {
+      setExtractionVersion((v) => v + 1);
       onTopicsExtracted();
     }
   };
@@ -139,12 +145,12 @@ export function TopicExtractionCard({
             )}
 
             {/* Extraction Results */}
-            {lastTopicsResult && !lastTopicsResult.error && (
+            {topicsResult && !topicsResult.error && (
               <>
                 <Separator />
                 <TopicListSection
                   collectionName={collectionName}
-                  result={lastTopicsResult}
+                  result={topicsResult}
                   renameTopicLabel={renameTopicLabel}
                   regenerateTopicLabel={regenerateTopicLabel}
                 />
@@ -155,6 +161,7 @@ export function TopicExtractionCard({
               <>
                 <Separator />
                 <ReduceTopicsSection
+                  key={extractionVersion}
                   collectionName={collectionName}
                   reduceTopics={reduceTopics}
                   reduceTopicsLoading={reduceTopicsLoading}
@@ -179,7 +186,7 @@ export function TopicExtractionCard({
                   collectionName={collectionName}
                   hasSubtopics={hasSubtopics}
                   otherOpsLoading={topicsLoading || reduceTopicsLoading || llmLabelsLoading}
-                  storedQualityMetrics={lastTopicsResult?.qualityMetrics}
+                  storedQualityMetrics={topicsResult?.qualityMetrics}
                 />
               </>
             )}

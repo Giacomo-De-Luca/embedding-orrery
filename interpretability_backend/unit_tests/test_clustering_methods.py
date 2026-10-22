@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from backend.topic_extraction.cluster_and_label import GenerateTopics
+from backend.topic_extraction.cluster_and_label import GenerateTopics, cluster_points
 
 
 @pytest.fixture
@@ -63,9 +63,7 @@ class TestKMeans:
 
     def test_kmeans_produces_exact_k_clusters(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="kmeans", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="kmeans", n_clusters=5)
         df = gen.generate_clusters(points)
         unique_topics = set(df["Topic"].unique())
         assert len(unique_topics) == 5
@@ -74,9 +72,7 @@ class TestKMeans:
 
     def test_kmeans_assigns_all_points(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="kmeans", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="kmeans", n_clusters=5)
         df = gen.generate_clusters(points)
         assert len(df) == len(points)
         assert (df["Topic"] >= 0).all()
@@ -87,9 +83,7 @@ class TestGMM:
 
     def test_gmm_produces_exact_k_clusters(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="gmm", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="gmm", n_clusters=5)
         df = gen.generate_clusters(points)
         unique_topics = set(df["Topic"].unique())
         assert len(unique_topics) == 5
@@ -97,9 +91,7 @@ class TestGMM:
 
     def test_gmm_assigns_all_points(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="gmm", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="gmm", n_clusters=5)
         df = gen.generate_clusters(points)
         assert len(df) == len(points)
         assert (df["Topic"] >= 0).all()
@@ -110,9 +102,7 @@ class TestSpectral:
 
     def test_spectral_produces_exact_k_clusters(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="spectral", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="spectral", n_clusters=5)
         df = gen.generate_clusters(points)
         unique_topics = set(df["Topic"].unique())
         assert len(unique_topics) == 5
@@ -120,9 +110,7 @@ class TestSpectral:
 
     def test_spectral_assigns_all_points(self, synthetic_data):
         points, documents = synthetic_data
-        gen = GenerateTopics(
-            documents=documents, clustering_method="spectral", n_clusters=5
-        )
+        gen = GenerateTopics(documents=documents, clustering_method="spectral", n_clusters=5)
         df = gen.generate_clusters(points)
         assert len(df) == len(points)
         assert (df["Topic"] >= 0).all()
@@ -162,3 +150,35 @@ class TestCTFIDFIntegration:
         for _topic_id, keywords in topics_data.items():
             assert len(keywords) > 0
             assert all(isinstance(w, str) and isinstance(s, float) for w, s in keywords)
+
+
+class TestClusteringOutcome:
+    """cluster_points returns the labels and, for HDBSCAN, the density merge tree."""
+
+    def test_hdbscan_outcome_carries_the_density_tree(self, synthetic_data):
+        points, _ = synthetic_data
+        outcome = cluster_points(points, "hdbscan", min_topic_size=10)
+
+        k = int(outcome.labels.max()) + 1
+        assert k >= 2
+        tree = outcome.density.tree
+        assert tree.linkage == "density"
+        assert tree.leaf_ids.tolist() == list(range(k))
+        assert tree.children.shape == (k - 1, 2)
+        noise = outcome.labels == -1
+        assert outcome.density.noise_rows.shape == outcome.labels.shape
+        assert np.all(outcome.density.noise_rows[~noise] == -1)
+
+    def test_kmeans_outcome_has_no_density_tree(self, synthetic_data):
+        points, _ = synthetic_data
+        outcome = cluster_points(points, "kmeans", n_clusters=5)
+
+        assert outcome.density is None
+        assert len(set(outcome.labels.tolist())) == 5
+
+    def test_a_single_cluster_has_no_density_tree(self):
+        rng = np.random.default_rng(0)
+        points = rng.normal(scale=0.1, size=(60, 2))
+        outcome = cluster_points(points, "hdbscan", min_topic_size=50)
+
+        assert outcome.density is None

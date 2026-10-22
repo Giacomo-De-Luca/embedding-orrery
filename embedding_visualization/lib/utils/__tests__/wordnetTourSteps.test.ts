@@ -20,6 +20,7 @@ function makeRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     setNebulaMode: vi.fn(),
     setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
+    isCompactViewport: () => false,
     setShowLabels: vi.fn(),
     getLoadedCollection: () => WORDNET_COLLECTION,
     getColorByField: () => 'pos',

@@ -15,9 +15,10 @@ worst case per row would not fit.
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, fields, replace
-from typing import ClassVar
+from functools import cache
+from typing import ClassVar, Self
 
 from .json_settings import JsonFileSettings
 from .media_kinds import DEFAULT_EXTENSIONS, MediaKind
@@ -39,6 +40,23 @@ class MediaOptions:
 
     def to_dict(self) -> dict[str, int | float]:
         return asdict(self)
+
+    def processing_kwargs(self, kinds: Iterable[MediaKind | str]) -> dict[str, dict]:
+        """``encode(processing_kwargs=...)`` for a job embedding these media kinds.
+
+        Video frames arrive pre-sampled (``MediaDecoder``), so the processor
+        must not sample them again.
+        """
+        kinds = {MediaKind(kind) for kind in kinds}
+        kwargs: dict[str, dict] = {}
+        if MediaKind.IMAGE in kinds:
+            kwargs["image"] = {"max_soft_tokens": self.image_max_soft_tokens}
+        if MediaKind.VIDEO in kinds:
+            kwargs["video"] = {
+                "max_soft_tokens": self.video_max_soft_tokens,
+                "do_sample_frames": False,
+            }
+        return kwargs
 
 
 OPTION_NAMES = tuple(f.name for f in fields(MediaOptions))
@@ -122,6 +140,12 @@ class MediaEmbeddingSettings(JsonFileSettings):
         if isinstance(defaults, Mapping):
             defaults = self._options_from(defaults, MediaOptions())
         object.__setattr__(self, "defaults", self._validated(defaults))
+
+    @classmethod
+    @cache
+    def shipped(cls) -> Self:
+        """The settings in ``config/media_embedding.json``, loaded once per process."""
+        return cls.from_file(MEDIA_SETTINGS_FILE)
 
     def with_overrides(self, overrides: Mapping[str, object] | None) -> MediaOptions:
         """The defaults with the given options replaced; ``None`` values keep the default."""

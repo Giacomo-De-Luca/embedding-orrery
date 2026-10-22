@@ -35,6 +35,7 @@ function makeMapRuntime(overrides: Partial<TourRuntime> = {}): TourRuntime {
     setNebulaMode: vi.fn(),
     setShowClusterLabels: vi.fn(),
     setActivePanel: vi.fn(),
+    isCompactViewport: () => false,
     setShowLabels: vi.fn(),
     getLoadedCollection: () => SAE_MAP_COLLECTION,
     getColorByField: () => null,

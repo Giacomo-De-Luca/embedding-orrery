@@ -38,6 +38,17 @@ describe('getEmbedValidationIssues', () => {
     );
   });
 
+  it('blocks on placeholder problems of the template or the task prefix', () => {
+    const issues = ['Task prefix references unknown columns: headline'];
+    expect(getEmbedValidationIssues({ ...VALID_HF, placeholderIssues: issues })).toEqual(issues);
+  });
+
+  it('waits for the task-prefix table before embedding', () => {
+    expect(getEmbedValidationIssues({ ...VALID_HF, taskPrefixesLoading: true })).toContain(
+      'Loading the task prefixes'
+    );
+  });
+
   it('requires at least one embedding column, with a VECTOR variant', () => {
     expect(getEmbedValidationIssues({ ...VALID_HF, embeddingColumns: [] })).toContain(
       'Select at least one embedding column'

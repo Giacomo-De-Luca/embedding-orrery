@@ -215,6 +215,7 @@ export const EMBEDDING_PROGRESS_SUBSCRIPTION = gql`
       totalBatches
       error
       message
+      warning
     }
   }
 `;
@@ -268,6 +269,7 @@ export const REDUCE_TOPICS = gql`
       topicMappings
       durationSeconds
       error
+      absorbedNoise
     }
   }
 `;
@@ -319,6 +321,7 @@ export const TOPIC_EXTRACTION_PROGRESS_SUBSCRIPTION = gql`
       totalBatches
       error
       message
+      warning
     }
   }
 `;
@@ -381,6 +384,37 @@ export const TOPIC_SEMANTIC_SEARCH = gql`
 export const TOPIC_SIMILARITY_ORDER = gql`
   query TopicSimilarityOrder($collectionName: String!, $field: String!) {
     topicSimilarityOrder(collectionName: $collectionName, field: $field)
+  }
+`;
+
+/**
+ * Merge tree over the active extraction's base topics (the Explore topic
+ * slider), or null without topics, under 3 base topics, too many topics, or
+ * no density tree for linkage "density". `includeNoise` (density only) adds
+ * which merge absorbs each noise item. Types: TopicMergeTreeData (mutations.ts).
+ */
+export const TOPIC_MERGE_TREE = gql`
+  query TopicMergeTree($collectionName: String!, $linkage: String!, $includeNoise: Boolean!) {
+    topicMergeTree(collectionName: $collectionName, linkage: $linkage, includeNoise: $includeNoise) {
+      extractionId
+      linkage
+      baseLevel
+      noiseCount
+      availableLinkages
+      leaves {
+        topicId
+        label
+        size
+      }
+      merges {
+        left
+        right
+        height
+        size
+      }
+      noiseItemIds
+      noiseMerges
+    }
   }
 `;
 
@@ -753,6 +787,39 @@ export const GET_PROBE_CLASS_PROBABILITIES = gql`
     ) {
       itemIds
       probabilities
+    }
+  }
+`;
+
+/**
+ * A local embedding model's input-length limit in tokens (the embed form's
+ * default cap). Null for remote API providers or when the limit is unknown.
+ */
+export const EMBEDDING_MODEL_MAX_LENGTH = gql`
+  query EmbeddingModelMaxLength($provider: EmbeddingProviderEnum!, $modelName: String!) {
+    embeddingModelMaxLength(provider: $provider, modelName: $modelName) {
+      maxLength
+      source
+    }
+  }
+`;
+
+/** The task-prefix table and the models that take it (app/collections/lib/taskPrefixes.ts). */
+export const EMBEDDING_TASK_PREFIXES = gql`
+  query EmbeddingTaskPrefixes {
+    embeddingTaskPrefixes {
+      defaultTask
+      tasks {
+        id
+        label
+        queryPrefix
+        documentPrefix
+        symmetric
+      }
+      models {
+        provider
+        modelName
+      }
     }
   }
 `;

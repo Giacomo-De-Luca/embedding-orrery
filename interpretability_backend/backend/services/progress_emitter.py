@@ -24,6 +24,7 @@ class ProgressEvent:
     total_batches: int
     error: str | None = None
     message: str | None = None  # Status message (e.g., "Sorting batches", "Loading model")
+    warning: str | None = None  # Non-cancelling issue (e.g. documents truncated at the cap)
 
 
 # Global event bus for progress subscribers
@@ -61,6 +62,7 @@ def emit_progress(
     total_batches: int,
     error: str | None = None,
     message: str | None = None,
+    warning: str | None = None,
 ) -> None:
     """
     Emit a progress update to all subscribers for a job.
@@ -76,6 +78,7 @@ def emit_progress(
         total_batches: Total number of batches
         error: Optional error message if status is "failed"
         message: Optional status message (e.g., "Sorting batches", "Loading model")
+        warning: Optional non-cancelling issue, shown until the job ends
     """
     if job_id not in _progress_subscribers:
         return  # No subscribers, skip
@@ -89,6 +92,7 @@ def emit_progress(
         total_batches=total_batches,
         error=error,
         message=message,
+        warning=warning,
     )
 
     # Broadcast to all subscribers

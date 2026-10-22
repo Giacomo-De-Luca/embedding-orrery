@@ -31,7 +31,11 @@ def catalog() -> EmbeddingModelCatalog:
 
 
 def _options(catalog, modalities, model=EG2, dtype="float32"):
-    policy = EmbeddingDtypePolicy(cuda_bf16_supported=lambda: True)
+    # "mps" stands for "any float32 device" here: the bf16 checkpoint rule is
+    # switched off so these tests stay about towers and kwargs.
+    policy = EmbeddingDtypePolicy(
+        cuda_bf16_supported=lambda: True, mps_bf16_supported=lambda: False
+    )
     return SentenceTransformerLoadOptions.for_modalities(
         model,
         "mps" if dtype == "float32" else "cuda",
@@ -134,3 +138,47 @@ class TestCoverage:
             _options(catalog, {"text"}, dtype="bfloat16").cache_key,
         }
         assert len(keys) == 3
+
+
+class TestMpsBf16Checkpoints:
+    """bf16 checkpoints (EmbeddingGemma 2) keep their dtype on Apple GPUs instead of
+    being upcast to float32, which doubled their weights and attention tensors."""
+
+    @staticmethod
+    def _policy(checkpoint="bfloat16", mps_ok=True):
+        return EmbeddingDtypePolicy(
+            cuda_bf16_supported=lambda: False,
+            mps_bf16_supported=lambda: mps_ok,
+            checkpoint_dtype=lambda model: checkpoint,
+        )
+
+    def test_bf16_checkpoints_stay_bf16_on_mps(self):
+        assert self._policy().for_device("mps", EG2) == "bfloat16"
+
+    @pytest.mark.parametrize("checkpoint", ["float32", None, "float16"])
+    def test_other_checkpoints_use_float32_on_mps(self, checkpoint):
+        assert self._policy(checkpoint=checkpoint).for_device("mps", EG2) == "float32"
+
+    def test_older_macos_falls_back_to_float32(self):
+        assert self._policy(mps_ok=False).for_device("mps", EG2) == "float32"
+
+    def test_cpu_keeps_float32(self):
+        assert self._policy().for_device("cpu", EG2) == "float32"
+
+    def test_no_checkpoint_lookup_without_a_model_name(self):
+        def lookup(model):
+            raise AssertionError("must not read model files")
+
+        policy = EmbeddingDtypePolicy(
+            cuda_bf16_supported=lambda: False,
+            mps_bf16_supported=lambda: True,
+            checkpoint_dtype=lookup,
+        )
+        assert policy.for_device("mps") == "float32"
+
+    def test_load_options_resolve_the_dtype_for_the_model(self, catalog):
+        options = SentenceTransformerLoadOptions.for_modalities(
+            EG2, "mps", {"text"}, catalog=catalog, dtype_policy=self._policy()
+        )
+        assert options.dtype == "bfloat16"
+        assert options.model_kwargs() == {"dtype": "bfloat16"}

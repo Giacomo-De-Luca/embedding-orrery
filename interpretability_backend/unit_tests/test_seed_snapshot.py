@@ -147,9 +147,7 @@ def test_config_parses_defaults_and_resolves_paths(tmp_path: Path) -> None:
             "positive integer",
         ),
         (
-            lambda data: data["sae_data"][0].update(
-                {"max_activation_examples_per_feature": 5}
-            ),
+            lambda data: data["sae_data"][0].update({"max_activation_examples_per_feature": 5}),
             "requires activation_examples",
         ),
         (
@@ -263,6 +261,15 @@ def _create_source_duckdb(path: Path) -> None:
         "topic-features",
         [{"level": "topic", "topic_id": 0, "member_count": 1, "centroid": [0.0, 1.0]}],
     )
+    for extraction in ("topic-docs", "topic-features"):
+        client.replace_topic_merge_tree(
+            extraction,
+            "density",
+            leaf_ids=[0, 1],
+            leaf_sizes=[1, 1],
+            children=[[0, 1]],
+            heights=[1.0],
+        )
     client._exec(
         "INSERT INTO probes (collection_name, target_field, kind) VALUES (?, ?, ?), (?, ?, ?)",
         ["documents", "year", "ridge", "feature-vectors", "density", "ridge"],
@@ -361,6 +368,9 @@ def test_duckdb_export_selects_payloads_and_sae_rows(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT extraction_id, centroid FROM topic_centroids"
         ).fetchall() == [("topic-docs", [1.0, 0.0])]
+        assert connection.execute(
+            "SELECT extraction_id, linkage FROM topic_merge_trees"
+        ).fetchall() == [("topic-docs", "density")]
         assert connection.execute("SELECT count(*) FROM probes").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM probe_scores").fetchone() == (1,)
         assert connection.execute("SELECT predicted, probs FROM probe_scores").fetchone() == (
@@ -389,6 +399,7 @@ def test_duckdb_export_tolerates_source_without_topic_centroids(tmp_path: Path) 
     _create_source_duckdb(source)
     connection = duckdb.connect(str(source))
     connection.execute("DROP TABLE topic_centroids")
+    connection.execute("DROP TABLE topic_merge_trees")
     connection.close()
     payload = _payload()
     payload["collections"][0]["include"] = {
@@ -402,6 +413,7 @@ def test_duckdb_export_tolerates_source_without_topic_centroids(tmp_path: Path) 
     counts = DuckDBSnapshotExporter(source).export(config, destination)
 
     assert counts["topic_centroids"] == 0
+    assert counts["topic_merge_trees"] == 0
     assert counts["topic_extractions"] == 1
 
 
@@ -488,9 +500,7 @@ def test_duckdb_export_prunes_document_activations_per_item(tmp_path: Path) -> N
     payload = _payload()
     payload["sae_data"][0]["document_activation_top_k"] = 3
     # Second, doc-free entry: multi-entry configs must export independently.
-    payload["sae_data"].append(
-        {"model_id": "model-b", "sae_id": "sae-b", "features": True}
-    )
+    payload["sae_data"].append({"model_id": "model-b", "sae_id": "sae-b", "features": True})
     config = SeedSnapshotConfig.from_file(_write_config(tmp_path, payload), project_root=tmp_path)
 
     counts = DuckDBSnapshotExporter(source).export(config, destination)
@@ -505,9 +515,10 @@ def test_duckdb_export_prunes_document_activations_per_item(tmp_path: Path) -> N
             "WHERE item_id = 'doc-x' ORDER BY feature_index"
         ).fetchall()
         assert kept == [(102,), (103,), (104,)]
-        assert set(
-            connection.execute("SELECT model_id, sae_id FROM sae_features").fetchall()
-        ) == {("model-a", "sae-a"), ("model-b", "sae-b")}
+        assert set(connection.execute("SELECT model_id, sae_id FROM sae_features").fetchall()) == {
+            ("model-a", "sae-a"),
+            ("model-b", "sae-b"),
+        }
     finally:
         connection.close()
 

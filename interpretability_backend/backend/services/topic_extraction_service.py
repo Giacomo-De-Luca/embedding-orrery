@@ -11,14 +11,15 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..topic_extraction.llm_labeling import (
     _create_labeler,
     generate_llm_label_for_topic,
-    generate_llm_labels,
 )
 from ..utils import cancellable_task
 from ..utils.cancellable_task import CancellableTask
@@ -34,6 +35,11 @@ from .cancel_registry import (
 from .job_ids import JobIds
 from .progress_emitter import emit_progress
 from .topic_centroid_service import Preloaded, TopicCentroidService
+from .topic_reduction_types import ReductionRequest
+
+if TYPE_CHECKING:
+    from ..topic_extraction.cluster_and_label import ClusteringOutcome
+    from ..utils.topic_merge_tree import TopicMergeTree
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -70,8 +76,9 @@ def cluster_documents(
     config: "TopicExtractionConfig",
     projection_coords: np.ndarray,
     raw: np.ndarray | None,
-) -> np.ndarray:
-    """Task target: per-document cluster labels in the configured space.
+) -> "ClusteringOutcome":
+    """Task target: per-document cluster labels (and HDBSCAN's density merge
+    tree) in the configured space.
 
     Spaces (``config.cluster_on``):
       "projection"   — stored UMAP/PCA viz coords (fast, but tuned for looks)
@@ -82,7 +89,7 @@ def cluster_documents(
     collections, so a cancel can stop the UMAP / HDBSCAN fits mid-step.
     """
     # Deferred like extract_topics: hdbscan/sklearn stay out of module scope.
-    from ..topic_extraction.cluster_and_label import cluster_labels
+    from ..topic_extraction.cluster_and_label import cluster_points
 
     points = projection_coords
     if raw is not None and config.cluster_on == "cluster_umap":
@@ -107,7 +114,7 @@ def cluster_documents(
         points = raw / np.where(norms == 0, 1.0, norms)
 
     channel.send(f"Running {config.clustering_method.upper()} clustering...")
-    return cluster_labels(
+    return cluster_points(
         points, config.clustering_method, config.min_topic_size, config.n_clusters
     )
 
@@ -136,11 +143,14 @@ class TopicExtractionConfig:
     cluster_min_dist: float = 0.0
     cluster_n_neighbors: int = 15
 
-    # Reduction config
+    # Reduction config (strategies: services/topic_reduction_types.py)
     reduce_topics: bool = False
     reduction_method: str = "auto"  # "auto" or "fixed_n"
-    nr_topics: int | None = None
-    use_ctfidf_for_reduction: bool = True
+    nr_topics: int | None = None  # topics to keep, noise not counted
+    use_ctfidf_for_reduction: bool = True  # legacy strategy choice when no strategy is set
+    reduction_strategy: str | None = None
+    reduction_distance_threshold: float | None = None
+    reduction_absorb_noise: bool = False
 
 
 @dataclass
@@ -169,6 +179,7 @@ class TopicExtractionResult:
     num_topics_before_reduction: int | None = None
     reduction_applied: bool = False
     topic_mappings: dict[int, int] | None = None
+    absorbed_noise: int = 0  # noise documents a density cut moved into topics
 
 
 def _cancelled_topics_result(collection_name: str, start_time: float) -> TopicExtractionResult:
@@ -183,13 +194,29 @@ def _cancelled_topics_result(collection_name: str, start_time: float) -> TopicEx
     )
 
 
+def _config_snapshot(config: TopicExtractionConfig) -> dict:
+    """The extraction settings stored with its topics (``topic_extractions.config``)."""
+    return {
+        "min_topic_size": config.min_topic_size,
+        "n_keywords": config.n_keywords,
+        "projection_type": config.projection_type,
+        "used_llm": config.use_llm_labels,
+        "clustering_method": config.clustering_method,
+        "n_clusters": config.n_clusters,
+        "cluster_on": config.cluster_on,
+        "cluster_n_components": config.cluster_n_components,
+        "cluster_min_dist": config.cluster_min_dist,
+        "cluster_n_neighbors": config.cluster_n_neighbors,
+        "language": config.language,
+    }
+
+
 def _sync_topics_to_duckdb(
     collection_name: str,
     topic_infos: list[TopicInfoResult],
-    ids: list[str],
     topic_assignments: dict[str, int],
     topic_labels: dict[int, str],
-    config=None,
+    config_snapshot: dict | None = None,
     subtopic_assignments: dict[str, int] | None = None,
     subtopic_labels: dict[int, str] | None = None,
     reduction_applied: bool = False,
@@ -197,51 +224,26 @@ def _sync_topics_to_duckdb(
     reduction_method: str | None = None,
     reduction_target: int | None = None,
     topic_hierarchy: dict | None = None,
-) -> str | None:
-    """Store topic extraction results in DuckDB.
+    merge_trees: Sequence["TopicMergeTree"] = (),
+) -> str:
+    """Store topics in DuckDB as the collection's new active extraction.
 
-    Creates a new topic_extraction record, inserts topic_info and
-    topic_assignments (with optional subtopic fields for reduction).
-
-    Returns the new extraction id, or None if nothing was stored.
+    Inserts topic_info, topic_assignments (with subtopic fields after a
+    reduction) and merge trees into an inactive extraction, then activates
+    it: a failure half-way leaves the previous extraction active, removes
+    the partial rows and fails the job. Returns the new extraction id.
     """
     db = _get_duckdb()
     if not db:
-        return None
+        raise RuntimeError("DuckDB is unavailable: the topics were not stored")
+    vc = db.get_vector_collection(collection_name)
+    if not vc:
+        raise ValueError(f"Vector collection {collection_name!r} is not registered")
 
+    ext_id = db.create_topic_extraction(
+        collection_name, vc["dataset_name"], config=config_snapshot, activate=False
+    )
     try:
-        vc = db.get_vector_collection(collection_name)
-        if not vc:
-            logger.warning(
-                "DuckDB: vector collection %r not found, skipping topic sync", collection_name
-            )
-            return None
-
-        dataset_name = vc["dataset_name"]
-
-        # Build extraction config snapshot
-        extraction_config = None
-        if config:
-            extraction_config = {
-                "min_topic_size": getattr(config, "min_topic_size", None),
-                "n_keywords": getattr(config, "n_keywords", None),
-                "projection_type": getattr(config, "projection_type", None),
-                "used_llm": getattr(config, "use_llm_labels", None),
-                "clustering_method": getattr(config, "clustering_method", None),
-                "n_clusters": getattr(config, "n_clusters", None),
-                "cluster_on": getattr(config, "cluster_on", None),
-                "cluster_n_components": getattr(config, "cluster_n_components", None),
-                "cluster_min_dist": getattr(config, "cluster_min_dist", None),
-                "cluster_n_neighbors": getattr(config, "cluster_n_neighbors", None),
-            }
-
-        ext_id = db.create_topic_extraction(
-            collection_name,
-            dataset_name,
-            config=extraction_config,
-        )
-
-        # Store reduction metadata if applicable
         topic_count = len([t for t in topic_infos if t.topic_id != -1])
         if reduction_applied:
             db.update_topic_extraction(
@@ -256,21 +258,19 @@ def _sync_topics_to_duckdb(
         else:
             db.update_topic_extraction(ext_id, topic_count=topic_count)
 
-        # Insert topic info
-        topic_info_records = []
-        for info in topic_infos:
-            topic_info_records.append(
-                {
-                    "topic_id": info.topic_id,
-                    "label": info.label,
-                    "count": info.count,
-                    "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:10]],
-                    "subtopics": info.subtopics,
-                }
-            )
+        topic_info_records = [
+            {
+                "topic_id": info.topic_id,
+                "label": info.label,
+                "count": info.count,
+                "keywords": [{"word": w, "score": round(s, 4)} for w, s in info.keywords[:10]],
+                "subtopics": info.subtopics,
+            }
+            for info in topic_infos
+        ]
         db.insert_topic_info_batch(ext_id, topic_info_records)
 
-        # Insert topic assignments (with subtopics if reduction was applied)
+        # Topic assignments, with subtopics when the topics were reduced
         assignment_records = []
         for item_id, topic_id in topic_assignments.items():
             record = {
@@ -285,63 +285,41 @@ def _sync_topics_to_duckdb(
             assignment_records.append(record)
         db.insert_topic_assignments_batch(ext_id, assignment_records)
 
-        # Update vector collection flag
+        for tree in merge_trees:
+            db.replace_topic_merge_tree(
+                ext_id,
+                tree.linkage,
+                leaf_ids=tree.leaf_ids,
+                leaf_sizes=tree.leaf_sizes,
+                children=tree.children,
+                heights=tree.heights,
+                noise_item_ids=list(tree.noise_merges),
+                noise_merges=list(tree.noise_merges.values()),
+            )
+
         db.set_collection_has_topics(collection_name)
+        db.activate_topic_extraction(collection_name, ext_id)
+    except Exception:
+        try:
+            db.delete_topic_extraction(ext_id)
+        except Exception:
+            logger.exception("Could not remove the partial topic extraction %s", ext_id)
+        raise
 
-        logger.info(
-            "DuckDB: synced %d topics, %d assignments for %s",
-            len(topic_info_records),
-            len(assignment_records),
-            collection_name,
-        )
-        return ext_id
-
-    except Exception as e:
-        logger.error("DuckDB topic sync failed: %s", e)
-        return None
-
-
-def _semantic_topic_centroids(
-    collection_name: str,
-    item_topics: dict[str, int],
-    topics_data: dict,
-    *,
-    job_id: str,
-    total_items: int,
-    current_batch: int,
-    total_batches: int,
-    preloaded: Preloaded | None = None,
-    cancel_event: threading.Event | None = None,
-) -> np.ndarray | None:
-    """Embedding centroids for semantic reduction, rows in ``sorted(topics_data)`` order.
-
-    When they cannot be computed, logs it, reports it on the job's progress
-    stream and returns None: the caller then reduces with c-TF-IDF. A cancel
-    during the vector load raises JobCancelled.
-    """
+    # The Explore page caches its colour options (topic fields included) in the
+    # dataset metadata; they describe the previous topics, so drop them.
     try:
-        service = TopicCentroidService(
-            duckdb=_get_duckdb(), vector_batches=cancellable_embedding_batches(cancel_event)
-        )
-        return service.centroids_for_assignments(
-            collection_name, item_topics, order=sorted(topics_data), preloaded=preloaded
-        )
-    except Exception as e:
-        logger.warning(
-            "Semantic topic centroids unavailable for %s (%s); reducing with c-TF-IDF instead.",
-            collection_name,
-            e,
-        )
-        emit_progress(
-            job_id=job_id,
-            status="running",
-            items_processed=0,
-            total_items=total_items,
-            current_batch=current_batch,
-            total_batches=total_batches,
-            message="Embeddings unavailable; reducing topics with c-TF-IDF...",
-        )
-        return None
+        db.update_collection_extra_metadata(collection_name, {"field_analysis": None})
+    except Exception:
+        logger.exception("Could not clear the cached field analysis of %s", collection_name)
+
+    logger.info(
+        "DuckDB: synced %d topics, %d assignments for %s",
+        len(topic_info_records),
+        len(assignment_records),
+        collection_name,
+    )
+    return ext_id
 
 
 def _refresh_topic_centroids(
@@ -361,6 +339,58 @@ def _refresh_topic_centroids(
             collection_name,
             e,
         )
+
+
+def _merge_tree_service(duckdb, cancel_event: threading.Event | None):
+    """Merge trees for one job: its vector loads stop at a cancel."""
+    # Deferred: merge trees import scipy (lean schema import graph).
+    from .topic_merge_tree_service import TopicMergeTreeService
+
+    centroids = TopicCentroidService(
+        duckdb=duckdb, vector_batches=cancellable_embedding_batches(cancel_event)
+    )
+    return TopicMergeTreeService(duckdb, centroid_service=centroids)
+
+
+def _density_tree_for_items(clustering: "ClusteringOutcome", ids: list[str]):
+    """HDBSCAN's density merge tree with its noise points named by item id."""
+    if clustering.density is None:
+        return None
+    rows = clustering.density.noise_rows.tolist()
+    return clustering.density.tree.with_noise(
+        {ids[i]: row for i, row in enumerate(rows) if row >= 0}
+    )
+
+
+def _report_running(
+    job_id: str, total_items: int, current_batch: int, total_batches: int, message: str
+) -> None:
+    emit_progress(
+        job_id=job_id,
+        status="running",
+        items_processed=0,
+        total_items=total_items,
+        current_batch=current_batch,
+        total_batches=total_batches,
+        message=message,
+    )
+
+
+def _llm_progress(job_id: str, current_batch: int, total_batches: int):
+    """Progress callback for LLM labelling: one event per labelled topic."""
+
+    def report(done: int, total: int) -> None:
+        emit_progress(
+            job_id=job_id,
+            status="running",
+            items_processed=done,
+            total_items=total,
+            current_batch=current_batch,
+            total_batches=total_batches,
+            message=f"Generating LLM labels ({done}/{total})...",
+        )
+
+    return report
 
 
 def extract_topics(
@@ -418,7 +448,7 @@ def extract_topics(
             )
 
         ids = projection_data["ids"]
-        documents = projection_data["documents"] or [""] * len(ids)
+        documents = [d or "" for d in projection_data["documents"] or [None] * len(ids)]
         coords = projection_data["coordinates"]
 
         total_items = len(ids)
@@ -488,12 +518,12 @@ def extract_topics(
                 message=message,
             )
 
-        labels = CancellableTask(
+        clustering = CancellableTask(
             cancel_event,
             isolate=cancellable_task.SETTINGS.should_isolate(total_items),
             on_item=clustering_progress,
         ).run(cluster_documents, config, reduced_embeddings, raw)
-        documents_df = generator.documents_frame(labels)
+        documents_df = generator.documents_frame(clustering.labels)
         raise_if_cancelled(cancel_event)
 
         # Count topics and noise
@@ -515,131 +545,55 @@ def extract_topics(
 
         topics_data = generator.extract_topics(documents_df, n_words=config.n_keywords)
 
-        # Step 3.5: Topic Reduction (optional)
-        num_topics_before_reduction = None
-        reduction_result = None
-        pre_reduction_labels = {}  # topic_id -> label (before reduction)
-        pre_reduction_assignments = {}  # item_id -> original topic_id
-        if config.reduce_topics:
+        # Deferred like GenerateTopics: the reduction pulls in the clustering stack.
+        from .topic_reduction_service import BaseTopics, TopicReductionService
+
+        preloaded = (ids, raw) if raw is not None else None
+        density_tree = _density_tree_for_items(clustering, ids)
+        base = BaseTopics.from_clustering(
+            config.collection_name,
+            ids,
+            documents,
+            clustering.labels,
+            topics_data,
+            config=_config_snapshot(config),
+            preloaded=preloaded,
+            density_tree=density_tree,
+        )
+        service = TopicReductionService(
+            duckdb=duckdb, trees=_merge_tree_service(duckdb, cancel_event)
+        )
+
+        # Step 3.5: Topic Reduction (optional; needs two topics to merge)
+        plan = None
+        if config.reduce_topics and len(base.topic_ids) >= 2:
             raise_if_cancelled(cancel_event)
             emit_progress(
                 job_id=job_id,
                 status="running",
                 items_processed=0,
                 total_items=total_items,
-                current_batch=2.5,
+                current_batch=2,
                 total_batches=5,
                 message="Reducing topics...",
             )
-            logger.info(
-                f"Running topic reduction: method={config.reduction_method}, target={config.nr_topics}"
+            request = ReductionRequest.create(
+                strategy=config.reduction_strategy,
+                method=config.reduction_method,
+                n_topics=config.nr_topics,
+                use_ctfidf=config.use_ctfidf_for_reduction,
+                distance_threshold=config.reduction_distance_threshold,
+                absorb_noise=config.reduction_absorb_noise,
+                regenerate_labels=config.use_llm_labels,
+                llm_provider=config.llm_provider,
+                llm_model=config.llm_model,
             )
+            logger.info("Running topic reduction: %s", request.snapshot())
+            plan = service.plan(base, request, cancel_event=cancel_event)
+            if plan.fallback:
+                _report_running(job_id, total_items, 2, 5, plan.fallback)
 
-            # Store pre-reduction count
-            num_topics_before_reduction = num_topics
-
-            # Capture pre-reduction labels (top-3-keyword labels) and assignments
-            for tid, kws in topics_data.items():
-                if tid == -1:
-                    pre_reduction_labels[tid] = "Unclustered"
-                else:
-                    top_words = [w for w, _ in kws[:3]]
-                    pre_reduction_labels[tid] = " | ".join(top_words)
-
-            for _, row in documents_df.iterrows():
-                doc_idx = int(row["Document_ID"])
-                item_id = ids[doc_idx]
-                pre_reduction_assignments[item_id] = int(row["Topic"])
-
-            # Semantic similarity needs embedding centroids of the pre-reduction
-            # topics; without them, fall back to c-TF-IDF rather than fail.
-            topic_embeddings = None
-            if not config.use_ctfidf_for_reduction:
-                topic_embeddings = _semantic_topic_centroids(
-                    config.collection_name,
-                    pre_reduction_assignments,
-                    topics_data,
-                    job_id=job_id,
-                    total_items=total_items,
-                    current_batch=2,
-                    total_batches=5,
-                    preloaded=(ids, raw) if raw is not None else None,
-                    cancel_event=cancel_event,
-                )
-            use_ctfidf = topic_embeddings is None
-
-            # Initialize reducer
-            from ..topic_extraction.topic_reducer import TopicReducer
-
-            reducer = TopicReducer(
-                documents_df=documents_df,
-                topics_data=topics_data,
-                ctfidf_matrix=generator.c_tf_idf_matrix,
-                ctfidf_words=generator.words,
-                language=config.language,
-                topic_embeddings=topic_embeddings,
-            )
-
-            # Run reduction
-            if config.reduction_method == "fixed_n":
-                if config.nr_topics is None:
-                    raise ValueError("nr_topics required when reduction_method='fixed_n'")
-                if config.nr_topics >= num_topics + 1:  # +1 for noise
-                    logger.info(
-                        f"Target ({config.nr_topics}) >= extracted ({num_topics}), skipping reduction"
-                    )
-                else:
-                    reduction_result = reducer.reduce_to_n_topics(
-                        n_topics=config.nr_topics, use_ctfidf=use_ctfidf
-                    )
-                    documents_df = reduction_result.documents_df
-                    topics_data = reduction_result.topics_data
-                    logger.info(
-                        f"Reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics"
-                    )
-            elif config.reduction_method == "auto":
-                reduction_result = reducer.auto_reduce_topics(use_ctfidf=use_ctfidf)
-                documents_df = reduction_result.documents_df
-                topics_data = reduction_result.topics_data
-                logger.info(
-                    f"Auto-reduced from {reduction_result.num_topics_before} to {reduction_result.num_topics_after} topics"
-                )
-            else:
-                raise ValueError(f"Invalid reduction_method: {config.reduction_method}")
-
-            # Recalculate topic counts after reduction
-            topic_counts = documents_df["Topic"].value_counts().to_dict()
-            num_noise = topic_counts.get(-1, 0)
-            num_topics = len([t for t in topic_counts.keys() if t != -1])
-            logger.info(f"After reduction: {num_topics} topics, {num_noise} noise points")
-
-        # Build labeled hierarchy: reduced_label -> [subtopic_labels]
-        labeled_hierarchy = {}
-        if reduction_result and reduction_result.topic_hierarchy:
-            # We'll populate this after building topic_labels below
-            pass
-
-        # Build topic info list
-        topic_labels: dict[int, str] = {}
-        topic_infos: list[TopicInfoResult] = []
-
-        for topic_id in sorted(topics_data.keys()):
-            keywords = topics_data[topic_id]
-            count = topic_counts.get(topic_id, 0)
-
-            # Default label from top keywords
-            if topic_id == -1:
-                label = "Unclustered"
-            else:
-                top_words = [w for w, _ in keywords[:3]]
-                label = " | ".join(top_words)
-
-            topic_labels[topic_id] = label
-            topic_infos.append(
-                TopicInfoResult(topic_id=int(topic_id), keywords=keywords, label=label, count=count)
-            )
-
-        # Step 4: Optional LLM labeling
+        # Step 4: Labels (optional LLM labels for every final topic)
         if config.use_llm_labels:
             emit_progress(
                 job_id=job_id,
@@ -650,47 +604,20 @@ def extract_topics(
                 total_batches=5,
                 message="Generating LLM labels...",
             )
-
-            def llm_progress(done, total):
-                emit_progress(
-                    job_id=job_id,
-                    status="running",
-                    items_processed=done,
-                    total_items=total,
-                    current_batch=3,
-                    total_batches=5,
-                    message=f"Generating LLM labels ({done}/{total})...",
-                )
-
-            llm_labels = generate_llm_labels(
-                topics_data=topics_data,
-                documents_df=documents_df,
-                llm_provider=config.llm_provider,
+        llm_progress = _llm_progress(job_id, current_batch=3, total_batches=5)
+        if plan is not None:
+            outcome = service.assemble(
+                plan, keep_unmerged_labels=False, progress=llm_progress, cancel_event=cancel_event
+            )
+        else:
+            outcome = service.unreduced(
+                base,
+                llm_provider=config.llm_provider if config.use_llm_labels else None,
                 llm_model=config.llm_model,
-                progress_callback=llm_progress,
+                progress=llm_progress,
                 cancel_event=cancel_event,
             )
-
-            # Update labels with LLM-generated ones
-            for topic_info in topic_infos:
-                if topic_info.topic_id in llm_labels and topic_info.topic_id != -1:
-                    topic_info.label = llm_labels[topic_info.topic_id]
-                    topic_labels[topic_info.topic_id] = llm_labels[topic_info.topic_id]
-
-        # Build subtopic info after labels are finalized
-        if reduction_result and reduction_result.topic_hierarchy:
-            for new_id, old_ids in reduction_result.topic_hierarchy.items():
-                new_label = topic_labels.get(new_id, f"Topic {new_id}")
-                subtopic_label_list = [
-                    pre_reduction_labels.get(old_id, f"Topic {old_id}") for old_id in old_ids
-                ]
-                labeled_hierarchy[new_label] = subtopic_label_list
-
-                # Attach subtopics to the corresponding TopicInfoResult
-                for info in topic_infos:
-                    if info.topic_id == new_id:
-                        info.subtopics = subtopic_label_list
-                        break
+        reduced = plan is not None and plan.changed
 
         # Step 5: Store topic assignments in DuckDB
         emit_progress(
@@ -704,32 +631,24 @@ def extract_topics(
         )
         logger.info("Storing topic assignments in DuckDB")
 
-        # Map document IDs to topic assignments
-        topic_assignments = {}
-        for _, row in documents_df.iterrows():
-            doc_idx = int(row["Document_ID"])
-            topic_id = int(row["Topic"])
-            item_id = ids[doc_idx]
-            topic_assignments[item_id] = topic_id
-
         # Last cancel point: once synced, the extraction is the active one.
         raise_if_cancelled(cancel_event)
 
         # DuckDB: sole destination for topic data
         extraction_id = _sync_topics_to_duckdb(
             collection_name=config.collection_name,
-            topic_infos=topic_infos,
-            ids=ids,
-            topic_assignments=topic_assignments,
-            topic_labels=topic_labels,
-            config=config,
-            subtopic_assignments=pre_reduction_assignments if reduction_result else None,
-            subtopic_labels=pre_reduction_labels if reduction_result else None,
-            reduction_applied=bool(reduction_result),
-            num_topics_before_reduction=num_topics_before_reduction,
-            reduction_method=config.reduction_method if config.reduce_topics else None,
-            reduction_target=config.nr_topics if config.reduce_topics else None,
-            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
+            topic_infos=outcome.topic_infos,
+            topic_assignments=outcome.topic_assignments,
+            topic_labels=outcome.topic_labels,
+            config_snapshot=service.config_snapshot(plan) if reduced else base.config,
+            subtopic_assignments=outcome.subtopic_assignments,
+            subtopic_labels=outcome.subtopic_labels,
+            reduction_applied=reduced,
+            num_topics_before_reduction=num_topics if reduced else None,
+            reduction_method=config.reduction_method if reduced else None,
+            reduction_target=config.nr_topics if reduced else None,
+            topic_hierarchy=outcome.topic_hierarchy,
+            merge_trees=[density_tree] if density_tree is not None else [],
         )
 
         emit_progress(
@@ -741,11 +660,7 @@ def extract_topics(
             total_batches=5,
             message="Computing topic centroids...",
         )
-        _refresh_topic_centroids(
-            config.collection_name,
-            extraction_id,
-            preloaded=(ids, raw) if raw is not None else None,
-        )
+        _refresh_topic_centroids(config.collection_name, extraction_id, preloaded=preloaded)
 
         duration = time.time() - start_time
 
@@ -764,13 +679,14 @@ def extract_topics(
 
         return TopicExtractionResult(
             collection_name=config.collection_name,
-            num_topics=num_topics,
-            num_noise_points=num_noise,
-            topics=topic_infos,
+            num_topics=outcome.num_topics,
+            num_noise_points=outcome.num_noise,
+            topics=outcome.topic_infos,
             duration_seconds=duration,
-            num_topics_before_reduction=num_topics_before_reduction,
-            reduction_applied=config.reduce_topics,
-            topic_mappings=reduction_result.topic_mappings if reduction_result else None,
+            num_topics_before_reduction=num_topics if reduced else None,
+            reduction_applied=reduced,
+            topic_mappings=plan.result.topic_mappings if reduced else None,
+            absorbed_noise=plan.result.absorbed_noise if reduced else 0,
         )
 
     except JobCancelled:
@@ -805,36 +721,29 @@ def extract_topics(
 
 def reduce_existing_topics(
     collection_name: str,
-    method: str,
-    n_topics: int | None,
-    use_ctfidf: bool,
-    regenerate_labels: bool,
-    llm_provider: str,
-    llm_model: str,
-    language: str = "english",
+    method: str = "auto",
+    n_topics: int | None = None,
+    use_ctfidf: bool = True,
+    regenerate_labels: bool = False,
+    llm_provider: str = "gemini",
+    llm_model: str = "gemini-3-flash-preview",
     cancel_event: threading.Event | None = None,
+    request: ReductionRequest | None = None,
 ) -> TopicExtractionResult:
-    """Reduce topics on an existing collection with extracted topics.
+    """Reduce the topics of a collection's active extraction (standalone post-processing).
 
-    Pipeline:
-    1. Load collection metadata (validate has_topics=true)
-    2. Load all items with topic_id, documents
-    3. Reconstruct documents_df from items
-    4. Reconstruct topics_data from metadata
-    5. Reconstruct c-TF-IDF matrix (re-run CountVectorizer + c-TF-IDF)
-    6. Initialize TopicReducer and run reduction
-    7. Optional: Re-label with LLM
-    8. Update metadata
+    Always starts from the extraction's base topics (its original clusters,
+    the subtopics of an already reduced extraction), so reductions never
+    compound and a larger topic count undoes a smaller one. The result is a
+    new active extraction: merged topics get keyword labels (LLM labels with
+    ``regenerate_labels``), unmerged ones keep theirs, and the base topics
+    become its subtopics.
 
     Args:
         collection_name: Name of collection with existing topics
-        method: "fixed_n" or "auto"
-        n_topics: Target topic count (required for fixed_n)
-        use_ctfidf: Use c-TF-IDF (True) or semantic (False) embeddings
-        regenerate_labels: Re-label with LLM after reduction
-        llm_provider: "gemini" or "openai"
-        llm_model: LLM model name
-        language: Stop words language for keyword extraction
+        request: The reduction (strategy, cut, labels); without it, a legacy
+            request is built from ``method`` / ``n_topics`` / ``use_ctfidf``
+            and the labelling arguments
         cancel_event: Checked between steps and before each LLM call; a
             cancel stores nothing and reports CANCELLED_MESSAGE
 
@@ -845,275 +754,69 @@ def reduce_existing_topics(
     job_id = JobIds.topic_reduction(collection_name)
 
     try:
-        # Step 1: Load collection and validate
-        emit_progress(
-            job_id=job_id,
-            status="running",
-            items_processed=0,
-            total_items=0,
-            current_batch=1,
-            total_batches=4,
-            message="Loading existing topics...",
-        )
+        _report_running(job_id, 0, 1, 4, "Loading existing topics...")
         logger.info(f"Reducing topics for collection: {collection_name}")
-
-        # DuckDB: load items and topic data
-        duckdb = _get_duckdb()
-
-        # Validate has_topics via DuckDB
-        active_topics = duckdb.get_active_topics(collection_name)
-        if not active_topics:
-            raise ValueError(
-                f"Collection '{collection_name}' has no topics. Run extractTopics first."
+        if request is None:
+            request = ReductionRequest.create(
+                strategy=None,
+                method=method,
+                n_topics=n_topics,
+                use_ctfidf=use_ctfidf,
+                regenerate_labels=regenerate_labels,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
             )
 
-        extraction_id = active_topics["id"]
+        # Deferred: the reduction pulls in the clustering stack (lean schema imports).
+        from .topic_reduction_service import BaseTopics, TopicReductionService
 
-        # Step 2: Load items + topic assignments from DuckDB
-        items_rows = duckdb.get_items_columns(collection_name, ("id", "document"))
-        ids = [r[0] for r in items_rows]
-        documents = [r[1] or "" for r in items_rows]
-
-        # Load topic assignments
-        assign_rows = duckdb.get_topic_assignments_raw(extraction_id, ["item_id", "topic_id"])
-        assign_map = {r[0]: r[1] for r in assign_rows}
-
-        total_items = len(ids)
+        duckdb = _get_duckdb()
+        trees = _merge_tree_service(duckdb, cancel_event)
+        service = TopicReductionService(duckdb=duckdb, trees=trees)
+        base = BaseTopics.load(duckdb, collection_name, trees)
+        total_items = len(base.item_ids)
         logger.info(f"Loaded {total_items} items from DuckDB")
         raise_if_cancelled(cancel_event)
 
-        # Step 3: Reconstruct documents_df
-        emit_progress(
-            job_id=job_id,
-            status="running",
-            items_processed=0,
-            total_items=total_items,
-            current_batch=2,
-            total_batches=4,
-            message="Reconstructing topic data...",
+        _report_running(job_id, total_items, 2, 4, "Reducing topics...")
+        logger.info("Running reduction: %s", request.snapshot())
+        plan = service.plan(base, request, cancel_event=cancel_event)
+        if plan.fallback:
+            _report_running(job_id, total_items, 2, 4, plan.fallback)
+        logger.info(
+            f"Reduced from {plan.num_topics_before} to {plan.result.num_topics_after} topics"
         )
 
-        doc_ids = []
-        doc_texts = []
-        doc_topics = []
-
-        for idx, (item_id, doc) in enumerate(zip(ids, documents, strict=True)):
-            doc_ids.append(idx)
-            doc_texts.append(doc)
-            topic_id = assign_map.get(item_id, -1)
-            doc_topics.append(topic_id)
-
-        import pandas as pd
-
-        documents_df = pd.DataFrame(
-            {"Document_ID": doc_ids, "Document": doc_texts, "Topic": doc_topics}
+        _report_running(job_id, total_items, 3, 4, "Labelling topics...")
+        outcome = service.assemble(
+            plan,
+            keep_unmerged_labels=True,
+            progress=_llm_progress(job_id, current_batch=3, total_batches=4),
+            cancel_event=cancel_event,
         )
 
-        # Step 4: Reconstruct topics_data from DuckDB topic_info
-        topic_summary = active_topics.get("topics", [])
-
-        topics_data = {}
-        for topic_info in topic_summary:
-            topic_id = topic_info["topic_id"]
-            keywords = [(kw["word"], kw["score"]) for kw in topic_info.get("keywords", [])]
-            topics_data[topic_id] = keywords
-
-        # Step 5: Reconstruct c-TF-IDF matrix
-        from sklearn.feature_extraction.text import CountVectorizer
-
-        from ..topic_extraction.cluster_and_label import ClassTfidfTransformer
-
-        # Group documents by topic (mega-document step)
-        docs_per_topic = documents_df.groupby(["Topic"], as_index=False).agg({"Document": " ".join})
-
-        count_vectorizer = CountVectorizer(stop_words=language, ngram_range=(1, 1))
-        X = count_vectorizer.fit_transform(docs_per_topic.Document.values)
-        words = count_vectorizer.get_feature_names_out()
-
-        ctfidf = ClassTfidfTransformer()
-        ctfidf_matrix = ctfidf.fit_transform(X)
-        raise_if_cancelled(cancel_event)
-
-        # Step 6: Run reduction
-        emit_progress(
-            job_id=job_id,
-            status="running",
-            items_processed=0,
-            total_items=total_items,
-            current_batch=3,
-            total_batches=4,
-            message="Reducing topics...",
-        )
-
-        num_topics_before = len([t for t in topics_data.keys() if t != -1])
-        logger.info(f"Running reduction: method={method}, use_ctfidf={use_ctfidf}")
-
-        # Capture pre-reduction labels and assignments from DuckDB
-        pre_reduction_labels: dict[int, str] = {}
-        pre_reduction_assignments: dict[str, int] = {}
-
-        # Build label map from topic_info
-        for t in topic_summary:
-            pre_reduction_labels[t["topic_id"]] = t.get("label", "Unclustered")
-
-        # Assignments already loaded from DuckDB
-        for item_id, topic_id in assign_map.items():
-            pre_reduction_assignments[item_id] = topic_id
-
-        # Semantic similarity needs embedding centroids of the current topics;
-        # without them, fall back to c-TF-IDF rather than fail.
-        topic_embeddings = None
-        if not use_ctfidf:
-            topic_embeddings = _semantic_topic_centroids(
-                collection_name,
-                dict(zip(ids, doc_topics, strict=True)),
-                topics_data,
-                job_id=job_id,
-                total_items=total_items,
-                current_batch=3,
-                total_batches=4,
-                cancel_event=cancel_event,
-            )
-        use_ctfidf = topic_embeddings is None
-
-        from ..topic_extraction.topic_reducer import TopicReducer
-
-        reducer = TopicReducer(
-            documents_df=documents_df,
-            topics_data=topics_data,
-            ctfidf_matrix=ctfidf_matrix,
-            ctfidf_words=words,
-            language=language,
-            topic_embeddings=topic_embeddings,
-        )
-
-        # Run reduction based on method
-        if method == "fixed_n":
-            if n_topics is None:
-                raise ValueError("n_topics required when method='fixed_n'")
-            result = reducer.reduce_to_n_topics(n_topics=n_topics, use_ctfidf=use_ctfidf)
-        elif method == "auto":
-            result = reducer.auto_reduce_topics(use_ctfidf=use_ctfidf)
-        else:
-            raise ValueError(f"Invalid method: {method}")
-
-        documents_df = result.documents_df
-        topics_data = result.topics_data
-        num_topics_after = result.num_topics_after
-
-        logger.info(f"Reduced from {result.num_topics_before} to {result.num_topics_after} topics")
-
-        # Recalculate topic counts
-        topic_counts = documents_df["Topic"].value_counts().to_dict()
-        num_noise = topic_counts.get(-1, 0)
-
-        # Build topic info list
-        topic_labels: dict[int, str] = {}
-        topic_infos: list[TopicInfoResult] = []
-
-        for topic_id in sorted(topics_data.keys()):
-            keywords = topics_data[topic_id]
-            count = topic_counts.get(topic_id, 0)
-
-            # Default label from top keywords
-            if topic_id == -1:
-                label = "Unclustered"
-            else:
-                top_words = [w for w, _ in keywords[:3]]
-                label = " | ".join(top_words)
-
-            topic_labels[topic_id] = label
-            topic_infos.append(
-                TopicInfoResult(topic_id=int(topic_id), keywords=keywords, label=label, count=count)
-            )
-
-        # Step 7: Optional LLM re-labeling
-        if regenerate_labels:
-            logger.info("Re-generating LLM labels after reduction")
-
-            def llm_progress(done, total):
-                emit_progress(
-                    job_id=job_id,
-                    status="running",
-                    items_processed=done,
-                    total_items=total,
-                    current_batch=3,
-                    total_batches=4,
-                    message=f"Generating LLM labels ({done}/{total})...",
-                )
-
-            llm_labels = generate_llm_labels(
-                topics_data=topics_data,
-                documents_df=documents_df,
-                llm_provider=llm_provider,
-                llm_model=llm_model,
-                progress_callback=llm_progress,
-                cancel_event=cancel_event,
-            )
-
-            for topic_info in topic_infos:
-                if topic_info.topic_id in llm_labels and topic_info.topic_id != -1:
-                    topic_info.label = llm_labels[topic_info.topic_id]
-                    topic_labels[topic_info.topic_id] = llm_labels[topic_info.topic_id]
-
-        # Build subtopic hierarchy from reduction result
-        labeled_hierarchy = {}
-        if result.topic_hierarchy:
-            for new_id, old_ids in result.topic_hierarchy.items():
-                new_label = topic_labels.get(new_id, f"Topic {new_id}")
-                subtopic_label_list = [
-                    pre_reduction_labels.get(old_id, f"Topic {old_id}") for old_id in old_ids
-                ]
-                labeled_hierarchy[new_label] = subtopic_label_list
-
-                # Attach subtopics to the corresponding TopicInfoResult
-                for info in topic_infos:
-                    if info.topic_id == new_id:
-                        info.subtopics = subtopic_label_list
-                        break
-
-        # Step 8: Update metadata
-        emit_progress(
-            job_id=job_id,
-            status="running",
-            items_processed=0,
-            total_items=total_items,
-            current_batch=4,
-            total_batches=4,
-            message="Updating metadata...",
-        )
-
-        # Build topic assignments
-        topic_assignments = {}
-        for _, row in documents_df.iterrows():
-            doc_idx = int(row["Document_ID"])
-            topic_id = int(row["Topic"])
-            item_id = ids[doc_idx]
-            topic_assignments[item_id] = topic_id
-
+        _report_running(job_id, total_items, 4, 4, "Updating metadata...")
         # Last cancel point: once synced, the reduced extraction is the active one.
         raise_if_cancelled(cancel_event)
 
-        # DuckDB: store reduced topics (with subtopic data from pre-reduction)
         extraction_id = _sync_topics_to_duckdb(
             collection_name=collection_name,
-            topic_infos=topic_infos,
-            ids=ids,
-            topic_assignments=topic_assignments,
-            topic_labels=topic_labels,
-            subtopic_assignments=pre_reduction_assignments,
-            subtopic_labels=pre_reduction_labels,
-            reduction_applied=True,
-            num_topics_before_reduction=num_topics_before,
-            reduction_method=method,
-            reduction_target=n_topics,
-            topic_hierarchy=labeled_hierarchy if labeled_hierarchy else None,
+            topic_infos=outcome.topic_infos,
+            topic_assignments=outcome.topic_assignments,
+            topic_labels=outcome.topic_labels,
+            config_snapshot=service.config_snapshot(plan),
+            subtopic_assignments=outcome.subtopic_assignments,
+            subtopic_labels=outcome.subtopic_labels,
+            reduction_applied=plan.changed,
+            num_topics_before_reduction=plan.num_topics_before,
+            reduction_method=request.method if plan.changed else None,
+            reduction_target=request.n_topics if plan.changed else None,
+            topic_hierarchy=outcome.topic_hierarchy,
+            merge_trees=[base.density_tree] if base.density_tree is not None else [],
         )
         _refresh_topic_centroids(collection_name, extraction_id)
 
         duration = time.time() - start_time
-
-        # Emit completion
         emit_progress(
             job_id=job_id,
             status="completed",
@@ -1123,18 +826,18 @@ def reduce_existing_topics(
             total_batches=4,
             message="Complete!",
         )
-
         logger.info(f"Topic reduction completed in {duration:.1f}s")
 
         return TopicExtractionResult(
             collection_name=collection_name,
-            num_topics=num_topics_after,
-            num_noise_points=num_noise,
-            topics=topic_infos,
+            num_topics=outcome.num_topics,
+            num_noise_points=outcome.num_noise,
+            topics=outcome.topic_infos,
             duration_seconds=duration,
-            num_topics_before_reduction=num_topics_before,
-            reduction_applied=True,
-            topic_mappings=result.topic_mappings,
+            num_topics_before_reduction=plan.num_topics_before,
+            reduction_applied=plan.changed,
+            topic_mappings=plan.result.topic_mappings,
+            absorbed_noise=plan.result.absorbed_noise,
         )
 
     except JobCancelled:
@@ -1165,9 +868,6 @@ def reduce_existing_topics(
             duration_seconds=duration,
             error=str(e),
         )
-
-
-# ========== Standalone LLM Label Generation ==========
 
 
 @dataclass
