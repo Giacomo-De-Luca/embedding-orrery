@@ -29,6 +29,8 @@ import { useCategoryData } from '../../lib/hooks/useCategoryData';
 import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import { useNestedCategoryData } from '../../lib/hooks/useNestedCategoryData';
 import { useVerticalResize } from '../../lib/hooks/useVerticalResize';
+import { useCollections } from '../../lib/hooks/useCollections';
+import { textQueryUnavailableReason } from '../../lib/utils/queryPrompt';
 import { MOBILE_BREAKPOINT } from '../../lib/hooks/use-mobile';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { drawLegendOverlay } from '../../lib/utils/plotCapture';
@@ -253,6 +255,13 @@ export function DashboardPanel({
   // labels, so legend and cluster-label clicks mute categories instead.
   const topicPreviewActive = isTopicColorField && (topicTree?.previewing ?? false);
   const topicIdMuting = isTopicColorField && !topicPreviewActive;
+
+  // Semantic topic search embeds a text query with the collection's model,
+  // like the header's semantic search (the manifest is already cached).
+  const { collections } = useCollections();
+  const topicSemanticUnavailableReason = textQueryUnavailableReason(
+    collectionName ? collections?.[collectionName] : null,
+  );
 
   // Colour dots of the Search panel's topic rows: resolved exactly as the plots
   // and legend colour topic_label (same values, palette and overrides; nested
@@ -826,6 +835,7 @@ export function DashboardPanel({
           onClearAllTopics={onClearAllTopics}
           topicColorMap={topicColorMap}
           previewingTopicCut={topicPreviewActive}
+          topicSemanticUnavailableReason={topicSemanticUnavailableReason}
           textSearchLoading={textSearchLoading}
           availableFields={availableFields}
           itemMetadata={itemMetadata}

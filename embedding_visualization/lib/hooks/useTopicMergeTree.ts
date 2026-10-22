@@ -29,6 +29,12 @@ const MIN_TOPICS = 2;
 export interface UseTopicMergeTreeOptions {
   /** Fetch the tree and allow a preview: the plot is coloured by topic_label. */
   enabled: boolean;
+  /**
+   * Collection `data` belongs to (useEmbeddingData's `loadedCollection`): no
+   * preview while it lags behind `collectionName`, since topic ids of two
+   * collections overlap.
+   */
+  dataCollection: string | null;
   /** Called when a preview starts (the page clears the topic selection and filters). */
   onPreviewStart?: () => void;
   /** After a successful Apply: reload everything derived from the old topics. */
@@ -39,6 +45,11 @@ export interface UseTopicMergeTreeReturn {
   /** Merge tree of the collection's active extraction; null while loading or unavailable. */
   view: TopicTreeView | null;
   loading: boolean;
+  /**
+   * The tree on screen is the selected linkage's (not the previous one kept
+   * while another loads): Apply would save exactly the previewed cut.
+   */
+  ready: boolean;
   error: string | null;
   linkage: TopicTreeLinkage;
   setLinkage: (linkage: TopicTreeLinkage) => void;
@@ -80,7 +91,7 @@ export function useTopicMergeTree(
   data: EmbeddingData | null,
   options: UseTopicMergeTreeOptions,
 ): UseTopicMergeTreeReturn {
-  const { enabled } = options;
+  const { enabled, dataCollection } = options;
   const client = useApolloClient();
   const cut = useVisualizationStore((s) => s.topicCut);
   const setTopicCut = useVisualizationStore((s) => s.setTopicCut);
@@ -136,7 +147,9 @@ export function useTopicMergeTree(
   const maxTopics = view?.tree.nLeaves ?? 0;
   const clampTopics = (n: number) => Math.min(Math.max(Math.round(n), MIN_TOPICS), Math.max(maxTopics, MIN_TOPICS));
   const topicCount = clampTopics(cut.nTopics ?? savedTopicCount);
-  const previewing = enabled && cut.previewing && view !== null && maxTopics >= MIN_TOPICS;
+  const previewing = enabled && cut.previewing && view !== null && maxTopics >= MIN_TOPICS
+    && dataCollection === collectionName;
+  const ready = view !== null && view.tree.linkage === cut.linkage && !loading;
   const absorbNoise = isDensity && cut.absorbNoise;
 
   // The cut is cheap; rewriting every item's metadata is not, so it follows
@@ -212,7 +225,7 @@ export function useTopicMergeTree(
   const applyError = applyFailure?.collection === collectionName ? applyFailure.message : null;
 
   const apply = useCallback(async (regenerateLabels: boolean) => {
-    if (!collectionName || !view || !previewing) return;
+    if (!collectionName || !view || !previewing || !ready) return;
     const collection = collectionName;
     const input = ReductionInputs.reduceTopics(
       collection,
@@ -266,11 +279,12 @@ export function useTopicMergeTree(
     } finally {
       setApplying(false);
     }
-  }, [collectionName, view, previewing, cut.linkage, topicCount, absorbNoise, reduceMutation, refetch, client, setTopicCut]);
+  }, [collectionName, view, previewing, ready, cut.linkage, topicCount, absorbNoise, reduceMutation, refetch, client, setTopicCut]);
 
   return {
     view,
     loading,
+    ready,
     error: queryError?.message ?? parsed.error,
     linkage: cut.linkage,
     setLinkage,

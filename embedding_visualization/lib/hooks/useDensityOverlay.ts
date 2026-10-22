@@ -130,11 +130,12 @@ export function useDensityOverlay({
   // One render per burst of requests, in the frame that drew the points. The
   // render reads the live layout, so the settled range of a pan/zoom is never
   // left on a stale frame.
-  const [redraw] = useState(() => new CoalescedRedraw(() => renderFrameRef.current()));
+  const [redraw] = useState(() => new CoalescedRedraw());
+  const renderLatestFrame = useCallback(() => renderFrameRef.current(), []);
 
   const scheduleRender = useCallback(() => {
-    if (rendererRef.current) redraw.request();
-  }, [redraw]);
+    if (rendererRef.current) redraw.request(renderLatestFrame);
+  }, [redraw, renderLatestFrame]);
 
   // --- Renderer lifecycle ---
   useEffect(() => {

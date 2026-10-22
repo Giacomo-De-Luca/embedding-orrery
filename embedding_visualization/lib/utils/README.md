@@ -70,6 +70,27 @@ renderers are in `experimental/`, and the density renderer has its own README.
   `PinchZoomSession` is the hook's DOM-free event handling (gesture → target,
   one `pinch` per animation frame through an injected scheduler).
   See `../../../documentation/MOBILE_PINCH_ZOOM.md`.
+- `coalescedRedraw.ts`: `CoalescedRedraw` merges the redraw requests of one
+  synchronous burst (the `plotly_relayouting` events of a pinch frame) into one
+  redraw, run in a microtask so it is painted in the same frame as the points.
+  Used by the 2D cluster labels (`ScatterPlot2D`) and `useDensityOverlay`.
+- `zoomOpacity.ts`: `ZoomOpacity`, the 2D plot's zoom-dependent opacity. Zoomed
+  in, each trace's opacity is multiplied by `calculateMarkerStyle`'s opacity for the
+  visible share of the points over its opacity for all of them, capped at 1;
+  `traceScale` is the factor the Plotly fork's `scatterglOpacityScale`
+  config option applies before every draw. Traces marked `FIXED_META` (search glow,
+  selected point) keep theirs. See `../../../documentation/ZOOM_OPACITY.md`.
+
+## Screenshot export
+
+- `plotCapture.ts`: `capture2DPlot` / `capture3DPlot` composite each plot with its
+  overlay canvases; `drawLegendOverlay` rasterizes the live legend on top.
+- `premultipliedPixels.ts`: `PremultipliedPixels.flattenOnto` composites the 3D
+  scene's raw `gl.readPixels` output (premultiplied, bottom-up, RGB can exceed
+  alpha) onto the screenshot background the way the browser does, so the search
+  glow survives the 3D export.
+
+See `../../../documentation/SCREENSHOT_EXPORT.md`.
 
 Other colour and scatter utilities include `plotUtils.ts` (shared highlight palette/size
 rules), colour scales, `collisionGrid.ts`, and `overlayLayout.ts`.
@@ -85,6 +106,25 @@ their corresponding hooks.
   `isJobCancelled` / `jobOutcome` (succeeded, cancelled or failed, for toasts and
   result cards) and `cancelButtonView` (the progress modal's Cancel button
   states). See `../../../documentation/JOB_CANCELLATION.md`.
+
+## Model and prompt pickers
+
+- `modelSuggestions.ts`: `ModelSuggestions` over the `embeddingModelCatalog`
+  query (`lib/hooks/useEmbeddingModelCatalog.ts`): the model-name field's groups
+  ("Suggested" catalog models, then "Used in your collections"), filtered by
+  provider and modalities, each model once; hints (modalities, dimension, use);
+  the multimodal default (`defaultFor`) and catalog modality lookups.
+- `promptPresets.ts`: `PROMPT_PRESETS`, the one prompt preset list, and
+  `PromptPresets` groups: a model's own catalog prompt names when known, else the
+  presets (embed form), or Auto plus the presets (Explore query prompt).
+- `queryPrompt.ts`: `resolveQueryPrompt` ("Auto", empty and blank send no
+  prompt: the backend uses the collection's own; typed text is sent as typed,
+  spaces included) and `textQueryUnavailableReason` (a collection that records
+  no embedding provider and model takes no semantic text query).
+- `suggestions.ts`: `SuggestionItem` / `SuggestionGroup` and `matchesSuggestion`,
+  shared by the two above and the field
+  `lib/ui-primitives/suggestion-combobox.tsx` (free text with grouped
+  suggestions, base-ui Autocomplete), which `prompt-combobox.tsx` wraps.
 
 ## Topic merge trees
 

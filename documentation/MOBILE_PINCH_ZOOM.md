@@ -69,7 +69,8 @@ Plotly's wheel zoom (`zoomWheel` in `forked/plotly.js/src/plots/cartesian/dragbo
 - each event updates only the scattergl viewport (no buffer upload);
 - one GUI relayout commits the ranges once the gesture pauses for 50 ms, so
   `uirevision` keeps the zoom across later `Plotly.react` calls;
-- `plotly_relayouting` fires per event, so the density map and cluster labels follow;
+- `plotly_relayouting` fires per event, so the density map and cluster labels follow
+  (see "Overlay redraws" below);
 - the events pass the container's capture-phase `useZoomLimit` listener on the way
   down, so the 2D zoom-out limit needs no second implementation.
 
@@ -80,6 +81,21 @@ event per frame; a fast pinch needs two or three, each a full Plotly viewport
 redraw. `forked/__tests__/pinchZoomContract.test.ts` checks the formula and the
 internals below against the fork's sources, so a fork patch that changes them
 fails a test.
+
+#### Overlay redraws
+
+The cluster-label canvas and the density map redraw through `CoalescedRedraw`
+(`lib/utils/coalescedRedraw.ts`): every request made before the redraw runs shares
+it, and it runs in a microtask. The wheel events of one pinch frame are dispatched
+inside `PinchZoomSession`'s animation-frame callback, so they get one overlay
+redraw, painted in the same frame as the points. Before, the labels queued a
+`requestAnimationFrame` per event and redrew two or three times per fast pinch
+frame; the density map already coalesced to one frame (plus a trailing one). Both
+ran one frame behind the points, because a frame requested from inside a frame
+callback runs on the next frame. Mouse wheel and drag events arrive outside frame
+callbacks, so there the redraw keeps the cadence of Plotly's own viewport redraws.
+The density map also redraws on react-plotly's `onUpdate`, after every
+`Plotly.react`, so a resize never leaves it on the old plot area.
 
 Plotly started a one-finger drag when the first finger landed. `start` hands it
 over to the pinch:

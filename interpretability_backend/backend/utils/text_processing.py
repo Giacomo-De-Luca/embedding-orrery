@@ -13,6 +13,11 @@ from functools import lru_cache
 from string import Formatter
 from typing import Any
 
+from .media_kinds import MediaKindDetector, MediaReference
+
+# Recognises media cells in metadata columns (bytes, HF media dicts, decoded audio)
+_MEDIA_DETECTOR = MediaKindDetector()
+
 
 def _value_text(value: Any) -> str:
     """A column value as text; lists join with spaces."""
@@ -156,6 +161,11 @@ def extract_metadata(
             # ChromaDB only supports str, int, float, bool
             if isinstance(value, (str, int, float, bool)):
                 metadata[col] = value
+            elif (kind := _MEDIA_DETECTOR.kind_of(value)) is not None or MediaReference.holds_bytes(
+                value
+            ):
+                # Its path or a placeholder: bytes never reach json.dumps
+                metadata[col] = MediaReference.describe(value, kind)
             elif isinstance(value, (list, dict)):
                 # Store lists and dicts as JSON strings
                 metadata[col] = json.dumps(value)

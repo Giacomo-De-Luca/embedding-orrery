@@ -7,6 +7,7 @@ reporting, plus regression tests for resume on the local-text and vector paths.
 """
 
 import importlib
+import inspect
 import json
 import threading
 from pathlib import Path
@@ -132,9 +133,7 @@ class TestOpenEmbeddingCollection:
         existing = FakeCollection(["x", "y"])
         client = FakeClient(existing=existing)
 
-        collection, existing_ids = open_embedding_collection(
-            client, "c", resume=True, metadata={}, embedding_function="ef"
-        )
+        collection, existing_ids = open_embedding_collection(client, "c", resume=True, metadata={})
 
         assert collection is existing and existing_ids == {"x", "y"}
         assert client.created == [] and client.deleted == []
@@ -144,18 +143,20 @@ class TestOpenEmbeddingCollection:
         one makes chromadb raise a conflict, so overwriting it would fail."""
         client = FakeClient(existing=FakeCollection(["x"]))
 
-        open_embedding_collection(client, "c", resume=False, metadata={}, embedding_function="ef")
-        open_embedding_collection(client, "c", resume=True, metadata={}, embedding_function="ef")
+        open_embedding_collection(client, "c", resume=False, metadata={})
+        open_embedding_collection(client, "c", resume=True, metadata={})
 
         lookups = client.lookup_embedding_functions
         assert lookups and all(embedding_function is None for embedding_function in lookups)
 
-    def test_passes_the_embedding_function_through(self):
+    def test_never_records_an_embedding_function(self):
+        """Writes and queries always pass explicit vectors, so no collection
+        stores an embedder config (nor the secrets one may carry)."""
+        assert "embedding_function" not in inspect.signature(open_embedding_collection).parameters
         client = FakeClient()
-        open_embedding_collection(client, "c", resume=False, metadata={}, embedding_function="ef")
-        open_embedding_collection(client, "d", resume=False, metadata={})
+        open_embedding_collection(client, "c", resume=False, metadata={})
         # None is passed explicitly: omitting it makes chromadb record its default embedder
-        assert [c["embedding_function"] for c in client.created] == ["ef", None]
+        assert [c["embedding_function"] for c in client.created] == [None]
 
 
 class TestOpenEmbeddingCollectionOnDisk:

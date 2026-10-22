@@ -10,12 +10,15 @@ import type {
   ReEmbedDatasetInput,
   EmbedDatasetResult,
   DataType,
+  MediaOptionsInput,
   PortionStrategy,
   PortionInput,
   SaeLinkInput,
   TopicConfigInput,
 } from '@/lib/graphql/mutations';
 import { JobIds } from '@/lib/utils/jobIds';
+import { EMBEDDING_PROVIDERS } from '@/lib/utils/embeddingProviders';
+import type { ModelSuggestions } from '@/lib/utils/modelSuggestions';
 
 /**
  * Update a text template when embedding columns are toggled.
@@ -113,6 +116,44 @@ export interface ResumeJobDeps extends SaePostEmbedDeps {
   setLlmResumeJobId: (id: string | null) => void;
 }
 
+// ========== Data type switch ==========
+
+export interface DataTypeSwitch {
+  from: DataType;
+  to: DataType;
+  provider: EmbeddingProvider;
+  /** The model name as typed (empty in media mode means the backend default). */
+  modelName: string;
+  catalog: Pick<ModelSuggestions, 'find'>;
+}
+
+/**
+ * The provider and model name a data-type switch moves the embed form to, or
+ * null to keep them. Images, audio and video need a sentence-transformers media
+ * model: switching to MULTIMODAL keeps a media model already typed, else
+ * empties the name (the backend's default, EmbeddingGemma 2). Leaving
+ * MULTIMODAL with an empty name restores the provider's default model.
+ */
+export function modelOnDataTypeSwitch({
+  from,
+  to,
+  provider,
+  modelName,
+  catalog,
+}: DataTypeSwitch): { provider: EmbeddingProvider; modelName: string } | null {
+  if (from === to) return null;
+  if (to === 'MULTIMODAL') {
+    const typed = provider === 'SENTENCE_TRANSFORMERS' ? catalog.find(provider, modelName) : null;
+    return typed?.modalities.some((m) => m !== 'text')
+      ? null
+      : { provider: 'SENTENCE_TRANSFORMERS', modelName: '' };
+  }
+  if (from === 'MULTIMODAL' && !modelName.trim()) {
+    return { provider, modelName: EMBEDDING_PROVIDERS[provider].defaultModel };
+  }
+  return null;
+}
+
 // ========== Embed input builders (shared by HF / local / re-embed flows) ==========
 
 /**
@@ -151,15 +192,51 @@ export function buildPortionInput(p: PortionParams): PortionInput {
 /** Form values common to every embed flow. */
 export interface CommonEmbedFormValues {
   collectionName: string;
+  /** Text columns (MULTIMODAL: the optional text embedded with the media) */
   selectedEmbeddingColumns: string[];
   selectedMetadataColumns: string[];
   textTemplate: string;
   idColumn: string;
   batchSize: number;
+  /** MULTIMODAL: the image / audio / video columns */
+  selectedMediaColumns?: string[];
+  /** MULTIMODAL: the changed media options (MediaOptionsBudget.request), undefined for none */
+  mediaOptions?: MediaOptionsInput;
   embeddingModel?: EmbeddingModelInput;
   topicParams: { extractTopics?: boolean; topicConfig?: TopicConfigInput };
   /** SAE to link the collection to after a successful embed (see saeLinkFromParams) */
   saeLink?: SaeLinkInput | null;
+}
+
+type ColumnFields = Pick<
+  EmbedLocalFileInput,
+  'columns' | 'textTemplate' | 'mediaColumns' | 'mediaOptions' | 'metadataColumns'
+>;
+
+/**
+ * The column fields of an embed input. TEXT embeds the text columns;
+ * MULTIMODAL embeds the media columns with the optional text columns, and
+ * keeps media columns out of the text and metadata columns (the backend
+ * stores each media cell's path or placeholder in the item metadata itself).
+ */
+function columnFields(form: CommonEmbedFormValues, dataType: DataType): ColumnFields {
+  if (dataType !== 'MULTIMODAL') {
+    return {
+      columns: form.selectedEmbeddingColumns,
+      textTemplate: form.textTemplate || undefined,
+      metadataColumns: mergeMetadataColumns(form.selectedEmbeddingColumns, form.selectedMetadataColumns),
+    };
+  }
+  const media = form.selectedMediaColumns ?? [];
+  const text = form.selectedEmbeddingColumns.filter((c) => !media.includes(c));
+  const options = form.mediaOptions;
+  return {
+    columns: text.length > 0 ? text : undefined,
+    textTemplate: text.length > 0 ? (form.textTemplate || undefined) : undefined,
+    mediaColumns: media,
+    mediaOptions: options && Object.keys(options).length > 0 ? options : undefined,
+    metadataColumns: mergeMetadataColumns(text, form.selectedMetadataColumns).filter((c) => !media.includes(c)),
+  };
 }
 
 export function buildHFEmbedInput(
@@ -171,16 +248,18 @@ export function buildHFEmbedInput(
     /** All split names, used when portion strategy is ALL (embed every split) */
     allSplits: string[];
     portion: PortionParams;
+    /** TEXT (default) or MULTIMODAL */
+    dataType?: DataType;
   }
 ): EmbedDatasetInput {
+  const dataType = source.dataType ?? 'TEXT';
   const common: EmbedDatasetInput = {
     datasetId: source.datasetId,
     collectionName: form.collectionName,
     config: source.defaultConfig || undefined,
-    columns: form.selectedEmbeddingColumns,
-    textTemplate: form.textTemplate || undefined,
+    dataType,
+    ...columnFields(form, dataType),
     idColumn: form.idColumn !== 'auto' ? form.idColumn : undefined,
-    metadataColumns: mergeMetadataColumns(form.selectedEmbeddingColumns, form.selectedMetadataColumns),
     computeProjections: true,
     batchSize: form.batchSize,
     embeddingModel: form.embeddingModel,
@@ -215,22 +294,23 @@ export function buildLocalEmbedInput(
   }
 ): EmbedLocalFileInput {
   const { dataType, portion } = source;
+  const isVector = dataType === 'VECTOR';
+  const fields = columnFields(form, dataType);
   return {
     filePath: source.filePath,
     collectionName: form.collectionName,
     dataType,
-    columns: dataType === 'TEXT' ? form.selectedEmbeddingColumns : undefined,
-    textTemplate: dataType === 'TEXT' ? (form.textTemplate || undefined) : undefined,
-    imageColumn: dataType === 'IMAGE' ? form.selectedEmbeddingColumns[0] : undefined,
-    vectorColumn: dataType === 'VECTOR' ? form.selectedEmbeddingColumns[0] : undefined,
+    ...fields,
+    columns: isVector ? undefined : fields.columns,
+    textTemplate: isVector ? undefined : fields.textTemplate,
+    vectorColumn: isVector ? form.selectedEmbeddingColumns[0] : undefined,
     idColumn: form.idColumn !== 'auto' ? form.idColumn : undefined,
-    metadataColumns: mergeMetadataColumns(form.selectedEmbeddingColumns, form.selectedMetadataColumns),
     nRows: portion.strategy === 'FIRST_N' ? portion.numRows : undefined,
     sampleN: portion.strategy === 'RANDOM_SAMPLE' ? portion.numRows : undefined,
     sampleSeed: portion.strategy === 'RANDOM_SAMPLE' ? portion.seed : undefined,
     computeProjections: true,
     batchSize: form.batchSize,
-    embeddingModel: dataType === 'TEXT' ? form.embeddingModel : undefined,
+    embeddingModel: isVector ? undefined : form.embeddingModel,
     ...form.topicParams,
     saeLink: form.saeLink ?? undefined,
   };
@@ -351,7 +431,7 @@ export function resumePlanFor(job: EmbeddingJob): ResumePlan | null {
     case 'local_file':
       return {
         kind: 'local',
-        input: { ...(stored ? (stored as unknown as EmbedLocalFileInput) : legacyLocalInput(job, config)), resume: true },
+        input: { ...(stored ? storedLocalInput(stored) : legacyLocalInput(job, config)), resume: true },
       };
     case 're_embed':
       return {
@@ -361,6 +441,17 @@ export function resumePlanFor(job: EmbeddingJob): ResumePlan | null {
     default:
       return null;
   }
+}
+
+/**
+ * A stored local-file input as the current schema takes it: inputs stored
+ * before the Image / Audio / Video / Mixed mode carry `imageColumn` (null for
+ * text jobs), a field the schema no longer has.
+ */
+function storedLocalInput(stored: Record<string, unknown>): EmbedLocalFileInput {
+  const { imageColumn: _removed, ...input } = stored;
+  void _removed;
+  return input as unknown as EmbedLocalFileInput;
 }
 
 function legacyHFInput(job: EmbeddingJob, config: Record<string, unknown>): EmbedDatasetInput {
@@ -399,7 +490,6 @@ function legacyLocalInput(job: EmbeddingJob, config: Record<string, unknown>): E
     dataType: (config.data_type as string | undefined)?.toUpperCase() as DataType | undefined,
     columns: config.columns as string[] | undefined,
     textTemplate: config.text_template as string | undefined,
-    imageColumn: config.image_column as string | undefined,
     vectorColumn: config.vector_column as string | undefined,
     idColumn: config.id_column as string | undefined,
     metadataColumns: config.metadata_columns as string[] | undefined,

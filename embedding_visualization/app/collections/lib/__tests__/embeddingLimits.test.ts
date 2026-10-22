@@ -77,8 +77,7 @@ describe('embeddingModelInputFrom', () => {
     ollamaUrl: 'http://localhost:11434',
     qwenTask: 'task',
     geminiTaskType: 'SEMANTIC_SIMILARITY',
-    promptName: 'Retrieval-document',
-    customPrompt: '',
+    prompt: 'Retrieval-document',
     maxLength: 2048,
     taskPrefix: null,
   };
@@ -124,6 +123,14 @@ describe('embeddingModelInputFrom', () => {
     });
     expect(input.prompt).toBeUndefined();
     expect(input.task).toBeUndefined();
+  });
+
+  it('sends one prompt: a prompt name or literal text as typed, or none when blank', () => {
+    // A literal prompt's trailing space is part of it ("query: ").
+    expect(embeddingModelInputFrom({ ...fields, prompt: 'query: ' }).prompt).toBe('query: ');
+    expect(embeddingModelInputFrom({ ...fields, prompt: '   ' })).toHaveProperty('prompt', undefined);
+    // Prompts are a sentence-transformers option.
+    expect(embeddingModelInputFrom({ ...fields, embeddingProvider: 'OLLAMA' }).prompt).toBeUndefined();
   });
 
   it('omits an unset cap so the backend uses the model limit', () => {

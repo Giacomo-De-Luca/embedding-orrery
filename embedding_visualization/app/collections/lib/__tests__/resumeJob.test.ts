@@ -39,6 +39,46 @@ describe('resumePlanFor', () => {
     });
   });
 
+  it('replays a multimodal job with its media columns, media options and resolved model', () => {
+    // The backend stores the input after filling the multimodal default model
+    // (graphql_input_payload: camelCase keys, enum names, unset options null).
+    const input = {
+      filePath: '/data/media.parquet',
+      collectionName: 'col',
+      dataType: 'MULTIMODAL',
+      columns: ['caption'],
+      textTemplate: null,
+      mediaColumns: ['img', 'clip'],
+      mediaOptions: {
+        imageMaxSoftTokens: null,
+        videoFps: null,
+        videoMaxFrames: 16,
+        videoMaxSoftTokens: null,
+        maxAudioSeconds: null,
+      },
+      vectorColumn: null,
+      embeddingModel: { provider: 'SENTENCE_TRANSFORMERS', modelName: 'google/embeddinggemma-2' },
+      resume: false,
+    };
+    expect(resumePlanFor(job('local_file', { input }))).toEqual({
+      kind: 'local',
+      input: { ...input, resume: true },
+    });
+
+    const hfInput = { datasetId: 'org/clips', collectionName: 'col', dataType: 'MULTIMODAL', mediaColumns: ['audio'] };
+    expect(resumePlanFor(job('huggingface', { input: hfInput }))).toEqual({
+      kind: 'hf',
+      input: { ...hfInput, resume: true },
+    });
+  });
+
+  it('drops imageColumn from inputs stored before the multimodal mode replaced it', () => {
+    const input = { filePath: '/tmp/a.csv', collectionName: 'col', dataType: 'TEXT', columns: ['text'], imageColumn: null };
+    const plan = resumePlanFor(job('local_file', { input }));
+    expect(plan?.input).not.toHaveProperty('imageColumn');
+    expect(plan?.input).toMatchObject({ dataType: 'TEXT', columns: ['text'], resume: true });
+  });
+
   it('maps each embed job type to its mutation', () => {
     const input = { collectionName: 'col' };
     expect(resumePlanFor(job('local_file', { input }))?.kind).toBe('local');

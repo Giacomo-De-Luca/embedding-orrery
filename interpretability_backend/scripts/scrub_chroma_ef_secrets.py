@@ -59,11 +59,16 @@ class ScrubSettings(JsonFileSettings):
 
 
 def _backend_running() -> bool:
-    """True when another process holds the live DuckDB store (the backend)."""
+    """True when another process holds the live DuckDB store (the backend).
+
+    Read-only, so the probe never replays or checkpoints a WAL left on a
+    stopped store (replaying ALTERs on FK tables has wedged DuckDB before);
+    it still fails while the backend holds the write lock.
+    """
     if not DUCKDB_PATH.exists():
         return False
     try:
-        duckdb.connect(str(DUCKDB_PATH)).close()
+        duckdb.connect(str(DUCKDB_PATH), read_only=True).close()
     except duckdb.IOException:
         return True
     return False

@@ -12,6 +12,9 @@ calculations live in `lib/utils/` or `app/utils/`.
   and Apply (`reduceTopics`). `useEmbeddingData.reload()`,
   `useCollectionTopics().refetch` and `refreshTopicSimilarityOrders` reload what
   an Apply replaces (`../../../documentation/TOPIC_MERGE_TREES.md`).
+- Embed-form data: `useEmbeddingModelCatalog.ts` (model suggestions, as
+  `ModelSuggestions`) and `useMediaEmbeddingSettings.ts` (media options' defaults
+  and limits), both fetched once per page, cache-first.
 - Chat and steering hooks manage chat sessions and streamed model responses.
 - Browser/layout hooks manage resizing, scrolling, theme, zoom, and URL syncing.
   `useZoomLimit.ts` caps 2D wheel zoom-out; `usePinchZoom.ts` adds two-finger

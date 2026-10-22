@@ -16,6 +16,10 @@ setup. Run Python entry points from the repository root with `uv run python`.
   on disk for deleted collections (config: `prune_chroma_orphans_config.toml`,
   dry run by default; backend stopped). See
   `documentation/CHROMA_ORPHAN_INDEXES.md`.
+- `scrub_chroma_ef_secrets.py` removes secrets (the HF token) from the
+  embedding-function configs older collections persisted in `chroma.sqlite3`
+  (config: `scrub_chroma_ef_secrets_config.toml`, dry run with a backup by
+  default; backend stopped). See `documentation/EMBEDDING_MODELS_AND_PROMPTS.md`.
 - `build_seed_snapshot.py` builds a staged, checksummed DuckDB/Chroma snapshot
   from a JSON manifest under `../config/seed_snapshots/`.
 - `publish_seed_snapshot.py` verifies an existing snapshot, uploads it to its

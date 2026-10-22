@@ -9,7 +9,7 @@ export function useAppSearch(
   selectedCollection: string | null,
   colorByField: string | null,
   distanceMetric: DistanceMetric = 'COSINE',
-  queryPromptName?: string | null,  // null=none, 'auto'=the collection's own (backend), or explicit value
+  queryPromptName?: string | null,  // null/blank/'auto' = the collection's own (backend), else an explicit prompt
   topicFilters?: FilterInput[],  // Optional topic filters to scope semantic search
   temporalRange?: TemporalRange | null,  // Optional temporal range to scope semantic search
   resolvePoint?: (id: string) => (Point2D | Point3D) | undefined,  // Resolve result ID to point (for auto-select in same batch)

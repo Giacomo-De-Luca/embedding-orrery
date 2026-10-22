@@ -11,31 +11,31 @@
  *
  * The redraw must read live state (Plotly's current ranges): a request made while
  * one is queued is then covered by it, and a request made during the redraw
- * queues another.
+ * queues another. A redraw must never request itself unconditionally: microtasks
+ * do not yield to the browser, so the page would never paint again.
  */
 export class CoalescedRedraw {
-  private queued = false;
+  private pending: (() => void) | null = null;
 
   constructor(
-    private readonly redraw: () => void,
     private readonly enqueue: (callback: () => void) => void = callback => queueMicrotask(callback),
   ) {}
 
-  /** Asks for a redraw; every request before it runs shares it. */
-  request(): void {
-    if (this.queued) return;
-    this.queued = true;
-    this.enqueue(() => this.run());
+  /** Asks for `redraw` to run; requests before it runs share one run of the latest `redraw`. */
+  request(redraw: () => void): void {
+    const queued = this.pending !== null;
+    this.pending = redraw;
+    if (!queued) this.enqueue(() => this.run());
   }
 
   /** Drops a queued redraw (its owner is going away). */
   cancel(): void {
-    this.queued = false;
+    this.pending = null;
   }
 
   private run() {
-    if (!this.queued) return;
-    this.queued = false;
-    this.redraw();
+    const redraw = this.pending;
+    this.pending = null;
+    redraw?.();
   }
 }

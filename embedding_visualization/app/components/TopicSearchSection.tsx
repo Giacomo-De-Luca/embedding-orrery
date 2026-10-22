@@ -46,6 +46,8 @@ interface TopicSearchSectionProps {
   topicColorMap: Record<string, string>;
   /** A topic-tree preview is on the map: these are still the saved topics. */
   previewingTopicCut?: boolean;
+  /** Why the Semantic mode is unavailable (the collection records no embedding model), or null. */
+  semanticUnavailableReason?: string | null;
 }
 
 const FALLBACK_TOPIC_COLOR = '#888';
@@ -73,7 +75,10 @@ export function TopicSearchSection({
   onClearAll,
   topicColorMap,
   previewingTopicCut = false,
+  semanticUnavailableReason = null,
 }: TopicSearchSectionProps) {
+  // Without the collection's model only Browse works.
+  const activeMode: TopicSearchMode = semanticUnavailableReason ? 'direct' : mode;
   const handleSemanticKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -95,7 +100,7 @@ export function TopicSearchSection({
       <ToggleGroup
         type="single"
         variant="outline"
-        value={mode}
+        value={activeMode}
         onValueChange={(v) => v && onModeChange(v as TopicSearchMode)}
         className="w-full"
         aria-label="Topic search mode"
@@ -111,13 +116,17 @@ export function TopicSearchSection({
           value="semantic"
           className="flex-1 text-xs h-7"
           title="Rank topics by similarity to a description"
+          disabled={semanticUnavailableReason !== null}
         >
           Semantic
         </ToggleGroupItem>
       </ToggleGroup>
+      {semanticUnavailableReason && (
+        <p className="text-xs text-muted-foreground">{semanticUnavailableReason}</p>
+      )}
 
       {/* Direct Mode */}
-      {mode === 'direct' && (
+      {activeMode === 'direct' && (
         <div className="space-y-2">
           <DebouncedSearchInput
             value={directQuery}
@@ -136,7 +145,7 @@ export function TopicSearchSection({
       )}
 
       {/* Semantic Mode */}
-      {mode === 'semantic' && (
+      {activeMode === 'semantic' && (
         <div className="space-y-2">
           <div className="flex gap-1">
             <Input

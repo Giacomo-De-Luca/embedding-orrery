@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useTheme } from 'next-themes';
 import type { PlotParams } from 'react-plotly.js';
@@ -24,6 +24,7 @@ import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
 import { CartesianPinchZoom } from '../../lib/utils/plotPinchZoom';
 import { CoalescedRedraw } from '../../lib/utils/coalescedRedraw';
+import { ZoomOpacity, type OpacityTrace } from '../../lib/utils/zoomOpacity';
 import { formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
@@ -45,7 +46,12 @@ import { build2DModeBarButtons } from '../../lib/utils/plotlyIcons';
 import { capture2DPlot } from '../../lib/utils/plotCapture';
 import { toast } from 'sonner';
 
-type PlotlyData = Partial<PlotData>;
+// `meta` is a Plotly trace attribute that @types/plotly.js lacks
+type PlotlyData = Partial<PlotData> & { meta?: string };
+// Fork-only config option: forked/plotly_changes.md change 6
+type ForkConfig = Partial<Config> & {
+  scatterglOpacityScale?: (trace: OpacityTrace, xRange: number[], yRange: number[]) => number;
+};
 
 // Dynamically import Plot to avoid SSR issues
 const Plot = dynamic<PlotParams>(() => import('react-plotly.js'), { ssr: false });
@@ -174,6 +180,16 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   // Two-finger pinch replays as wheel zoom, so the zoom-out limit above covers it too
   const [pinchZoom] = useState(() => new CartesianPinchZoom(graphDivRef));
   usePinchZoom(containerRef, pinchZoom);
+
+  // Points grow more opaque as you zoom in. The fork's scatterglOpacityScale config
+  // option applies it before every draw, and toImage copies it into screenshots. Read
+  // through a ref because the config memo must stay stable: a config change replots.
+  // A layout effect is early enough: react-plotly runs Plotly.react in a promise continuation.
+  const zoomOpacity = useMemo(() => new ZoomOpacity(points.length, bounds), [points.length, bounds]);
+  const zoomOpacityRef = useRef(zoomOpacity);
+  useLayoutEffect(() => {
+    zoomOpacityRef.current = zoomOpacity;
+  }, [zoomOpacity]);
 
   // --- Cluster labels: canvas overlay refs and state ---
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -467,13 +483,11 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   // `relayouting` fires continuously during drag/scroll so the density map and
   // labels track the gesture live; `relayout` fires once at the end. A pinch
   // frame emits several, so both overlays coalesce them into one redraw.
-  const renderClusterLabelsRef = useRef(renderClusterLabels);
-  renderClusterLabelsRef.current = renderClusterLabels;
-  const [labelRedraw] = useState(() => new CoalescedRedraw(() => renderClusterLabelsRef.current()));
+  const [labelRedraw] = useState(() => new CoalescedRedraw());
   const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
     scheduleDensityRender();
-    if (labelsActive) labelRedraw.request();
-  }, [labelsActive, labelRedraw, scheduleDensityRender]);
+    if (labelsActive) labelRedraw.request(renderClusterLabels);
+  }, [labelsActive, labelRedraw, renderClusterLabels, scheduleDensityRender]);
 
   // Re-render labels when cluster data, size, or theme changes
   useEffect(() => {
@@ -968,6 +982,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: outerSizes,
               color: outerColors,
@@ -984,6 +999,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: innerSizes,
               color: innerColors,
@@ -1000,6 +1016,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Search results',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: coreSizes,
               color: coreColors,
@@ -1022,6 +1039,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: markerStyle.size * highlightScale.selectedOuterMultiplier,
               color: 'rgba(255, 215, 140, 0.15)',
@@ -1038,6 +1056,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: Math.max(markerStyle.size * highlightScale.selectedInnerMultiplier, 8),
               color: 'rgba(255, 223, 160, 0.35)',
@@ -1054,6 +1073,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Selected',
+            meta: ZoomOpacity.FIXED_META,
             marker: {
               size: Math.max(markerStyle.size * highlightScale.selectedCoreMultiplier, 4),
               color: '#fff8e8',
@@ -1413,12 +1433,13 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   );
 
    
-  const config = useMemo<Partial<Config>>(() => ({
+  const config = useMemo<ForkConfig>(() => ({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
     scrollZoom: true,
     modeBarButtons: build2DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
+    scatterglOpacityScale: (trace, xRange, yRange) => zoomOpacityRef.current.traceScale(trace, xRange, yRange),
   }), [plotlyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClick = (event: PlotMouseEvent) => {
@@ -1492,6 +1513,8 @@ return (
       // Fires continuously during pan/zoom gestures; supported by react-plotly
       // at runtime but missing from its type declarations.
       {...({ onRelayouting: handleRelayout } as Partial<PlotParams>)}
+      // After every Plotly.react: the density effects can run before a queued react lands
+      onUpdate={scheduleDensityRender}
       onInitialized={(_figure, graphDiv) => { graphDivRef.current = graphDiv; setPlotReady(true); }}
     />
     {densityMode && densitySupported && (

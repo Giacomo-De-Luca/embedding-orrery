@@ -1,10 +1,15 @@
 """Column templates (utils/text_processing.py): "{title}: {abstract}" over one row."""
 
+import json
 import math
 
 import pytest
 
-from backend.utils.text_processing import ColumnTemplate, format_text_for_embedding
+from backend.utils.text_processing import (
+    ColumnTemplate,
+    extract_metadata,
+    format_text_for_embedding,
+)
 
 
 class TestColumnTemplate:
@@ -68,3 +73,47 @@ class TestFormatTextForEmbedding:
     def test_without_a_template_columns_are_concatenated(self):
         row = {"title": "A", "abstract": "B", "tags": ["c", "d"], "n": 3}
         assert format_text_for_embedding(row, ["title", "abstract", "tags", "n"]) == "A B c d 3"
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 2048
+
+
+class TestExtractMetadata:
+    def test_plain_values_pass_through(self):
+        row = {"title": "A", "year": 2017, "score": 0.5, "ok": True, "tags": ["x"]}
+        assert extract_metadata(row, list(row)) == {
+            "title": "A",
+            "year": 2017,
+            "score": 0.5,
+            "ok": True,
+            "tags": '["x"]',
+        }
+
+    def test_undecoded_media_cells_become_references(self):
+        """HF Image/Audio/Video(decode=False) dicts carry bytes, which json.dumps
+        rejects: a text job with a media column in its metadata used to fail."""
+        row = {
+            "with_path": {"bytes": PNG, "path": "images/cat.png"},
+            "bytes_only": {"bytes": PNG, "path": None},
+            "raw": PNG,
+        }
+        metadata = extract_metadata(row, list(row))
+        assert metadata["with_path"] == "images/cat.png"
+        assert metadata["bytes_only"] == "[image 2 KB]"
+        assert metadata["raw"] == "[image 2 KB]"
+        json.dumps(metadata)
+
+    def test_decoded_audio_is_summarised(self):
+        row = {"clip": {"array": [0.0] * 32000, "sampling_rate": 16000}}
+        assert extract_metadata(row, ["clip"]) == {"clip": "[audio 2.0 s]"}
+
+    def test_unrecognised_bytes_are_summarised_not_dumped(self):
+        """AIFF, FLV, MPEG-TS and the like aren't sniffed, but their bytes must
+        still never reach json.dumps (nor be stored as a str(bytes) dump)."""
+        row = {
+            "blob": {"bytes": b"FORM\x00\x00AIFF" + b"\x00" * 100, "path": None},
+            "raw": b"\x00\x01",
+        }
+        metadata = extract_metadata(row, list(row))
+        assert metadata == {"blob": "[binary 110 B]", "raw": "[binary 2 B]"}
+        json.dumps(metadata)

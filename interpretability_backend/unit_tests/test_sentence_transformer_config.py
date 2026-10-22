@@ -44,6 +44,18 @@ class MultimodalModel:
         return np.array([[float(len(self.calls)), float(i), 0.0] for i in range(len(inputs))])
 
 
+class WordTokenizer:
+    """Fake tokenizer: one token per whitespace-separated word."""
+
+    def __call__(self, texts, **kwargs):
+        if isinstance(texts, str):
+            return {"input_ids": texts.split()}
+        return {"input_ids": [text.split() for text in texts]}
+
+    def decode(self, ids, **kwargs):
+        return " ".join(ids)
+
+
 @pytest.fixture
 def ef_class(monkeypatch):
     fake_module = types.ModuleType("sentence_transformers")
@@ -163,6 +175,43 @@ class TestEmbedInputs:
 
         call = ef._model.calls[0]
         assert call["processing_kwargs"] == processing and call["batch_size"] == 4
+
+    def test_text_is_cut_to_the_cap_prompt_included(self, ef_class):
+        """The context holds text and media together: text past its share would
+        overflow it and fail the whole batch."""
+        ef = ef_class(model_name=EG2, prompt="Retrieval-document", modalities=("text", "image"))
+        ef._model.tokenizer = WordTokenizer()
+        ef.cap_text_tokens(8)  # the prompt "title: none | text: " takes 4 of them
+        long_row = {"text": "one two three four five six", "image": "a"}
+        short_row = {"text": "one two", "image": "b"}
+
+        ef.embed_inputs([long_row, short_row, {"image": "c"}], has_text=[True, True, False])
+
+        with_text, media_only = ef._model.calls
+        assert with_text["inputs"] == [{"text": "one two three four", "image": "a"}, short_row]
+        assert media_only["inputs"] == [{"image": "c"}]
+        assert long_row["text"] == "one two three four five six"  # the caller's rows untouched
+        assert ef.truncation.truncated == 1 and "8-token" in ef.truncation.warning()
+
+    def test_plain_text_inputs_are_cut_too(self, ef_class):
+        ef = ef_class(model_name=EG2, modalities=("text", "image"))
+        ef._model.tokenizer = WordTokenizer()
+        ef.cap_text_tokens(2)
+
+        ef.embed_inputs(["one two three"], has_text=[True])
+
+        assert ef._model.calls[0]["inputs"] == ["one two"]
+
+    def test_a_lower_cap_already_set_wins(self, ef_class):
+        ef = ef_class(model_name=EG2, modalities=("text", "image"), max_length=5)
+        ef.cap_text_tokens(100)
+        assert ef.max_length == 5 and ef.truncation.max_length == 5
+
+    def test_without_a_cap_inputs_pass_unchanged(self, ef_class):
+        ef = ef_class(model_name=EG2, modalities=("text", "image"))
+        row = {"text": "one two three", "image": "a"}
+        ef.embed_inputs([row], has_text=[True])
+        assert ef._model.calls[0]["inputs"] == [row]
 
     def test_lengths_must_match(self, ef_class):
         ef = ef_class(model_name=EG2, modalities=("text", "image"))

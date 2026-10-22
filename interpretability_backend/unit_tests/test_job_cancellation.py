@@ -333,6 +333,29 @@ class TestReEmbedLoopCancel:
         assert emitted[-1]["error"] == CANCELLED_MESSAGE
 
 
+class TestReEmbedMultimodalSource:
+    def test_refused_before_the_model_loads(self, job_states, monkeypatch):
+        """A multimodal dataset's documents are file-name labels or the text
+        column only, so re-embedding them as text would silently lose the media."""
+        db = _FakeReEmbedDB(n_items=3)
+        db.get_dataset = lambda name: {"name": name, "data_type": "multimodal"}
+        monkeypatch.setattr("backend.API.duckdb_instance.get_duckdb_client", lambda: db)
+        monkeypatch.setattr(reembed_module, "get_device", lambda: "cpu")
+
+        def factory(model_config, device):
+            raise AssertionError("no model may load for a multimodal source")
+
+        monkeypatch.setattr(reembed_module, "create_embedding_function", factory)
+        config = ReEmbedConfig(
+            source_dataset_name="media", collection_name="media_new", batch_size=2
+        )
+
+        result = reembed_module.embed_existing_dataset(config)
+
+        assert result.total_embedded == 0
+        assert "multimodal" in result.error and "media" in result.error
+
+
 class TestReEmbedTaskPrefix:
     """The prefix row is the item's metadata plus ``__document__``, in both branches."""
 

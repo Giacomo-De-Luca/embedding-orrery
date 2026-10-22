@@ -37,11 +37,17 @@ DEFAULT_EXTENSIONS: Mapping[MediaKind, tuple[str, ...]] = {
 # ISO base-media brands (bytes 8-12 after "ftyp") that are not video.
 _AUDIO_BRANDS = (b"M4A ", b"M4B ", b"M4P ")
 _IMAGE_BRANDS = (b"heic", b"heix", b"mif1", b"msf1", b"avif")
+# Generic brands that audio-only (.m4a) and video files both use.
+_GENERIC_BRANDS = (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash")
+
+
+def _has_generic_brand(data: bytes) -> bool:
+    return data[4:8] == b"ftyp" and data[8:12] in _GENERIC_BRANDS
 
 
 def _sniff(data: bytes) -> MediaKind | None:
-    """Classify encoded media by its leading magic bytes."""
-    if data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")):
+    """Classify encoded media by its leading magic bytes (a generic ISO brand reads as video)."""
+    if data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM")):
         return MediaKind.IMAGE
     if data.startswith((b"II*\x00", b"MM\x00*")):
         return MediaKind.IMAGE
@@ -104,9 +110,11 @@ class MediaKindDetector:
             return MediaKind.AUDIO
         if isinstance(value, Mapping) and ("bytes" in value or "path" in value):
             data = _as_bytes(value.get("bytes"))
-            kind = _sniff(data) if data else None
             path = value.get("path")
-            return kind or (self._kind_of_path(path) if isinstance(path, str) else None)
+            by_path = self._kind_of_path(path) if isinstance(path, str) else None
+            if data and by_path is not None and _has_generic_brand(data):
+                return by_path  # the extension tells an .m4a from an .mp4
+            return (_sniff(data) if data else None) or by_path
         if _is_pil_image(value):
             return MediaKind.IMAGE
         return None
@@ -147,24 +155,38 @@ class MediaReference:
             return value["path"]
         return None
 
+    @staticmethod
+    def holds_bytes(value: object) -> bool:
+        """Raw bytes, or a ``{"bytes", "path"}`` dict carrying them."""
+        if isinstance(value, Mapping):
+            value = value.get("bytes")
+        return _as_bytes(value) is not None
+
     @classmethod
-    def placeholder(cls, value: object, kind: MediaKind) -> str:
-        """A short description such as ``[image 34 KB]`` or ``[audio 2.0 s]``."""
+    def placeholder(cls, value: object, kind: MediaKind | None) -> str:
+        """A short description such as ``[image 34 KB]`` or ``[audio 2.0 s]``
+        (``[binary 2 KB]`` for bytes of no known kind)."""
+        name = kind or "binary"
         reference = cls.of(value)
         if isinstance(value, str):
-            return f"[{kind} {reference}]"
+            return f"[{name} {reference}]"
         data = _as_bytes(value)
         if data is None and isinstance(value, Mapping):
             data = _as_bytes(value.get("bytes"))
         if data is not None:
-            return f"[{kind} {cls._size(len(data))}]"
+            return f"[{name} {cls._size(len(data))}]"
         if _is_decoded_audio(value) and value["sampling_rate"]:
             seconds = len(value["array"]) / value["sampling_rate"]
-            return f"[{kind} {seconds:.1f} s]"
+            return f"[{name} {seconds:.1f} s]"
         if _is_pil_image(value):
             width, height = value.size
-            return f"[{kind} {width}x{height}]"
-        return f"[{kind} {reference}]" if reference else f"[{kind}]"
+            return f"[{name} {width}x{height}]"
+        return f"[{name} {reference}]" if reference else f"[{name}]"
+
+    @classmethod
+    def describe(cls, value: object, kind: MediaKind | None) -> str:
+        """The cell's path, else its placeholder: what metadata stores for a media cell."""
+        return cls.of(value) or cls.placeholder(value, kind)
 
     @classmethod
     def label(cls, value: object, kind: MediaKind) -> str:

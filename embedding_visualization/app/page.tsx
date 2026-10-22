@@ -351,6 +351,7 @@ function HomeContent() {
   }, [reload, refetchTopics, resetTopicSearch]);
   const topicTree = useTopicMergeTree(selectedCollection, probes.augmentedData ?? data, {
     enabled: colorByField === 'topic_label',
+    dataCollection: loadedCollection,
     onPreviewStart: clearTopicSelection,
     onApplied: handleTopicsApplied,
   });
@@ -578,6 +579,8 @@ function HomeContent() {
     if (!preset || !collections?.[preset.collection]) return;
     setIntroOpen(false);
     setSelectedCollection(preset.collection);
+    // A topic-tree preview would outlive a preset on the same collection.
+    useVisualizationStore.getState().setTopicCut({ previewing: false, nTopics: null });
     runStoreOps(presetStoreOps(preset));
     setPendingPreset(preset);
   }, [collections]);
@@ -748,6 +751,8 @@ function HomeContent() {
         : undefined;
       const topic = preferred ?? topics[0];
       if (!topic) return null;
+      // Topic isolation draws saved topics: end any topic-tree preview first.
+      useVisualizationStore.getState().setTopicCut({ previewing: false, nTopics: null });
       topicSearchRef.current.clearAll();
       topicSearchRef.current.toggleTopic(topic.topicId);
       return topic.label;

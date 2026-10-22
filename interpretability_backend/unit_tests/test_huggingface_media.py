@@ -8,11 +8,17 @@ reads them. The datasets here are built from plain structs and then cast,
 because encoding into an ``Audio()`` feature would import torchcodec.
 """
 
+import io
+from types import SimpleNamespace
+
 import datasets
+import datasets.utils.file_utils
 import pytest
 
 from backend.clients import huggingface_client
 from backend.clients.huggingface_client import HFMediaFeatures
+from backend.embedding_functions import embed_huggingface
+from backend.embedding_functions.config import DataType, EmbeddingConfig
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 WAV = b"RIFF\x10\x00\x00\x00WAVEfmt " + b"\x00" * 8
@@ -83,6 +89,71 @@ class TestLoading:
         assert preview.error is None
         assert preview.rows[0]["image"] == "cat.png"
         assert preview.rows[0]["speech"] == "a.wav"
+
+
+class TestMediaColumnKinds:
+    def test_from_the_declared_features(self, monkeypatch):
+        features = _media_dataset().features
+        builder = SimpleNamespace(info=SimpleNamespace(features=features))
+        monkeypatch.setattr(datasets, "load_dataset_builder", lambda dataset_id, name=None: builder)
+
+        assert huggingface_client.get_media_column_kinds("org/pets") == {
+            "image": "image",
+            "speech": "audio",
+        }
+
+    def test_unknown_when_the_builder_fails(self, monkeypatch):
+        def offline(dataset_id, name=None):
+            raise ConnectionError("offline")
+
+        monkeypatch.setattr(datasets, "load_dataset_builder", offline)
+        assert huggingface_client.get_media_column_kinds("org/pets") == {}
+
+
+class TestReadFile:
+    def test_reads_like_datasets_does(self, monkeypatch):
+        opened = []
+
+        def xopen(path, mode="r", *args, **kwargs):
+            opened.append((path, mode))
+            return io.BytesIO(PNG)
+
+        monkeypatch.setattr(datasets.utils.file_utils, "xopen", xopen)
+        assert HFMediaFeatures.read_file("hf://datasets/org/pets@main/cat.png") == PNG
+        assert opened == [("hf://datasets/org/pets@main/cat.png", "rb")]
+
+
+class TestMultimodalDispatch:
+    def test_the_media_run_gets_the_dataset_kinds_and_file_reader(self, monkeypatch):
+        """Generic-brand MP4 audio sniffs as video: the dataset's own types decide."""
+        captured = {}
+
+        class Run:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def run(self):
+                return "result"
+
+        monkeypatch.setattr(embed_huggingface, "MultimodalEmbeddingRun", Run)
+        monkeypatch.setattr(embed_huggingface, "_chroma_client", lambda: None)
+        monkeypatch.setattr(
+            embed_huggingface,
+            "get_media_column_kinds",
+            lambda dataset_id, config=None: {"speech": "audio"},
+        )
+        config = EmbeddingConfig(
+            dataset_id="org/pets",
+            collection_name="pets",
+            data_type=DataType.MULTIMODAL,
+            media_columns=["speech"],
+        )
+
+        result = embed_huggingface._embed_media(config, ["train"], [], 0, "cpu", 0.0, None, None)
+
+        assert result == "result"
+        assert captured["source"].column_hints == {"speech": "audio"}
+        assert captured["source"].open_path is HFMediaFeatures.read_file
 
 
 def test_video_dtype_label():

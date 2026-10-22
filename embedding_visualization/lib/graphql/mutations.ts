@@ -94,6 +94,7 @@ export const GET_LOCAL_FILE_PREVIEW = gql`
       rows
       totalRows
       error
+      columnKinds
     }
   }
 `;
@@ -211,6 +212,7 @@ export interface HFSplitInfo {
 
 export interface HFFeatureInfo {
   name: string;
+  /** Value dtype ("string", "int64", ...), "class_label", "sequence", or a media kind: "image" / "audio" / "video" */
   dtype: string;
   description: string | null;
 }
@@ -255,6 +257,8 @@ export interface LocalFilePreview {
   rows: Record<string, unknown>[];
   totalRows: number;
   error: string | null;
+  /** Media columns of the preview: {column: "image" | "audio" | "video"} */
+  columnKinds?: Record<string, string> | null;
 }
 
 export type PortionStrategy = 'FIRST_N' | 'RANDOM_SAMPLE' | 'ROW_RANGE' | 'ALL';
@@ -303,7 +307,7 @@ export type GeminiTaskType =
  * Model names are free-form strings - any valid model for the provider works.
  *
  * Examples:
- * - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-small-en-v1.5"
+ * - SentenceTransformers: "all-MiniLM-L6-v2", "all-mpnet-base-v2", "google/embeddinggemma-2" (text, images, audio, video)
  * - OpenAI: "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
  * - Cohere: "embed-english-v3.0", "embed-multilingual-v3.0"
  * - Ollama: "nomic-embed-text", "mxbai-embed-large"
@@ -321,6 +325,52 @@ export interface EmbeddingModelInput {
   maxLength?: number; // Local providers: input-length cap in tokens (omit = the model's limit)
 }
 
+/** A model suggestion for the embed forms (`embeddingModelCatalog` query; lib/utils/modelSuggestions.ts). */
+export interface EmbeddingModelCatalogEntry {
+  provider: EmbeddingProvider;
+  modelName: string;
+  description: string | null;
+  /** What the model embeds: "text", "image", "audio", "video" */
+  modalities: string[];
+  /** Its sentence-transformers prompt names */
+  prompts: string[];
+  dimension: number | null;
+  /** Data types whose default model this is ("multimodal") */
+  defaultFor: string[];
+  /** Listed in the backend catalog (false: only used by existing collections, e.g. local checkpoints) */
+  suggested: boolean;
+  collectionCount: number;
+}
+
+/** Media options of a multimodal embed (config/media_embedding.json defaults). */
+export interface MediaOptions {
+  imageMaxSoftTokens: number;
+  videoFps: number;
+  videoMaxFrames: number;
+  videoMaxSoftTokens: number;
+  maxAudioSeconds: number;
+}
+
+/** Per-job overrides of the media options; omitted (or null) values keep the defaults. */
+export type MediaOptionsInput = { [K in keyof MediaOptions]?: MediaOptions[K] | null };
+
+/** Defaults, limits and token constants of the media options (`mediaEmbeddingSettings` query). */
+export interface MediaEmbeddingSettings {
+  defaults: MediaOptions;
+  /** Allowed soft-token budgets per image or video frame */
+  softTokenBudgets: number[];
+  videoFpsLimit: number;
+  videoFramesLimit: number;
+  audioSecondsLimit: number;
+  /** One input's context window, shared by every modality */
+  contextTokens: number;
+  /** Allowance for the text, task prompt and special tokens */
+  reservedTokens: number;
+  audioTokensPerSecond: number;
+  /** The multimodal default model */
+  defaultModel: string;
+}
+
 export interface EmbedDatasetInput {
   datasetId: string;
   collectionName: string;
@@ -328,13 +378,20 @@ export interface EmbedDatasetInput {
   split?: string;
   /** Embed several splits into one collection in a single pass (adds `source_split` metadata). Takes precedence over `split`. */
   splits?: string[];
+  /** TEXT or MULTIMODAL (VECTOR is local files only) */
+  dataType?: DataType;
+  /** Text columns (MULTIMODAL: optional, embedded with the media) */
   columns?: string[];
+  /** MULTIMODAL: the Image / Audio / Video features to embed */
+  mediaColumns?: string[];
+  mediaOptions?: MediaOptionsInput;
   textTemplate?: string;
   idColumn?: string;
   portion?: PortionInput;
   metadataColumns?: string[];
   computeProjections?: boolean;
   batchSize?: number;
+  /** MULTIMODAL: a sentence-transformers model; an empty name uses the backend's default (EmbeddingGemma 2) */
   embeddingModel?: EmbeddingModelInput;
   resume?: boolean; // Resume an interrupted job instead of starting fresh
   extractTopics?: boolean;
@@ -352,15 +409,19 @@ export interface SaeLinkInput {
   computeActivations?: boolean;
 }
 
-export type DataType = 'TEXT' | 'IMAGE' | 'VECTOR';
+/** MULTIMODAL: images, audio, video and rows mixing them with text ("Image / Audio / Video / Mixed"). */
+export type DataType = 'TEXT' | 'MULTIMODAL' | 'VECTOR';
 
 export interface EmbedLocalFileInput {
   filePath: string;
   collectionName: string;
   dataType?: DataType;
+  /** Text columns (MULTIMODAL: optional, embedded with the media) */
   columns?: string[];
   textTemplate?: string;
-  imageColumn?: string;
+  /** MULTIMODAL: the image / audio / video columns to embed */
+  mediaColumns?: string[];
+  mediaOptions?: MediaOptionsInput;
   vectorColumn?: string;
   idColumn?: string;
   metadataColumns?: string[];
@@ -369,6 +430,7 @@ export interface EmbedLocalFileInput {
   sampleSeed?: number;
   computeProjections?: boolean;
   batchSize?: number;
+  /** MULTIMODAL: a sentence-transformers model; an empty name uses the backend's default (EmbeddingGemma 2) */
   embeddingModel?: EmbeddingModelInput;
   resume?: boolean; // Resume an interrupted job instead of starting fresh
   extractTopics?: boolean;
@@ -402,7 +464,7 @@ export interface EmbedDatasetResult {
   error: string | null;
   embeddingProvider: string | null;
   embeddingModel: string | null;
-  /** Non-cancelling issues, e.g. documents truncated at the length cap */
+  /** Non-cancelling issues, e.g. documents truncated at the length cap or media rows that could not be decoded */
   warnings?: string[];
 }
 

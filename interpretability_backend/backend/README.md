@@ -60,13 +60,14 @@ interpretability_backend/
 │   │   ├── config.py                    # Constants, enums (DataType, EmbeddingProvider), dataclasses
 │   │   ├── create_embedding_function.py # Factory: provider → embedding function + dimension
 │   │   ├── embed_huggingface.py         # HuggingFace dataset → DuckDB+ChromaDB (with resume)
-│   │   ├── embed_local_file.py          # Local file → DuckDB+ChromaDB (text/image/vector, with resume)
+│   │   ├── embed_local_file.py          # Local file → DuckDB+ChromaDB (text/multimodal/vector, with resume)
 │   │   ├── embed_existing_dataset.py    # Re-embed an existing dataset with a new model
-│   │   ├── embed_images.py              # Image embedding via ViT (google/vit-base-patch16-384)
+│   │   ├── embed_media.py               # Image / audio / video / mixed rows via EmbeddingGemma 2
+│   │   ├── embedding_job.py             # Shared batch loop: collection open/resume, progress, cancel
 │   │   ├── embed_vectors.py             # Pre-computed vector ingestion
 │   │   ├── ingest_sae.py                # Neuronpedia SAE features/activations → DuckDB
 │   │   └── specific_functions/          # Provider-specific embedding implementations
-│   │       ├── embed_sentence_transformer.py  # Fork of ChromaDB's ST EF with prompt support
+│   │       ├── embed_sentence_transformer.py  # Fork of ChromaDB's ST EF: prompts, load options, media inputs
 │   │       ├── embed_gemini.py                # Google Gemini embedding with task_type
 │   │       ├── embed_qwen.py                  # QWEN3-Embedding with query instruction
 │   │       ├── embed_bge.py                   # BGE-M3 with FlagEmbedding
@@ -94,10 +95,19 @@ interpretability_backend/
 │       ├── seed_bootstrap.py            # First-start seed dataset copy
 │       ├── color_preprocessing.py       # Hex colour column → mapped_colour float
 │       ├── text_processing.py           # format_text_for_embedding, extract_metadata
+│       ├── embedding_model_catalog.py   # Known models per provider (config/embedding_models.json)
+│       ├── embedding_prompts.py         # Document / query prompt resolution
+│       ├── model_load_options.py        # Embedding dtype policy, encoder towers to skip
+│       ├── media_kinds.py               # Media cell detection and JSON-safe references
+│       ├── media_decoding.py            # Media cells → model inputs (PIL / PyAV, lazy)
+│       ├── media_rows.py                # One multimodal input per row
+│       ├── media_settings.py            # config/media_embedding.json: options, limits, token budget
+│       ├── chroma_config_scrubber.py    # Remove secrets from persisted Chroma EF configs
 │       ├── batch_utils.py               # sort_items_by_length (efficient batching)
 │       ├── id_utils.py                  # IDDeduplicator (handles duplicate IDs)
 │       ├── provider_list.py             # Single source of truth for EmbeddingProviderEnum
 │       ├── logger.py                    # orrery logger setup (file + console)
+│       ├── known_dimensions.py          # KnownDimensions: read / extend the mapping below
 │       └── known_dimensions.json        # Cached model→dimension mapping
 │
 ├── resources/

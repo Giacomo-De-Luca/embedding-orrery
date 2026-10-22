@@ -44,6 +44,17 @@ export function EmbedResultCard({ result, isImportMode = false }: EmbedResultCar
             {result.embeddingProvider && (
               <p><strong>Model:</strong> {result.embeddingProvider} / {result.embeddingModel}</p>
             )}
+            {/* Non-cancelling issues: truncated documents, media rows that could not be decoded */}
+            {(result.warnings ?? []).length > 0 && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <p className="font-medium">Warnings</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {result.warnings!.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {(!cancelled || result.projectionsComputed) && (
               <div className="mt-4">
                 <a

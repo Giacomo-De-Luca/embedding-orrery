@@ -21,6 +21,7 @@ import { Input } from '@/lib/ui-primitives/input';
 import { REPO_URL } from '@/lib/utils/siteMetadata';
 import type { CollectionsManifest } from '../../lib/types/types';
 import { getSaeInfo } from '../../lib/utils/saeCollections';
+import { textQueryUnavailableReason } from '../../lib/utils/queryPrompt';
 
 function ModeToggle() {
   const { isDark, toggle } = useThemeToggle();
@@ -81,7 +82,13 @@ export function AppHeader({
   const [searchQuery, setSearchQuery] = useState('');
   const [collectionFilter, setCollectionFilter] = useState('');
 
+  // Semantic (text-query) search needs the collection's own model (the backend never falls back).
+  const queryUnavailable = textQueryUnavailableReason(
+    selectedCollection ? collections?.[selectedCollection] : null,
+  );
+
   const handleSearch = () => {
+    if (queryUnavailable) return;
     if (searchQuery.trim() && onSemanticSearch) {
       onSemanticSearch(searchQuery.trim());
     }
@@ -154,19 +161,21 @@ export function AppHeader({
           data-header-cell="search"
           data-tour="search-input"
           className="pointer-events-auto relative w-full sm:max-w-xs"
+          // On the cell: a disabled input shows no tooltip.
+          title={queryUnavailable ?? undefined}
         >
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Semantic search..."
+            placeholder={queryUnavailable ? 'Semantic search unavailable' : 'Semantic search...'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             className="pl-8 pr-9"
-            disabled={searchLoading}
+            disabled={searchLoading || queryUnavailable !== null}
           />
           <button
             onClick={handleSearch}
-            disabled={!searchQuery.trim() || searchLoading}
+            disabled={!searchQuery.trim() || searchLoading || queryUnavailable !== null}
             className={cn(
               "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full h-6 w-6 flex items-center justify-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
               searchQuery.trim()

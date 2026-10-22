@@ -19,12 +19,15 @@ import { useTaskPrefixTable } from './useTaskPrefixTable';
 export interface EmbeddingModelState {
   // Model config
   embeddingProvider: EmbeddingProvider;
+  /** The model name as typed (may be empty when the form has a fallback model). */
   modelName: string;
+  /** The model the job runs: the typed name, else the fallback (the multimodal default). */
+  effectiveModelName: string;
   ollamaUrl: string;
   qwenTask: string;
   geminiTaskType: GeminiTaskType;
-  promptName: string | null;
-  customPrompt: string;
+  /** Sentence-transformers prompt: a prompt name of the model, or literal prompt text ('' = none). */
+  prompt: string;
   batchSize: number;
   /** Input-length cap in tokens; null = the model's own limit (local providers only). */
   maxLength: number | null;
@@ -40,8 +43,7 @@ export interface EmbeddingModelState {
   setOllamaUrl: (u: string) => void;
   setQwenTask: (t: string) => void;
   setGeminiTaskType: (t: GeminiTaskType) => void;
-  setPromptName: (p: string | null) => void;
-  setCustomPrompt: (p: string) => void;
+  setPrompt: (p: string) => void;
   setBatchSize: (b: number) => void;
   setMaxLength: (m: number | null) => void;
   setTaskPrefix: (v: TaskPrefixValue) => void;
@@ -59,28 +61,37 @@ export interface EmbeddingModelState {
   setSaeSelection: (s: string | null) => void;
 
   // Derived helpers
-  handleProviderChange: (provider: EmbeddingProvider) => void;
+  /** Switch provider; the model name becomes `modelName`, else the provider's default. */
+  handleProviderChange: (provider: EmbeddingProvider, modelName?: string) => void;
   buildEmbeddingModelInput: () => EmbeddingModelInput;
   getTopicParams: () => { extractTopics?: boolean; topicConfig?: TopicConfigInput };
   getSaePostParams: () => SaePostEmbedParams;
 }
 
-export function useEmbeddingModelState(): EmbeddingModelState {
+export interface EmbeddingModelStateOptions {
+  /**
+   * The model an empty name stands for (the backend fills it in, e.g. the
+   * multimodal default): its task prefixes and limits apply.
+   */
+  fallbackModelName?: string | null;
+}
+
+export function useEmbeddingModelState(options: EmbeddingModelStateOptions = {}): EmbeddingModelState {
   const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider>('SENTENCE_TRANSFORMERS');
   const [modelName, setModelNameState] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultModel);
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
   const [qwenTask, setQwenTask] = useState('Given a web search query, retrieve relevant passages that answer the query');
   const [geminiTaskType, setGeminiTaskType] = useState<GeminiTaskType>('SEMANTIC_SIMILARITY');
-  const [promptName, setPromptName] = useState<string | null>(null);
-  const [customPrompt, setCustomPrompt] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [batchSize, setBatchSize] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultBatchSize);
   const [maxLength, setMaxLength] = useState<number | null>(null);
   // null until a task is picked: the model's default task applies.
   const [taskPrefixChoice, setTaskPrefix] = useState<TaskPrefixValue | null>(null);
+  const effectiveModelName = modelName.trim() || options.fallbackModelName || '';
   const prefixTable = useTaskPrefixTable();
   const taskPrefixInfo = useMemo(
-    () => taskPrefixesFor(prefixTable.table, embeddingProvider, modelName),
-    [prefixTable.table, embeddingProvider, modelName],
+    () => taskPrefixesFor(prefixTable.table, embeddingProvider, effectiveModelName),
+    [prefixTable.table, embeddingProvider, effectiveModelName],
   );
 
   const [enableTopics, setEnableTopics] = useState(false);
@@ -96,9 +107,9 @@ export function useEmbeddingModelState(): EmbeddingModelState {
     setMaxLength(null);
   }, []);
 
-  const handleProviderChange = useCallback((provider: EmbeddingProvider) => {
+  const handleProviderChange = useCallback((provider: EmbeddingProvider, name?: string) => {
     setEmbeddingProvider(provider);
-    setModelName(EMBEDDING_PROVIDERS[provider].defaultModel);
+    setModelName(name ?? EMBEDDING_PROVIDERS[provider].defaultModel);
     setBatchSize(EMBEDDING_PROVIDERS[provider].defaultBatchSize);
   }, [setModelName]);
 
@@ -108,11 +119,10 @@ export function useEmbeddingModelState(): EmbeddingModelState {
     ollamaUrl,
     qwenTask,
     geminiTaskType,
-    promptName,
-    customPrompt,
+    prompt,
     maxLength,
     taskPrefix: taskPrefixInput(taskPrefixInfo, taskPrefixChoice),
-  }), [embeddingProvider, modelName, ollamaUrl, qwenTask, geminiTaskType, customPrompt, promptName, maxLength, taskPrefixInfo, taskPrefixChoice]);
+  }), [embeddingProvider, modelName, ollamaUrl, qwenTask, geminiTaskType, prompt, maxLength, taskPrefixInfo, taskPrefixChoice]);
 
   const getTopicParams = useCallback(() => ({
     extractTopics: enableTopics || undefined,
@@ -127,11 +137,11 @@ export function useEmbeddingModelState(): EmbeddingModelState {
   return {
     embeddingProvider,
     modelName,
+    effectiveModelName,
     ollamaUrl,
     qwenTask,
     geminiTaskType,
-    promptName,
-    customPrompt,
+    prompt,
     batchSize,
     maxLength,
     taskPrefixInfo,
@@ -142,8 +152,7 @@ export function useEmbeddingModelState(): EmbeddingModelState {
     setOllamaUrl,
     setQwenTask,
     setGeminiTaskType,
-    setPromptName,
-    setCustomPrompt,
+    setPrompt,
     setBatchSize,
     setMaxLength,
     setTaskPrefix,

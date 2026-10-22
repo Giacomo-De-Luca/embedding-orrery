@@ -78,5 +78,6 @@ overlay; the scatter plot is unaffected.
 ## Consumers
 
 `lib/hooks/useDensityOverlay.ts` owns the React lifecycle (construct/dispose,
-data upload, rAF-coalesced renders on Plotly relayout) and is used by
+data upload, renders on Plotly relayout and update coalesced by `CoalescedRedraw`
+in `../coalescedRedraw.ts`) and is used by
 `app/components/ScatterPlot2D.tsx` when the `densityMode` store flag is on.

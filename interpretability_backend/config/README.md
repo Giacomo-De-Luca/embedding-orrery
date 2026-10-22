@@ -18,7 +18,20 @@
   `label`, `query_prefix`, optional `document_prefix` (absent = symmetric) and
   the `prompt_names` that alias it) of the models marked
   `"prompt_format": "task_prefix"` (EmbeddingGemma, Gemini Embedding 2). See
-  `../../documentation/EMBEDDING_TASK_PREFIXES.md`.
+  `../../documentation/EMBEDDING_TASK_PREFIXES.md`. Entries may also carry
+  `modalities`, `default_for` (`["multimodal"]`: the default model of that data
+  type) and `encoders` (media modality → model-config tower to skip); top-level
+  `query_prompt_map` / `query_task_type_map` map a document prompt or Gemini
+  task type to its query counterpart, and `extra_prompt_names` extends the
+  prompt-name vocabulary. See `../../documentation/EMBEDDING_MODELS_AND_PROMPTS.md`.
+- `media_embedding.json`: `MediaEmbeddingSettings` for `utils/media_settings.py`:
+  the per-job media option `defaults` (tokens per image, video fps / max frames /
+  tokens per frame, max audio seconds), their limits (`soft_token_budgets`,
+  `video_fps_limit`, `video_frames_limit`, `audio_seconds_limit`), the token-budget
+  constants (`context_tokens`, `reserved_tokens`, `audio_tokens_per_second`) and
+  technical settings (audio sample rate, video frame size, batching, column
+  detection sample, remote-URL policy, optional extension lists). Served by the
+  `mediaEmbeddingSettings` query. See `../../documentation/MULTIMODAL_EMBEDDING.md`.
 - `http_compression.json`: JSON response gzip settings (level, minimum size,
   worker-thread threshold, media types), loaded by `CompressionSettings` for
   `JsonGzipMiddleware`. See `../../documentation/MULTICLASS_PROBES.md`.

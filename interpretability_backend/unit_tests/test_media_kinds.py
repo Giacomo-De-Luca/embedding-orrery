@@ -164,3 +164,37 @@ class TestMediaReference:
             == "image: dog.png"
         )
         assert MediaReference.label(PNG, MediaKind.IMAGE) == "image"
+
+
+BMP = b"BM" + b"\x00" * 24
+# ISO base media with a generic brand: an .m4a and an .mp4 can both carry it
+ISOM = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 8
+
+
+class TestAmbiguousContainers:
+    def test_bmp_bytes_are_images(self, detector):
+        assert detector.kind_of(BMP) is MediaKind.IMAGE
+
+    def test_a_generic_iso_brand_defers_to_the_file_extension(self, detector):
+        assert detector.kind_of({"bytes": ISOM, "path": "clips/song.m4a"}) is MediaKind.AUDIO
+        assert detector.kind_of({"bytes": ISOM, "path": "clips/walk.mp4"}) is MediaKind.VIDEO
+
+    def test_a_generic_iso_brand_without_a_path_reads_as_video(self, detector):
+        assert detector.kind_of(ISOM) is MediaKind.VIDEO
+
+    def test_a_dataset_hint_wins_over_sniffing(self, detector):
+        assert detector.kind_of_column([{"bytes": ISOM, "path": None}], hint="audio") is (
+            MediaKind.AUDIO
+        )
+
+
+class TestDescribe:
+    def test_path_else_placeholder(self):
+        assert MediaReference.describe({"bytes": PNG, "path": "a/cat.png"}, MediaKind.IMAGE) == (
+            "a/cat.png"
+        )
+        assert MediaReference.describe(PNG, MediaKind.IMAGE) == "[image 24 B]"
+
+    def test_unrecognised_bytes_are_binary(self):
+        assert MediaReference.describe(b"\x00" * 2048, None) == "[binary 2 KB]"
+        assert MediaReference.describe({"bytes": b"\x01\x02", "path": None}, None) == "[binary 2 B]"

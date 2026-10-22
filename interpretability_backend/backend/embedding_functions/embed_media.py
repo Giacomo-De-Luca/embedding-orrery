@@ -66,6 +66,8 @@ class MediaSource:
     auto_id: Callable[[Mapping[str, Any], int], str]
     # Where relative media paths resolve (a local file's folder).
     base_dir: Path | None = None
+    # Reads paths that are not local files: a streamed HF dataset's own repo files.
+    open_path: Callable[[str], bytes] | None = None
     # Dataset dtype labels per column (HF "image" / "audio" / "video").
     column_hints: Mapping[str, str] = field(default_factory=dict)
     # Internal row keys never stored as metadata (the HF split tag).
@@ -123,7 +125,8 @@ class MultimodalEmbeddingRun:
             detector=MediaKindDetector(self.settings.extensions()),
             sample_size=self.settings.detection_sample_rows,
         )
-        self.settings.check_budget(self.options, Counter(column.kind for column in columns))
+        kind_counts = Counter(column.kind for column in columns)
+        self.settings.check_budget(self.options, kind_counts)
         text_columns = list(config.columns or [])
         texts = None
         if text_columns:
@@ -133,7 +136,12 @@ class MultimodalEmbeddingRun:
             texts.validate(self.rows)
         builder = MediaRowBuilder(
             columns,
-            MediaDecoder(self.settings, self.options, base_dir=self.source.base_dir),
+            MediaDecoder(
+                self.settings,
+                self.options,
+                base_dir=self.source.base_dir,
+                open_path=self.source.open_path,
+            ),
             texts,
         )
         kinds = builder.kinds
@@ -144,6 +152,8 @@ class MultimodalEmbeddingRun:
             model_config, self.device, modalities=("text", *(kind.value for kind in kinds))
         )
         embedding_func.require_modalities([kind.value for kind in kinds], with_text=bool(texts))
+        # The text's share of the context: what the worst-case media leave
+        embedding_func.cap_text_tokens(self.settings.text_token_budget(self.options, kind_counts))
 
         collection_metadata = {
             **self.source.collection_metadata,
@@ -159,7 +169,6 @@ class MultimodalEmbeddingRun:
             config.collection_name,
             resume=config.resume,
             metadata=collection_metadata,
-            embedding_function=embedding_func,
         )
         dataset_name = sync_dataset_and_collection(
             config.collection_name,
@@ -182,6 +191,7 @@ class MultimodalEmbeddingRun:
             cancel_event=self.cancel_event,
             progress_callback=self.progress_callback,
             description="Embedding media batches",
+            truncation_source=embedding_func,
         )
         job.start(already_embedded=len(existing_ids), resume=config.resume)
         processing_kwargs = self.options.processing_kwargs(kinds)

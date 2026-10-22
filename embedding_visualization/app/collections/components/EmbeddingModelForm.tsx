@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Input } from '@/lib/ui-primitives/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import {
@@ -13,9 +13,14 @@ import {
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
+import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import type { EmbeddingProvider, GeminiTaskType } from '@/lib/graphql/mutations';
 import { EMBEDDING_PROVIDERS, isLocalProvider } from '@/lib/utils/embeddingProviders';
+import { useEmbeddingModelCatalog } from '@/lib/hooks/useEmbeddingModelCatalog';
+import { PromptPresets } from '@/lib/utils/promptPresets';
 import { TopicConfigForm } from './TopicConfigForm';
+import { ModelNameCombobox } from './ModelNameCombobox';
+import type { MediaKind } from '../lib/mediaColumns';
 import type { EmbeddingModelState } from '../lib/useEmbeddingModelState';
 import { commitMaxLengthDraft, describeModelLimit, parseMaxLengthDraft } from '../lib/embeddingLimits';
 import { useModelMaxLength } from '../lib/useModelMaxLength';
@@ -33,7 +38,15 @@ interface EmbeddingModelFormProps {
    * Configuration section holds it.
    */
   taskPrefixColumns?: string[];
+  /**
+   * Image / Audio / Video / Mixed mode: the provider is locked to
+   * sentence-transformers, an empty model name means `defaultModel` (the
+   * backend fills it in), and suggestions are media models that embed `kinds`.
+   */
+  media?: { kinds: MediaKind[]; defaultModel: string | null } | null;
 }
+
+const MEDIA_PROVIDER: EmbeddingProvider = 'SENTENCE_TRANSFORMERS';
 
 export function EmbeddingModelForm({
   model,
@@ -41,6 +54,7 @@ export function EmbeddingModelForm({
   idPrefix = '',
   title = 'Embedding Model',
   taskPrefixColumns,
+  media = null,
 }: EmbeddingModelFormProps) {
   // Draft so the field can be temporarily empty/invalid while typing; the
   // committed batchSize only updates on valid positive integers and the
@@ -50,7 +64,16 @@ export function EmbeddingModelForm({
   // value is kept); empty commits null (= the model limit).
   const [maxLengthDraft, setMaxLengthDraft] = useState<string | null>(null);
   const isLocal = isLocalProvider(model.embeddingProvider);
-  const modelLimit = useModelMaxLength(model.embeddingProvider, model.modelName);
+  const modelLimit = useModelMaxLength(model.embeddingProvider, model.effectiveModelName);
+  const { suggestions } = useEmbeddingModelCatalog();
+  // The prompt names the catalog lists for the model; the shared presets otherwise.
+  const promptGroups = useMemo(
+    () => PromptPresets.documentGroups(suggestions.find(model.embeddingProvider, model.effectiveModelName)?.prompts),
+    [suggestions, model.embeddingProvider, model.effectiveModelName],
+  );
+  const modelPlaceholder = media
+    ? (media.defaultModel ?? 'Backend default')
+    : EMBEDDING_PROVIDERS[model.embeddingProvider].defaultModel;
   const limit = modelLimit.limit?.maxLength ?? null;
   const maxLengthError = maxLengthDraft !== null
     ? parseMaxLengthDraft(maxLengthDraft, limit).error
@@ -79,6 +102,7 @@ export function EmbeddingModelForm({
             <Select
               value={model.embeddingProvider}
               onValueChange={(v) => model.handleProviderChange(v as EmbeddingProvider)}
+              disabled={media !== null}
             >
               <SelectTrigger id={`${idPrefix}provider`}>
                 <SelectValue />
@@ -92,17 +116,27 @@ export function EmbeddingModelForm({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              {EMBEDDING_PROVIDERS[model.embeddingProvider].description}
+              {media
+                ? 'Images, audio and video need a sentence-transformers media model.'
+                : EMBEDDING_PROVIDERS[model.embeddingProvider].description}
             </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor={`${idPrefix}model-name`}>Model Name</Label>
-            <Input
+            <ModelNameCombobox
               id={`${idPrefix}model-name`}
+              provider={media ? MEDIA_PROVIDER : model.embeddingProvider}
               value={model.modelName}
-              onChange={(e) => model.setModelName(e.target.value)}
-              placeholder={EMBEDDING_PROVIDERS[model.embeddingProvider].defaultModel}
+              onChange={model.setModelName}
+              placeholder={modelPlaceholder}
+              requires={media?.kinds}
+              anyMedia={media !== null}
             />
+            {media && !model.modelName.trim() && (
+              <p className="text-xs text-muted-foreground">
+                Empty uses the default{media.defaultModel ? `, ${media.defaultModel}` : ''}.
+              </p>
+            )}
             <Label htmlFor={`${idPrefix}batch-size`}>Batch Size</Label>
             <Input
               id={`${idPrefix}batch-size`}
@@ -118,9 +152,11 @@ export function EmbeddingModelForm({
               placeholder={model.batchSize.toString()}
             />
             <p className="text-xs text-muted-foreground">
-              {isLocal
-                ? 'Texts per forward pass. Lower it for long documents: memory grows with batch × length.'
-                : 'Texts per API request.'}
+              {media
+                ? "Rows per batch, capped by the backend's media settings (images, audio and video are decoded per batch)."
+                : isLocal
+                  ? 'Texts per forward pass. Lower it for long documents: memory grows with batch × length.'
+                  : 'Texts per API request.'}
             </p>
             {isLocal && (
               <>
@@ -220,39 +256,20 @@ export function EmbeddingModelForm({
             </div>
           )}
           {model.embeddingProvider === 'SENTENCE_TRANSFORMERS' && !prefixInfo && (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor={`${idPrefix}prompt-name`}>Prompt Name</Label>
-                <Select
-                  value={model.promptName ?? 'none'}
-                  onValueChange={(v) => model.setPromptName(v === 'none' ? null : v)}
-                >
-                  <SelectTrigger id={`${idPrefix}prompt-name`}>
-                    <SelectValue placeholder="None" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="Retrieval-document">Retrieval-document (RAG storage)</SelectItem>
-                    <SelectItem value="Retrieval-query">Retrieval-query (RAG search)</SelectItem>
-                    <SelectItem value="STS">STS (Sentence similarity)</SelectItem>
-                    <SelectItem value="Classification">Classification</SelectItem>
-                    <SelectItem value="Clustering">Clustering</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Task-specific prompt for models like Gemma Embedding
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor={`${idPrefix}custom-prompt`}>Custom Prompt (Advanced)</Label>
-                <Input
-                  id={`${idPrefix}custom-prompt`}
-                  value={model.customPrompt}
-                  onChange={(e) => model.setCustomPrompt(e.target.value)}
-                  placeholder="Leave empty to use prompt name"
-                />
-              </div>
-            </>
+            <div className="space-y-2">
+              <Label htmlFor={`${idPrefix}prompt`}>Prompt</Label>
+              <PromptCombobox
+                id={`${idPrefix}prompt`}
+                value={model.prompt}
+                onChange={model.setPrompt}
+                groups={promptGroups}
+                placeholder="None (pick a prompt name or type a prompt)"
+              />
+              <p className="text-xs text-muted-foreground">
+                A prompt name of the model (e.g. Retrieval-document) or literal text placed before each
+                document. Queries use the matching query prompt.
+              </p>
+            </div>
           )}
         </div>
 

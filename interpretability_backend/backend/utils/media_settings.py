@@ -173,6 +173,14 @@ class MediaEmbeddingSettings(JsonFileSettings):
             + counts.get(MediaKind.AUDIO, 0) * audio_tokens
         )
 
+    def text_token_budget(self, options: MediaOptions, kinds: Mapping[MediaKind | str, int]) -> int:
+        """Tokens left for one row's text (prompt included) by its worst-case media.
+
+        The embedder cuts longer text to this, so text and media together fit
+        the context; ``check_budget`` keeps it at ``reserved_tokens`` or more.
+        """
+        return self.context_tokens - (self.estimate_tokens(options, kinds) - self.reserved_tokens)
+
     def check_budget(self, options: MediaOptions, kinds: Mapping[MediaKind | str, int]) -> None:
         """Raise ``ValueError`` when a row could exceed the model's context window."""
         estimate = self.estimate_tokens(options, kinds)

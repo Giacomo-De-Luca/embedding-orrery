@@ -21,6 +21,7 @@ from ..utils.embedding_tasks import EmbeddingTexts
 from .config import (
     DB_PATH,
     EMBEDDING_BATCH_SIZE,
+    DataType,
     EmbeddingModelConfig,
     EmbeddingResult,
     ReEmbedConfig,
@@ -79,6 +80,16 @@ def embed_existing_dataset(
                 error=f"Dataset '{dataset_name}' not found in DuckDB",
                 embedding_provider=model_config.provider.value,
                 embedding_model=model_config.model_name,
+            )
+        # Its documents are the text columns or file-name labels, not the media
+        if dataset.get("data_type") == DataType.MULTIMODAL.value:
+            return EmbeddingResult.failed(
+                config.collection_name,
+                f"Dataset '{dataset_name}' is multimodal: re-embedding would embed its "
+                "text only. Embed its source file or dataset again instead.",
+                device=device,
+                start_time=start_time,
+                model_config=model_config,
             )
 
         all_items = db.get_filtered_items(dataset_name, filters=[], limit=1_000_000)
@@ -168,7 +179,6 @@ def embed_existing_dataset(
                 **model_config.collection_metadata(embedding_dim),
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             },
-            embedding_function=embedding_func,
         )
 
         # Step 5: Register vector collection in DuckDB (dataset_name ≠ collection_name)

@@ -15,8 +15,10 @@ import chromadb
 from chromadb.config import Settings
 
 from ..clients.huggingface_client import (
+    HFMediaFeatures,
     PortionConfig,
     PortionStrategy,
+    get_media_column_kinds,
     load_dataset_portion,
 )
 from ..services.progress_emitter import emit_progress_sync
@@ -110,8 +112,12 @@ def _embed_media(
         auto_id=lambda row, row_idx: (
             f"{config.collection_name}_{row.get(_SPLIT_KEY, config.split)}_{row_idx}"
         ),
+        # The dataset's own Image / Audio / Video types: sniffing alone reads
+        # audio in a generic MP4 container as video
+        column_hints=get_media_column_kinds(config.dataset_id, config.config),
         excluded_columns=frozenset({_SPLIT_KEY}),
         row_metadata=lambda row: {"source_split": row.get(_SPLIT_KEY, config.split)},
+        open_path=HFMediaFeatures.read_file,
     )
     return MultimodalEmbeddingRun(
         client=_chroma_client(),
@@ -269,7 +275,6 @@ def embed_huggingface_dataset(
             config.collection_name,
             resume=config.resume,
             metadata=collection_metadata,
-            embedding_function=embedding_func,
         )
 
         # DuckDB dual-write: create dataset + register vector collection

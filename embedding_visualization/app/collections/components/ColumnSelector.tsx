@@ -13,16 +13,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/lib/ui-primitives/select';
+import type { DataType } from '@/lib/graphql/mutations';
 import { placeholderIssues, templateFields } from '../lib/taskPrefixes';
+import { MEDIA_KIND_LABELS, MediaColumns, type ColumnInfo, type MediaKind } from '../lib/mediaColumns';
 import { TaskPrefixField, type TaskPrefixControl } from './TaskPrefixField';
-
-interface ColumnInfo {
-  name: string;
-  dtype: string;
-}
 
 interface ColumnSelectorProps {
   columns: ColumnInfo[];
+  /** Text columns (MULTIMODAL: the optional text embedded with the media); VECTOR: the vector column */
   selectedEmbeddingColumns: string[];
   selectedMetadataColumns: string[];
   onEmbeddingColumnsChange: (columns: string[]) => void;
@@ -31,7 +29,11 @@ interface ColumnSelectorProps {
   onTemplateChange: (template: string) => void;
   idColumn: string;
   onIdColumnChange: (column: string) => void;
-  dataType?: 'TEXT' | 'IMAGE' | 'VECTOR';
+  dataType?: DataType;
+  /** MULTIMODAL: the source's media columns and their kinds */
+  mediaKinds?: Record<string, MediaKind>;
+  selectedMediaColumns?: string[];
+  onMediaColumnsChange?: (columns: string[]) => void;
   /**
    * Hide the metadata pane / ID selector for flows where they have no
    * effect (re-embed carries both over from the source dataset).
@@ -40,6 +42,50 @@ interface ColumnSelectorProps {
   showIdColumn?: boolean;
   /** Task prefix of the selected model (text mode); its placeholders may name any column. */
   taskPrefix?: TaskPrefixControl;
+  /** Prefix of the element ids, unique per form (several tabs stay mounted). */
+  idPrefix?: string;
+}
+
+interface ColumnChecklistProps {
+  columns: ColumnInfo[];
+  selected: string[];
+  onChange: (columns: string[]) => void;
+  idPrefix: string;
+  /** Badge text of a column (defaults to its dtype). */
+  badge?: (column: ColumnInfo) => string;
+}
+
+/** A scrollable list of column checkboxes, each with a type badge. */
+function ColumnChecklist({ columns, selected, onChange, idPrefix, badge }: ColumnChecklistProps) {
+  const toggle = (name: string, checked: boolean) =>
+    onChange(checked ? [...selected, name] : selected.filter((c) => c !== name));
+  return (
+    <ScrollArea
+      className="border rounded-md [&>[data-radix-scroll-area-viewport]>div]:block!"
+      viewportClassName="max-h-60"
+    >
+      <div className="space-y-2 p-3">
+        {columns.map((col) => (
+          <div key={col.name} className="flex items-center space-x-2">
+            <Checkbox
+              id={`${idPrefix}${col.name}`}
+              checked={selected.includes(col.name)}
+              onCheckedChange={(checked) => toggle(col.name, checked === true)}
+            />
+            <Label
+              htmlFor={`${idPrefix}${col.name}`}
+              className="flex-1 font-normal cursor-pointer flex items-center gap-2"
+            >
+              <span>{col.name}</span>
+              <Badge variant="outline" className="text-xs">
+                {badge ? badge(col) : col.dtype}
+              </Badge>
+            </Label>
+          </div>
+        ))}
+      </div>
+    </ScrollArea>
+  );
 }
 
 export function ColumnSelector({
@@ -53,11 +99,22 @@ export function ColumnSelector({
   idColumn,
   onIdColumnChange,
   dataType = 'TEXT',
+  mediaKinds = {},
+  selectedMediaColumns = [],
+  onMediaColumnsChange,
   showMetadataColumns = true,
   showIdColumn = true,
   taskPrefix,
+  idPrefix = '',
 }: ColumnSelectorProps) {
   const isVectorMode = dataType === 'VECTOR';
+  const isMultimodal = dataType === 'MULTIMODAL';
+  // Multimodal: media columns are embedded as media, never as text or
+  // metadata (the backend stores each cell's path or placeholder itself).
+  const mediaColumns = isMultimodal ? columns.filter((col) => mediaKinds[col.name]) : [];
+  const otherColumns = isMultimodal ? columns.filter((col) => !mediaKinds[col.name]) : columns;
+  const hasText = selectedEmbeddingColumns.length > 0;
+
   // Validation: same grammar and rules as the backend (taskPrefixes.ts)
   const templateValidation = useMemo(() => {
     if (!textTemplate) return null;
@@ -70,88 +127,91 @@ export function ColumnSelector({
     return { valid: true, message: null };
   }, [textTemplate, selectedEmbeddingColumns]);
 
-  const handleEmbeddingColumnToggle = (columnName: string, checked: boolean) => {
-    if (checked) {
-      onEmbeddingColumnsChange([...selectedEmbeddingColumns, columnName]);
-    } else {
-      onEmbeddingColumnsChange(selectedEmbeddingColumns.filter(c => c !== columnName));
-    }
-  };
-
-  const handleMetadataColumnToggle = (columnName: string, checked: boolean) => {
-    if (checked) {
-      onMetadataColumnsChange([...selectedMetadataColumns, columnName]);
-    } else {
-      onMetadataColumnsChange(selectedMetadataColumns.filter(c => c !== columnName));
-    }
-  };
-
   if (columns.length === 0) {
     return null;
   }
+
+  const mediaSelected = MediaColumns.selectedKinds(selectedMediaColumns, mediaKinds)
+    .map((kind) => MEDIA_KIND_LABELS[kind].toLowerCase());
 
   return (
     <div className="space-y-6">
       {/* Column selection grid */}
       <div className={`grid grid-cols-1 gap-6 ${showMetadataColumns ? 'md:grid-cols-2' : ''}`}>
-        {/* Embedding / Vector column */}
-        <div className="space-y-3">
-          <div>
-            <Label className="text-base">{isVectorMode ? 'Vector Column' : 'Embedding Columns'}</Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              {isVectorMode
-                ? 'Column containing pre-computed embedding vectors'
-                : 'Columns to combine for embedding text'}
-            </p>
-          </div>
-          {isVectorMode ? (
-            <Select
-              value={selectedEmbeddingColumns[0] || ''}
-              onValueChange={(value) => onEmbeddingColumnsChange([value])}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select vector column..." />
-              </SelectTrigger>
-              <SelectContent>
-                {columns.map((col) => (
-                  <SelectItem key={col.name} value={col.name}>
-                    {col.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <ScrollArea
-              className="border rounded-md [&>[data-radix-scroll-area-viewport]>div]:block!"
-              viewportClassName="max-h-60"
-            >
-              <div className="space-y-2 p-3">
-                {columns.map((col) => (
-                  <div key={col.name} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`embed-${col.name}`}
-                      checked={selectedEmbeddingColumns.includes(col.name)}
-                      onCheckedChange={(checked) => handleEmbeddingColumnToggle(col.name, checked as boolean)}
-                    />
-                    <Label
-                      htmlFor={`embed-${col.name}`}
-                      className="flex-1 font-normal cursor-pointer flex items-center gap-2"
-                    >
-                      <span>{col.name}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {col.dtype}
-                      </Badge>
-                    </Label>
-                  </div>
-                ))}
+        <div className="space-y-6">
+          {/* Media columns (multimodal) */}
+          {isMultimodal && (
+            <div className="space-y-3">
+              <div>
+                <Label className="text-base">Media Columns</Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Image, audio and video columns to embed; a row&apos;s media and text become one input
+                </p>
               </div>
-            </ScrollArea>
+              {mediaColumns.length > 0 ? (
+                <ColumnChecklist
+                  columns={mediaColumns}
+                  selected={selectedMediaColumns}
+                  onChange={(cols) => onMediaColumnsChange?.(cols)}
+                  idPrefix={`${idPrefix}media-`}
+                  badge={(col) => MEDIA_KIND_LABELS[mediaKinds[col.name]]}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground border rounded-md p-3">
+                  No image, audio or video columns found. Image, Audio and Video features of
+                  HuggingFace datasets are recognised, and local columns holding media bytes or file paths.
+                </p>
+              )}
+              {mediaColumns.length > 0 && selectedMediaColumns.length === 0 && (
+                <p className="text-xs text-destructive">Select at least one media column</p>
+              )}
+            </div>
           )}
-          {selectedEmbeddingColumns.length === 0 && (
-            <p className="text-xs text-destructive">
-              {isVectorMode ? 'Select a vector column' : 'Select at least one column'}
-            </p>
-          )}
+
+          {/* Embedding (text) / Vector column */}
+          <div className="space-y-3">
+            <div>
+              <Label className="text-base">
+                {isVectorMode ? 'Vector Column' : isMultimodal ? 'Text Columns (optional)' : 'Embedding Columns'}
+              </Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                {isVectorMode
+                  ? 'Column containing pre-computed embedding vectors'
+                  : isMultimodal
+                    ? 'Text embedded together with the media, e.g. a caption or a title'
+                    : 'Columns to combine for embedding text'}
+              </p>
+            </div>
+            {isVectorMode ? (
+              <Select
+                value={selectedEmbeddingColumns[0] || ''}
+                onValueChange={(value) => onEmbeddingColumnsChange([value])}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select vector column..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {columns.map((col) => (
+                    <SelectItem key={col.name} value={col.name}>
+                      {col.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <ColumnChecklist
+                columns={otherColumns}
+                selected={selectedEmbeddingColumns}
+                onChange={onEmbeddingColumnsChange}
+                idPrefix={`${idPrefix}embed-`}
+              />
+            )}
+            {!isMultimodal && selectedEmbeddingColumns.length === 0 && (
+              <p className="text-xs text-destructive">
+                {isVectorMode ? 'Select a vector column' : 'Select at least one column'}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Metadata columns */}
@@ -163,42 +223,31 @@ export function ColumnSelector({
                 Additional fields to store (categories, labels, etc.)
               </p>
             </div>
-            <ScrollArea
-              className="border rounded-md [&>[data-radix-scroll-area-viewport]>div]:block!"
-              viewportClassName="max-h-60"
-            >
-              <div className="space-y-2 p-3">
-                {columns.map((col) => (
-                  <div key={col.name} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`meta-${col.name}`}
-                      checked={selectedMetadataColumns.includes(col.name)}
-                      onCheckedChange={(checked) => handleMetadataColumnToggle(col.name, checked as boolean)}
-                    />
-                    <Label
-                      htmlFor={`meta-${col.name}`}
-                      className="flex-1 font-normal cursor-pointer flex items-center gap-2"
-                    >
-                      <span>{col.name}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {col.dtype}
-                      </Badge>
-                    </Label>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+            <ColumnChecklist
+              columns={otherColumns}
+              selected={selectedMetadataColumns}
+              onChange={onMetadataColumnsChange}
+              idPrefix={`${idPrefix}meta-`}
+            />
           </div>
         )}
       </div>
 
       {/* Column selection info (embed-flow copy — talks about metadata
           duplication rules, which don't apply when the pane is hidden) */}
-      {showMetadataColumns && selectedEmbeddingColumns.length > 0 && (
+      {showMetadataColumns && isMultimodal && selectedMediaColumns.length > 0 && (
+        <div className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
+          Each row embeds its <strong>{mediaSelected.join(', ')}</strong>
+          {hasText ? <> with the text of <strong>{selectedEmbeddingColumns.join(', ')}</strong></> : null}
+          {' '}as one input. Media cells are stored as their file path, or a short placeholder, in the
+          item metadata; rows without text are labelled by their media in the plot.
+        </div>
+      )}
+      {showMetadataColumns && !isMultimodal && selectedEmbeddingColumns.length > 0 && (
         <div className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
           {isVectorMode ? (
             <>
-              Vector column: <strong>{selectedEmbeddingColumns[0]}</strong> — pre-computed embeddings will be loaded directly
+              Vector column: <strong>{selectedEmbeddingColumns[0]}</strong>. Its pre-computed embeddings are loaded directly.
             </>
           ) : selectedEmbeddingColumns.length === 1 ? (
             <>
@@ -214,7 +263,8 @@ export function ColumnSelector({
         </div>
       )}
 
-      {/* Task prefix of the model, before the text it prefixes (TEXT mode only) */}
+      {/* Task prefix of the model, before the text it prefixes (text and
+          multimodal: queries use its query prefix even for media-only rows) */}
       {!isVectorMode && taskPrefix && (
         <div className="space-y-2">
           <Label className="text-base">Task Prefix</Label>
@@ -226,6 +276,7 @@ export function ColumnSelector({
               columns={columns.map((col) => col.name)}
               template={textTemplate}
               embeddingColumns={selectedEmbeddingColumns}
+              idPrefix={idPrefix}
             />
           ) : (
             <p className="text-xs text-muted-foreground">
@@ -233,15 +284,20 @@ export function ColumnSelector({
               from a prefix: pick one of them under Embedding Model to set it here.
             </p>
           )}
+          {isMultimodal && taskPrefix.info && (
+            <p className="text-xs text-muted-foreground">
+              The document prefix applies to a row&apos;s text only; images, audio and video get none.
+            </p>
+          )}
         </div>
       )}
 
-      {/* Text template (TEXT mode only) */}
-      {!isVectorMode && (
+      {/* Text template (text, and multimodal rows with text) */}
+      {!isVectorMode && (!isMultimodal || hasText) && (
         <div className="space-y-2">
-          <Label htmlFor="text-template">Text Template</Label>
+          <Label htmlFor={`${idPrefix}text-template`}>Text Template</Label>
           <Textarea
-            id="text-template"
+            id={`${idPrefix}text-template`}
             value={textTemplate}
             onChange={(e) => onTemplateChange(e.target.value)}
             placeholder={
@@ -267,14 +323,14 @@ export function ColumnSelector({
       {/* ID column selector */}
       {showIdColumn && (
         <div className="space-y-2">
-          <Label htmlFor="id-column">ID Column</Label>
+          <Label htmlFor={`${idPrefix}id-column`}>ID Column</Label>
           <Select value={idColumn} onValueChange={onIdColumnChange}>
-            <SelectTrigger id="id-column">
+            <SelectTrigger id={`${idPrefix}id-column`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="auto">Auto (sequential IDs)</SelectItem>
-              {columns.map((col) => (
+              {otherColumns.map((col) => (
                 <SelectItem key={col.name} value={col.name}>
                   {col.name}
                 </SelectItem>

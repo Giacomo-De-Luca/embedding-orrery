@@ -169,6 +169,9 @@ export function VisualizationColorControls({ colorFieldOptions, collectionName, 
 
           {/* Topic slider: preview a merge of the topics, Apply saves it */}
           {colorByField === 'topic_label' && topicTree?.view && <TopicTreeControls topicTree={topicTree} />}
+          {colorByField === 'topic_label' && topicTree?.error && !topicTree.view && (
+            <p className="text-xs text-muted-foreground pt-2">Topic tree unavailable: {topicTree.error}</p>
+          )}
         </div>
 
   </>;

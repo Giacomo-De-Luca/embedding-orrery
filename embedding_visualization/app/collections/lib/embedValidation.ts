@@ -1,6 +1,51 @@
 /** Pure validation + summary helpers for the embed flows (HF / local / re-embed). */
 
-import type { DataType, PortionStrategy } from '@/lib/graphql/mutations';
+import type { DataType, MediaOptionsInput, PortionStrategy } from '@/lib/graphql/mutations';
+import { DATA_TYPE_LABELS, type MediaKindCounts } from './mediaColumns';
+import type { MediaOptionsBudget } from './mediaOptions';
+
+/** What the Image / Audio / Video / Mixed (MULTIMODAL) checks need. */
+export interface MediaValidationInput {
+  /** The selected image / audio / video columns. */
+  columns: string[];
+  /** Kinds of the selected columns. */
+  kinds: MediaKindCounts;
+  /** Limits and token estimate of the media options; null until the settings load. */
+  budget: MediaOptionsBudget | null;
+  /** Why the media settings failed to load (null while loading or once loaded). */
+  settingsError?: string | null;
+  /** The changed media options. */
+  overrides: MediaOptionsInput;
+  /** The model in effect, for the messages. */
+  modelName: string;
+  /**
+   * What the model does not embed of the job's text and media kinds
+   * (`ModelSuggestions.missingModalities`; [] for models outside the catalog,
+   * which the backend checks when they load).
+   */
+  missingModalities: string[];
+}
+
+/** "image", "image or video", "image, audio or video". */
+function orList(items: string[]): string {
+  return items.length <= 2 ? items.join(' or ') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
+}
+
+function mediaIssues(media: MediaValidationInput): string[] {
+  if (media.columns.length === 0) return ['Select at least one image, audio or video column'];
+  const issues: string[] = [];
+  if (media.missingModalities.length > 0) {
+    const example = media.budget ? `, such as ${media.budget.settings.defaultModel}` : '';
+    issues.push(`${media.modelName} does not embed ${orList(media.missingModalities)}: pick a model that does${example}`);
+  }
+  if (!media.budget) {
+    return [
+      ...issues,
+      media.settingsError ? `Could not load the media settings: ${media.settingsError}` : 'Loading the media settings',
+    ];
+  }
+  return [...issues, ...media.budget.issues(media.budget.effective(media.overrides), media.kinds)];
+}
 
 export interface EmbedValidationInput {
   source: 'hf' | 'local-file' | 'reembed';
@@ -9,9 +54,12 @@ export interface EmbedValidationInput {
   /** local-file only */
   filePath?: string;
   collectionName: string;
+  /** Text columns (optional in MULTIMODAL mode) */
   embeddingColumns: string[];
-  /** local-file only; changes the column message for VECTOR mode */
+  /** Changes the column checks: VECTOR takes a vector column, MULTIMODAL media columns (`media`) */
   dataType?: DataType;
+  /** MULTIMODAL only */
+  media?: MediaValidationInput;
   portionStrategy?: PortionStrategy;
   rangeStart?: number;
   rangeEnd?: number;
@@ -40,7 +88,9 @@ export function getEmbedValidationIssues(input: EmbedValidationInput): string[] 
     }
   }
 
-  if (input.embeddingColumns.length === 0) {
+  if (input.dataType === 'MULTIMODAL') {
+    if (input.media) issues.push(...mediaIssues(input.media));
+  } else if (input.embeddingColumns.length === 0) {
     issues.push(
       input.dataType === 'VECTOR'
         ? 'Select a vector column'
@@ -105,9 +155,10 @@ export function buildEmbedSummary(input: EmbedSummaryInput): string {
 
   if (input.dataType === 'VECTOR') {
     parts.push('pre-computed vectors');
-  } else if (input.modelName) {
+  } else {
+    if (input.dataType === 'MULTIMODAL') parts.push(DATA_TYPE_LABELS.MULTIMODAL);
     // Short model name: drop the org prefix
-    parts.push(input.modelName.split('/').pop() || input.modelName);
+    if (input.modelName) parts.push(input.modelName.split('/').pop() || input.modelName);
   }
 
   if (input.enableTopics) parts.push('topics on');

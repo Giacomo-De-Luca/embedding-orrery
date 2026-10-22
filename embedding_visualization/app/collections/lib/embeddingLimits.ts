@@ -72,8 +72,8 @@ export interface EmbeddingModelFields {
   ollamaUrl: string;
   qwenTask: string;
   geminiTaskType: GeminiTaskType;
-  promptName: string | null;
-  customPrompt: string;
+  /** Sentence-transformers prompt: a prompt name of the model, or literal prompt text. */
+  prompt: string;
   maxLength: number | null;
   /** Set for models that read their task from a prefix (see taskPrefixes.ts). */
   taskPrefix: TaskPrefixInput | null;
@@ -97,9 +97,7 @@ export function embeddingModelInputFrom(fields: EmbeddingModelFields): Embedding
         ollamaUrl: provider === 'OLLAMA' ? fields.ollamaUrl : undefined,
         task: provider === 'QWEN' ? fields.qwenTask : undefined,
         taskType: provider === 'GEMINI' ? fields.geminiTaskType : undefined,
-        prompt: provider === 'SENTENCE_TRANSFORMERS'
-          ? (fields.customPrompt || fields.promptName || undefined)
-          : undefined,
+        prompt: provider === 'SENTENCE_TRANSFORMERS' && fields.prompt.trim() ? fields.prompt : undefined,
       };
   if (isLocalProvider(provider) && fields.maxLength !== null) {
     input.maxLength = fields.maxLength;

@@ -26,7 +26,7 @@ const LINKAGE_OPTIONS = REDUCTION_STRATEGY_OPTIONS.filter(
 export function TopicTreeControls({ topicTree }: { topicTree: UseTopicMergeTreeReturn }) {
   const {
     view, linkage, setLinkage, absorbNoise, setAbsorbNoise, minTopics, maxTopics, topicCount,
-    setTopicCount, previewing, liveSlider, reset, apply, applying, applyError, jobId,
+    setTopicCount, previewing, liveSlider, reset, apply, applying, applyError, jobId, ready,
   } = topicTree;
   // The thumb follows the pointer; large collections recut only on release.
   const [draft, setDraft] = useState<number | null>(null);
@@ -101,7 +101,12 @@ export function TopicTreeControls({ topicTree }: { topicTree: UseTopicMergeTreeR
           Reset
         </Button>
         {!IS_DEMO && (
-          <Button size="sm" onClick={() => apply(llmLabels)} disabled={!previewing || applying}>
+          <Button
+            size="sm"
+            onClick={() => apply(llmLabels)}
+            disabled={!previewing || applying || !ready}
+            title={ready ? undefined : 'Loading the selected topic tree'}
+          >
             Apply
           </Button>
         )}

@@ -39,10 +39,10 @@ class EmbedTextQWEN(EmbeddingFunction[Documents]):
         # bfloat16 matches Qwen3's training dtype (fp16 risks overflow on long-context pooling).
         self.model = (
             AutoModel.from_pretrained(
-                model, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16
+                model, attn_implementation="flash_attention_2", dtype=torch.bfloat16
             ).cuda()
             if device == "cuda"
-            else AutoModel.from_pretrained(model, torch_dtype=torch.bfloat16).to(device)
+            else AutoModel.from_pretrained(model, dtype=torch.bfloat16).to(device)
         )
         self.model.eval()
 

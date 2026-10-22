@@ -1,11 +1,14 @@
 """HuggingFace dataset client for fetching dataset information and embedding datasets."""
 
 import dataclasses
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from ..utils.media_kinds import MediaKind, MediaReference
+
+logger = logging.getLogger("orrery." + __name__)
 
 
 @dataclass
@@ -134,6 +137,30 @@ class HFMediaFeatures:
             if getattr(feature, "decode", False):
                 dataset = dataset.cast_column(name, dataclasses.replace(feature, decode=False))
         return dataset
+
+    @staticmethod
+    def read_file(path: str) -> bytes:
+        """The bytes of a repo file a streamed media cell points at (``hf://…``,
+        ``zip://…::https://…``), read the way ``datasets`` reads it when decoding."""
+        from datasets.utils.file_utils import xopen
+
+        with xopen(path, "rb") as file:
+            return file.read()
+
+
+def get_media_column_kinds(dataset_id: str, config: str | None = None) -> dict[str, str]:
+    """The Image / Audio / Video columns a dataset declares (column -> kind), read
+    without loading data; empty when it declares no features (folder-based
+    datasets, whose cells carry file paths) or they can't be read."""
+    from datasets import load_dataset_builder
+
+    config_name = config if config and config != "default" else None
+    try:
+        builder = load_dataset_builder(dataset_id, name=config_name)
+    except Exception:
+        logger.warning("No declared features for %s: media kinds are sniffed", dataset_id)
+        return {}
+    return HFMediaFeatures.kinds(builder.info.features)
 
 
 def get_dataset_info(dataset_id: str) -> DatasetInfo:

@@ -89,6 +89,9 @@ export function useCollections(options?: { skip?: boolean }) {
             display_name: col.name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
             count: col.count,
             embedding_dim: (col.metadata?.embedding_dim as number | undefined) || 384,
+            // The model text queries are embedded with (none: no text search)
+            embedding_provider: (col.metadata?.embedding_provider as string | null | undefined) ?? undefined,
+            embedding_model: (col.metadata?.embedding_model as string | null | undefined) ?? undefined,
             timestamp: (col.metadata?.timestamp as string | undefined) || '',
             source_dataset: col.metadata?.source_dataset as string | undefined,
             has_projections: col.metadata?.has_projections as boolean | undefined,

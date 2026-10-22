@@ -2,6 +2,7 @@
 Configuration for embedding datasets.
 """
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -113,6 +114,28 @@ class EmbeddingResult:
     embedding_model: str | None = None
     # Non-cancelling issues the run met, e.g. documents truncated at the length cap.
     warnings: list[str] = field(default_factory=list)
+
+    @classmethod
+    def failed(
+        cls,
+        collection_name: str,
+        error: str,
+        *,
+        device: str,
+        start_time: float,
+        model_config: EmbeddingModelConfig,
+    ) -> "EmbeddingResult":
+        """A run that stopped before embedding anything."""
+        return cls(
+            collection_name=collection_name,
+            total_embedded=0,
+            embedding_dim=0,
+            device=device,
+            duration_seconds=time.time() - start_time,
+            error=error,
+            embedding_provider=model_config.provider.value,
+            embedding_model=model_config.model_name,
+        )
 
 
 @dataclass(kw_only=True)

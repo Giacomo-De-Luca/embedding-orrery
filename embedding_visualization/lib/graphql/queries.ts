@@ -804,6 +804,49 @@ export const EMBEDDING_MODEL_MAX_LENGTH = gql`
   }
 `;
 
+/**
+ * Model suggestions of the embed forms: the backend catalog, then the models
+ * existing collections use (lib/utils/modelSuggestions.ts).
+ */
+export const GET_EMBEDDING_MODEL_CATALOG = gql`
+  query EmbeddingModelCatalog {
+    embeddingModelCatalog {
+      provider
+      modelName
+      description
+      modalities
+      prompts
+      dimension
+      defaultFor
+      suggested
+      collectionCount
+    }
+  }
+`;
+
+/** Defaults, limits and token constants of the media options (app/collections/lib/mediaOptions.ts). */
+export const GET_MEDIA_EMBEDDING_SETTINGS = gql`
+  query MediaEmbeddingSettings {
+    mediaEmbeddingSettings {
+      defaults {
+        imageMaxSoftTokens
+        videoFps
+        videoMaxFrames
+        videoMaxSoftTokens
+        maxAudioSeconds
+      }
+      softTokenBudgets
+      videoFpsLimit
+      videoFramesLimit
+      audioSecondsLimit
+      contextTokens
+      reservedTokens
+      audioTokensPerSecond
+      defaultModel
+    }
+  }
+`;
+
 /** The task-prefix table and the models that take it (app/collections/lib/taskPrefixes.ts). */
 export const EMBEDDING_TASK_PREFIXES = gql`
   query EmbeddingTaskPrefixes {

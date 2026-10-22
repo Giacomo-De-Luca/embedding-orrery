@@ -25,7 +25,12 @@ import sys
 
 import interpretability_backend.backend.main  # noqa: F401  (full app + schema)
 
-BANNED = ("torch", "interpret", "hdbscan", "sklearn", "scipy", "umap")
+BANNED = (
+    "torch", "interpret", "hdbscan", "sklearn", "scipy", "umap",
+    # Embedding and media stacks load on first embed / query, never with the schema
+    "sentence_transformers", "transformers", "torchvision", "librosa", "soundfile", "av",
+    "datasets", "FlagEmbedding",
+)
 heavy = sorted(
     m for m in sys.modules
     if any(m == b or m.startswith(b + ".") for b in BANNED)
@@ -72,6 +77,6 @@ def test_schema_import_loads_no_heavy_modules():
     )
     assert result.returncode == 0, (
         f"Importing backend.main pulled in a heavy module (torch/interpret.*/"
-        f"hdbscan/sklearn/scipy/umap) at module level.\n"
+        f"hdbscan/sklearn/scipy/umap or an embedding/media library) at module level.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )

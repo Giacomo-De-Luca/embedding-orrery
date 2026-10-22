@@ -75,6 +75,18 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 
 **Tests:** `forked/__tests__/plotlyEntry.test.ts`.
 
+### 6. scattergl: per-trace opacity scale before every draw
+
+**Files:** `src/plot_api/plot_config.js`, `src/traces/scattergl/scene_update.js`
+
+**Problem:** the 2D plot should grow more opaque as you zoom in. For scattergl, `marker.opacity` is a `calc` attribute, so changing it through `Plotly.react` or `restyle` recalculates every trace on every wheel tick.
+
+**Fix:** a new config option, `scatterglOpacityScale(fullTrace, xRange, yRange) → factor` (`valType: 'any'`, default `null`, like `setBackground`). `scene.draw` starts with `applyOpacityScale`, which sets each marker trace's regl-scatter2d group opacity to its base opacity (`scene.markerOptions[i].opacity`) × the factor. It always starts from the base, so draws never compound, and Plotly's own `scatter2d.update(scene.markerOptions)` on each plot call outside select mode keeps resetting it. The uniform is written to `group.opacity` directly: `scatter2d.update()` re-parses every option alias per trace, which costs milliseconds per frame with thousands of traces. Traces with a selection (`selectBatch` / `unselectBatch`) are skipped, so they keep Plotly's selected/unselected styling at the unscaled opacity (selected points are drawn by `select2d`, which the patch doesn't touch). Every redraw passes through `scene.draw` (drag and wheel frames, relayouts, `Plotly.react`), so the opacity follows the ranges in the same frame. `toImage` copies `gd._context` into its clone's config, so exported images are scaled too.
+
+**Contract:** regl-scatter2d reads `opacity` from the group at draw time (`opacity: regl.prop('opacity')`). The app's rule is `lib/utils/zoomOpacity.ts`. Details: `documentation/ZOOM_OPACITY.md`.
+
+**Tests:** `forked/__tests__/scatterglOpacityScale.test.ts`.
+
 ---
 
 ## react-plotly.js

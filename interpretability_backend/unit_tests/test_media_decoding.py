@@ -185,3 +185,40 @@ class TestVideo:
         pytest.importorskip("av")
         with pytest.raises(MediaDecodeError):
             _decoder().decode(b"\x00\x00\x00\x18ftypisomjunk", MediaKind.VIDEO)
+
+
+class TestDatasetFiles:
+    """Streamed Hugging Face datasets point media cells at the repo's own files
+    (``hf://…``, ``zip://…::https://…``, ``https://huggingface.co/…``)."""
+
+    def _decoder(self, open_path, base_dir=None) -> MediaDecoder:
+        return MediaDecoder(
+            MediaEmbeddingSettings(), MediaOptions(), base_dir=base_dir, open_path=open_path
+        )
+
+    def test_non_local_paths_go_to_the_dataset_reader(self):
+        opened = []
+        decoder = self._decoder(lambda path: opened.append(path) or _png())
+        cell = {"bytes": None, "path": "hf://datasets/org/pets@main/cat.png"}
+
+        assert decoder.decode(cell, MediaKind.IMAGE).mode == "RGB"
+        assert opened == ["hf://datasets/org/pets@main/cat.png"]
+
+    def test_dataset_urls_need_no_remote_url_opt_in(self):
+        url = "https://huggingface.co/datasets/org/pets/resolve/main/cat.png"
+        assert self._decoder(lambda path: _png()).decode(url, MediaKind.IMAGE).mode == "RGB"
+
+    def test_local_files_are_read_directly(self, tmp_path):
+        (tmp_path / "cat.png").write_bytes(_png())
+
+        def unexpected(path):
+            raise AssertionError(f"dataset reader used for a local file: {path}")
+
+        assert self._decoder(unexpected, tmp_path).decode("cat.png", MediaKind.IMAGE).mode == "RGB"
+
+    def test_reader_failures_skip_the_row(self):
+        def missing(path):
+            raise FileNotFoundError(path)
+
+        with pytest.raises(MediaDecodeError, match="cat.png"):
+            self._decoder(missing).decode("hf://datasets/org/pets/cat.png", MediaKind.IMAGE)

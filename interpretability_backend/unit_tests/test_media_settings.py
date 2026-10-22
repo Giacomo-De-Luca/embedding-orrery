@@ -127,6 +127,23 @@ class TestTokenBudget:
         options = settings.with_overrides({"video_max_frames": 16})
         settings.check_budget(options, {MediaKind.VIDEO: 2})
 
+    def test_text_gets_what_the_media_leave(self, settings):
+        """A row's text is cut to this, so text plus worst-case media fits the context."""
+        options = settings.defaults
+        kinds = {MediaKind.VIDEO: 1, MediaKind.AUDIO: 1}
+        media = settings.estimate_tokens(options, kinds) - settings.reserved_tokens
+        assert settings.text_token_budget(options, kinds) == settings.context_tokens - media
+        assert settings.text_token_budget(options, {"image": 1}) == (
+            settings.context_tokens - options.image_max_soft_tokens
+        )
+
+    def test_the_text_budget_never_drops_below_the_reserve(self, settings):
+        """check_budget guarantees it; the budget follows from the same numbers."""
+        kinds = {MediaKind.VIDEO: 1, MediaKind.AUDIO: 1, MediaKind.IMAGE: 1}
+        options = settings.with_overrides({"max_audio_seconds": 100})
+        settings.check_budget(options, kinds)
+        assert settings.text_token_budget(options, kinds) >= settings.reserved_tokens
+
 
 class TestSettingsValidation:
     def test_unknown_file_keys_are_rejected(self, tmp_path):

@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { getEmbedValidationIssues, buildEmbedSummary } from '../embedValidation';
+import { getEmbedValidationIssues, buildEmbedSummary, type MediaValidationInput } from '../embedValidation';
+import { MediaOptionsBudget } from '../mediaOptions';
+import type { MediaEmbeddingSettings } from '@/lib/graphql/mutations';
+
+const MEDIA_SETTINGS: MediaEmbeddingSettings = {
+  defaults: { imageMaxSoftTokens: 280, videoFps: 1, videoMaxFrames: 32, videoMaxSoftTokens: 140, maxAudioSeconds: 120 },
+  softTokenBudgets: [70, 140, 280, 560, 1120],
+  videoFpsLimit: 4,
+  videoFramesLimit: 128,
+  audioSecondsLimit: 327,
+  contextTokens: 8192,
+  reservedTokens: 512,
+  audioTokensPerSecond: 25,
+  defaultModel: 'google/embeddinggemma-2',
+};
+
+const MEDIA: MediaValidationInput = {
+  columns: ['img'],
+  kinds: { image: 1 },
+  budget: new MediaOptionsBudget(MEDIA_SETTINGS),
+  settingsError: null,
+  overrides: {},
+  modelName: 'google/embeddinggemma-2',
+  missingModalities: [],
+};
 
 const VALID_HF = {
   source: 'hf' as const,
@@ -56,6 +80,86 @@ describe('getEmbedValidationIssues', () => {
     expect(
       getEmbedValidationIssues({ ...VALID_LOCAL, embeddingColumns: [], dataType: 'VECTOR' })
     ).toContain('Select a vector column');
+  });
+
+  it('accepts media rows without text columns in MULTIMODAL mode', () => {
+    expect(
+      getEmbedValidationIssues({ ...VALID_LOCAL, dataType: 'MULTIMODAL', embeddingColumns: [], media: MEDIA })
+    ).toEqual([]);
+    expect(
+      getEmbedValidationIssues({ ...VALID_HF, dataType: 'MULTIMODAL', embeddingColumns: [], media: MEDIA })
+    ).toEqual([]);
+  });
+
+  it('requires at least one media column in MULTIMODAL mode', () => {
+    expect(
+      getEmbedValidationIssues({
+        ...VALID_LOCAL,
+        dataType: 'MULTIMODAL',
+        media: { ...MEDIA, columns: [], kinds: {} },
+      })
+    ).toEqual(['Select at least one image, audio or video column']);
+  });
+
+  it('requires a model that embeds the selected kinds (ModelSuggestions.missingModalities)', () => {
+    expect(
+      getEmbedValidationIssues({
+        ...VALID_LOCAL,
+        dataType: 'MULTIMODAL',
+        media: {
+          ...MEDIA,
+          columns: ['img', 'clip'],
+          kinds: { image: 1, video: 1 },
+          modelName: 'all-MiniLM-L6-v2',
+          missingModalities: ['image', 'video'],
+        },
+      })
+    ).toEqual(['all-MiniLM-L6-v2 does not embed image or video: pick a model that does, such as google/embeddinggemma-2']);
+    expect(
+      getEmbedValidationIssues({
+        ...VALID_LOCAL,
+        dataType: 'MULTIMODAL',
+        media: { ...MEDIA, modelName: 'x', missingModalities: ['image', 'audio', 'video'] },
+      })[0]
+    ).toMatch(/^x does not embed image, audio or video: /);
+  });
+
+  it('keeps a row within the model context (same estimate as the backend)', () => {
+    const issues = getEmbedValidationIssues({
+      ...VALID_LOCAL,
+      dataType: 'MULTIMODAL',
+      media: { ...MEDIA, columns: ['img', 'clip', 'speech'], kinds: { image: 1, video: 1, audio: 1 } },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain('about 8272 tokens');
+    expect(
+      getEmbedValidationIssues({
+        ...VALID_LOCAL,
+        dataType: 'MULTIMODAL',
+        media: {
+          ...MEDIA,
+          columns: ['img', 'clip', 'speech'],
+          kinds: { image: 1, video: 1, audio: 1 },
+          overrides: { videoMaxFrames: 16 },
+        },
+      })
+    ).toEqual([]);
+  });
+
+  it('waits for the media settings before embedding media', () => {
+    expect(
+      getEmbedValidationIssues({ ...VALID_LOCAL, dataType: 'MULTIMODAL', media: { ...MEDIA, budget: null } })
+    ).toEqual(['Loading the media settings']);
+  });
+
+  it('reports media settings that failed to load instead of waiting forever', () => {
+    expect(
+      getEmbedValidationIssues({
+        ...VALID_LOCAL,
+        dataType: 'MULTIMODAL',
+        media: { ...MEDIA, budget: null, settingsError: 'Failed to fetch' },
+      })
+    ).toEqual(['Could not load the media settings: Failed to fetch']);
   });
 
   it('requires a non-blank collection name', () => {
@@ -117,6 +221,18 @@ describe('buildEmbedSummary', () => {
         dataType: 'VECTOR',
       })
     ).toBe('vecs · all 20,000 rows · pre-computed vectors');
+  });
+
+  it('names the Image / Audio / Video / Mixed mode and its model', () => {
+    expect(
+      buildEmbedSummary({
+        collectionName: 'clips',
+        portionStrategy: 'FIRST_N',
+        numRows: 100,
+        modelName: 'google/embeddinggemma-2',
+        dataType: 'MULTIMODAL',
+      })
+    ).toBe('clips · first 100 rows · Image / Audio / Video / Mixed · embeddinggemma-2');
   });
 
   it('describes a row range and handles a blank name', () => {

@@ -101,6 +101,33 @@ describe('buildHFEmbedInput', () => {
     expect(input.idColumn).toBe('doc_id');
     expect(input.metadataColumns).toEqual(['label', 'title', 'body']);
   });
+
+  it('embeds text by default', () => {
+    const input = buildHFEmbedInput(form({ selectedMediaColumns: ['img'] }), source);
+    expect(input.dataType).toBe('TEXT');
+    expect(input.columns).toEqual(['text']);
+    expect(input.mediaColumns).toBeUndefined();
+  });
+
+  it('embeds Image / Audio / Video features in MULTIMODAL mode', () => {
+    const input = buildHFEmbedInput(
+      form({
+        selectedEmbeddingColumns: [],
+        textTemplate: '',
+        selectedMediaColumns: ['audio'],
+        selectedMetadataColumns: ['label', 'audio'],
+        mediaOptions: { maxAudioSeconds: 30 },
+      }),
+      { ...source, dataType: 'MULTIMODAL' }
+    );
+    expect(input.dataType).toBe('MULTIMODAL');
+    expect(input.mediaColumns).toEqual(['audio']);
+    expect(input.mediaOptions).toEqual({ maxAudioSeconds: 30 });
+    expect(input.columns).toBeUndefined();
+    expect(input.textTemplate).toBeUndefined();
+    expect(input.metadataColumns).toEqual(['label']);
+    expect(input.embeddingModel).toBe(MODEL);
+  });
 });
 
 describe('buildLocalEmbedInput', () => {
@@ -114,7 +141,8 @@ describe('buildLocalEmbedInput', () => {
     const input = buildLocalEmbedInput(form(), source);
     expect(input.columns).toEqual(['text']);
     expect(input.textTemplate).toBe('{text}');
-    expect(input.imageColumn).toBeUndefined();
+    expect(input.dataType).toBe('TEXT');
+    expect(input.mediaColumns).toBeUndefined();
     expect(input.vectorColumn).toBeUndefined();
     expect(input.embeddingModel).toBe(MODEL);
     expect(input.nRows).toBe(1000);
@@ -132,13 +160,54 @@ describe('buildLocalEmbedInput', () => {
     expect(input.embeddingModel).toBeUndefined();
   });
 
-  it('routes IMAGE mode to imageColumn', () => {
-    const input = buildLocalEmbedInput(form({ selectedEmbeddingColumns: ['img'] }), {
-      ...source,
-      dataType: 'IMAGE',
-    });
-    expect(input.imageColumn).toBe('img');
-    expect(input.columns).toBeUndefined();
+  it('routes MULTIMODAL mode to mediaColumns, with optional text and the changed media options', () => {
+    const input = buildLocalEmbedInput(
+      form({
+        selectedEmbeddingColumns: ['caption'],
+        textTemplate: '{caption}',
+        selectedMediaColumns: ['img', 'clip'],
+        selectedMetadataColumns: ['label', 'img'],
+        mediaOptions: { videoMaxFrames: 16 },
+      }),
+      { ...source, dataType: 'MULTIMODAL' }
+    );
+    expect(input.dataType).toBe('MULTIMODAL');
+    expect(input.mediaColumns).toEqual(['img', 'clip']);
+    expect(input.mediaOptions).toEqual({ videoMaxFrames: 16 });
+    expect(input.columns).toEqual(['caption']);
+    expect(input.textTemplate).toBe('{caption}');
+    // Media cells reach the metadata as references; never as metadata columns.
+    expect(input.metadataColumns).toEqual(['label']);
+    expect(input.embeddingModel).toBe(MODEL);
+    expect(input.vectorColumn).toBeUndefined();
+    expect(input).not.toHaveProperty('imageColumn');
+  });
+
+  it('sends no text columns or template for media-only rows, and never a media column as text', () => {
+    const mediaOnly = buildLocalEmbedInput(
+      form({ selectedEmbeddingColumns: [], textTemplate: '', selectedMediaColumns: ['img'] }),
+      { ...source, dataType: 'MULTIMODAL' }
+    );
+    expect(mediaOnly.columns).toBeUndefined();
+    expect(mediaOnly.textTemplate).toBeUndefined();
+    expect(mediaOnly.mediaOptions).toBeUndefined();
+
+    const overlapping = buildLocalEmbedInput(
+      form({ selectedEmbeddingColumns: ['img', 'caption'], selectedMediaColumns: ['img'] }),
+      { ...source, dataType: 'MULTIMODAL' }
+    );
+    expect(overlapping.columns).toEqual(['caption']);
+    expect(overlapping.metadataColumns).toEqual(['label']);
+  });
+
+  it('sends no media fields outside MULTIMODAL mode', () => {
+    const input = buildLocalEmbedInput(
+      form({ selectedMediaColumns: ['img'], mediaOptions: { videoMaxFrames: 16 } }),
+      source
+    );
+    expect(input.mediaColumns).toBeUndefined();
+    expect(input.mediaOptions).toBeUndefined();
+    expect(input.columns).toEqual(['text']);
   });
 
   it('maps random sampling fields', () => {

@@ -256,8 +256,15 @@ The standalone slider's maximum is the base-topic count from the tree query.
 
 **Cached colour options.** The Explore page caches its colour-by options in
 the dataset metadata (`field_analysis`). Every topic sync drops that cache,
-so new topic fields (subtopics after a reduction) appear on the next load;
-`reload()` after an Explore Apply rewrites it directly.
+so new topic fields (subtopics after a reduction) appear on the next load.
+After an Explore Apply, `reload()` does not wait for that: the reload
+response carries no cache, so `TopicFieldOptions.refreshCache`
+(`lib/utils/fieldAnalysis.ts`) rebuilds one from the analysis already in
+memory, with the topic-field options recomputed from the reloaded items. The
+reload then takes the cached path (no full analysis of every field on the
+main thread) and stores the rebuilt cache. Because a reduction changes
+neither the items nor their coordinates, `reload()` also keeps the cached
+projections while the item membership signature is unchanged.
 
 Frontend tests: `topicTreeCut.test.ts`, `topicCutMetadata.test.ts`,
 `app/collections/lib/__tests__/topicConfigInput.test.ts`,

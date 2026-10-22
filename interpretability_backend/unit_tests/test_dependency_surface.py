@@ -3,7 +3,8 @@
 EmbeddingGemma 2 needs sentence-transformers >= 6.1 (ordered multimodal dict inputs)
 and transformers >= 5.19 (the first release with ``embedding_gemma2``). Its
 processor always builds a video sub-processor, which needs torchvision. PyAV
-decodes audio and video with the FFmpeg it bundles.
+decodes audio and video with the FFmpeg it bundles (scipy resamples the audio);
+librosa and soundfile back sentence-transformers' own audio support.
 """
 
 import inspect
@@ -37,7 +38,11 @@ def test_sentence_transformer_multimodal_api():
 def test_embeddinggemma_2_classes_exist():
     from transformers.models import embedding_gemma2
 
-    for name in ("EmbeddingGemma2Model", "EmbeddingGemma2Processor"):
+    for name in (
+        "EmbeddingGemma2Model",
+        "EmbeddingGemma2Processor",
+        "EmbeddingGemma2VideoProcessor",
+    ):
         assert hasattr(embedding_gemma2, name)
 
 
@@ -48,8 +53,16 @@ def test_torchvision_backs_the_video_processor():
 
 
 def test_pyav_decodes_and_resamples():
-    av = pytest.importorskip("av")
+    import av
+
     assert hasattr(av, "AudioResampler") and hasattr(av, "open")
+
+
+def test_audio_libraries_import():
+    import librosa
+    import soundfile
+
+    assert hasattr(librosa, "resample") and hasattr(soundfile, "read")
 
 
 def test_bge_provider_imports():

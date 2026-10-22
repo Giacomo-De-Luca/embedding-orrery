@@ -366,6 +366,17 @@ var configAttributes = {
         ].join(' ')
     },
 
+    // [fork] change 6: zoom-dependent scattergl opacity (see plotly_changes.md)
+    scatterglOpacityScale: {
+        valType: 'any',
+        dflt: null,
+        description: [
+            'Function (fullTrace, xRange, yRange) returning a multiplier for the marker',
+            'opacity of a scattergl trace. It is called before every draw, so the',
+            'opacity can follow the axis ranges while panning and zooming.'
+        ].join(' ')
+    },
+
     topojsonURL: {
         valType: 'string',
         noBlank: true,

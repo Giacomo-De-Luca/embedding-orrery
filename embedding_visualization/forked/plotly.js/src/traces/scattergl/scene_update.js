@@ -10,6 +10,31 @@ function isReady(component) {
     return component && component !== true;
 }
 
+// [fork] change 6: scale each trace's marker opacity by config.scatterglOpacityScale
+// before a draw. Always from the base opacity in markerOptions, so draws never compound.
+// The group's uniform is written directly: scatter2d.update() re-parses every option
+// alias per trace, which costs milliseconds per frame with thousands of traces.
+function applyOpacityScale(gd, scene) {
+    var scale = gd._context && gd._context.scatterglOpacityScale;
+    if(typeof scale !== 'function' || !isReady(scene.scatter2d)) return;
+
+    var groups = scene.scatter2d.groups;
+    var calcdata = gd.calcdata || [];
+    for(var k = 0; k < calcdata.length; k++) {
+        var cd0 = calcdata[k] && calcdata[k][0];
+        var stash = cd0 && cd0.t;
+        if(!stash || stash._scene !== scene) continue;
+
+        var i = stash.index;
+        var options = scene.markerOptions[i];
+        // a trace with a selection keeps plotly's selected/unselected styling
+        if(!options || !groups[i] || scene.selectBatch[i].length || scene.unselectBatch[i].length) continue;
+
+        var trace = cd0.trace;
+        groups[i].opacity = options.opacity * scale(trace, trace._xA.range, trace._yA.range);
+    }
+}
+
 // make sure scene exists on subplot, return it
 module.exports = function sceneUpdate(gd, subplot) {
     var scene = subplot._scene;
@@ -81,6 +106,8 @@ module.exports = function sceneUpdate(gd, subplot) {
             var select2d = scene.select2d;
             var selectBatch = scene.selectBatch;
             var unselectBatch = scene.unselectBatch;
+
+            applyOpacityScale(gd, scene);
 
             for(var i = 0; i < count; i++) {
                 if(isReady(fill2d) && scene.fillOrder[i]) {

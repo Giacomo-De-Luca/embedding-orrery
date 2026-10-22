@@ -61,12 +61,18 @@ class MediaDecoder:
         options: MediaOptions,
         base_dir: Path | None = None,
         fetch: Callable[[str, float], bytes] | None = None,
+        open_path: Callable[[str], bytes] | None = None,
     ):
-        """``base_dir``: where relative paths resolve (the data file's folder)."""
+        """``base_dir``: where relative paths resolve (the data file's folder).
+        ``open_path``: reads paths that are not local files, the repo files a
+        streamed Hugging Face dataset points at (``hf://…``, ``https://…``); the
+        dataset is trusted like ``datasets`` trusts it, so ``allow_remote_urls``
+        does not apply to them."""
         self.settings = settings
         self.options = options
         self.base_dir = base_dir
         self.fetch = fetch or fetch_url
+        self.open_path = open_path
 
     def decode(self, value: Any, kind: MediaKind) -> Any:
         """The model input for one cell; raises ``MediaDecodeError``."""
@@ -222,20 +228,34 @@ class MediaDecoder:
                 return bytes(data)
             value = value.get("path")
         if isinstance(value, str) and value:
-            if value.startswith(URL_SCHEMES):
-                if not self.settings.allow_remote_urls:
-                    raise MediaDecodeError(
-                        f"{value} is a remote URL; set allow_remote_urls in "
-                        "config/media_embedding.json to fetch it"
-                    )
-                return self.fetch(value, self.settings.remote_timeout_seconds)
-            path = Path(value).expanduser()
-            if not path.is_absolute() and self.base_dir is not None:
-                path = self.base_dir / path
-            if not path.is_file():
+            path = None
+            if not value.startswith(URL_SCHEMES):
+                path = Path(value).expanduser()
+                if not path.is_absolute() and self.base_dir is not None:
+                    path = self.base_dir / path
+                if path.is_file():
+                    return path
+            if self.open_path is not None:
+                return self._dataset_file(value)
+            if path is not None:
                 raise MediaDecodeError(f"file not found: {path}")
-            return path
+            if not self.settings.allow_remote_urls:
+                raise MediaDecodeError(
+                    f"{value} is a remote URL; set allow_remote_urls in "
+                    "config/media_embedding.json to fetch it"
+                )
+            return self.fetch(value, self.settings.remote_timeout_seconds)
         raise MediaDecodeError(f"unsupported media value of type {type(value).__name__}")
+
+    def _dataset_file(self, path: str) -> bytes:
+        """A dataset repo file through ``open_path`` (at most ``MAX_REMOTE_BYTES``)."""
+        try:
+            data = self.open_path(path)
+        except Exception as error:
+            raise MediaDecodeError(f"cannot read {path}: {error}") from error
+        if len(data) > MAX_REMOTE_BYTES:
+            raise MediaDecodeError(f"{path} is larger than {MAX_REMOTE_BYTES // (1024 * 1024)} MB")
+        return data
 
     @staticmethod
     def _av_source(source: bytes | Path) -> Any:

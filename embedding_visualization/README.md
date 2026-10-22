@@ -59,10 +59,11 @@ npm start
   - Dataset info (configs, splits, features)
   - Preview rows before embedding
   - Column selection with text template support
+  - Image / Audio / Video / Mixed mode: embeds Image, Audio and Video features, optionally with text
   - Portion strategies (first N, last N, random sample, full)
 - **Local File Support**: Upload and embed CSV, JSON, Parquet files
   - Text embedding with column selection
-  - Image embedding with ViT models
+  - Image / Audio / Video / Mixed embedding (EmbeddingGemma 2 by default): media columns as bytes or file paths, optionally with text, with per-job media settings and a per-row token estimate
   - Pre-computed vector support
 - **Collection Manager**: View, edit metadata, and delete collections
 - **Topic Extraction**: Extract topics from existing collections (HDBSCAN + c-TF-IDF + optional LLM labeling)
@@ -155,8 +156,10 @@ embedding_visualization/
 - `JobsPanel`: Interrupted jobs panel with resume capability
 - `DataSourceTabs`: Tab selector with icons
 - `FileUploadZone`: Drag-drop file upload
-- `DataTypeSelector`: TEXT/IMAGE/VECTOR selection
-- `ColumnSelector`: Column selection + text template
+- `DataTypeSelector`: Text, Image / Audio / Video / Mixed (`MULTIMODAL`) or pre-computed vectors (local files only)
+- `ColumnSelector`: Column selection + text template (multimodal: media columns with kind badges, optional text)
+- `MediaSettingsForm`: Media options of a multimodal embed (tokens per image or frame, video sampling, audio length) with the per-row token estimate
+- `ModelNameCombobox`: Model-name field with suggestions (catalog models, models your collections use)
 - `PortionSelector`: Row range/sample selection
 - `SplitSelector`: HF split selector
 - `DatasetInfoDisplay`: Preview data display

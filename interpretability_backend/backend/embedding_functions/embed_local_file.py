@@ -47,7 +47,8 @@ def embed_local_file(
     """
     Embed a local file (parquet/json/csv/tsv) into ChromaDB.
 
-    Supports text, image, and pre-computed vector embeddings.
+    Supports text, multimodal (image / audio / video / mixed) and pre-computed
+    vector embeddings.
 
     Args:
         config: Embedding configuration
@@ -259,7 +260,6 @@ def embed_text_from_local(
         config.collection_name,
         resume=config.resume,
         metadata=collection_metadata,
-        embedding_function=embedding_func,
     )
 
     # DuckDB dual-write: create dataset + register vector collection

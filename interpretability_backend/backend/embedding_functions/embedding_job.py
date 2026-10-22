@@ -1,11 +1,12 @@
 """Batch-loop bookkeeping shared by every embedder.
 
-HuggingFace, local text, re-embed, image and vector embedding all run the same
-loop around their own row → (ids, documents, vectors) step:
+HuggingFace, local text, re-embed, multimodal and vector embedding all run the
+same loop around their own row → (ids, documents, vectors) step:
 
 - ``open_embedding_collection`` opens the ChromaDB collection: on resume it
   reuses the existing one and returns the ids already embedded, otherwise it
-  replaces any existing collection with a fresh one;
+  replaces any existing collection with a fresh one, which records no
+  embedding function;
 - ``EmbeddingBatchJob`` registers the job (or keeps the record of the job
   being resumed), yields batch bounds while checking the job's cancel event
   between batches, records progress after each batch (job state, WebSocket
@@ -39,19 +40,19 @@ def open_embedding_collection(
     *,
     resume: bool,
     metadata: dict,
-    embedding_function=None,
 ) -> tuple[Any, set[str]]:
     """Return ``(collection, ids already embedded)``.
 
     ``metadata`` (None values dropped, ChromaDB rejects them) is only used when
-    a collection is created; a resumed collection keeps its own. Without an
-    ``embedding_function`` (image and vector paths) the collection records
-    none: ``None`` is passed explicitly, since omitting the argument makes
-    chromadb record its default 384-d embedder. A replaced collection is
-    deleted together with its HNSW index directory. The existence check
-    attaches no embedder (chromadb rejects one that differs from the
-    collection's, which would block overwriting it with another model); the
-    returned handle is only ever given explicit ``embeddings``.
+    a collection is created; a resumed collection keeps its own. A created
+    collection records no embedding function: writes and queries always pass
+    explicit vectors (queries are embedded from the model named in
+    ``metadata``), so chromadb never needs one, and a recorded one would store
+    its config, secrets included. ``None`` is passed explicitly, since
+    omitting the argument makes chromadb record its default 384-d embedder. A
+    replaced collection is deleted together with its HNSW index directory. The
+    existence check attaches no embedder (chromadb rejects one that differs
+    from the collection's, which would block overwriting it with another model).
     """
     try:
         existing = client.get_collection(name=name, embedding_function=None)
@@ -69,7 +70,7 @@ def open_embedding_collection(
     collection = client.create_collection(
         name=name,
         metadata={k: v for k, v in metadata.items() if v is not None},
-        embedding_function=embedding_function,
+        embedding_function=None,
     )
     print(f"Created collection: {name}")
     return collection, set()

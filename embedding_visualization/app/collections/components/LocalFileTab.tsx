@@ -25,6 +25,7 @@ import { GET_COLLECTION_PREVIEW } from '@/lib/graphql/queries';
 
 import { FileUploadZone } from './FileUploadZone';
 import { DataTypeSelector } from './DataTypeSelector';
+import { MediaSettingsForm } from './MediaSettingsForm';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
@@ -34,9 +35,16 @@ import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
 import { EmbedFooterBar } from './EmbedFooterBar';
-import { useEmbedFormState } from '../lib/useEmbedFormState';
-import { buildLocalEmbedInput, buildReEmbedInput, runPostEmbedSaeStep, type SaePostEmbedDeps } from '../lib/embeddingFormUtils';
+import { useEmbedFormState, type MediaColumnKinds } from '../lib/useEmbedFormState';
+import {
+  buildLocalEmbedInput,
+  buildReEmbedInput,
+  modelOnDataTypeSwitch,
+  runPostEmbedSaeStep,
+  type SaePostEmbedDeps,
+} from '../lib/embeddingFormUtils';
 import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
+import { MediaColumns } from '../lib/mediaColumns';
 
 interface LocalFileTabProps {
   fetchLocalFileInfo: (filePath: string) => Promise<LocalFileInfo | null>;
@@ -81,16 +89,17 @@ export function LocalFileTab({
 
   // Local file specific state
   const [filePath, setFilePath] = useState('');
-  const [dataType, setDataType] = useState<DataType>('TEXT');
 
-  // Shared embed-form state (columns, template, portion, model config);
-  // column config resets when the file path changes
+  // Shared embed-form state (data type, columns, template, portion, model
+  // config); column config resets when the file path changes
   const form = useEmbedFormState(filePath);
   const {
     model,
+    dataType, setDataType,
     collectionName, setCollectionName,
     selectedEmbeddingColumns, setSelectedEmbeddingColumns,
     selectedMetadataColumns, setSelectedMetadataColumns,
+    selectedMediaColumns, setSelectedMediaColumns,
     textTemplate, setTextTemplate,
     idColumn, setIdColumn,
     handleEmbeddingColumnsChange,
@@ -136,26 +145,37 @@ export function LocalFileTab({
     }
   }, [client, setSelectedEmbeddingColumns, setSelectedMetadataColumns]);
 
-  const autoConfigureColumns = (columns: string[]) => {
+  const autoConfigureColumns = (
+    columns: string[],
+    kinds: MediaColumnKinds,
+    type: DataType = dataType,
+  ) => {
     if (columns.length === 0) return;
 
-    let embeddingCol: string;
-
-    if (dataType === 'VECTOR') {
-      const vectorNames = ['embedding', 'embeddings', 'vector', 'vectors', 'emb'];
-      const match = columns.find(col =>
-        vectorNames.some(name => col.toLowerCase().includes(name))
-      );
-      embeddingCol = match || columns[0];
-      setSelectedEmbeddingColumns([embeddingCol]);
+    if (type === 'MULTIMODAL') {
+      // Every detected media column; text is optional.
+      const { media, metadata } = MediaColumns.defaultSelection(columns, kinds);
+      setSelectedMediaColumns(media);
+      setSelectedEmbeddingColumns([]);
       setTextTemplate('');
+      setSelectedMetadataColumns(metadata);
     } else {
-      embeddingCol = columns[0];
+      let embeddingCol: string;
+      if (type === 'VECTOR') {
+        const vectorNames = ['embedding', 'embeddings', 'vector', 'vectors', 'emb'];
+        const match = columns.find(col =>
+          vectorNames.some(name => col.toLowerCase().includes(name))
+        );
+        embeddingCol = match || columns[0];
+        setTextTemplate('');
+      } else {
+        embeddingCol = MediaColumns.withoutMedia(columns, kinds)[0] ?? columns[0];
+        setTextTemplate(`{${embeddingCol}}`);
+      }
+      setSelectedMediaColumns([]);
       setSelectedEmbeddingColumns([embeddingCol]);
-      setTextTemplate(`{${embeddingCol}}`);
+      setSelectedMetadataColumns(columns.filter(col => col !== embeddingCol));
     }
-
-    setSelectedMetadataColumns(columns.filter(col => col !== embeddingCol));
 
     const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'feature_id', 'doc_id'];
     const idMatch = columns.find(col =>
@@ -180,8 +200,16 @@ export function LocalFileTab({
     const info = await fetchLocalFileInfo(filePath);
     if (!info || info.error) return;
 
-    await fetchLocalFilePreview(filePath, 5);
-    autoConfigureColumns(info.columns);
+    const preview = await fetchLocalFilePreview(filePath, 5);
+    autoConfigureColumns(
+      info.columns,
+      MediaColumns.kindsOf(MediaColumns.localColumns(info.columns, preview?.rows ?? [], preview?.columnKinds)),
+    );
+  };
+
+  const handleDataTypeChange = (type: DataType) => {
+    setDataType(type);
+    if (localFileInfo) autoConfigureColumns(localFileInfo.columns, mediaKinds, type);
   };
 
   const handleEmbed = async () => {
@@ -190,7 +218,7 @@ export function LocalFileTab({
     // CTA is disabled while issues exist; guard anyway
     if (fileValidationIssues.length > 0) return;
 
-    const input = buildLocalEmbedInput(form.commonValues(), {
+    const input = buildLocalEmbedInput(form.commonValues(mediaKinds), {
       filePath,
       dataType,
       portion: { strategy: portionStrategy, numRows, seed: randomSeed },
@@ -212,8 +240,19 @@ export function LocalFileTab({
     }
     setSourceDataset(value);
     setFilePath(''); // Clear file path when selecting a dataset
+    // Re-embedding composes text from the stored items. The name suggestion
+    // needs the model the switch leaves (state updates land next render).
+    const switched = modelOnDataTypeSwitch({
+      from: dataType,
+      to: 'TEXT',
+      provider: model.embeddingProvider,
+      modelName: model.modelName,
+      catalog: form.modelCatalog,
+    });
+    setDataType('TEXT');
     // Auto-suggest collection name
-    const shortModel = model.modelName.split('/').pop()?.replace(/[^a-zA-Z0-9_-]/g, '_') || 'model';
+    const modelName = switched?.modelName ?? model.modelName;
+    const shortModel = modelName.split('/').pop()?.replace(/[^a-zA-Z0-9_-]/g, '_') || 'model';
     setCollectionName(`${value}_${shortModel}`);
     // Fetch columns from dataset preview
     fetchDatasetColumns(value);
@@ -240,22 +279,31 @@ export function LocalFileTab({
 
   const isLoading = infoLoading || previewLoading;
   const isDataLoaded = Boolean(localFileInfo) && !sourceDataset;
-  const columns = localFileInfo?.columns.map(name => ({ name, dtype: 'unknown' })) || [];
+  // Column types from the preview: media kinds detected by the backend, else
+  // the type of the previewed values
+  const columns = localFileInfo
+    ? MediaColumns.localColumns(localFileInfo.columns, localFilePreview?.rows ?? [], localFilePreview?.columnKinds)
+    : [];
+  const mediaKinds = MediaColumns.kindsOf(columns);
   const totalRows = localFileInfo?.numRows;
   const isVectorMode = dataType === 'VECTOR';
+  const isMultimodal = dataType === 'MULTIMODAL';
+  // Media collections hold no text to re-embed from (the backend refuses them).
+  const reEmbedSources = collections.filter(c => !MediaColumns.isMultimodalCollection(c.metadata));
   const sourceDatasetInfo = sourceDataset ? collections.find(c => c.name === sourceDataset) : null;
 
-  // The template and task prefix only apply to text embeds.
-  const isTextEmbed = dataType === 'TEXT';
+  // The template and task prefix apply to embeds with a model (not vectors).
+  const isModelEmbed = !isVectorMode;
   const fileValidationIssues = getEmbedValidationIssues({
     source: 'local-file',
     filePath,
     collectionName,
     embeddingColumns: selectedEmbeddingColumns,
     dataType,
+    media: isMultimodal ? form.mediaValidation(mediaKinds) : undefined,
     portionStrategy,
-    placeholderIssues: isTextEmbed ? form.placeholderIssues(columns.map(c => c.name)) : [],
-    taskPrefixesLoading: isTextEmbed && model.taskPrefixesLoading,
+    placeholderIssues: isModelEmbed ? form.placeholderIssues(columns.map(c => c.name)) : [],
+    taskPrefixesLoading: isModelEmbed && model.taskPrefixesLoading,
   });
 
   const reEmbedValidationIssues = getEmbedValidationIssues({
@@ -271,7 +319,7 @@ export function LocalFileTab({
     portionStrategy,
     numRows,
     totalRows: totalRows ?? null,
-    modelName: model.modelName,
+    modelName: model.effectiveModelName,
     enableTopics: model.enableTopics,
     dataType,
   });
@@ -317,11 +365,11 @@ export function LocalFileTab({
 
           {/* From Existing Dataset selector (searchable; clear to go back
               to file mode) */}
-          {collections.length > 0 && (
+          {reEmbedSources.length > 0 && (
             <div className="space-y-2">
               <Label>Or re-embed from existing dataset:</Label>
               <Combobox
-                items={collections.map(col => col.name)}
+                items={reEmbedSources.map(col => col.name)}
                 value={sourceDataset}
                 onValueChange={handleSourceDatasetChange}
               >
@@ -377,7 +425,8 @@ export function LocalFileTab({
             <>
               <DataTypeSelector
                 dataType={dataType}
-                onDataTypeChange={setDataType}
+                onDataTypeChange={handleDataTypeChange}
+                idPrefix="local-"
                 disabled={isLoading}
               />
 
@@ -420,13 +469,18 @@ export function LocalFileTab({
             <CardDescription>
               {isVectorMode
                 ? 'Select the vector column and metadata fields'
-                : 'Select columns for embedding and configure the text template'}
+                : isMultimodal
+                  ? 'Select the media columns to embed, optionally with text'
+                  : 'Select columns for embedding and configure the text template'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ColumnSelector
               columns={columns}
               dataType={dataType}
+              mediaKinds={mediaKinds}
+              selectedMediaColumns={selectedMediaColumns}
+              onMediaColumnsChange={setSelectedMediaColumns}
               selectedEmbeddingColumns={selectedEmbeddingColumns}
               selectedMetadataColumns={selectedMetadataColumns}
               onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
@@ -435,10 +489,24 @@ export function LocalFileTab({
               onTemplateChange={setTextTemplate}
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
-              taskPrefix={dataType === 'TEXT' ? taskPrefixControlOf(model) : undefined}
+              taskPrefix={isModelEmbed ? taskPrefixControlOf(model) : undefined}
+              idPrefix="local-"
             />
           </CardContent>
         </Card>
+      )}
+
+      {/* Media options of the selected kinds (multimodal) */}
+      {isDataLoaded && isMultimodal && (
+        <MediaSettingsForm
+          budget={form.mediaBudget}
+          settingsError={form.mediaSettingsError}
+          onRetry={form.retryMediaSettings}
+          overrides={form.mediaOptions}
+          onChange={form.setMediaOptions}
+          kinds={MediaColumns.counts(selectedMediaColumns, mediaKinds)}
+          idPrefix="local-"
+        />
       )}
 
       {/* Portion Configuration */}
@@ -469,13 +537,18 @@ export function LocalFileTab({
         </Card>
       )}
 
-      {/* Embedding Model Configuration (only for TEXT) */}
-      {isDataLoaded && dataType === 'TEXT' && (
+      {/* Embedding Model Configuration (not for pre-computed vectors) */}
+      {isDataLoaded && isModelEmbed && (
         <EmbeddingModelForm
           model={model}
           title="5 · Embedding Model"
           showTopics={false}
           idPrefix="local-"
+          media={
+            isMultimodal
+              ? { kinds: MediaColumns.selectedKinds(selectedMediaColumns, mediaKinds), defaultModel: form.multimodalDefaultModel }
+              : null
+          }
         />
       )}
 
@@ -500,8 +573,9 @@ export function LocalFileTab({
         </Card>
       )}
 
-      {/* Optional post-embed SAE step (after the topics section above) */}
-      {isDataLoaded && <SaeActivationsSection model={model} idPrefix="local-" />}
+      {/* Optional post-embed SAE step (after the topics section above); SAE
+          activations read text documents, so media embeds have none */}
+      {isDataLoaded && !isMultimodal && <SaeActivationsSection model={model} idPrefix="local-" />}
 
       {/* Sticky CTA with config recap + inline validation */}
       {isDataLoaded && (
@@ -540,6 +614,7 @@ export function LocalFileTab({
                 showMetadataColumns={false}
                 showIdColumn={false}
                 taskPrefix={taskPrefixControlOf(model)}
+                idPrefix="reembed-"
               />
               <p className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
                 All metadata fields and item IDs are carried over from the source dataset

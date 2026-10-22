@@ -25,7 +25,9 @@ from backend.services import cancel_registry, job_state
 from backend.services.cancel_registry import CANCELLED_MESSAGE
 from backend.services.job_state import JobStateService, JobStatus
 from backend.utils.embedding_model_catalog import TASK_PREFIX_FORMAT
+from backend.utils.media_kinds import MediaKind
 from backend.utils.media_settings import MediaEmbeddingSettings, MediaOptions
+from backend.utils.truncation import TruncationTracker
 
 media_module = importlib.import_module("backend.embedding_functions.embed_media")
 MediaSource = media_module.MediaSource
@@ -112,6 +114,12 @@ class FakeMediaEF:
     def __init__(self):
         self.batches: list[dict] = []
         self.required: list[tuple] = []
+        self.text_caps: list[int] = []
+        self.truncation = TruncationTracker(None)
+
+    def cap_text_tokens(self, limit):
+        self.text_caps.append(limit)
+        self.truncation = TruncationTracker(limit)
 
     def embed_inputs(self, inputs, has_text, processing_kwargs=None, batch_size=None):
         self.batches.append(
@@ -189,6 +197,25 @@ class TestRun:
         assert isinstance(inputs[0]["image"], Image.Image)
         assert factory.ef.batches[0]["processing_kwargs"] == {"image": {"max_soft_tokens": 280}}
         assert factory.ef.batches[0]["batch_size"] == MediaEmbeddingSettings().encode_batch_size
+
+    def test_text_is_capped_at_what_the_media_leave(self):
+        _, factory = _run(_rows(1))
+        settings = MediaEmbeddingSettings()
+        assert factory.ef.text_caps == [
+            settings.text_token_budget(settings.defaults, {MediaKind.IMAGE: 1})
+        ]
+
+    def test_truncated_text_is_reported(self):
+        factory = Factory()
+        original = factory.ef.embed_inputs
+
+        def embed_and_truncate(inputs, has_text, **kwargs):
+            factory.ef.truncation.observe([10**6] * len(inputs))
+            return original(inputs, has_text, **kwargs)
+
+        factory.ef.embed_inputs = embed_and_truncate
+        result, _ = _run(_rows(2), factory=factory)
+        assert any("truncated" in warning for warning in result.warnings)
 
     def test_loads_only_the_needed_towers(self):
         _, factory = _run(_rows(1))

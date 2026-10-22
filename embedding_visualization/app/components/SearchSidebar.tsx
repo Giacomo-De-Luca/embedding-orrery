@@ -85,6 +85,8 @@ interface SearchSidebarProps<T extends SearchablePoint> extends React.ComponentP
   topicColorMap?: Record<string, string>;
   /** A topic-tree preview is on the map (the topic section notes it lists the saved topics). */
   previewingTopicCut?: boolean;
+  /** Why semantic topic search is unavailable (no recorded embedding model), or null. */
+  topicSemanticUnavailableReason?: string | null;
   // SAE prompt highlight
   saeInfo?: { modelId: string; saeId: string } | null;
   promptHighlightStatus?: 'idle' | 'loading_model' | 'running' | 'error';
@@ -126,6 +128,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
   topicSemanticError,
   topicColorMap,
   previewingTopicCut,
+  topicSemanticUnavailableReason,
   selectedTopicIds,
   onToggleTopic,
   onSelectAllTopics,
@@ -582,12 +585,13 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
                 <PromptCombobox
                   id="query-prompt-name"
                   value={queryPromptName ?? ''}
-                  onChange={(v) => onQueryPromptNameChange?.(v.trim() === '' ? null : v.trim())}
-                  placeholder="None (type or select a prompt)"
+                  onChange={(v) => onQueryPromptNameChange?.(v === '' ? null : v)}
+                  placeholder="Auto (the collection's prompt)"
                   className="h-8"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Task-specific prompt for models like Gemma Embedding. Type a custom prompt or select a preset.
+                  Empty or Auto uses the query prompt matching the collection&apos;s own. Pick a prompt name or
+                  type a prompt to override it.
                 </p>
               </div>
 
@@ -649,6 +653,7 @@ export function SearchSidebar<T extends SearchablePoint = Point2D | Point3D>({
               onClearAll={onClearAllTopics ?? (() => {})}
               topicColorMap={topicColorMap ?? EMPTY_COLOR_MAP}
               previewingTopicCut={previewingTopicCut}
+              semanticUnavailableReason={topicSemanticUnavailableReason}
             />
           )}
         </div>

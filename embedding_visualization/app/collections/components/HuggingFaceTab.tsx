@@ -7,10 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Label } from '@/lib/ui-primitives/label';
 import { Separator } from '@/lib/ui-primitives/separator';
-import type { EmbedDatasetInput, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
+import type { DataType, EmbedDatasetInput, HFDatasetInfo, HFDatasetPreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
 import type { EmbedSource } from '@/lib/hooks/useEmbedDataset';
 
 import { SplitSelector } from './SplitSelector';
+import { DataTypeSelector } from './DataTypeSelector';
+import { MediaSettingsForm } from './MediaSettingsForm';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
@@ -23,6 +25,10 @@ import { EmbedFooterBar } from './EmbedFooterBar';
 import { useEmbedFormState } from '../lib/useEmbedFormState';
 import { buildHFEmbedInput, runPostEmbedSaeStep, type SaePostEmbedDeps } from '../lib/embeddingFormUtils';
 import { getEmbedValidationIssues, buildEmbedSummary } from '../lib/embedValidation';
+import { MediaColumns } from '../lib/mediaColumns';
+
+/** HuggingFace sources embed text or media (pre-computed vectors are local files only). */
+const HF_DATA_TYPES: DataType[] = ['TEXT', 'MULTIMODAL'];
 
 interface HuggingFaceTabProps {
   fetchHFDatasetInfo: (datasetId: string) => Promise<HFDatasetInfo | null>;
@@ -71,9 +77,11 @@ export function HuggingFaceTab({
   const form = useEmbedFormState(datasetId);
   const {
     model,
+    dataType, setDataType,
     collectionName, setCollectionName,
     selectedEmbeddingColumns, setSelectedEmbeddingColumns,
     selectedMetadataColumns, setSelectedMetadataColumns,
+    selectedMediaColumns, setSelectedMediaColumns,
     textTemplate, setTextTemplate,
     idColumn, setIdColumn,
     handleEmbeddingColumnsChange,
@@ -84,21 +92,29 @@ export function HuggingFaceTab({
     randomSeed, setRandomSeed,
   } = form;
 
-  const autoConfigureColumns = (features: Array<{ name: string; dtype: string }>) => {
-    const textCols = features
-      .filter(f => f.dtype === 'string' || f.dtype === 'str')
-      .map(f => f.name);
+  const autoConfigureColumns = (features: Array<{ name: string; dtype: string }>, type: DataType = dataType) => {
+    const kinds = MediaColumns.kindsOf(features);
+    const names = features.map(f => f.name);
 
-    const embeddingCol = textCols.length > 0 ? textCols[0] : features[0]?.name;
+    if (type === 'MULTIMODAL') {
+      // Every Image / Audio / Video feature; text is optional.
+      const { media, metadata } = MediaColumns.defaultSelection(names, kinds);
+      setSelectedMediaColumns(media);
+      setSelectedEmbeddingColumns([]);
+      setTextTemplate('');
+      setSelectedMetadataColumns(metadata);
+    } else {
+      const textCols = features
+        .filter(f => f.dtype === 'string' || f.dtype === 'str')
+        .map(f => f.name);
 
-    if (embeddingCol) {
-      setSelectedEmbeddingColumns([embeddingCol]);
-      setTextTemplate(`{${embeddingCol}}`);
+      const embeddingCol = textCols.length > 0 ? textCols[0] : MediaColumns.withoutMedia(names, kinds)[0];
+
+      setSelectedMediaColumns([]);
+      setSelectedEmbeddingColumns(embeddingCol ? [embeddingCol] : []);
+      setTextTemplate(embeddingCol ? `{${embeddingCol}}` : '');
+      setSelectedMetadataColumns(names.filter(name => name !== embeddingCol));
     }
-
-    setSelectedMetadataColumns(
-      features.map(f => f.name).filter(name => name !== embeddingCol)
-    );
 
     const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'doc_id'];
     const idMatch = features.find(f =>
@@ -131,18 +147,25 @@ export function HuggingFaceTab({
     }
   };
 
+  const handleDataTypeChange = (type: DataType) => {
+    setDataType(type);
+    const features = datasetInfo?.configs[0]?.features;
+    if (features) autoConfigureColumns(features, type);
+  };
+
   const handleEmbed = async () => {
     clearError();
 
     // CTA is disabled while issues exist; guard anyway
     if (validationIssues.length > 0) return;
 
-    const input = buildHFEmbedInput(form.commonValues(), {
+    const input = buildHFEmbedInput(form.commonValues(mediaKinds), {
       datasetId,
       defaultConfig: datasetInfo?.defaultConfig,
       selectedSplit,
       allSplits: datasetInfo?.configs[0]?.splits.map(s => s.name) || [],
       portion: { strategy: portionStrategy, numRows, rangeStart, rangeEnd, seed: randomSeed },
+      dataType,
     });
     const result = await embedHFDataset(input);
 
@@ -156,6 +179,10 @@ export function HuggingFaceTab({
   const isLoading = infoLoading || previewLoading;
   const isDataLoaded = Boolean(datasetInfo);
   const columns = datasetInfo?.configs[0]?.features.map(f => ({ name: f.name, dtype: f.dtype })) || [];
+  const isMultimodal = dataType === 'MULTIMODAL';
+  // Image / Audio / Video features, from their dtypes
+  const mediaKinds = MediaColumns.kindsOf(columns);
+  const selectedKinds = MediaColumns.selectedKinds(selectedMediaColumns, mediaKinds);
   const splits = datasetInfo?.configs[0]?.splits || [];
   const availableSplits = datasetInfo?.configs[0]?.splits.map(s => s.name) || [];
   const totalRows = datasetInfo?.configs[0]?.splits.find(s => s.name === selectedSplit)?.numRows;
@@ -167,6 +194,8 @@ export function HuggingFaceTab({
     datasetId,
     collectionName,
     embeddingColumns: selectedEmbeddingColumns,
+    dataType,
+    media: isMultimodal ? form.mediaValidation(mediaKinds) : undefined,
     portionStrategy,
     rangeStart,
     rangeEnd,
@@ -181,8 +210,9 @@ export function HuggingFaceTab({
     rangeStart,
     rangeEnd,
     totalRows: totalRows ?? null,
-    modelName: model.modelName,
+    modelName: model.effectiveModelName,
     enableTopics: model.enableTopics,
+    dataType,
   });
 
   // Scroll the newly revealed configuration into view after fetching info
@@ -232,6 +262,14 @@ export function HuggingFaceTab({
             </div>
           </div>
 
+          <DataTypeSelector
+            dataType={dataType}
+            onDataTypeChange={handleDataTypeChange}
+            options={HF_DATA_TYPES}
+            idPrefix="hf-"
+            disabled={isLoading}
+          />
+
           <Button
             onClick={handleFetchInfoAndPreview}
             disabled={isLoading || !datasetId.includes('/')}
@@ -275,12 +313,18 @@ export function HuggingFaceTab({
           <CardHeader>
             <CardTitle>3 · Column Configuration</CardTitle>
             <CardDescription>
-              Select columns for embedding and configure the text template
+              {isMultimodal
+                ? 'Select the media columns to embed, optionally with text'
+                : 'Select columns for embedding and configure the text template'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ColumnSelector
               columns={columns}
+              dataType={dataType}
+              mediaKinds={mediaKinds}
+              selectedMediaColumns={selectedMediaColumns}
+              onMediaColumnsChange={setSelectedMediaColumns}
               selectedEmbeddingColumns={selectedEmbeddingColumns}
               selectedMetadataColumns={selectedMetadataColumns}
               onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
@@ -290,9 +334,23 @@ export function HuggingFaceTab({
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
               taskPrefix={taskPrefixControlOf(model)}
+              idPrefix="hf-"
             />
           </CardContent>
         </Card>
+      )}
+
+      {/* Media options of the selected kinds (multimodal) */}
+      {isDataLoaded && isMultimodal && (
+        <MediaSettingsForm
+          budget={form.mediaBudget}
+          settingsError={form.mediaSettingsError}
+          onRetry={form.retryMediaSettings}
+          overrides={form.mediaOptions}
+          onChange={form.setMediaOptions}
+          kinds={MediaColumns.counts(selectedMediaColumns, mediaKinds)}
+          idPrefix="hf-"
+        />
       )}
 
       {/* Portion Configuration */}
@@ -329,11 +387,13 @@ export function HuggingFaceTab({
           model={model}
           title="5 · Embedding Model"
           idPrefix="hf-"
+          media={isMultimodal ? { kinds: selectedKinds, defaultModel: form.multimodalDefaultModel } : null}
         />
       )}
 
-      {/* Optional post-embed SAE step (after the topics section above) */}
-      {isDataLoaded && <SaeActivationsSection model={model} idPrefix="hf-" />}
+      {/* Optional post-embed SAE step (after the topics section above); SAE
+          activations read text documents, so media embeds have none */}
+      {isDataLoaded && !isMultimodal && <SaeActivationsSection model={model} idPrefix="hf-" />}
 
       {lastEmbedResult && lastEmbedSource === 'hf' && <EmbedResultCard result={lastEmbedResult} />}
 

@@ -43,6 +43,16 @@ logger = logging.getLogger("orrery." + __name__)
 _SECRET_KWARGS = frozenset(key.casefold() for key in DEFAULT_SECRET_KEYS)
 
 
+def _text_of(item: Any) -> str:
+    """The text of a model input: a plain string, or the ``text`` of a mixed input dict."""
+    return item if isinstance(item, str) else str(item.get("text") or "")
+
+
+def _with_text(item: Any, text: str) -> Any:
+    """``item`` with its text replaced (a new dict for mixed inputs)."""
+    return text if isinstance(item, str) else {**item, "text": text}
+
+
 class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
     """Fork of ChromaDB's SentenceTransformerEmbeddingFunction (see module docstring)."""
 
@@ -203,6 +213,8 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
         """
         if len(inputs) != len(has_text):
             raise ValueError("embed_inputs needs one has_text flag per input")
+        if self.max_length is not None:
+            inputs = self._cut_texts(inputs, has_text)
         extra: dict[str, Any] = {}
         if processing_kwargs:
             extra["processing_kwargs"] = dict(processing_kwargs)
@@ -224,6 +236,40 @@ class SentenceTransformerEmbeddingFunction(EmbeddingFunction[Documents]):
             for position, vector in zip(positions, encoded, strict=True):
                 vectors[position] = np.asarray(vector, dtype=np.float32)
         return vectors
+
+    def cap_text_tokens(self, limit: int) -> None:
+        """Lower this instance's text cap to ``limit`` tokens: a multimodal row's
+        share of the context (a lower cap already set wins)."""
+        self.max_length = limit if self.max_length is None else min(self.max_length, limit)
+        self.truncation = TruncationTracker(self.max_length)
+
+    def _cut_texts(self, inputs: Sequence[Any], has_text: Sequence[bool]) -> list[Any]:
+        """The inputs with their text cut to ``max_length`` tokens, prompt included.
+
+        sentence-transformers' own text cap would leave no room for the media
+        of a mixed input, so the text is cut here with the model's tokenizer;
+        the cut inputs are counted in ``truncation``. The caller's inputs are
+        not modified.
+        """
+        inputs = list(inputs)
+        tokenizer = getattr(self._model, "tokenizer", None)
+        positions = [i for i, flag in enumerate(has_text) if flag]
+        if tokenizer is None or not positions:
+            return inputs
+        try:
+            prefix = tokenizer(self._prompt_prefix, add_special_tokens=False)["input_ids"]
+            ids = tokenizer([_text_of(inputs[i]) for i in positions], add_special_tokens=False)[
+                "input_ids"
+            ]
+        except Exception:  # the cap is a safeguard: never fail the batch over it
+            logger.warning("Text cap skipped: the tokenizer failed", exc_info=True)
+            return inputs
+        kept = max(0, self.max_length - len(prefix))
+        self.truncation.observe(len(prefix) + len(row) for row in ids)
+        for position, row in zip(positions, ids, strict=True):
+            if len(row) > kept:
+                inputs[position] = _with_text(inputs[position], tokenizer.decode(row[:kept]))
+        return inputs
 
     def require_modalities(self, kinds: Iterable[str], with_text: bool) -> None:
         """Raise ``ValueError`` unless the loaded model embeds these media kinds.
