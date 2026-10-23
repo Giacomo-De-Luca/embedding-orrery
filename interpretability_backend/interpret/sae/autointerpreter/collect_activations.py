@@ -67,7 +67,9 @@ from interpret.utils.wordnet_parser import WordNetParser
 
 
 def aggregate_tokens(
-    feats: torch.Tensor, mode: str, skip_first_token: bool = False,
+    feats: torch.Tensor,
+    mode: str,
+    skip_first_token: bool = False,
 ) -> torch.Tensor:
     """Reduce a per-token ``(seq_len, d)`` tensor to ``(d,)``.
 
@@ -161,9 +163,7 @@ class ActivationCollector:
         # collector must mirror that decision per spec when reading the
         # prefill back, otherwise multi-SAE configs with some sites
         # singly-occupied (e.g. L9 alone + L29 shared) read None.
-        self._site_count = Counter(
-            (s.layer_index, s.hook_type) for s in self.specs
-        )
+        self._site_count = Counter((s.layer_index, s.hook_type) for s in self.specs)
         self.stores: list[SparseActivationStore] = []
         for unit_idx, (_spec, _agg, sub) in enumerate(self.unit_layout):
             # unit_layout is spec-major: units i*len(aggs)..(i+1)*len(aggs)-1
@@ -186,15 +186,14 @@ class ActivationCollector:
         # may differ from (and out-number) the SAE aggregations, e.g.
         # raw {last_token, max_prefill} alongside SAE max_prefill.
         self.residual_spec = config.residual
-        self.residual_sites = (
-            list(self.residual_spec.sites) if self.residual_spec else []
-        )
+        self.residual_sites = list(self.residual_spec.sites) if self.residual_spec else []
         self.residual_layout: list[tuple[ResidualSiteSpec, str, str]] = []
         self.residual_stores: list[DenseActivationStore] = []
         if self.residual_sites:
             self._residual_aggs = config.resolve_residual_aggregations()
             self.residual_layout = residual_unit_layout(
-                self.residual_sites, self._residual_aggs,
+                self.residual_sites,
+                self._residual_aggs,
             )
             self._residual_dtype = np.dtype(self.residual_spec.activation_dtype)
             hidden = int(self.wrapper.config.hidden_size)
@@ -203,7 +202,9 @@ class ActivationCollector:
                 store_dir.mkdir(parents=True, exist_ok=True)
                 self.residual_stores.append(
                     DenseActivationStore(
-                        store_dir, n_features=hidden, dtype=self._residual_dtype,
+                        store_dir,
+                        n_features=hidden,
+                        dtype=self._residual_dtype,
                     ),
                 )
 
@@ -211,12 +212,10 @@ class ActivationCollector:
         # on disk. Updated as we append so we don't re-issue store.append
         # for a sample one store already has.
         self._per_store_seen: list[set[tuple[str, str]]] = [
-            store.existing_row_keys() if config.resume else set()
-            for store in self.stores
+            store.existing_row_keys() if config.resume else set() for store in self.stores
         ]
         self._residual_seen: list[set[tuple[str, str]]] = [
-            store.existing_row_keys() if config.resume else set()
-            for store in self.residual_stores
+            store.existing_row_keys() if config.resume else set() for store in self.residual_stores
         ]
 
     # ── Wrapper factory ────────────────────────────────────────────────
@@ -261,7 +260,9 @@ class ActivationCollector:
     def _aggregate(self, feats: torch.Tensor, aggregation: str) -> torch.Tensor:
         """Reduce ``(seq_len, d_sae)`` to ``(d_sae,)`` per aggregation mode."""
         return aggregate_tokens(
-            feats, aggregation, skip_first_token=self._skip_first_token,
+            feats,
+            aggregation,
+            skip_first_token=self._skip_first_token,
         )
 
     def _capture_vectors(self, prompt: str) -> list[tuple[np.ndarray, int]]:
@@ -336,9 +337,7 @@ class ActivationCollector:
 
             cache_ctx = self.wrapper.cache_activations(
                 layers={
-                    s.layer_index
-                    for s in self.residual_sites
-                    if s.intermediate != "final_norm"
+                    s.layer_index for s in self.residual_sites if s.intermediate != "final_norm"
                 },
                 intermediates={s.intermediate for s in self.residual_sites},
                 prefill=True,
@@ -358,7 +357,8 @@ class ActivationCollector:
                     self.unit_layout,
                     self.stores,
                     self._per_store_seen,
-                    captured, strict=True,
+                    captured,
+                    strict=True,
                 ):
                     if key in seen:
                         continue
@@ -383,7 +383,8 @@ class ActivationCollector:
                         self.residual_layout,
                         self.residual_stores,
                         self._residual_seen,
-                        resid_captured, strict=True,
+                        resid_captured,
+                        strict=True,
                     ):
                         if key in seen:
                             continue
@@ -391,8 +392,7 @@ class ActivationCollector:
                             **sample,
                             "n_tokens": seq_len,
                             "layer": (
-                                -1 if site.intermediate == "final_norm"
-                                else site.layer_index
+                                -1 if site.intermediate == "final_norm" else site.layer_index
                             ),
                             "hook_type": site.intermediate,
                             "width": self.base_spec.checkpoint,

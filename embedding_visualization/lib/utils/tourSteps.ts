@@ -573,3 +573,15 @@ export const TOUR_STEPS: TourStepDefinition[] = [
     },
   },
 ];
+
+// Built once: a fresh array per render would re-sync joyride's steps every render.
+const TOUR_STEPS_WITHOUT_DENSITY = TOUR_STEPS.filter((step) => step.id !== 'density');
+
+/**
+ * The main tour for this browser. The density step narrates the 2D density
+ * overlay, which needs float render targets (`DensityRenderer.isSupported`);
+ * without them it would show a bare 2D map, so it is left out.
+ */
+export function mainTourSteps(densityOverlaySupported: boolean): TourStepDefinition[] {
+  return densityOverlaySupported ? TOUR_STEPS : TOUR_STEPS_WITHOUT_DENSITY;
+}

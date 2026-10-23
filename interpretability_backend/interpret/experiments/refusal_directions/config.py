@@ -55,19 +55,14 @@ class RefusalConfig:
     output_dir: Path = field(
         default_factory=lambda: Path("resources/experiments/refusal_directions")
     )
-    splits_dir: Path = field(
-        default_factory=lambda: Path("resources/refusal_direction/splits")
-    )
-    eval_dir: Path = field(
-        default_factory=lambda: Path("resources/refusal_direction/processed")
-    )
+    splits_dir: Path = field(default_factory=lambda: Path("resources/refusal_direction/splits"))
+    eval_dir: Path = field(default_factory=lambda: Path("resources/refusal_direction/processed"))
 
     def __post_init__(self) -> None:
         unknown = set(self.intermediates) - VALID_INTERMEDIATES
         if unknown:
             raise ValueError(
-                f"Unknown intermediates: {sorted(unknown)}. "
-                f"Valid: {sorted(VALID_INTERMEDIATES)}"
+                f"Unknown intermediates: {sorted(unknown)}. Valid: {sorted(VALID_INTERMEDIATES)}"
             )
         if not self.intermediates:
             raise ValueError("intermediates must contain at least one entry")
@@ -75,8 +70,7 @@ class RefusalConfig:
             raise ValueError("prune_layer_pct must be in [0, 1)")
         if self.bypass_mode not in VALID_BYPASS_MODES:
             raise ValueError(
-                f"Unknown bypass_mode: {self.bypass_mode!r}. "
-                f"Valid: {sorted(VALID_BYPASS_MODES)}"
+                f"Unknown bypass_mode: {self.bypass_mode!r}. Valid: {sorted(VALID_BYPASS_MODES)}"
             )
 
         self.output_dir = Path(self.output_dir)

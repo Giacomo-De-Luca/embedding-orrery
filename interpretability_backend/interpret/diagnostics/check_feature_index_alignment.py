@@ -88,9 +88,7 @@ def run_alignment_check(
     np_max_idx = record["maxValueTokenIndex"]
     np_tokens = record["tokens"]
     np_top_tok = np_tokens[np_max_idx]
-    np_context = "".join(
-        np_tokens[max(0, np_max_idx - 4) : np_max_idx + 5]
-    )
+    np_context = "".join(np_tokens[max(0, np_max_idx - 4) : np_max_idx + 5])
     print(f"  Neuronpedia: max={np_max:.1f} on tok {np_max_idx}={np_top_tok!r}")
     print(f"              context: {np_context!r}")
 

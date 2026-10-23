@@ -10,7 +10,8 @@ import { modelOnDataTypeSwitch, saeLinkFromParams, updateTextTemplate, type Comm
 import type { MediaValidationInput } from './embedValidation';
 import { MediaColumns, type MediaKind } from './mediaColumns';
 import { MediaOptionsBudget } from './mediaOptions';
-import { placeholderIssues as findPlaceholderIssues } from './taskPrefixes';
+import { placeholderIssues as findPlaceholderIssues, type TaskPrefixRow } from './taskPrefixes';
+import { ColumnDefaults, type ColumnDefaultsInput, type TextPick } from './columnDefaults';
 
 /** Media columns of the loaded source and their kinds (MediaColumns.kindsOf). */
 export type MediaColumnKinds = Record<string, MediaKind>;
@@ -49,6 +50,13 @@ export interface EmbedFormState {
   setIdColumn: (v: string) => void;
   /** Column toggle that keeps the text template's placeholders in sync */
   handleEmbeddingColumnsChange: (cols: string[]) => void;
+  /**
+   * Start a loaded source from its default selection (ColumnDefaults): the
+   * text column picked by name or by length, media columns, the id column.
+   */
+  applyColumnDefaults: (input: ColumnDefaultsInput) => void;
+  /** Why the embedded column was pre-selected, while it still is the selection; null otherwise. */
+  selectionNote: string | null;
 
   /** MULTIMODAL: the media options changed from their defaults */
   mediaOptions: MediaOptionsInput;
@@ -77,6 +85,8 @@ export interface EmbedFormState {
    * prefix may name any of `prefixColumns` (the source's columns).
    */
   placeholderIssues: (prefixColumns: string[]) => string[];
+  /** The row the task prefix is written for (EmbeddingModelForm), over the same `prefixColumns`. */
+  taskPrefixRow: (prefixColumns: string[]) => TaskPrefixRow;
   /** What the MULTIMODAL checks of embedValidation need. */
   mediaValidation: (mediaKinds: MediaColumnKinds) => MediaValidationInput;
 }
@@ -110,6 +120,7 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
   const [selectedMediaColumns, setSelectedMediaColumns] = useState<string[]>([]);
   const [textTemplate, setTextTemplate] = useState('');
   const [idColumn, setIdColumn] = useState('auto');
+  const [textPick, setTextPick] = useState<TextPick | null>(null);
   const [mediaOptions, setMediaOptions] = useState<MediaOptionsInput>({});
 
   // Portion configuration
@@ -122,6 +133,18 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
   const handleEmbeddingColumnsChange = (cols: string[]) => {
     setSelectedEmbeddingColumns(cols);
     setTextTemplate(updateTextTemplate(textTemplate, selectedEmbeddingColumns, cols));
+    // A hand-picked selection needs no "Pre-selected" note.
+    setTextPick(null);
+  };
+
+  const applyColumnDefaults = (input: ColumnDefaultsInput) => {
+    const selection = ColumnDefaults.select(input);
+    setSelectedMediaColumns(selection.media);
+    setSelectedEmbeddingColumns(selection.embedding);
+    setSelectedMetadataColumns(selection.metadata);
+    setTextTemplate(selection.template);
+    if (selection.idColumn) setIdColumn(selection.idColumn);
+    setTextPick(selection.textPick);
   };
 
   const setDataType = (next: DataType) => {
@@ -143,6 +166,7 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     setSelectedMediaColumns([]);
     setTextTemplate('');
     setIdColumn('auto');
+    setTextPick(null);
   }, [resetKey]);
 
   const commonValues = (mediaKinds: MediaColumnKinds = {}): CommonEmbedFormValues => ({
@@ -168,6 +192,12 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     embeddingColumns: selectedEmbeddingColumns,
     prefix: model.taskPrefix?.documentPrefix,
     prefixColumns,
+  });
+
+  const taskPrefixRow = (prefixColumns: string[]): TaskPrefixRow => ({
+    columns: prefixColumns,
+    template: textTemplate,
+    embeddingColumns: selectedEmbeddingColumns,
   });
 
   const mediaValidation = (mediaKinds: MediaColumnKinds): MediaValidationInput => {
@@ -206,6 +236,8 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     idColumn,
     setIdColumn,
     handleEmbeddingColumnsChange,
+    applyColumnDefaults,
+    selectionNote: ColumnDefaults.note(textPick, selectedEmbeddingColumns, dataType),
     mediaOptions,
     setMediaOptions,
     mediaBudget,
@@ -223,6 +255,7 @@ export function useEmbedFormState(resetKey: string): EmbedFormState {
     setRandomSeed,
     commonValues,
     placeholderIssues,
+    taskPrefixRow,
     mediaValidation,
   };
 }

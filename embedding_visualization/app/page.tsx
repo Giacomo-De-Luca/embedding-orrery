@@ -28,6 +28,7 @@ import { serializeColorScale, deserializeColorScale, resolveDefaultColorScheme }
 import { mergeViewSearch, shouldDropPreset, type OwnedViewParams } from '../lib/utils/urlViewParams';
 import { useHfSpaceUrlSync } from '../lib/hooks/useHfSpaceUrlSync';
 import { useInHfSpace } from '../lib/hooks/useInHfSpace';
+import { plotlyLoader } from '../lib/utils/plotlyLoader';
 import {
   getPreset,
   seedInitialColorState,
@@ -46,6 +47,7 @@ import {
 import {
   planOnboarding,
   isCompactWidth,
+  linkedCollectionsFitViewport,
   readIntroSeen,
   readMobileNoticeSeen,
   NO_ONBOARDING,
@@ -59,7 +61,8 @@ import { supportedHazeRenderer } from '../lib/utils/densityHaze/support';
 import { IS_DEMO } from '../lib/utils/demoMode';
 import { DemoIntro } from './components/DemoIntro';
 import { MobileNotice } from './components/MobileNotice';
-import { TOUR_ANCHORS, TOUR_STEPS, waitFor, type CameraViewAdjustment, type TourRuntime } from '../lib/utils/tourSteps';
+import { TOUR_ANCHORS, mainTourSteps, waitFor, type CameraViewAdjustment, type TourRuntime } from '../lib/utils/tourSteps';
+import { DensityRenderer } from '../lib/utils/densityRenderer/DensityRenderer';
 import { apolloClient } from '../lib/utils/apollo-client';
 import { SEARCH_SAE_FEATURES } from '../lib/graphql/queries';
 import { SAE_MAP_TOUR_STEPS, SAE_TOUR_TOTAL_STEPS, saeInspectPath } from '../lib/utils/saeTourSteps';
@@ -133,17 +136,30 @@ function HomeContent() {
   const isInitialLoad = useRef(true);
   // Demo preset (`?preset=`) latched once at first render; its colour block
   // seeds the same initial refs as explicit URL colour params (URL wins).
-  const initialPresetRef = useRef(getPreset(searchParams.get('preset')));
+  const presetFromUrl = getPreset(searchParams.get('preset'));
+  const initialPresetRef = useRef(presetFromUrl);
+  // A link to a collection this viewport doesn't offer (WordNet on a demo
+  // phone) loads the default collection instead, so the link's preset view and
+  // URL colour are not applied to it. The raw preset still drives `?preset=`
+  // cleanup in the URL sync.
+  const [linkFitsViewport] = useState(() =>
+    typeof window === 'undefined' ||
+    linkedCollectionsFitViewport(
+      [collectionFromUrl, presetFromUrl?.collection],
+      { isDemo: IS_DEMO, viewportWidth: window.innerWidth },
+    ),
+  );
+  const appliedPresetRef = useRef(linkFitsViewport ? presetFromUrl : null);
   // Colour scheme captured from the URL/preset on first render (applied once data loads)
   const initialColorSeed = useRef(seedInitialColorState({
-    urlColorBy: colorByFromUrl,
+    urlColorBy: linkFitsViewport ? colorByFromUrl : null,
     urlScale: deserializeColorScale({
       scale: searchParams.get('scale'),
       scaleName: searchParams.get('scaleName'),
       color: searchParams.get('color'),
     }),
     urlPalette: searchParams.get('palette'),
-    preset: initialPresetRef.current,
+    preset: appliedPresetRef.current,
   })).current;
   const initialColorByRef = useRef(initialColorSeed.colorBy);
   const initialColorScaleRef = useRef(initialColorSeed.scale);
@@ -173,7 +189,7 @@ function HomeContent() {
   const [introOpen, setIntroOpen] = useState(onboarding === 'intro');
   const [mobileNoticeOpen, setMobileNoticeOpen] = useState(onboarding === 'mobile-notice');
   // Tour links run at any viewport they fit; the decision above already
-  // downgraded a desktop-only tour (WordNet) on a phone.
+  // downgraded every tour but `?tour=1` on a phone.
   const [tourRequested, setTourRequested] = useState(onboarding === 'tour');
   // "Inspect SAE" tour, segment 1: runs HERE on the label map, then hands
   // off to /sae (`saeInspectPath`) when it finishes.
@@ -194,7 +210,7 @@ function HomeContent() {
   // Apply the initial preset's store flags once, after persisted preferences
   // rehydrate (preset > persisted prefs; flags have no URL representation).
   useEffect(() => {
-    const preset = initialPresetRef.current;
+    const preset = appliedPresetRef.current;
     if (!preset) return;
     const apply = () => runStoreOps(presetStoreOps(preset));
     if (useVisualizationStore.persist.hasHydrated()) {
@@ -202,6 +218,14 @@ function HomeContent() {
       return;
     }
     return useVisualizationStore.persist.onFinishHydration(apply);
+  }, []);
+
+  // The forked Plotly bundle is the page's heaviest download, and the scatter
+  // plots only import it once DashboardPanel mounts, after the collection data
+  // has arrived. Start it now so it downloads while the manifest and data
+  // queries run (documentation/EXPLORE_FIRST_LOAD.md).
+  useEffect(() => {
+    plotlyLoader.preload();
   }, []);
 
   // Default to the first available collection
@@ -945,7 +969,9 @@ function HomeContent() {
         <MobileNotice open={mobileNoticeOpen} onOpenChange={handleMobileNoticeOpenChange} />
         {tourRequested && (
           <TourController
-            steps={TOUR_STEPS}
+            // tourRequested is never set during SSR, so the cached capability
+            // probe runs in the browser; both step lists are stable arrays.
+            steps={mainTourSteps(DensityRenderer.isSupported())}
             anchors={TOUR_ANCHORS}
             runtime={tourRuntime}
             storageKey={TOUR_STORAGE_KEY}

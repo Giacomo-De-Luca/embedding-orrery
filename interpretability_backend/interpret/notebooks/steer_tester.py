@@ -26,12 +26,19 @@ def main() -> None:
         description="SAE additive-steering smoke test on Gemma3-4b-it.",
     )
     parser.add_argument("--prompt", default="What is your favorite job?")
-    parser.add_argument("--feature", type=int, default=3289,
-                        help="Neuronpedia feature index (default 3289 = poetry).")
+    parser.add_argument(
+        "--feature",
+        type=int,
+        default=3289,
+        help="Neuronpedia feature index (default 3289 = poetry).",
+    )
     parser.add_argument("--layer", type=int, default=9)
-    parser.add_argument("--site", default="resid_post",
-                        choices=[h.value for h in HookType],
-                        help="Decoder-layer site to steer at.")
+    parser.add_argument(
+        "--site",
+        default="resid_post",
+        choices=[h.value for h in HookType],
+        help="Decoder-layer site to steer at.",
+    )
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--output_len", type=int, default=200)
     args = parser.parse_args()
@@ -57,7 +64,9 @@ def main() -> None:
             )
 
         with manager.session(wrapper.model.model.layers):
-            output = wrapper.generate(args.prompt, output_len=args.output_len, temperature=args.temperature)
+            output = wrapper.generate(
+                args.prompt, output_len=args.output_len, temperature=args.temperature
+            )
 
         label = "BASELINE" if strength == 0.0 else f"STRENGTH={strength:g}"
         print(f"\n===== {label} =====")

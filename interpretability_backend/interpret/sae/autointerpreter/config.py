@@ -229,7 +229,8 @@ def normalize_aggregations(
 
 
 def residual_unit_layout(
-    sites: list[ResidualSiteSpec], aggregations: list[str],
+    sites: list[ResidualSiteSpec],
+    aggregations: list[str],
 ) -> list[tuple[ResidualSiteSpec, str, str]]:
     """On-disk layout for every (residual site, aggregation) store.
 
@@ -261,7 +262,8 @@ def sae_subdir(spec: SAESpec) -> str:
 
 
 def sae_unit_layout(
-    specs: list[SAESpec], aggregations: list[str],
+    specs: list[SAESpec],
+    aggregations: list[str],
 ) -> list[tuple[SAESpec, str, str | None]]:
     """On-disk layout for every (SAE, aggregation) store of a collect pass.
 
@@ -296,8 +298,8 @@ class AutoInterpretCollectConfig:
 
     # SAE identification (all configurable, never hardcoded downstream)
     layer_index: int = 29
-    hook_type: str = "resid_post"                 # maps to HookType enum
-    width: str = "16k"                            # "16k" | "65k" | "262k"
+    hook_type: str = "resid_post"  # maps to HookType enum
+    width: str = "16k"  # "16k" | "65k" | "262k"
     l0_size: str = "medium"
     model_size: str = "4b"
     variant: str = "it"
@@ -312,8 +314,8 @@ class AutoInterpretCollectConfig:
     aggregation: Aggregation | list[Aggregation] = "last_token"
 
     # WordNet iteration
-    limit: int | None = 5000                      # debug slice by default
-    pos_filter: list[str] | None = None           # None = all POS
+    limit: int | None = 5000  # debug slice by default
+    pos_filter: list[str] | None = None  # None = all POS
     prompt_template: str = "{word}: {definition}."
     add_bos: bool = True
     use_chat_template: bool = False
@@ -376,7 +378,8 @@ class AutoInterpretCollectConfig:
     def resolve_residual_aggregations(self) -> list[str]:
         """Aggregation modes for the residual side-capture (inherits collect-level)."""
         return normalize_aggregations(
-            self.resolve_residual().aggregation, self.resolve_aggregations(),
+            self.resolve_residual().aggregation,
+            self.resolve_aggregations(),
         )
 
     def resolve_saes(self) -> list[SAESpec]:
@@ -428,9 +431,7 @@ class AutoInterpretCollectConfig:
             return f"emb_{model_slug.replace('-', '_')}"
         if self.source_kind == "residual":
             ckpt = self.resolve_base_model().checkpoint.split("/")[-1]
-            sites = "_".join(
-                residual_subdir(s) for s in self.resolve_residual().sites
-            )
+            sites = "_".join(residual_subdir(s) for s in self.resolve_residual().sites)
             return f"resid_{ckpt.replace('-', '_')}_{sites}_{self.resolve_aggregations()[0]}"
         agg_slug = "_".join(self.resolve_aggregations())
         specs = self.resolve_saes()
@@ -460,7 +461,7 @@ class TopKExtractConfig:
     density_max: float = 0.3
     require_min_nonzero: int = 50
 
-    feature_indices: list[int] | None = None       # None = all that pass filter
+    feature_indices: list[int] | None = None  # None = all that pass filter
 
     # ── Dense (embedding-dimension) extraction only — ignored on the SAE path ──
     # How to treat each signed embedding dimension (see :data:`DimMode`).
@@ -468,8 +469,8 @@ class TopKExtractConfig:
     # Dimension selection: "all" labels every dim (~384-1024, no filter);
     # "top_variance" keeps the highest-variance dims (capped by max_features).
     select: DimSelect = "all"
-    min_variance: float = 0.0                       # drop dims below this variance
-    max_features: int | None = None                 # cap when select="top_variance"
+    min_variance: float = 0.0  # drop dims below this variance
+    max_features: int | None = None  # cap when select="top_variance"
     # Read the activation matrix from another run_dir (e.g. to run a second
     # dim_mode over an already-collected embedding pass without re-embedding).
     # None = read from this run's own directory.
@@ -543,6 +544,7 @@ class AutoInterpretConfig:
 
 
 # ── Loader ───────────────────────────────────────────────────────────────────
+
 
 def _unwrap_optional(ftype):
     """Strip ``T | None`` / ``Optional[T]`` down to ``T``; return ftype unchanged otherwise.
@@ -643,8 +645,7 @@ def _validate(cfg: AutoInterpretConfig) -> None:
         return
     if c.source_kind != "sae":
         raise ValueError(
-            f"source_kind must be 'sae', 'embedding' or 'residual', "
-            f"got {c.source_kind!r}"
+            f"source_kind must be 'sae', 'embedding' or 'residual', got {c.source_kind!r}"
         )
 
     c.resolve_aggregations()  # raises on empty / unknown / duplicate modes
@@ -656,9 +657,7 @@ def _validate(cfg: AutoInterpretConfig) -> None:
     seen_keys: set[tuple[int, str, str]] = set()
     for i, spec in enumerate(specs):
         if spec.family not in {"gemma", "qwen"}:
-            raise ValueError(
-                f"saes[{i}].family must be 'gemma' or 'qwen', got {spec.family!r}"
-            )
+            raise ValueError(f"saes[{i}].family must be 'gemma' or 'qwen', got {spec.family!r}")
         if spec.family != base.family:
             raise ValueError(
                 f"saes[{i}].family={spec.family!r} does not match "
@@ -704,9 +703,7 @@ def _validate_embedding(c: AutoInterpretCollectConfig) -> None:
     config module decoupled from ``scripts/`` (and chromadb).
     """
     if c.embedding is None:
-        raise ValueError(
-            "source_kind='embedding' requires an `embedding:` block"
-        )
+        raise ValueError("source_kind='embedding' requires an `embedding:` block")
     if c.embedding.provider != "sentence_transformers":
         raise ValueError(
             f"embedding.provider {c.embedding.provider!r} is not supported; "
@@ -743,7 +740,8 @@ def _validate_residual(c: AutoInterpretCollectConfig) -> None:
 
 
 def _validate_residual_sites(
-    spec: ResidualSourceSpec, allow_multi_agg: bool,
+    spec: ResidualSourceSpec,
+    allow_multi_agg: bool,
 ) -> None:
     """Site-list + aggregation checks shared by the residual source and side-capture."""
     if not spec.sites:

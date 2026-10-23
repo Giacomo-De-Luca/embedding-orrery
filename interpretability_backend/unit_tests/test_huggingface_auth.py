@@ -28,7 +28,9 @@ def test_sentence_transformer_receives_huggingface_api_key(monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGINGFACE_HUB_TOKEN", raising=False)
     monkeypatch.setattr(factory, "_hf_logged_in", False)
-    monkeypatch.setattr(factory, "login", lambda token, add_to_git_credential: login_calls.append(token))
+    monkeypatch.setattr(
+        factory, "login", lambda token, add_to_git_credential: login_calls.append(token)
+    )
     monkeypatch.setattr(
         "backend.embedding_functions.specific_functions.embed_sentence_transformer.SentenceTransformerEmbeddingFunction",
         DummySentenceTransformerEmbeddingFunction,
@@ -57,7 +59,9 @@ def test_sentence_transformer_accepts_hf_token_alias(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_alias_token")
     monkeypatch.delenv("HUGGINGFACE_HUB_TOKEN", raising=False)
     monkeypatch.setattr(factory, "_hf_logged_in", False)
-    monkeypatch.setattr(factory, "login", lambda token, add_to_git_credential: login_calls.append(token))
+    monkeypatch.setattr(
+        factory, "login", lambda token, add_to_git_credential: login_calls.append(token)
+    )
     monkeypatch.setattr(
         "backend.embedding_functions.specific_functions.embed_sentence_transformer.SentenceTransformerEmbeddingFunction",
         DummySentenceTransformerEmbeddingFunction,

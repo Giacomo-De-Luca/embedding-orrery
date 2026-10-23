@@ -108,13 +108,29 @@ fall back to Chroma's stored embedder when ours failed to load.
   - a Task select (the tasks plus None);
   - an editable **Document prefix** (picking a task fills it in);
   - "Queries use: …" (the task's query prefix, not editable);
-  - a "Model input: …" pattern;
+  - a "Model input: …" pattern, the form's only preview of what the model reads;
   - placeholder validation.
 
-  It is shown above the Text Template in Column Configuration (HuggingFace, local file and
-  re-embed). In SaeTab's label-map mode, which has no column section, `EmbeddingModelForm` renders
-  it with static prefixes only.
-- **`EmbeddingModelForm`** hides the prompt-name picker and the Gemini task type for these models.
+  It lives in **`EmbeddingModelForm`** ("5 · Embedding Model"), under Provider and Model Name, and
+  only for these models. Every form uses this one place, through the required `taskPrefixRow`
+  prop (`TaskPrefixRow`: the columns a placeholder may name, the text template and embedded
+  columns for the "Model input" pattern):
+  - **HuggingFace, local file, re-embed:** each form builds its row once with
+    `form.taskPrefixRow(columns)` (`useEmbedFormState`) and validates with
+    `form.placeholderIssues(row.columns)`, so the field and the embed button check the same
+    columns. HuggingFace and local files pass the source's column names; re-embed passes the
+    source dataset's fields (its metadata keys plus `__document__`).
+  - **SaeTab label maps:** no column section, so `STATIC_TASK_PREFIX_ROW` (no columns): static
+    prefixes only, no `{column}` hint, validated against the same empty list.
+
+  An emptied document prefix reads "No prefix": documents then get none, while queries keep the
+  task's query prefix. In multimodal mode a note says the prefix applies to a row's text only. The
+  task prefix used to
+  sit in Column Configuration, before the model was picked, with a pointer line in the model card
+  and a "not used by the selected model" note for every other model.
+- **`EmbeddingModelForm`** shows the task prefix as one kind of its "Task prompt" section (with
+  Gemini's task type and Qwen's query instruction; see `COLLECTIONS_EMBED_FORM.md`), so these
+  models get no Gemini task type. Other sentence-transformers models get no prompt field.
 - **Model input:** `embeddingModelInputFrom` sends `prompt` = document prefix and `task` = query
   prefix.
 - **Validation** (`placeholderIssues`, `embedValidation`) blocks the template and prefix problems
@@ -148,6 +164,8 @@ stored document prompt itself, which would have sent a document template as the 
   - `test_embedding_task_prefixes_query.py` (GraphQL).
 - **Frontend:**
   - `app/collections/lib/__tests__/taskPrefixes.test.ts`;
+  - `app/collections/components/__tests__/embedFormSections.test.tsx` (where the prefix renders,
+    one model-input preview, the shared topics card);
   - `embeddingLimits.test.ts`;
   - `embedValidation.test.ts`;
   - `lib/utils/__tests__/queryPrompt.test.ts`.

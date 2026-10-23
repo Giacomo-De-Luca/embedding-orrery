@@ -69,7 +69,9 @@ class EmbeddingCollector:
         self.dtype = np.dtype(self.spec.activation_dtype)
         self.n_features = self._probe_dim()
         self.store = DenseActivationStore(
-            self.run_dir, n_features=self.n_features, dtype=self.dtype,
+            self.run_dir,
+            n_features=self.n_features,
+            dtype=self.dtype,
         )
         self._seen = self.store.existing_row_keys() if config.resume else set()
 

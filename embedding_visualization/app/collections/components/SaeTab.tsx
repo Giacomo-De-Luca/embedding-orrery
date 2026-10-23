@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { Download, RefreshCw, Trash2, Check, X } from 'lucide-react';
 import { Button } from '@/lib/ui-primitives/button';
+import { dotControlIndentClassName } from '@/lib/ui-primitives/dot-control';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Card, CardContent } from '@/lib/ui-primitives/card';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
@@ -21,7 +22,7 @@ import { isJobCancelled } from '@/lib/utils/jobCancellation';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
 import { TopicConfigForm, toTopicConfigInput } from './TopicConfigForm';
 import { useEmbeddingModelState } from '../lib/useEmbeddingModelState';
-import { placeholderIssues } from '../lib/taskPrefixes';
+import { STATIC_TASK_PREFIX_ROW, placeholderIssues } from '../lib/taskPrefixes';
 import { GET_SAE_MODELS } from '@/lib/graphql/queries';
 import {
   PREPARE_SAE_DATA,
@@ -137,7 +138,10 @@ export function SaeTab() {
     createCollection &&
     isLabelMode &&
     (embeddingModel.taskPrefixesLoading ||
-      placeholderIssues({ prefix: embeddingModel.taskPrefix?.documentPrefix, prefixColumns: [] })
+      placeholderIssues({
+        prefix: embeddingModel.taskPrefix?.documentPrefix,
+        prefixColumns: STATIC_TASK_PREFIX_ROW.columns,
+      })
         .length > 0);
 
   // Job state
@@ -404,7 +408,7 @@ export function SaeTab() {
 
           {createCollection && (
             <div className="space-y-4">
-              <div className="ml-6 space-y-2.5">
+              <div className={`${dotControlIndentClassName} space-y-2.5`}>
                 <div className="space-y-1.5">
                   <label className="text-xs text-muted-foreground">Vector mode</label>
                   <Select
@@ -444,9 +448,8 @@ export function SaeTab() {
               {isLabelMode && (
                 <EmbeddingModelForm
                   model={embeddingModel}
-                  showTopics={false}
                   idPrefix="sae-"
-                  taskPrefixColumns={[]}
+                  taskPrefixRow={STATIC_TASK_PREFIX_ROW}
                 />
               )}
 

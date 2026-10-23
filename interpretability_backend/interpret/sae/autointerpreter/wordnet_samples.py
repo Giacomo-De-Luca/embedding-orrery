@@ -43,7 +43,8 @@ class WordNetSampleIterator:
         self.limit = limit
 
     def iter_samples(
-        self, skip_keys: set[tuple[str, str]] | frozenset = frozenset(),
+        self,
+        skip_keys: set[tuple[str, str]] | frozenset = frozenset(),
     ) -> Iterator[dict]:
         """Yield ``{word, synset_id, pos, definition, prompt}`` dicts.
 

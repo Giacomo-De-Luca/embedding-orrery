@@ -77,17 +77,21 @@ def capture_residual_prefill(
         else:
             tensor = prefill.get(site.layer_index, {}).get(site.intermediate)
         if tensor is None:
-            raise RuntimeError(
-                f"no cached activation for site {residual_subdir(site)}"
-            )
+            raise RuntimeError(f"no cached activation for site {residual_subdir(site)}")
         feats = tensor[0].to(torch.float32)  # (seq_len, hidden_size)
         seq_len = int(feats.shape[0])
         # Raw BOS residuals are extreme outliers — keep them out of
         # mean/max aggregates (last_token is unaffected).
         for agg in aggregations:
-            vec = aggregate_tokens(
-                feats, agg, skip_first_token=wrapper.prepends_bos,
-            ).cpu().numpy()
+            vec = (
+                aggregate_tokens(
+                    feats,
+                    agg,
+                    skip_first_token=wrapper.prepends_bos,
+                )
+                .cpu()
+                .numpy()
+            )
             out.append((vec.astype(dtype, copy=False), seq_len))
     return out
 
@@ -123,15 +127,14 @@ class ResidualCollector:
             wrapper
             if wrapper is not None
             else GemmaPytorchInference(
-                self.base_spec.checkpoint, precision=self.base_spec.dtype,
+                self.base_spec.checkpoint,
+                precision=self.base_spec.dtype,
             )
         )
 
         n_layers = len(self.wrapper.decoder_layers)
         for site in self.sites:
-            if site.intermediate != "final_norm" and not (
-                0 <= site.layer_index < n_layers
-            ):
+            if site.intermediate != "final_norm" and not (0 <= site.layer_index < n_layers):
                 raise ValueError(
                     f"residual site {residual_subdir(site)} is out of range "
                     f"for a {n_layers}-layer model"
@@ -151,7 +154,8 @@ class ResidualCollector:
         # normalize_aggregations coerces a str / one-element list / None
         # (inherit collect-level) uniformly.
         self.aggregation = normalize_aggregations(
-            self.spec.aggregation, config.resolve_aggregations(),
+            self.spec.aggregation,
+            config.resolve_aggregations(),
         )[0]
 
         self.run_dir = run_dir if run_dir is not None else config.run_dir()
@@ -169,12 +173,13 @@ class ResidualCollector:
             store_dir.mkdir(parents=True, exist_ok=True)
             self.stores.append(
                 DenseActivationStore(
-                    store_dir, n_features=self.n_features, dtype=self.dtype,
+                    store_dir,
+                    n_features=self.n_features,
+                    dtype=self.dtype,
                 ),
             )
         self._per_store_seen: list[set[tuple[str, str]]] = [
-            store.existing_row_keys() if config.resume else set()
-            for store in self.stores
+            store.existing_row_keys() if config.resume else set() for store in self.stores
         ]
 
     # ── Sample iteration ───────────────────────────────────────────────
@@ -208,7 +213,10 @@ class ResidualCollector:
         else:
             self.wrapper.generate_from_template(prompt, output_len=1)
         return capture_residual_prefill(
-            self.wrapper, self.sites, [self.aggregation], self.dtype,
+            self.wrapper,
+            self.sites,
+            [self.aggregation],
+            self.dtype,
         )
 
     # ── Run ────────────────────────────────────────────────────────────
@@ -225,14 +233,15 @@ class ResidualCollector:
         # One cache configuration serves every site: per-layer intermediates
         # are captured for the union of requested layers, final_norm (when
         # requested) is captured top-level regardless of the layer set.
-        layer_set = {
-            s.layer_index for s in self.sites if s.intermediate != "final_norm"
-        }
+        layer_set = {s.layer_index for s in self.sites if s.intermediate != "final_norm"}
         inter_set = {s.intermediate for s in self.sites}
         flush_every = max(1, self.config.flush_every)
         samples = self._iter_samples()
         with self.wrapper.cache_activations(
-            layers=layer_set, intermediates=inter_set, prefill=True, last=False,
+            layers=layer_set,
+            intermediates=inter_set,
+            prefill=True,
+            last=False,
         ):
             for i, sample in enumerate(
                 tqdm(samples, desc="collect-resid", unit="sample"),
@@ -240,17 +249,18 @@ class ResidualCollector:
                 captured = self._capture_vectors(sample["prompt"])
                 key = (sample["word"], sample["synset_id"])
                 for site, store, seen, (vec, seq_len) in zip(
-                    self.sites, self.stores, self._per_store_seen, captured, strict=True,
+                    self.sites,
+                    self.stores,
+                    self._per_store_seen,
+                    captured,
+                    strict=True,
                 ):
                     if key in seen:
                         continue
                     meta: dict[str, Any] = {
                         **sample,
                         "n_tokens": seq_len,
-                        "layer": (
-                            -1 if site.intermediate == "final_norm"
-                            else site.layer_index
-                        ),
+                        "layer": (-1 if site.intermediate == "final_norm" else site.layer_index),
                         "hook_type": site.intermediate,
                         "width": self.base_spec.checkpoint,
                         "aggregation": self.aggregation,

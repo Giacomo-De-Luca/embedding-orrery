@@ -89,9 +89,7 @@ def _download_file(url: str, dest: Path, *, overwrite: bool) -> bool:
 def download_refusal_datasets(config: RefusalDownloadConfig | None = None) -> None:
     """Download all split + processed files described by `config`."""
     cfg = config or RefusalDownloadConfig()
-    targets = [
-        ("splits", name, cfg.splits_dir / name) for name in SPLIT_FILES
-    ] + [
+    targets = [("splits", name, cfg.splits_dir / name) for name in SPLIT_FILES] + [
         ("processed", name, cfg.eval_dir / name) for name in PROCESSED_FILES
     ]
 

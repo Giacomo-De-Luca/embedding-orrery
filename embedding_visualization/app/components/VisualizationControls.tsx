@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Label } from '@/lib/ui-primitives/label';
+import { dotControlIndentClassName } from '@/lib/ui-primitives/dot-control';
 import { Input } from '@/lib/ui-primitives/input';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
@@ -24,12 +25,15 @@ import type { UseTopicMergeTreeReturn } from '../../lib/hooks/useTopicMergeTree'
 import { VisualizationColorControls } from './VisualizationColorControls';
 import { VisualizationPointControls } from './VisualizationPointControls';
 import { SliderRow } from './SliderRow';
-import { isDensityHazeSupported, supportedHazeRenderer } from '../../lib/utils/densityHaze/support';
+import { supportedHazeRenderer } from '../../lib/utils/densityHaze/support';
+import { DensityRenderer } from '../../lib/utils/densityRenderer/DensityRenderer';
+import { useFloatRenderTargets } from '../../lib/hooks/useFloatRenderTargets';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useShallow } from 'zustand/react/shallow';
 
 const SECTION_HEADER = 'text-xs font-medium uppercase tracking-wider text-muted-foreground';
 const SEGMENT_ITEM = 'text-xs h-7 px-3';
+const NO_FLOAT_TARGETS_HINT = 'Needs WebGL2 float render targets, unavailable in this browser';
 
 interface VisualizationControlsProps {
   embeddingDim: number;
@@ -68,14 +72,15 @@ export function VisualizationControls({
   topicTree,
 }: VisualizationControlsProps) {
   const store = useVisualizationStore;
-  // Density haze needs float render targets: probe after mount (SSR-safe) and
-  // reset a persisted 'density' preference so no dead sliders are shown here.
-  const [densityHazeSupported, setDensityHazeSupported] = React.useState(false);
+  // Density haze and the 2D density overlay both need float render targets
+  // (false during SSR). Reset a persisted 'density' haze or density overlay
+  // preference this browser can't draw, so no dead controls are shown here.
+  const floatTargetsSupported = useFloatRenderTargets();
   React.useEffect(() => {
-    setDensityHazeSupported(isDensityHazeSupported());
-    const { hazeRenderer, setHazeRenderer } = store.getState();
+    const { hazeRenderer, setHazeRenderer, densityMode: densityOn, setFlag } = store.getState();
     const runnable = supportedHazeRenderer(hazeRenderer);
     if (runnable !== hazeRenderer) setHazeRenderer(runnable);
+    if (densityOn && !DensityRenderer.isSupported()) setFlag('densityMode', false);
   }, [store]);
   const {
     method, mode, colorByField, selectedDimensions,
@@ -224,7 +229,7 @@ export function VisualizationControls({
                 </Label>
               </div>
               {nebulaMode && (
-                <div className="space-y-2 pl-6">
+                <div className={`space-y-2 ${dotControlIndentClassName}`}>
                   <div className="flex items-center justify-between gap-2">
                     <Label className="text-xs text-muted-foreground">Haze renderer</Label>
                     <ToggleGroup
@@ -245,10 +250,10 @@ export function VisualizationControls({
                         value="density"
                         className={SEGMENT_ITEM}
                         aria-label="Density haze"
-                        disabled={!densityHazeSupported}
-                        title={densityHazeSupported
+                        disabled={!floatTargetsSupported}
+                        title={floatTargetsSupported
                           ? 'Per-point density splats (experimental)'
-                          : 'Needs WebGL2 float render targets, unavailable in this browser'}
+                          : NO_FLOAT_TARGETS_HINT}
                       >
                         Density
                       </ToggleGroupItem>
@@ -284,10 +289,14 @@ export function VisualizationControls({
 
           {mode === '2d' && (
             <div className="space-y-2">
-              <div className="flex items-center space-x-2">
+              <div
+                className="flex items-center space-x-2"
+                title={floatTargetsSupported ? undefined : NO_FLOAT_TARGETS_HINT}
+              >
                 <Checkbox
                   id="density-mode"
                   checked={densityMode ?? false}
+                  disabled={!floatTargetsSupported}
                   onCheckedChange={(checked) => store.getState().setFlag('densityMode', checked === true)}
                 />
                 <Label htmlFor="density-mode" className="font-normal cursor-pointer text-sm">
@@ -295,7 +304,7 @@ export function VisualizationControls({
                 </Label>
               </div>
               {densityMode && (
-                <div className="space-y-2 pl-6">
+                <div className={`space-y-2 ${dotControlIndentClassName}`}>
                   <div className="flex items-center justify-between">
                     <Label className="text-sm font-normal">Density intensity</Label>
                     <span className="text-xs text-muted-foreground tabular-nums">
@@ -355,7 +364,7 @@ export function VisualizationControls({
                 </div>
               )}
               {colorByField && showClusterLabels && (
-                <div className="flex items-center space-x-2 mt-1 ml-6">
+                <div className={`flex items-center space-x-2 mt-1 ${dotControlIndentClassName}`}>
                   <Checkbox
                     id="show-all-cluster-labels"
                     checked={showAllClusterLabels ?? false}

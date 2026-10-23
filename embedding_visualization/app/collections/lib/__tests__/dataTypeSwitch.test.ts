@@ -7,7 +7,6 @@ import { modelOnDataTypeSwitch } from '../embeddingFormUtils';
 const entry = (fields: Pick<EmbeddingModelCatalogEntry, 'modelName' | 'modalities'>): EmbeddingModelCatalogEntry => ({
   provider: 'SENTENCE_TRANSFORMERS',
   description: null,
-  prompts: [],
   dimension: null,
   defaultFor: [],
   suggested: true,

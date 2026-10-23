@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Input } from '@/lib/ui-primitives/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib/ui-primitives/card';
 import {
@@ -11,33 +11,33 @@ import {
   SelectValue,
 } from '@/lib/ui-primitives/select';
 import { Label } from '@/lib/ui-primitives/label';
-import { Separator } from '@/lib/ui-primitives/separator';
-import { Checkbox } from '@/lib/ui-primitives/checkbox';
-import { PromptCombobox } from '@/lib/ui-primitives/prompt-combobox';
 import type { EmbeddingProvider, GeminiTaskType } from '@/lib/graphql/mutations';
 import { EMBEDDING_PROVIDERS, isLocalProvider } from '@/lib/utils/embeddingProviders';
-import { useEmbeddingModelCatalog } from '@/lib/hooks/useEmbeddingModelCatalog';
-import { PromptPresets } from '@/lib/utils/promptPresets';
-import { TopicConfigForm } from './TopicConfigForm';
 import { ModelNameCombobox } from './ModelNameCombobox';
 import type { MediaKind } from '../lib/mediaColumns';
 import type { EmbeddingModelState } from '../lib/useEmbeddingModelState';
-import { commitMaxLengthDraft, describeModelLimit, parseMaxLengthDraft } from '../lib/embeddingLimits';
+import {
+  commitMaxLengthDraft,
+  describeModelLimit,
+  modelTaskKind,
+  parseMaxLengthDraft,
+  type ModelTaskKind,
+} from '../lib/embeddingLimits';
 import { useModelMaxLength } from '../lib/useModelMaxLength';
-import { NO_TASK } from '../lib/taskPrefixes';
+import type { TaskPrefixRow } from '../lib/taskPrefixes';
 import { TaskPrefixField } from './TaskPrefixField';
 
 interface EmbeddingModelFormProps {
   model: EmbeddingModelState;
-  showTopics?: boolean;
   idPrefix?: string;
   title?: string;
   /**
-   * Render the task prefix here, with these columns for its placeholders, in
-   * forms without a column section (SAE label maps). Otherwise the Column
-   * Configuration section holds it.
+   * The row the task prefix (EmbeddingGemma, Gemini Embedding 2) is written
+   * for: the source's columns and the text template (`form.taskPrefixRow`),
+   * or STATIC_TASK_PREFIX_ROW in forms without a column section (SAE label
+   * maps). Validate against the same row's columns.
    */
-  taskPrefixColumns?: string[];
+  taskPrefixRow: TaskPrefixRow;
   /**
    * Image / Audio / Video / Mixed mode: the provider is locked to
    * sentence-transformers, an empty model name means `defaultModel` (the
@@ -48,12 +48,18 @@ interface EmbeddingModelFormProps {
 
 const MEDIA_PROVIDER: EmbeddingProvider = 'SENTENCE_TRANSFORMERS';
 
+/** What the "Task prompt" section says each kind of task control does. */
+const TASK_DESCRIPTIONS: Record<ModelTaskKind, string> = {
+  prefix: 'The model reads its task from a text prefix on documents and queries.',
+  taskType: 'Gemini tunes the embeddings for the chosen task.',
+  instruction: 'The model puts a one-sentence task instruction before every query; documents get none.',
+};
+
 export function EmbeddingModelForm({
   model,
-  showTopics = true,
   idPrefix = '',
   title = 'Embedding Model',
-  taskPrefixColumns,
+  taskPrefixRow,
   media = null,
 }: EmbeddingModelFormProps) {
   // Draft so the field can be temporarily empty/invalid while typing; the
@@ -65,12 +71,6 @@ export function EmbeddingModelForm({
   const [maxLengthDraft, setMaxLengthDraft] = useState<string | null>(null);
   const isLocal = isLocalProvider(model.embeddingProvider);
   const modelLimit = useModelMaxLength(model.embeddingProvider, model.effectiveModelName);
-  const { suggestions } = useEmbeddingModelCatalog();
-  // The prompt names the catalog lists for the model; the shared presets otherwise.
-  const promptGroups = useMemo(
-    () => PromptPresets.documentGroups(suggestions.find(model.embeddingProvider, model.effectiveModelName)?.prompts),
-    [suggestions, model.embeddingProvider, model.effectiveModelName],
-  );
   const modelPlaceholder = media
     ? (media.defaultModel ?? 'Backend default')
     : EMBEDDING_PROVIDERS[model.embeddingProvider].defaultModel;
@@ -80,12 +80,11 @@ export function EmbeddingModelForm({
     : model.maxLength !== null && limit !== null && model.maxLength > limit
       ? parseMaxLengthDraft(String(model.maxLength), limit).error
       : null;
-  // Task-prefix models take neither prompt names nor the Gemini task type.
+  // The one task control the model reads, if any (embeddingModelInputFrom sends the same).
   const prefixInfo = model.taskPrefixInfo;
   const prefixValue = model.taskPrefix;
-  const taskLabel = prefixValue?.taskId === NO_TASK
-    ? 'None'
-    : prefixInfo?.tasks.find((t) => t.id === prefixValue?.taskId)?.label;
+  const taskKind = modelTaskKind(model.embeddingProvider, prefixInfo !== null);
+  const defaultInstruction = EMBEDDING_PROVIDERS[model.embeddingProvider].queryInstruction;
 
   return (
     <Card>
@@ -137,6 +136,70 @@ export function EmbeddingModelForm({
                 Empty uses the default{media.defaultModel ? `, ${media.defaultModel}` : ''}.
               </p>
             )}
+          </div>
+          {taskKind && (
+            <div className="space-y-3 rounded-md border p-3 md:col-span-2">
+              <div>
+                <Label className="text-base">Task prompt</Label>
+                <p className="text-xs text-muted-foreground mt-1">{TASK_DESCRIPTIONS[taskKind]}</p>
+              </div>
+              {taskKind === 'prefix' && prefixInfo && prefixValue && (
+                <>
+                  <TaskPrefixField
+                    info={prefixInfo}
+                    value={prefixValue}
+                    onChange={model.setTaskPrefix}
+                    row={taskPrefixRow}
+                    idPrefix={idPrefix}
+                  />
+                  {media && (
+                    <p className="text-xs text-muted-foreground">
+                      The document prefix applies to a row&apos;s text only; images, audio and video get none.
+                    </p>
+                  )}
+                </>
+              )}
+              {taskKind === 'taskType' && (
+                <div className="space-y-2 md:w-1/2 md:pr-2">
+                  <Label htmlFor={`${idPrefix}gemini-task-type`}>Task type</Label>
+                  <Select
+                    value={model.geminiTaskType}
+                    onValueChange={(v) => model.setGeminiTaskType(v as GeminiTaskType)}
+                  >
+                    <SelectTrigger id={`${idPrefix}gemini-task-type`} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="SEMANTIC_SIMILARITY">Semantic Similarity</SelectItem>
+                      <SelectItem value="CLASSIFICATION">Classification</SelectItem>
+                      <SelectItem value="CLUSTERING">Clustering</SelectItem>
+                      <SelectItem value="RETRIEVAL_DOCUMENT">Retrieval (Document)</SelectItem>
+                      <SelectItem value="RETRIEVAL_QUERY">Retrieval (Query)</SelectItem>
+                      <SelectItem value="CODE_RETRIEVAL_QUERY">Code Retrieval</SelectItem>
+                      <SelectItem value="QUESTION_ANSWERING">Question Answering</SelectItem>
+                      <SelectItem value="FACT_VERIFICATION">Fact Verification</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {taskKind === 'instruction' && (
+                <div className="space-y-2">
+                  <Label htmlFor={`${idPrefix}qwen-task`}>Query instruction</Label>
+                  <Input
+                    id={`${idPrefix}qwen-task`}
+                    value={model.qwenTask}
+                    onChange={(e) => model.setQwenTask(e.target.value)}
+                    placeholder={defaultInstruction}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Empty uses the default: the instruction the model was trained with. Without one,
+                    retrieval loses accuracy (about 1 to 5% for Qwen3-Embedding).
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="space-y-2">
             <Label htmlFor={`${idPrefix}batch-size`}>Batch Size</Label>
             <Input
               id={`${idPrefix}batch-size`}
@@ -158,32 +221,32 @@ export function EmbeddingModelForm({
                   ? 'Texts per forward pass. Lower it for long documents: memory grows with batch × length.'
                   : 'Texts per API request.'}
             </p>
-            {isLocal && (
-              <>
-                <Label htmlFor={`${idPrefix}max-length`}>Max Length (tokens)</Label>
-                <Input
-                  id={`${idPrefix}max-length`}
-                  type="number"
-                  min={1}
-                  max={limit ?? undefined}
-                  value={maxLengthDraft ?? (model.maxLength === null ? '' : model.maxLength.toString())}
-                  onChange={(e) => setMaxLengthDraft(e.target.value)}
-                  onBlur={() => {
-                    if (maxLengthDraft !== null) {
-                      model.setMaxLength(commitMaxLengthDraft(maxLengthDraft, limit, model.maxLength));
-                    }
-                    setMaxLengthDraft(null);
-                  }}
-                  placeholder={limit !== null ? limit.toString() : 'Model default'}
-                  aria-invalid={maxLengthError ? true : undefined}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {describeModelLimit(modelLimit.limit, modelLimit.loading)}
-                </p>
-                {maxLengthError && <p className="text-xs text-destructive">{maxLengthError}</p>}
-              </>
-            )}
           </div>
+          {isLocal && (
+            <div className="space-y-2">
+              <Label htmlFor={`${idPrefix}max-length`}>Max Length (tokens)</Label>
+              <Input
+                id={`${idPrefix}max-length`}
+                type="number"
+                min={1}
+                max={limit ?? undefined}
+                value={maxLengthDraft ?? (model.maxLength === null ? '' : model.maxLength.toString())}
+                onChange={(e) => setMaxLengthDraft(e.target.value)}
+                onBlur={() => {
+                  if (maxLengthDraft !== null) {
+                    model.setMaxLength(commitMaxLengthDraft(maxLengthDraft, limit, model.maxLength));
+                  }
+                  setMaxLengthDraft(null);
+                }}
+                placeholder={limit !== null ? limit.toString() : 'Model default'}
+                aria-invalid={maxLengthError ? true : undefined}
+              />
+              <p className="text-xs text-muted-foreground">
+                {describeModelLimit(modelLimit.limit, modelLimit.loading)}
+              </p>
+              {maxLengthError && <p className="text-xs text-destructive">{maxLengthError}</p>}
+            </div>
+          )}
           {model.embeddingProvider === 'OLLAMA' && (
             <div className="space-y-2">
               <Label htmlFor={`${idPrefix}ollama-url`}>Ollama URL</Label>
@@ -195,104 +258,7 @@ export function EmbeddingModelForm({
               />
             </div>
           )}
-          {model.embeddingProvider === 'QWEN' && (
-            <div className="space-y-2 md:col-span-2">
-              <Label htmlFor={`${idPrefix}qwen-task`}>Query Task Instruction</Label>
-              <Input
-                id={`${idPrefix}qwen-task`}
-                value={model.qwenTask}
-                onChange={(e) => model.setQwenTask(e.target.value)}
-                placeholder="Given a web search query, retrieve relevant passages that answer the query"
-              />
-              <p className="text-xs text-muted-foreground">
-                Instruction prefix added to queries during semantic search (not used during document embedding)
-              </p>
-            </div>
-          )}
-          {prefixInfo && prefixValue && (
-            <div className="space-y-2 md:col-span-2">
-              {taskPrefixColumns ? (
-                <>
-                  <Label>Task Prefix</Label>
-                  <TaskPrefixField
-                    info={prefixInfo}
-                    value={prefixValue}
-                    onChange={model.setTaskPrefix}
-                    columns={taskPrefixColumns}
-                    idPrefix={idPrefix}
-                  />
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Task prefix: <strong>{taskLabel}</strong>, set under Column Configuration.
-                </p>
-              )}
-            </div>
-          )}
-          {model.embeddingProvider === 'GEMINI' && !prefixInfo && (
-            <div className="space-y-2">
-              <Label htmlFor={`${idPrefix}gemini-task-type`}>Task Type</Label>
-              <Select
-                value={model.geminiTaskType}
-                onValueChange={(v) => model.setGeminiTaskType(v as GeminiTaskType)}
-              >
-                <SelectTrigger id={`${idPrefix}gemini-task-type`}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="SEMANTIC_SIMILARITY">Semantic Similarity</SelectItem>
-                  <SelectItem value="CLASSIFICATION">Classification</SelectItem>
-                  <SelectItem value="CLUSTERING">Clustering</SelectItem>
-                  <SelectItem value="RETRIEVAL_DOCUMENT">Retrieval (Document)</SelectItem>
-                  <SelectItem value="RETRIEVAL_QUERY">Retrieval (Query)</SelectItem>
-                  <SelectItem value="CODE_RETRIEVAL_QUERY">Code Retrieval</SelectItem>
-                  <SelectItem value="QUESTION_ANSWERING">Question Answering</SelectItem>
-                  <SelectItem value="FACT_VERIFICATION">Fact Verification</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Optimizes embeddings for the selected task type
-              </p>
-            </div>
-          )}
-          {model.embeddingProvider === 'SENTENCE_TRANSFORMERS' && !prefixInfo && (
-            <div className="space-y-2">
-              <Label htmlFor={`${idPrefix}prompt`}>Prompt</Label>
-              <PromptCombobox
-                id={`${idPrefix}prompt`}
-                value={model.prompt}
-                onChange={model.setPrompt}
-                groups={promptGroups}
-                placeholder="None (pick a prompt name or type a prompt)"
-              />
-              <p className="text-xs text-muted-foreground">
-                A prompt name of the model (e.g. Retrieval-document) or literal text placed before each
-                document. Queries use the matching query prompt.
-              </p>
-            </div>
-          )}
         </div>
-
-        {/* Topic Extraction Toggle */}
-        {showTopics && (
-          <>
-            <Separator />
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`${idPrefix}enable-topics`}
-                  checked={model.enableTopics}
-                  onCheckedChange={(checked) => model.setEnableTopics(checked === true)}
-                />
-                <Label htmlFor={`${idPrefix}enable-topics`} className="cursor-pointer">Extract topics after embedding</Label>
-              </div>
-              {model.enableTopics && (
-                <TopicConfigForm value={model.topicConfig} onChange={model.setTopicConfig} />
-              )}
-            </div>
-          </>
-        )}
-
       </CardContent>
     </Card>
   );

@@ -49,9 +49,7 @@ def _kl_div(p_logits: torch.Tensor, q_logits: torch.Tensor) -> float:
         return float("inf")
     p = torch.softmax(p_logits.to(torch.float64), dim=-1)
     q = torch.softmax(q_logits.to(torch.float64), dim=-1)
-    return torch.sum(
-        p * (torch.log(p + _KL_EPSILON) - torch.log(q + _KL_EPSILON))
-    ).item()
+    return torch.sum(p * (torch.log(p + _KL_EPSILON) - torch.log(q + _KL_EPSILON))).item()
 
 
 @contextlib.contextmanager

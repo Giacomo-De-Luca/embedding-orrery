@@ -6,7 +6,6 @@ are mathematically correct for different metrics.
 """
 
 
-
 class TestDistanceToSimilarity:
     """Test distance metric conversions used in semantic search."""
 
@@ -78,9 +77,7 @@ class TestDistanceToSimilarity:
 class TestSimilarityConversionFunction:
     """Test the actual conversion logic as implemented in chromadb_client."""
 
-    def convert_distances_to_similarities(
-        self, distances: list[float], metric: str
-    ) -> list[float]:
+    def convert_distances_to_similarities(self, distances: list[float], metric: str) -> list[float]:
         """Replicate the conversion logic from chromadb_client.py."""
         if metric == "cosine":
             return [1 - d for d in distances]

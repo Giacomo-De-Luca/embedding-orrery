@@ -252,13 +252,11 @@ def report_embedding_failure(
         total_batches=0,
         error=str(error),
     )
-    return EmbeddingResult(
-        collection_name=collection_name,
-        total_embedded=0,
-        embedding_dim=embedding_dim,
+    return EmbeddingResult.failed(
+        collection_name,
+        str(error),
         device=device,
-        duration_seconds=time.time() - start_time,
-        error=str(error),
-        embedding_provider=model_config.provider.value if model_config else None,
-        embedding_model=model_config.model_name if model_config else None,
+        start_time=start_time,
+        model_config=model_config,
+        embedding_dim=embedding_dim,
     )

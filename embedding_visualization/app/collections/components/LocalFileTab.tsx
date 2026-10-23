@@ -8,8 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/lib
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { Label } from '@/lib/ui-primitives/label';
 import { Input } from '@/lib/ui-primitives/input';
-import { Checkbox } from '@/lib/ui-primitives/checkbox';
-import { TopicConfigForm } from './TopicConfigForm';
 import type { DataType, EmbedLocalFileInput, ReEmbedDatasetInput, LocalFileInfo, LocalFilePreview, EmbedDatasetResult } from '@/lib/graphql/mutations';
 import type { EmbedSource } from '@/lib/hooks/useEmbedDataset';
 import type { CollectionInfo } from './CollectionManagerTab';
@@ -29,8 +27,8 @@ import { MediaSettingsForm } from './MediaSettingsForm';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-import { taskPrefixControlOf } from './TaskPrefixField';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
+import { TopicExtractionSection } from './TopicExtractionSection';
 import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
@@ -147,43 +145,13 @@ export function LocalFileTab({
 
   const autoConfigureColumns = (
     columns: string[],
+    rows: Record<string, unknown>[],
     kinds: MediaColumnKinds,
     type: DataType = dataType,
   ) => {
     if (columns.length === 0) return;
 
-    if (type === 'MULTIMODAL') {
-      // Every detected media column; text is optional.
-      const { media, metadata } = MediaColumns.defaultSelection(columns, kinds);
-      setSelectedMediaColumns(media);
-      setSelectedEmbeddingColumns([]);
-      setTextTemplate('');
-      setSelectedMetadataColumns(metadata);
-    } else {
-      let embeddingCol: string;
-      if (type === 'VECTOR') {
-        const vectorNames = ['embedding', 'embeddings', 'vector', 'vectors', 'emb'];
-        const match = columns.find(col =>
-          vectorNames.some(name => col.toLowerCase().includes(name))
-        );
-        embeddingCol = match || columns[0];
-        setTextTemplate('');
-      } else {
-        embeddingCol = MediaColumns.withoutMedia(columns, kinds)[0] ?? columns[0];
-        setTextTemplate(`{${embeddingCol}}`);
-      }
-      setSelectedMediaColumns([]);
-      setSelectedEmbeddingColumns([embeddingCol]);
-      setSelectedMetadataColumns(columns.filter(col => col !== embeddingCol));
-    }
-
-    const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'feature_id', 'doc_id'];
-    const idMatch = columns.find(col =>
-      idNames.some(name => col.toLowerCase() === name)
-    );
-    if (idMatch) {
-      setIdColumn(idMatch);
-    }
+    form.applyColumnDefaults({ columns, rows, kinds, dataType: type });
 
     if (filePath && !collectionName) {
       const filename = filePath.split('/').pop()?.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'local_data';
@@ -201,15 +169,17 @@ export function LocalFileTab({
     if (!info || info.error) return;
 
     const preview = await fetchLocalFilePreview(filePath, 5);
+    const rows = preview?.rows ?? [];
     autoConfigureColumns(
       info.columns,
-      MediaColumns.kindsOf(MediaColumns.localColumns(info.columns, preview?.rows ?? [], preview?.columnKinds)),
+      rows,
+      MediaColumns.kindsOf(MediaColumns.localColumns(info.columns, rows, preview?.columnKinds)),
     );
   };
 
   const handleDataTypeChange = (type: DataType) => {
     setDataType(type);
-    if (localFileInfo) autoConfigureColumns(localFileInfo.columns, mediaKinds, type);
+    if (localFileInfo) autoConfigureColumns(localFileInfo.columns, localFilePreview?.rows ?? [], mediaKinds, type);
   };
 
   const handleEmbed = async () => {
@@ -284,6 +254,10 @@ export function LocalFileTab({
   const columns = localFileInfo
     ? MediaColumns.localColumns(localFileInfo.columns, localFilePreview?.rows ?? [], localFilePreview?.columnKinds)
     : [];
+  // The task prefix may name any column (re-embed: any field of the source
+  // dataset); its field and the validation share these rows
+  const filePrefixRow = form.taskPrefixRow(columns.map(c => c.name));
+  const reEmbedPrefixRow = form.taskPrefixRow(datasetColumns);
   const mediaKinds = MediaColumns.kindsOf(columns);
   const totalRows = localFileInfo?.numRows;
   const isVectorMode = dataType === 'VECTOR';
@@ -302,7 +276,7 @@ export function LocalFileTab({
     dataType,
     media: isMultimodal ? form.mediaValidation(mediaKinds) : undefined,
     portionStrategy,
-    placeholderIssues: isModelEmbed ? form.placeholderIssues(columns.map(c => c.name)) : [],
+    placeholderIssues: isModelEmbed ? form.placeholderIssues(filePrefixRow.columns) : [],
     taskPrefixesLoading: isModelEmbed && model.taskPrefixesLoading,
   });
 
@@ -310,7 +284,7 @@ export function LocalFileTab({
     source: 'reembed',
     collectionName,
     embeddingColumns: selectedEmbeddingColumns,
-    placeholderIssues: form.placeholderIssues(datasetColumns),
+    placeholderIssues: form.placeholderIssues(reEmbedPrefixRow.columns),
     taskPrefixesLoading: model.taskPrefixesLoading,
   });
 
@@ -485,11 +459,11 @@ export function LocalFileTab({
               selectedMetadataColumns={selectedMetadataColumns}
               onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
               onMetadataColumnsChange={setSelectedMetadataColumns}
+              selectionNote={form.selectionNote}
               textTemplate={textTemplate}
               onTemplateChange={setTextTemplate}
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
-              taskPrefix={isModelEmbed ? taskPrefixControlOf(model) : undefined}
               idPrefix="local-"
             />
           </CardContent>
@@ -542,8 +516,8 @@ export function LocalFileTab({
         <EmbeddingModelForm
           model={model}
           title="5 · Embedding Model"
-          showTopics={false}
           idPrefix="local-"
+          taskPrefixRow={filePrefixRow}
           media={
             isMultimodal
               ? { kinds: MediaColumns.selectedKinds(selectedMediaColumns, mediaKinds), defaultModel: form.multimodalDefaultModel }
@@ -554,23 +528,11 @@ export function LocalFileTab({
 
       {/* Topic Extraction (available for all data types) */}
       {isDataLoaded && (
-        <Card>
-          <CardContent className="pt-6 space-y-3">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="local-enable-topics"
-                checked={model.enableTopics}
-                onCheckedChange={(checked) => model.setEnableTopics(checked === true)}
-              />
-              <Label htmlFor="local-enable-topics" className="cursor-pointer">
-                {isVectorMode ? 'Extract topics after import' : 'Extract topics after embedding'}
-              </Label>
-            </div>
-            {model.enableTopics && (
-              <TopicConfigForm value={model.topicConfig} onChange={model.setTopicConfig} />
-            )}
-          </CardContent>
-        </Card>
+        <TopicExtractionSection
+          model={model}
+          idPrefix="local-"
+          label={isVectorMode ? 'Extract topics after import' : undefined}
+        />
       )}
 
       {/* Optional post-embed SAE step (after the topics section above); SAE
@@ -613,7 +575,6 @@ export function LocalFileTab({
                 onIdColumnChange={setIdColumn}
                 showMetadataColumns={false}
                 showIdColumn={false}
-                taskPrefix={taskPrefixControlOf(model)}
                 idPrefix="reembed-"
               />
               <p className="text-xs text-muted-foreground bg-muted p-3 rounded-md">
@@ -625,27 +586,11 @@ export function LocalFileTab({
 
           <EmbeddingModelForm
             model={model}
-            showTopics={false}
             idPrefix="reembed-"
+            taskPrefixRow={reEmbedPrefixRow}
           />
 
-          <Card>
-            <CardContent className="pt-6 space-y-3">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="reembed-enable-topics"
-                  checked={model.enableTopics}
-                  onCheckedChange={(checked) => model.setEnableTopics(checked === true)}
-                />
-                <Label htmlFor="reembed-enable-topics" className="cursor-pointer">
-                  Extract topics after embedding
-                </Label>
-              </div>
-              {model.enableTopics && (
-                <TopicConfigForm value={model.topicConfig} onChange={model.setTopicConfig} />
-              )}
-            </CardContent>
-          </Card>
+          <TopicExtractionSection model={model} idPrefix="reembed-" />
 
           {/* Optional post-embed SAE step (after the topics section above) */}
           <SaeActivationsSection model={model} idPrefix="reembed-" />

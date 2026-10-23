@@ -133,17 +133,18 @@ def main() -> None:
     cos_poetry_refusal = cosine(poetry, refusal)
     cos_sae_refusal = cosine(sae_poetry, refusal)
     cos_poetry_sae = cosine(poetry, sae_poetry)
-    print(f"  cos(diffmeans_poetry, refusal_dir) = {cos_poetry_refusal:+.4f}   "
-          f"(predicted: substantially non-zero)")
-    print(f"  cos(sae_poetry,       refusal_dir) = {cos_sae_refusal:+.4f}   "
-          f"(predicted: ≈ 0)")
+    print(
+        f"  cos(diffmeans_poetry, refusal_dir) = {cos_poetry_refusal:+.4f}   "
+        f"(predicted: substantially non-zero)"
+    )
+    print(f"  cos(sae_poetry,       refusal_dir) = {cos_sae_refusal:+.4f}   (predicted: ≈ 0)")
     print(f"  cos(diffmeans_poetry, sae_poetry)  = {cos_poetry_sae:+.4f}   (for reference)")
 
     # --- Decomposition: poetry = (proj onto refusal) + (orthogonal remainder) ---
     refusal_hat = refusal / refusal.norm()
-    proj_scalar = torch.dot(poetry, refusal_hat)          # signed length along refusal
-    proj_vec = proj_scalar * refusal_hat                  # refusal-parallel component
-    remainder = poetry - proj_vec                         # orthogonal "pure poetry"
+    proj_scalar = torch.dot(poetry, refusal_hat)  # signed length along refusal
+    proj_vec = proj_scalar * refusal_hat  # refusal-parallel component
+    remainder = poetry - proj_vec  # orthogonal "pure poetry"
 
     print()
     print(rule)
@@ -157,8 +158,10 @@ def main() -> None:
     # Sanity: pieces sum back, and the remainder is orthogonal to refusal.
     recon_err = (proj_vec + remainder - poetry).norm().item()
     print(f"  reconstruction error |proj + remainder - poetry| = {recon_err:.2e}")
-    print(f"  cos(orthogonal_remainder, refusal_dir) = {cosine(remainder, refusal):+.2e}  "
-          f"(should be ≈ 0)")
+    print(
+        f"  cos(orthogonal_remainder, refusal_dir) = {cosine(remainder, refusal):+.2e}  "
+        f"(should be ≈ 0)"
+    )
 
     if SAVE_PIECES:
         target_norm = poetry.norm()
@@ -187,14 +190,11 @@ def main() -> None:
                 ),
             },
         }
-        (PIECES_DIR / "decomposition_metadata.json").write_text(
-            json.dumps(meta, indent=2) + "\n"
-        )
+        (PIECES_DIR / "decomposition_metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
 
         print()
         print(rule)
-        print("Saved matched-norm pieces (both rescaled to |poetry| = "
-              f"{target_norm.item():.2f})")
+        print(f"Saved matched-norm pieces (both rescaled to |poetry| = {target_norm.item():.2f})")
         print(rule)
         print(f"  refusal-parallel  → {parallel_path}")
         print(f"  orthogonal pure   → {remainder_path}")

@@ -186,7 +186,6 @@ function ParamNumberRow({
             checked={checked}
             onCheckedChange={(c) => onCheckedChange(c === true)}
             aria-label={`Enable ${label.toLowerCase()}`}
-            className="size-3.5"
           />
         )}
         <Label
@@ -269,7 +268,6 @@ function ProbeSettingsPopover({
               checked={classifierMode === 'forced-on' || (classifierMode === 'free' && params.mlpClassifier)}
               disabled={classifierMode !== 'free'}
               onCheckedChange={(c) => set({ mlpClassifier: c === true })}
-              className="size-3.5"
             />
             <Label
               htmlFor="probe-mlp-classifier"

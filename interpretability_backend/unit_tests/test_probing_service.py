@@ -1062,4 +1062,3 @@ class TestClassifierOutputGuards:
         config = ProbeConfig(collection_name="c", target_field="label", kind="logreg")
         with pytest.raises(ProbeTrainingError, match="classes"):
             run_probe_core(X, y, _ids(len(y)), config, tmp_path)
-

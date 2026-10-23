@@ -30,39 +30,6 @@ export function calculateMarkerStyle(pointCount: number): MarkerStyle {
   return { size, opacity };
 }
 
-export interface LayerOpacity {
-  outer: number;
-  inner: number;
-  core: number;
-}
-
-/**
- * Calculate layer opacities based on similarity score.
- * Uses linear mapping from minimum to maximum opacity thresholds.
- *
- * This creates a variable-brightness glow effect where:
- * - Low similarity (0.0): Very faint glow, barely visible
- * - Medium similarity (0.5): Moderate brightness
- * - High similarity (1.0): Full brightness
- *
- * @param similarity Similarity score between 0 and 1
- * @returns Object containing opacity values for outer, inner, and core layers
- */
-export function calculateLuminosity(similarity: number): LayerOpacity {
-  const MIN_OUTER = 0.05;
-  const MAX_OUTER = 0.2;
-  const MIN_INNER = 0.1;
-  const MAX_INNER = 0.4;
-  const MIN_CORE = 0.5;
-  const MAX_CORE = 1.0;
-
-  return {
-    outer: MIN_OUTER + (similarity * (MAX_OUTER - MIN_OUTER)),
-    inner: MIN_INNER + (similarity * (MAX_INNER - MIN_INNER)),
-    core: MIN_CORE + (similarity * (MAX_CORE - MIN_CORE)),
-  };
-}
-
 export interface HighlightScale {
   outerMultiplier: number;
   innerMultiplier: number;

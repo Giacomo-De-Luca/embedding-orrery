@@ -165,7 +165,11 @@ class TestProbeInfoFromRecord:
         assert (info.n_train, info.n_val) == (80, 20)
 
     def test_binary_text_record_keeps_target_mapping(self):
-        config = {"task": "binary", "classes": ["safe", "unsafe"], "target_mapping": {"safe": 0.0, "unsafe": 1.0}}
+        config = {
+            "task": "binary",
+            "classes": ["safe", "unsafe"],
+            "target_mapping": {"safe": 0.0, "unsafe": 1.0},
+        }
         info = probe_info_from_record(_record("logreg", config))
         assert info.classes == ["safe", "unsafe"]
         assert info.target_mapping == {"safe": 0.0, "unsafe": 1.0}

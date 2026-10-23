@@ -10,6 +10,9 @@ export interface ProviderConfig {
   /** Form default: small for local models (GPU memory grows with the batch),
    * 100 texts per request for remote APIs. */
   defaultBatchSize: number;
+  /** The query instruction the provider's models were trained with (QWEN);
+   * it is sent when the form's field is empty. Documents get none. */
+  queryInstruction?: string;
 }
 
 export const EMBEDDING_PROVIDERS: Record<EmbeddingProvider, ProviderConfig> = {
@@ -54,6 +57,9 @@ export const EMBEDDING_PROVIDERS: Record<EmbeddingProvider, ProviderConfig> = {
     description: 'Local Qwen3 model (no API key)',
     local: true,
     defaultBatchSize: 32,
+    // Qwen3-Embedding's model card (and its sentence-transformers "query" prompt);
+    // mirrors the backend's default (backend/embedding_functions/specific_functions/embed_qwen.py).
+    queryInstruction: 'Given a web search query, retrieve relevant passages that answer the query',
   },
   HUGGINGFACE_API: {
     defaultModel: 'sentence-transformers/all-MiniLM-L6-v2',

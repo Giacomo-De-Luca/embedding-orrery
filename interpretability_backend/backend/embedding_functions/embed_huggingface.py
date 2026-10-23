@@ -175,15 +175,12 @@ def embed_huggingface_dataset(
         print(f"Loaded {len(rows)} rows (total across splits: {total_in_split})")
 
         if not rows:
-            return EmbeddingResult(
-                collection_name=config.collection_name,
-                total_embedded=0,
-                embedding_dim=0,
+            return EmbeddingResult.failed(
+                config.collection_name,
+                "No rows loaded from dataset",
                 device=device,
-                duration_seconds=time.time() - start_time,
-                error="No rows loaded from dataset",
-                embedding_provider=model_config.provider.value,
-                embedding_model=model_config.model_name,
+                start_time=start_time,
+                model_config=model_config,
             )
 
         if config.data_type == DataType.MULTIMODAL:
@@ -205,15 +202,12 @@ def embed_huggingface_dataset(
             first_row = rows[0]
             columns = [k for k, v in first_row.items() if isinstance(v, str) and k != _SPLIT_KEY]
             if not columns:
-                return EmbeddingResult(
-                    collection_name=config.collection_name,
-                    total_embedded=0,
-                    embedding_dim=0,
+                return EmbeddingResult.failed(
+                    config.collection_name,
+                    "No text columns found in dataset",
                     device=device,
-                    duration_seconds=time.time() - start_time,
-                    error="No text columns found in dataset",
-                    embedding_provider=model_config.provider.value,
-                    embedding_model=model_config.model_name,
+                    start_time=start_time,
+                    model_config=model_config,
                 )
         print(f"Embedding columns: {columns}")
 

@@ -37,6 +37,21 @@ export interface TaskPrefixValue {
   documentPrefix: string;
 }
 
+/**
+ * The row a document prefix is written for: the columns its placeholders may
+ * name (any column of the source), and the text template and embedded columns
+ * it goes before (for the model-input preview). No columns = static prefixes
+ * only (SAE label maps have no column section).
+ */
+export interface TaskPrefixRow {
+  columns: string[];
+  template?: string;
+  embeddingColumns?: string[];
+}
+
+/** The row of a form without a column section: static prefixes only. */
+export const STATIC_TASK_PREFIX_ROW: TaskPrefixRow = { columns: [] };
+
 /** What the embedding model input carries (`prompt`, `task`). */
 export interface TaskPrefixInput {
   documentPrefix: string;

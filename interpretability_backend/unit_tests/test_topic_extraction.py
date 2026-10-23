@@ -47,10 +47,9 @@ def print_topics_result(result):
 
             # Print top keywords
             if topic_info.keywords:
-                keywords_str = ", ".join([
-                    f"{word} ({score:.3f})"
-                    for word, score in topic_info.keywords[:5]
-                ])
+                keywords_str = ", ".join(
+                    [f"{word} ({score:.3f})" for word, score in topic_info.keywords[:5]]
+                )
                 print(f"   Keywords: {keywords_str}")
 
             print()
@@ -74,8 +73,8 @@ async def main():
         collection_info = client.get_collection_info(collection_name)
         print(f"   ✅ Collection found: {collection_info['count']} items")
 
-        metadata = collection_info['metadata']
-        has_projections = metadata.get('has_projections', False)
+        metadata = collection_info["metadata"]
+        has_projections = metadata.get("has_projections", False)
 
         if not has_projections:
             print(f"\n❌ ERROR: Collection '{collection_name}' does not have projections!")
@@ -106,7 +105,7 @@ async def main():
         use_llm_labels=True,
         llm_provider="gemini",
         llm_model="gemini-3-flash-preview",
-        projection_type="umap_2d"
+        projection_type="umap_2d",
     )
 
     print("   Configuration:")
@@ -130,9 +129,9 @@ async def main():
         # Verify metadata was updated
         print("\n4️⃣ Verifying metadata update...")
         collection_info = client.get_collection_info(collection_name)
-        metadata = collection_info['metadata']
+        metadata = collection_info["metadata"]
 
-        if metadata.get('has_topics'):
+        if metadata.get("has_topics"):
             print("   ✅ Collection metadata updated successfully")
             print(f"      • Topic count: {metadata.get('topic_count')}")
             print(f"      • Extracted at: {metadata.get('topics_extracted_at')}")
@@ -142,6 +141,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ ERROR during extraction: {e}")
         import traceback
+
         traceback.print_exc()
         return
 

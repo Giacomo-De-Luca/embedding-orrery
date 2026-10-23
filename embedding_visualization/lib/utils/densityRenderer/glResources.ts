@@ -5,6 +5,8 @@
  * DensityRenderer and explicitly disposed.
  */
 
+import type { FloatPrecision } from '../floatRenderTargets';
+
 export interface GlProgram {
   program: WebGLProgram;
   uniforms: Record<string, WebGLUniformLocation>;
@@ -77,24 +79,31 @@ export function createStaticBuffer(
 }
 
 /**
- * Float32 framebuffer (R32F or RGBA32F) with LINEAR filtering and
- * CLAMP_TO_EDGE, matching the embedding-atlas density pipeline. Requires
- * EXT_color_buffer_float (+ OES_texture_float_linear for the LINEAR filter).
+ * Float framebuffer with LINEAR filtering and CLAMP_TO_EDGE, matching the
+ * embedding-atlas density pipeline: R32F/RGBA32F at `float32` (needs
+ * OES_texture_float_linear for the LINEAR filter), R16F/RGBA16F at `float16`
+ * (filterable in core WebGL2). Both need EXT_color_buffer_float; the
+ * precision comes from `FloatRenderTargets.enable`.
  */
 export function createFramebuffer(
   gl: WebGL2RenderingContext,
   width: number,
   height: number,
   channels: 1 | 4,
+  precision: FloatPrecision,
 ): GlFramebuffer {
   const texture = gl.createTexture();
   const framebuffer = gl.createFramebuffer();
   if (!texture || !framebuffer) throw new Error('Failed to create framebuffer');
 
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  const internalFormat = channels === 1 ? gl.R32F : gl.RGBA32F;
+  const half = precision === 'float16';
+  const internalFormat = channels === 1
+    ? (half ? gl.R16F : gl.R32F)
+    : (half ? gl.RGBA16F : gl.RGBA32F);
   const format = channels === 1 ? gl.RED : gl.RGBA;
-  gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, gl.FLOAT, null);
+  const type = half ? gl.HALF_FLOAT : gl.FLOAT;
+  gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);

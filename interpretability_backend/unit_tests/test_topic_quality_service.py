@@ -160,9 +160,7 @@ def test_mutation_metric_names_in_sync_with_evaluator():
 
     from evaluation.quality_metrics import METRIC_NAMES
 
-    mutations_src = (
-        Path(__file__).parents[1] / "backend" / "API" / "mutations.py"
-    ).read_text()
+    mutations_src = (Path(__file__).parents[1] / "backend" / "API" / "mutations.py").read_text()
     literals = [
         set(ast.literal_eval(node))
         for node in ast.walk(ast.parse(mutations_src))

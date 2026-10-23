@@ -30,9 +30,7 @@ class SaeWarmupConfig:
     @classmethod
     def from_env(cls) -> "SaeWarmupConfig":
         return cls(
-            backend_health_url=os.getenv(
-                "ORRERY_BACKEND_HEALTH_URL", "http://backend:8000/health"
-            ),
+            backend_health_url=os.getenv("ORRERY_BACKEND_HEALTH_URL", "http://backend:8000/health"),
             graphql_url=os.getenv("ORRERY_GRAPHQL_URL", "http://backend:8000/graphql"),
             checkpoint=os.getenv("ORRERY_MODEL_CHECKPOINT", "google/gemma-3-4b-it"),
             layer=int(os.getenv("ORRERY_SAE_LAYER", "9")),

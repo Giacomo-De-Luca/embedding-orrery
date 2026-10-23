@@ -88,8 +88,7 @@ class HookManager:
             )
         site = (config.layer_index, config.hook_type)
         existing_at_site = [
-            (sid, c) for (li, ht, sid), c in self._configs.items()
-            if (li, ht) == site
+            (sid, c) for (li, ht, sid), c in self._configs.items() if (li, ht) == site
         ]
         if existing_at_site:
             offenders = [sid for sid, c in existing_at_site if not c.read_only]
@@ -164,9 +163,7 @@ class HookManager:
         # Group SAEs by (layer, hook_type) site so co-attached SAEs
         # share a single forward hook (one forward pass through the
         # layer, N SAE encodes).
-        sites: dict[
-            tuple[int, HookType], list[tuple[SAEBase, SAEConfigT, str]]
-        ] = {}
+        sites: dict[tuple[int, HookType], list[tuple[SAEBase, SAEConfigT, str]]] = {}
         for (layer_idx, hook_type, sae_id), sae in self._saes.items():
             cfg = self._configs[(layer_idx, hook_type, sae_id)]
             sites.setdefault((layer_idx, hook_type), []).append(
@@ -178,8 +175,7 @@ class HookManager:
             layer_idx, hook_type = site_key
             if layer_idx >= len(layers):
                 raise ValueError(
-                    f"layer_index {layer_idx} out of range "
-                    f"(model has {len(layers)} layers)"
+                    f"layer_index {layer_idx} out of range (model has {len(layers)} layers)"
                 )
             target = self._resolve_hook_target(layers[layer_idx], hook_type)
             steer_ops = self._resolved_by_layer.get(site_key, [])
@@ -241,10 +237,7 @@ class HookManager:
             site = op.sae_key or (op.layer_index, op.hook_type)
             sae = None
             if op.feature_index is not None:
-                matches = [
-                    (k, s) for k, s in self._saes.items()
-                    if (k[0], k[1]) == site
-                ]
+                matches = [(k, s) for k, s in self._saes.items() if (k[0], k[1]) == site]
                 if matches:
                     if len(matches) > 1:
                         ids = [k[2] for k, _ in matches]
@@ -307,7 +300,9 @@ class HookManager:
                 hidden_states = output[0] if isinstance(output, tuple) else output
                 if steer_ops:
                     hidden_states = apply_steering(
-                        hidden_states, steer_ops, self.strength_multiplier,
+                        hidden_states,
+                        steer_ops,
+                        self.strength_multiplier,
                     )
 
                 last_reconstruction = None

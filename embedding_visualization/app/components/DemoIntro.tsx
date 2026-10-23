@@ -92,7 +92,7 @@ export function DemoIntro({
     if (open) warmEmotionSearch(apolloClient);
   }, [open]);
 
-  // Desktop-only tours (the WordNet galaxy, 212k points) are hidden on phones.
+  // Phones get only the 90-second tour (`tourFitsViewport`).
   const fits = (tour: TourAction) =>
     typeof window === 'undefined' || tourFitsViewport(tour, window.innerWidth);
 

@@ -38,6 +38,7 @@ except ImportError:
 
 # ============= LOCKING =============
 
+
 def _acquire_manifest(jobs_folder):
     """Acquire exclusive lock and read manifest. Returns (manifest, lock_fh)."""
     jobs_folder = Path(jobs_folder)
@@ -88,6 +89,7 @@ def _generate_worker_id():
 
 # ============= STALE DETECTION =============
 
+
 def _reset_stale_items(manifest):
     """Reset items that have been in_progress for too long."""
     timeout = manifest.get("stale_timeout_minutes", 30)
@@ -107,6 +109,7 @@ def _reset_stale_items(manifest):
 
 
 # ============= INIT =============
+
 
 def init_jobs(config):
     """
@@ -134,10 +137,12 @@ def init_jobs(config):
             # Skip if already in output
             if output_folder and (output_folder / f.name).exists():
                 continue
-            items.append({
-                "filename": f.name,
-                "file_size": f.stat().st_size,
-            })
+            items.append(
+                {
+                    "filename": f.name,
+                    "file_size": f.stat().st_size,
+                }
+            )
 
     items.sort(key=lambda x: x["file_size"])
 
@@ -188,6 +193,7 @@ def init_jobs(config):
 
 # ============= GET NEXT ITEM =============
 
+
 def get_next_item(config, worker_id=None):
     """
     Claim the next available item. Returns a dict with item info,
@@ -233,8 +239,10 @@ def get_next_item(config, worker_id=None):
             continue
 
         # Advance current_item_index past completed items
-        while (manifest["current_item_index"] < len(queue) and
-               manifest["items"][queue[manifest["current_item_index"]]]["status"] == "completed"):
+        while (
+            manifest["current_item_index"] < len(queue)
+            and manifest["items"][queue[manifest["current_item_index"]]]["status"] == "completed"
+        ):
             manifest["current_item_index"] += 1
 
         # Nothing left
@@ -248,6 +256,7 @@ def get_next_item(config, worker_id=None):
 
 
 # ============= SUBMIT ITEM =============
+
 
 def submit_item(config, item_filename, result_file):
     """
@@ -286,15 +295,14 @@ def submit_item(config, item_filename, result_file):
 
         # Advance current_item_index past completed items
         queue = manifest["item_queue"]
-        while (manifest["current_item_index"] < len(queue) and
-               manifest["items"][queue[manifest["current_item_index"]]]["status"] == "completed"):
+        while (
+            manifest["current_item_index"] < len(queue)
+            and manifest["items"][queue[manifest["current_item_index"]]]["status"] == "completed"
+        ):
             manifest["current_item_index"] += 1
 
         # Check if all items are done
-        all_done = all(
-            info["status"] == "completed"
-            for info in manifest["items"].values()
-        )
+        all_done = all(info["status"] == "completed" for info in manifest["items"].values())
 
         on_complete = manifest.get("on_complete")
 
@@ -319,6 +327,7 @@ def submit_item(config, item_filename, result_file):
 
 
 # ============= FAIL ITEM =============
+
 
 def fail_item(config, item_filename, error=""):
     """Mark an item as failed so another worker can retry it."""
@@ -351,6 +360,7 @@ def fail_item(config, item_filename, error=""):
 
 # ============= ON COMPLETE HOOK =============
 
+
 def _run_on_complete(config, on_complete_template):
     """Run the on_complete shell command with variable substitution."""
     cmd = on_complete_template.format(
@@ -362,7 +372,10 @@ def _run_on_complete(config, on_complete_template):
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
-            print(f"on_complete hook failed (exit {result.returncode}): {result.stderr}", file=sys.stderr)
+            print(
+                f"on_complete hook failed (exit {result.returncode}): {result.stderr}",
+                file=sys.stderr,
+            )
         return result.returncode == 0
     except Exception as e:
         print(f"on_complete hook error: {e}", file=sys.stderr)
@@ -371,12 +384,15 @@ def _run_on_complete(config, on_complete_template):
 
 # ============= STATUS =============
 
+
 def get_status(config):
     """Return a progress report dict."""
     jobs_folder = Path(config["jobs_folder"])
 
     if not (jobs_folder / "manifest.json").exists():
-        return {"error": f"Not initialized. Run: python job_queue.py init --task {config['task_name']}"}
+        return {
+            "error": f"Not initialized. Run: python job_queue.py init --task {config['task_name']}"
+        }
 
     manifest, lock_fh = _acquire_manifest(jobs_folder)
     try:
@@ -421,15 +437,18 @@ def print_status(config):
         print(s["error"])
         return
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"JOB STATUS: {s['task_name']}")
-    print(f"{'='*50}")
-    print(f"Items: {s['items_completed']} done / {s['items_in_progress']} active / {s['items_failed']} failed / {s['items_pending']} pending  (total: {s['items_total']})")
+    print(f"{'=' * 50}")
+    print(
+        f"Items: {s['items_completed']} done / {s['items_in_progress']} active / {s['items_failed']} failed / {s['items_pending']} pending  (total: {s['items_total']})"
+    )
     print(f"Progress: {s['completion_pct']}%")
-    print(f"{'='*50}\n")
+    print(f"{'=' * 50}\n")
 
 
 # ============= RESET =============
+
 
 def reset_items(config, item_filename=None):
     """Reset failed and stale in-progress items back to pending."""
@@ -462,6 +481,7 @@ def reset_items(config, item_filename=None):
 
 # ============= CLI =============
 
+
 def main():
     parser = argparse.ArgumentParser(description="Generic agent job queue")
     parser.add_argument("--task", required=True, help="Task name (matches tasks/<name>.json)")
@@ -474,7 +494,8 @@ def main():
     # needing to learn the flag (their hardcoded `--task X` commands then
     # pick up the variant transparently).
     parser.add_argument(
-        "--variant", default=os.environ.get("AGENT_QUEUE_VARIANT") or None,
+        "--variant",
+        default=os.environ.get("AGENT_QUEUE_VARIANT") or None,
         help="Path subfolder; substituted into {variant} in task JSON paths.",
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -539,14 +560,20 @@ def main():
         reset_items(config, args.item)
 
     elif args.command == "paths":
-        print(json.dumps({
-            "input_folder": str(config["input_folder"]) if config["input_folder"] else "",
-            "output_folder": str(config["output_folder"]) if config["output_folder"] else "",
-            "jobs_folder": str(config["jobs_folder"]) if config["jobs_folder"] else "",
-            "agent": config["agent"],
-            "model": config["model"],
-            "variant": config.get("variant", ""),
-        }))
+        print(
+            json.dumps(
+                {
+                    "input_folder": str(config["input_folder"]) if config["input_folder"] else "",
+                    "output_folder": str(config["output_folder"])
+                    if config["output_folder"]
+                    else "",
+                    "jobs_folder": str(config["jobs_folder"]) if config["jobs_folder"] else "",
+                    "agent": config["agent"],
+                    "model": config["model"],
+                    "variant": config.get("variant", ""),
+                }
+            )
+        )
 
     else:
         parser.print_help()

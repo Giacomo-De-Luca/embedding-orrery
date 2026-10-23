@@ -61,14 +61,8 @@ class SparseActivationStore(ActivationStore):
         self._indptr.append(self._indptr[-1] + len(nz))
 
     def _build_pending(self) -> sparse.csr_matrix:
-        data = (
-            np.concatenate(self._data) if self._data else np.empty(0, self.dtype)
-        )
-        indices = (
-            np.concatenate(self._indices)
-            if self._indices
-            else np.empty(0, np.int32)
-        )
+        data = np.concatenate(self._data) if self._data else np.empty(0, self.dtype)
+        indices = np.concatenate(self._indices) if self._indices else np.empty(0, np.int32)
         indptr = np.asarray(self._indptr, dtype=np.int64)
         return sparse.csr_matrix(
             (data, indices, indptr),
@@ -144,9 +138,7 @@ class SparseActivationStore(ActivationStore):
             if n_cols is None:
                 n_cols = ncols
             elif ncols != n_cols:
-                raise ValueError(
-                    f"shard column-count mismatch at {p}: {ncols} (expected {n_cols})"
-                )
+                raise ValueError(f"shard column-count mismatch at {p}: {ncols} (expected {n_cols})")
             shard_info.append((nrows, nnz))
             total_rows += nrows
             total_nnz += nnz
@@ -161,11 +153,11 @@ class SparseActivationStore(ActivationStore):
         for p, (nr, nz) in zip(paths, shard_info, strict=True):
             m = sparse.load_npz(p)
             if nz:
-                out_data[nnz_offset:nnz_offset + nz] = m.data
-                out_indices[nnz_offset:nnz_offset + nz] = m.indices
+                out_data[nnz_offset : nnz_offset + nz] = m.data
+                out_indices[nnz_offset : nnz_offset + nz] = m.indices
             # m.indptr is length nr+1 and starts at 0; shift and skip leading 0
             # so subsequent shards' indptr continues from this shard's last nnz.
-            out_indptr[row_offset + 1:row_offset + 1 + nr] = (
+            out_indptr[row_offset + 1 : row_offset + 1 + nr] = (
                 m.indptr[1:].astype(np.int64, copy=False) + nnz_offset
             )
             row_offset += nr

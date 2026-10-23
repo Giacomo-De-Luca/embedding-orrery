@@ -11,7 +11,6 @@ function entry(fields: EntryFields): EmbeddingModelCatalogEntry {
   return {
     description: null,
     modalities: ['text'],
-    prompts: [],
     dimension: null,
     defaultFor: [],
     suggested: true,
@@ -32,7 +31,6 @@ const EG2 = entry({
   modelName: 'google/embeddinggemma-2',
   description: 'EmbeddingGemma 2: text, images, audio and video in one space',
   modalities: ['text', 'image', 'audio', 'video'],
-  prompts: ['query', 'Retrieval-document'],
   dimension: 768,
   defaultFor: ['multimodal'],
 });

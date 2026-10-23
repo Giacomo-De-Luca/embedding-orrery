@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { Button } from '@/lib/ui-primitives/button';
+import { dotControlIndentClassName } from '@/lib/ui-primitives/dot-control';
 import { Badge } from '@/lib/ui-primitives/badge';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Spinner } from '@/lib/ui-primitives/spinner';
@@ -113,7 +114,7 @@ export function ReduceTopicsSection({
           </div>
 
           {reduceRegenerateLabels && (
-            <div className="space-y-3 pl-6">
+            <div className={`space-y-3 ${dotControlIndentClassName}`}>
               <div className="space-y-2">
                 <Label htmlFor="reduce-llm-provider">Provider</Label>
                 <Select value={reduceLlmProvider} onValueChange={setReduceLlmProvider}>

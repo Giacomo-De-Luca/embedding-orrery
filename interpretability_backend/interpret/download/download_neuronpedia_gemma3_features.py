@@ -67,10 +67,8 @@ DEFAULT_WORKERS = 4
 DEFAULT_RATE_LIMIT_DELAY = 0.1  # seconds between requests
 
 
-
-
-
 # ── API Client ───────────────────────────────────────────────────────────────
+
 
 class NeuronpediaClient:
     """Simple client for the Neuronpedia REST API."""
@@ -105,7 +103,7 @@ class NeuronpediaClient:
                 elif resp.status_code == 404:
                     return None  # Feature doesn't exist
                 elif resp.status_code == 429:
-                    wait = min(2 ** attempt * 5, 60)
+                    wait = min(2**attempt * 5, 60)
                     print(f"\n  Rate limited. Waiting {wait}s...")
                     time.sleep(wait)
                     continue
@@ -113,7 +111,7 @@ class NeuronpediaClient:
                     resp.raise_for_status()
             except requests.exceptions.RequestException as e:
                 if attempt < retries - 1:
-                    wait = 2 ** attempt
+                    wait = 2**attempt
                     print(f"\n  Request error: {e}. Retrying in {wait}s...")
                     time.sleep(wait)
                 else:
@@ -153,6 +151,7 @@ def build_source_id(layer, hook, width):
 
 # ── Download Logic ───────────────────────────────────────────────────────────
 
+
 def extract_autointerp_data(raw_feature):
     """Extract the useful autointerpreter fields from a raw API response."""
     if raw_feature is None:
@@ -160,24 +159,28 @@ def extract_autointerp_data(raw_feature):
 
     explanations = []
     for exp in raw_feature.get("explanations", []):
-        explanations.append({
-            "text": exp.get("description", ""),
-            "method": exp.get("typeName"),
-            "explainer_model": exp.get("explanationModelName"),
-            "score": exp.get("score"),
-        })
+        explanations.append(
+            {
+                "text": exp.get("description", ""),
+                "method": exp.get("typeName"),
+                "explainer_model": exp.get("explanationModelName"),
+                "score": exp.get("score"),
+            }
+        )
 
     # Extract top activating tokens (compact form)
     top_activations = []
     for act in raw_feature.get("activations", []):
         tokens = act.get("tokens", [])
         values = act.get("values", [])
-        top_activations.append({
-            "tokens": tokens,
-            "values": values,
-            "bin_min": act.get("binMin"),
-            "bin_max": act.get("binMax"),
-        })
+        top_activations.append(
+            {
+                "tokens": tokens,
+                "values": values,
+                "bin_min": act.get("binMin"),
+                "bin_max": act.get("binMax"),
+            }
+        )
 
     return {
         "model_id": raw_feature.get("modelId"),
@@ -220,8 +223,9 @@ def download_source_features(client, model_id, source, max_features, output_dir,
 
     # Progress tracking
     if tqdm:
-        pbar = tqdm(total=len(indices_to_download), desc=f"  {source}", unit="feat",
-                     initial=0, ncols=80)
+        pbar = tqdm(
+            total=len(indices_to_download), desc=f"  {source}", unit="feat", initial=0, ncols=80
+        )
     else:
         pbar = None
 
@@ -232,6 +236,7 @@ def download_source_features(client, model_id, source, max_features, output_dir,
     write_lock = threading.Lock()
 
     with open(output_file, "a") as f:
+
         def _write_result(data):
             nonlocal downloaded, failed
             if data is not None:
@@ -267,6 +272,7 @@ def download_source_features(client, model_id, source, max_features, output_dir,
 
 # ── Discovery ────────────────────────────────────────────────────────────────
 
+
 def discover_available_sources(client, model_id, hooks, widths, layers):
     """Probe the API to find which sources actually exist."""
     print(f"\nDiscovering available SAE sources for {model_id}...")
@@ -298,6 +304,7 @@ def discover_available_sources(client, model_id, hooks, widths, layers):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download Gemma 3 4B autointerpreter features from Neuronpedia",
@@ -321,35 +328,75 @@ Examples:
         """,
     )
 
-    parser.add_argument("--api-key", type=str, default=None,
-                        help="Neuronpedia API key (or set NEURONPEDIA_API_KEY env var)")
-    parser.add_argument("--output-dir", type=str, default=str(DEFAULT_OUTPUT_DIR),
-                        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})")
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="Neuronpedia API key (or set NEURONPEDIA_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR),
+        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+    )
 
     # Source selection
-    parser.add_argument("--layers", type=int, nargs="+", default=None,
-                        help="Layer numbers to download (default: all 34 layers)")
-    parser.add_argument("--hook", type=str, nargs="+", default=["res"],
-                        choices=HOOKS,
-                        help="Hook types: res (residual), att (attention), mlp (default: res)")
-    parser.add_argument("--width", type=str, nargs="+", default=["16k"],
-                        help="SAE widths (default: 16k)")
-    parser.add_argument("--sources", type=str, nargs="+", default=None,
-                        help="Explicit source IDs to download (overrides --layers/--hook/--width)")
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Layer numbers to download (default: all 34 layers)",
+    )
+    parser.add_argument(
+        "--hook",
+        type=str,
+        nargs="+",
+        default=["res"],
+        choices=HOOKS,
+        help="Hook types: res (residual), att (attention), mlp (default: res)",
+    )
+    parser.add_argument(
+        "--width", type=str, nargs="+", default=["16k"], help="SAE widths (default: 16k)"
+    )
+    parser.add_argument(
+        "--sources",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Explicit source IDs to download (overrides --layers/--hook/--width)",
+    )
 
     # Download options
-    parser.add_argument("--max-features", type=int, default=DEFAULT_MAX_FEATURES,
-                        help=f"Max feature index to download per source (default: {DEFAULT_MAX_FEATURES})")
-    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
-                        help=f"Parallel download workers (default: {DEFAULT_WORKERS})")
-    parser.add_argument("--rate-limit", type=float, default=DEFAULT_RATE_LIMIT_DELAY,
-                        help=f"Seconds between API requests (default: {DEFAULT_RATE_LIMIT_DELAY})")
+    parser.add_argument(
+        "--max-features",
+        type=int,
+        default=DEFAULT_MAX_FEATURES,
+        help=f"Max feature index to download per source (default: {DEFAULT_MAX_FEATURES})",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"Parallel download workers (default: {DEFAULT_WORKERS})",
+    )
+    parser.add_argument(
+        "--rate-limit",
+        type=float,
+        default=DEFAULT_RATE_LIMIT_DELAY,
+        help=f"Seconds between API requests (default: {DEFAULT_RATE_LIMIT_DELAY})",
+    )
 
     # Modes
-    parser.add_argument("--discover", action="store_true",
-                        help="Only discover available sources, don't download")
-    parser.add_argument("--raw", action="store_true",
-                        help="Save raw API responses instead of extracted autointerp data")
+    parser.add_argument(
+        "--discover", action="store_true", help="Only discover available sources, don't download"
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Save raw API responses instead of extracted autointerp data",
+    )
 
     args = parser.parse_args()
 
@@ -411,7 +458,7 @@ Examples:
     # Download
     total_features = 0
     for i, source in enumerate(sources):
-        print(f"\n[{i+1}/{len(sources)}] Downloading {source}...")
+        print(f"\n[{i + 1}/{len(sources)}] Downloading {source}...")
 
         # Quick probe to check source exists
         if not client.probe_source(MODEL_ID, source):

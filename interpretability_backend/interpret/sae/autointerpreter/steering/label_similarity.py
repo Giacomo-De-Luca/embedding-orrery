@@ -40,16 +40,20 @@ class LabelAgreementAnalyzer:
 
     def run(self) -> dict:
         df = pd.read_parquet(self.run_dir / "verdicts.parquet")
-        df["label_cosine"] = self._cosine(
-            df["steering_short_name"], df["activation_short_name"]
-        )
+        df["label_cosine"] = self._cosine(df["steering_short_name"], df["activation_short_name"])
 
         # Persist: full table to parquet, the scannable subset to summary.csv.
         df.to_parquet(self.run_dir / "verdicts.parquet", index=False)
         summary_cols = [
-            "feature_index", "working_steering", "steers", "broken",
-            "steering_strength_0_10", "confidence", "label_cosine",
-            "steering_short_name", "activation_short_name",
+            "feature_index",
+            "working_steering",
+            "steers",
+            "broken",
+            "steering_strength_0_10",
+            "confidence",
+            "label_cosine",
+            "steering_short_name",
+            "activation_short_name",
         ]
         df[summary_cols].to_csv(self.run_dir / "summary.csv", index=False)
 
@@ -61,7 +65,9 @@ class LabelAgreementAnalyzer:
             "mean_cosine_working": _safe_mean(work["label_cosine"]),
             "agree": int((work["label_cosine"] >= AGREE_THRESHOLD).sum()),
             "partial": int(
-                work["label_cosine"].between(DIVERGE_THRESHOLD, AGREE_THRESHOLD, inclusive="left").sum()
+                work["label_cosine"]
+                .between(DIVERGE_THRESHOLD, AGREE_THRESHOLD, inclusive="left")
+                .sum()
             ),
             "diverge": int((work["label_cosine"] < DIVERGE_THRESHOLD).sum()),
         }

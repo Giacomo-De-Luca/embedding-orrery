@@ -123,18 +123,20 @@ class EmbeddingResult:
         *,
         device: str,
         start_time: float,
-        model_config: EmbeddingModelConfig,
+        model_config: EmbeddingModelConfig | None = None,
+        embedding_dim: int = 0,
     ) -> "EmbeddingResult":
-        """A run that stopped before embedding anything."""
+        """The result of a failed run: nothing reported as embedded, the error,
+        and the model when the run has one (vector ingestion has none)."""
         return cls(
             collection_name=collection_name,
             total_embedded=0,
-            embedding_dim=0,
+            embedding_dim=embedding_dim,
             device=device,
             duration_seconds=time.time() - start_time,
             error=error,
-            embedding_provider=model_config.provider.value,
-            embedding_model=model_config.model_name,
+            embedding_provider=model_config.provider.value if model_config else None,
+            embedding_model=model_config.model_name if model_config else None,
         )
 
 

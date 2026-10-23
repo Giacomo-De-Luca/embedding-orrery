@@ -16,8 +16,8 @@ import { MediaSettingsForm } from './MediaSettingsForm';
 import { PortionSelector } from './PortionSelector';
 import { DatasetInfoDisplay } from './DatasetInfoDisplay';
 import { ColumnSelector } from './ColumnSelector';
-import { taskPrefixControlOf } from './TaskPrefixField';
 import { EmbeddingModelForm } from './EmbeddingModelForm';
+import { TopicExtractionSection } from './TopicExtractionSection';
 import { SaeActivationsSection } from './SaeActivationsSection';
 import { EmbedResultCard } from './EmbedResultCard';
 import { ErrorCard } from './ErrorCard';
@@ -79,7 +79,7 @@ export function HuggingFaceTab({
     model,
     dataType, setDataType,
     collectionName, setCollectionName,
-    selectedEmbeddingColumns, setSelectedEmbeddingColumns,
+    selectedEmbeddingColumns,
     selectedMetadataColumns, setSelectedMetadataColumns,
     selectedMediaColumns, setSelectedMediaColumns,
     textTemplate, setTextTemplate,
@@ -92,37 +92,17 @@ export function HuggingFaceTab({
     randomSeed, setRandomSeed,
   } = form;
 
-  const autoConfigureColumns = (features: Array<{ name: string; dtype: string }>, type: DataType = dataType) => {
-    const kinds = MediaColumns.kindsOf(features);
-    const names = features.map(f => f.name);
-
-    if (type === 'MULTIMODAL') {
-      // Every Image / Audio / Video feature; text is optional.
-      const { media, metadata } = MediaColumns.defaultSelection(names, kinds);
-      setSelectedMediaColumns(media);
-      setSelectedEmbeddingColumns([]);
-      setTextTemplate('');
-      setSelectedMetadataColumns(metadata);
-    } else {
-      const textCols = features
-        .filter(f => f.dtype === 'string' || f.dtype === 'str')
-        .map(f => f.name);
-
-      const embeddingCol = textCols.length > 0 ? textCols[0] : MediaColumns.withoutMedia(names, kinds)[0];
-
-      setSelectedMediaColumns([]);
-      setSelectedEmbeddingColumns(embeddingCol ? [embeddingCol] : []);
-      setTextTemplate(embeddingCol ? `{${embeddingCol}}` : '');
-      setSelectedMetadataColumns(names.filter(name => name !== embeddingCol));
-    }
-
-    const idNames = ['id', 'index', 'idx', '_id', 'row_id', 'item_id', 'doc_id'];
-    const idMatch = features.find(f =>
-      idNames.some(name => f.name.toLowerCase() === name)
-    );
-    if (idMatch) {
-      setIdColumn(idMatch.name);
-    }
+  const autoConfigureColumns = (
+    features: Array<{ name: string; dtype: string }>,
+    rows: Record<string, unknown>[],
+    type: DataType = dataType,
+  ) => {
+    form.applyColumnDefaults({
+      columns: features.map(f => f.name),
+      rows,
+      kinds: MediaColumns.kindsOf(features),
+      dataType: type,
+    });
 
     if (datasetId && !collectionName) {
       const suggestedName = datasetId.split('/').pop()?.replace(/[^a-zA-Z0-9_-]/g, '_') || 'dataset';
@@ -140,17 +120,17 @@ export function HuggingFaceTab({
     if (!info || info.error) return;
 
     const config = info.defaultConfig ?? undefined;
-    await fetchHFDatasetPreview(datasetId, config, selectedSplit, 5);
+    const preview = await fetchHFDatasetPreview(datasetId, config, selectedSplit, 5);
 
     if (info.configs[0]?.features) {
-      autoConfigureColumns(info.configs[0].features);
+      autoConfigureColumns(info.configs[0].features, preview?.rows ?? []);
     }
   };
 
   const handleDataTypeChange = (type: DataType) => {
     setDataType(type);
     const features = datasetInfo?.configs[0]?.features;
-    if (features) autoConfigureColumns(features, type);
+    if (features) autoConfigureColumns(features, datasetPreview?.rows ?? [], type);
   };
 
   const handleEmbed = async () => {
@@ -179,6 +159,8 @@ export function HuggingFaceTab({
   const isLoading = infoLoading || previewLoading;
   const isDataLoaded = Boolean(datasetInfo);
   const columns = datasetInfo?.configs[0]?.features.map(f => ({ name: f.name, dtype: f.dtype })) || [];
+  // The task prefix may name any column; its field and the validation share this row
+  const prefixRow = form.taskPrefixRow(columns.map(c => c.name));
   const isMultimodal = dataType === 'MULTIMODAL';
   // Image / Audio / Video features, from their dtypes
   const mediaKinds = MediaColumns.kindsOf(columns);
@@ -199,7 +181,7 @@ export function HuggingFaceTab({
     portionStrategy,
     rangeStart,
     rangeEnd,
-    placeholderIssues: form.placeholderIssues(columns.map(c => c.name)),
+    placeholderIssues: form.placeholderIssues(prefixRow.columns),
     taskPrefixesLoading: model.taskPrefixesLoading,
   });
 
@@ -329,11 +311,11 @@ export function HuggingFaceTab({
               selectedMetadataColumns={selectedMetadataColumns}
               onEmbeddingColumnsChange={handleEmbeddingColumnsChange}
               onMetadataColumnsChange={setSelectedMetadataColumns}
+              selectionNote={form.selectionNote}
               textTemplate={textTemplate}
               onTemplateChange={setTextTemplate}
               idColumn={idColumn}
               onIdColumnChange={setIdColumn}
-              taskPrefix={taskPrefixControlOf(model)}
               idPrefix="hf-"
             />
           </CardContent>
@@ -387,9 +369,12 @@ export function HuggingFaceTab({
           model={model}
           title="5 · Embedding Model"
           idPrefix="hf-"
+          taskPrefixRow={prefixRow}
           media={isMultimodal ? { kinds: selectedKinds, defaultModel: form.multimodalDefaultModel } : null}
         />
       )}
+
+      {isDataLoaded && <TopicExtractionSection model={model} idPrefix="hf-" />}
 
       {/* Optional post-embed SAE step (after the topics section above); SAE
           activations read text documents, so media embeds have none */}

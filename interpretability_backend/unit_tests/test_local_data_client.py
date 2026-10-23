@@ -6,13 +6,18 @@ without requiring actual file I/O (unit tests with mocking).
 """
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # Import the functions we're testing
 from backend.clients.local_data_client import (
     LocalFileInfo,
     LocalFilePreview,
     _detect_file_type,
+    get_local_file_preview,
+    load_local_file_portion,
 )
+from backend.utils.text_processing import extract_metadata
 
 
 class TestFileTypeDetection:
@@ -235,15 +240,15 @@ class TestMediaColumns:
 
     @staticmethod
     def _parquet(tmp_path):
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
         table = pa.table(
             {
                 "caption": ["a cat", "a dog"],
                 "img": [PNG, PNG],
                 "hf_img": [{"bytes": PNG, "path": "cat.png"}, {"bytes": PNG, "path": "dog.png"}],
+                # an HF media dict pointing at a file, with no bytes
+                "linked": [{"bytes": None, "path": "cat.png"}, {"bytes": None, "path": "dog.png"}],
                 "clip": ["clips/a.mp4", "clips/b.mp4"],
+                "tags": [{"lang": "en"}, {"lang": "it"}],
             }
         )
         path = tmp_path / "media.parquet"
@@ -251,8 +256,6 @@ class TestMediaColumns:
         return str(path)
 
     def test_raw_columns_keep_bytes_and_dicts(self, tmp_path):
-        from backend.clients.local_data_client import load_local_file_portion
-
         rows, total = load_local_file_portion(
             self._parquet(tmp_path), raw_columns=["img", "hf_img"]
         )
@@ -261,17 +264,32 @@ class TestMediaColumns:
         assert rows[0]["hf_img"] == {"bytes": PNG, "path": "cat.png"}
         assert rows[0]["clip"] == "clips/a.mp4"
 
-    def test_other_columns_are_converted_as_before(self, tmp_path):
-        from backend.clients.local_data_client import load_local_file_portion
-
+    def test_bytes_stay_bytes_in_text_jobs_too(self, tmp_path):
+        """They used to become a str(bytes) dump (16 KB for a 4 KB PNG) stored
+        whole as metadata; the metadata now keeps a path or a placeholder."""
         rows, _ = load_local_file_portion(self._parquet(tmp_path))
-        assert isinstance(rows[0]["img"], str)
+
+        assert rows[0]["img"] == PNG
+        assert rows[0]["hf_img"] == {"bytes": PNG, "path": "cat.png"}
+        assert rows[0]["linked"] == {"bytes": None, "path": "cat.png"}
+        assert extract_metadata(rows[0], ["img", "hf_img", "linked"]) == {
+            "img": "[image 48 B]",
+            "hf_img": "cat.png",
+            "linked": "cat.png",
+        }
+
+    def test_other_cells_are_converted_as_before(self, tmp_path):
+        rows, _ = load_local_file_portion(self._parquet(tmp_path))
+        assert rows[0]["tags"] == str({"lang": "en"})
 
     def test_preview_reports_media_kinds_and_placeholders(self, tmp_path):
-        from backend.clients.local_data_client import get_local_file_preview
-
         preview = get_local_file_preview(self._parquet(tmp_path))
-        assert preview.column_kinds == {"img": "image", "hf_img": "image", "clip": "video"}
+        assert preview.column_kinds == {
+            "img": "image",
+            "hf_img": "image",
+            "linked": "image",
+            "clip": "video",
+        }
         assert preview.rows[0]["img"] == "[image 48 B]"
         assert preview.rows[0]["hf_img"] == "cat.png"
         assert preview.rows[0]["caption"] == "a cat"

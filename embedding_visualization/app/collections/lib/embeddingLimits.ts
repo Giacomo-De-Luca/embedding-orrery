@@ -7,7 +7,7 @@
  * reports how many, without stopping. Only local providers take a cap.
  */
 import type { EmbeddingModelInput, EmbeddingProvider, GeminiTaskType } from '@/lib/graphql/mutations';
-import { isLocalProvider } from '@/lib/utils/embeddingProviders';
+import { EMBEDDING_PROVIDERS, isLocalProvider } from '@/lib/utils/embeddingProviders';
 import type { TaskPrefixInput } from './taskPrefixes';
 
 export interface ModelLimitInfo {
@@ -72,20 +72,34 @@ export interface EmbeddingModelFields {
   ollamaUrl: string;
   qwenTask: string;
   geminiTaskType: GeminiTaskType;
-  /** Sentence-transformers prompt: a prompt name of the model, or literal prompt text. */
-  prompt: string;
   maxLength: number | null;
   /** Set for models that read their task from a prefix (see taskPrefixes.ts). */
   taskPrefix: TaskPrefixInput | null;
 }
 
+/**
+ * How a model is told its task: a text prefix (EmbeddingGemma, Gemini
+ * Embedding 2), Gemini's task type, or a query instruction (providers with a
+ * `queryInstruction`: Qwen).
+ */
+export type ModelTaskKind = 'prefix' | 'taskType' | 'instruction';
+
+/** The task control of a model (the embed form's "Task prompt"); null when it takes none. */
+export function modelTaskKind(provider: EmbeddingProvider, hasTaskPrefixes: boolean): ModelTaskKind | null {
+  if (hasTaskPrefixes) return 'prefix';
+  if (provider === 'GEMINI') return 'taskType';
+  if (EMBEDDING_PROVIDERS[provider].queryInstruction !== undefined) return 'instruction';
+  return null;
+}
+
 export function embeddingModelInputFrom(fields: EmbeddingModelFields): EmbeddingModelInput {
   const provider = fields.embeddingProvider;
   const prefixes = fields.taskPrefix;
+  const kind = modelTaskKind(provider, prefixes !== null);
   const input: EmbeddingModelInput = prefixes
     ? {
         // Task-prefix models: the document prefix template and the query
-        // prefix replace prompt names and the Gemini task type.
+        // prefix replace the Gemini task type.
         provider,
         modelName: fields.modelName,
         prompt: prefixes.documentPrefix || undefined,
@@ -95,9 +109,11 @@ export function embeddingModelInputFrom(fields: EmbeddingModelFields): Embedding
         provider,
         modelName: fields.modelName,
         ollamaUrl: provider === 'OLLAMA' ? fields.ollamaUrl : undefined,
-        task: provider === 'QWEN' ? fields.qwenTask : undefined,
-        taskType: provider === 'GEMINI' ? fields.geminiTaskType : undefined,
-        prompt: provider === 'SENTENCE_TRANSFORMERS' && fields.prompt.trim() ? fields.prompt : undefined,
+        // An empty instruction falls back to the one the model was trained with.
+        task: kind === 'instruction'
+          ? fields.qwenTask.trim() || EMBEDDING_PROVIDERS[provider].queryInstruction
+          : undefined,
+        taskType: kind === 'taskType' ? fields.geminiTaskType : undefined,
       };
   if (isLocalProvider(provider) && fields.maxLength !== null) {
     input.maxLength = fields.maxLength;

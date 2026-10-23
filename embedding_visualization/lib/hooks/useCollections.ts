@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { GET_COLLECTIONS } from '../graphql/queries';
 import type { CollectionsManifest, TopicInfo } from '../types/types';
 import type { DefaultColorScheme } from '../utils/colorScaleUrl';
+import { collectionFitsViewport } from '../utils/demoOnboarding';
+import { IS_DEMO } from '../utils/demoMode';
 
 interface GraphQLCollection {
   name: string;
@@ -77,12 +79,20 @@ export function useCollections(options?: { skip?: boolean }) {
     return () => stopPolling();
   }, [skip, data, error, startPolling, stopPolling]);
 
+  // Latched at mount, so rotating a phone never brings a heavy collection back.
+  const [viewportWidth] = useState(() =>
+    typeof window === 'undefined' ? Infinity : window.innerWidth,
+  );
+
   // Transform GraphQL response to CollectionsManifest format. Memoized on `data`
   // so the manifest keeps a stable reference across renders (avoids re-running the
   // reduce for every consumer and churning effects that depend on `collections`).
+  // Demo phones never see the desktop-only collections (WordNet).
   const collections: CollectionsManifest | null = useMemo(() => (
     data?.collections
-      ? data.collections.reduce((acc, col) => {
+      ? data.collections
+        .filter(col => collectionFitsViewport(col.name, { isDemo: IS_DEMO, viewportWidth }))
+        .reduce((acc, col) => {
           const topics = parseTopicSummary(col.metadata);
           acc[col.name] = {
             name: col.name,
@@ -102,7 +112,7 @@ export function useCollections(options?: { skip?: boolean }) {
           return acc;
         }, {} as CollectionsManifest)
       : null
-  ), [data]);
+  ), [data, viewportWidth]);
 
   return { collections, loading, error: error || null };
 }

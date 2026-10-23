@@ -79,14 +79,10 @@ class SteeringOp:
         has_idx = self.feature_index is not None
         has_vec = self.vector is not None
         if has_idx == has_vec:
-            raise ValueError(
-                "SteeringOp requires exactly one of feature_index or vector"
-            )
+            raise ValueError("SteeringOp requires exactly one of feature_index or vector")
         if self.mode is SteeringMode.PROJECTION_CAP:
             if self.cap_min is None and self.cap_max is None:
-                raise ValueError(
-                    "PROJECTION_CAP requires at least one of cap_min / cap_max"
-                )
+                raise ValueError("PROJECTION_CAP requires at least one of cap_min / cap_max")
 
 
 @dataclass
@@ -124,10 +120,7 @@ def resolve_op(
                 "Call HookManager.add_sae(...) first or pass a raw `vector`."
             )
         if not (0 <= op.feature_index < sae.d_sae):
-            raise ValueError(
-                f"feature_index {op.feature_index} out of range "
-                f"[0, {sae.d_sae})"
-            )
+            raise ValueError(f"feature_index {op.feature_index} out of range [0, {sae.d_sae})")
         v = sae.w_dec[op.feature_index].detach().clone()
     else:
         assert op.vector is not None

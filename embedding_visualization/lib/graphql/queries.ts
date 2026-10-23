@@ -815,7 +815,6 @@ export const GET_EMBEDDING_MODEL_CATALOG = gql`
       modelName
       description
       modalities
-      prompts
       dimension
       defaultFor
       suggested

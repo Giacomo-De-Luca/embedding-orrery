@@ -11,37 +11,41 @@ SAE_ID = "9-gemmascope-2-res-16k"
 
 
 def _make_features_df(n: int = 5) -> pd.DataFrame:
-    return pd.DataFrame({
-        "feature_index": list(range(n)),
-        "density": [0.01 * (i + 1) for i in range(n)],
-        "label": [f"feature {i} explanation" for i in range(n)],
-        "top_logits": [
-            json.dumps([{"token": f"tok_{i}_{j}", "score": 0.5 + j * 0.1} for j in range(3)])
-            for i in range(n)
-        ],
-        "bottom_logits": [
-            json.dumps([{"token": f"bot_{i}_{j}", "score": 0.3 + j * 0.05} for j in range(3)])
-            for i in range(n)
-        ],
-    })
+    return pd.DataFrame(
+        {
+            "feature_index": list(range(n)),
+            "density": [0.01 * (i + 1) for i in range(n)],
+            "label": [f"feature {i} explanation" for i in range(n)],
+            "top_logits": [
+                json.dumps([{"token": f"tok_{i}_{j}", "score": 0.5 + j * 0.1} for j in range(3)])
+                for i in range(n)
+            ],
+            "bottom_logits": [
+                json.dumps([{"token": f"bot_{i}_{j}", "score": 0.3 + j * 0.05} for j in range(3)])
+                for i in range(n)
+            ],
+        }
+    )
 
 
 def _make_activations_df(feature_indices: list, samples_per: int = 3) -> pd.DataFrame:
     rows = []
     for fi in feature_indices:
         for s in range(samples_per):
-            rows.append({
-                "id": f"act_{fi}_{s}",
-                "model_id": MODEL_ID,
-                "sae_id": SAE_ID,
-                "feature_index": fi,
-                "tokens": json.dumps([f"tok{t}" for t in range(10)]),
-                "act_values": json.dumps([float(t) * (s + 1) for t in range(10)]),
-                "max_value": float(9 * (s + 1)),
-                "max_value_token_idx": 9,
-                "min_value": 0.0,
-                "qualifying_token_idx": 5,
-            })
+            rows.append(
+                {
+                    "id": f"act_{fi}_{s}",
+                    "model_id": MODEL_ID,
+                    "sae_id": SAE_ID,
+                    "feature_index": fi,
+                    "tokens": json.dumps([f"tok{t}" for t in range(10)]),
+                    "act_values": json.dumps([float(t) * (s + 1) for t in range(10)]),
+                    "max_value": float(9 * (s + 1)),
+                    "max_value_token_idx": 9,
+                    "min_value": 0.0,
+                    "qualifying_token_idx": 5,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -49,11 +53,11 @@ def _make_activations_df(feature_indices: list, samples_per: int = 3) -> pd.Data
 # Schema
 # ------------------------------------------------------------------
 
+
 class TestSaeSchema:
     def test_sae_tables_exist(self, db: DuckDBClient):
         tables = db._conn.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
         ).fetchall()
         table_names = {t[0] for t in tables}
         assert "sae_features" in table_names
@@ -63,6 +67,7 @@ class TestSaeSchema:
 # ------------------------------------------------------------------
 # Feature CRUD
 # ------------------------------------------------------------------
+
 
 class TestSaeFeatures:
     def test_insert_and_get(self, db: DuckDBClient):
@@ -87,13 +92,15 @@ class TestSaeFeatures:
         db.insert_sae_features_batch(MODEL_ID, SAE_ID, df1)
 
         # Update label for feature 0
-        df2 = pd.DataFrame({
-            "feature_index": [0],
-            "density": [0.99],
-            "label": ["updated label"],
-            "top_logits": [json.dumps([])],
-            "bottom_logits": [json.dumps([])],
-        })
+        df2 = pd.DataFrame(
+            {
+                "feature_index": [0],
+                "density": [0.99],
+                "label": ["updated label"],
+                "top_logits": [json.dumps([])],
+                "bottom_logits": [json.dumps([])],
+            }
+        )
         db.insert_sae_features_batch(MODEL_ID, SAE_ID, df2)
 
         feat = db.get_sae_feature(MODEL_ID, SAE_ID, 0)
@@ -128,6 +135,7 @@ class TestSaeFeatures:
 # ------------------------------------------------------------------
 # Activation CRUD
 # ------------------------------------------------------------------
+
 
 class TestSaeActivations:
     def test_insert_and_get(self, db: DuckDBClient):
@@ -166,6 +174,7 @@ class TestSaeActivations:
 # ------------------------------------------------------------------
 # Model listing
 # ------------------------------------------------------------------
+
 
 class TestSaeModels:
     def test_list_empty(self, db: DuckDBClient):
@@ -206,13 +215,15 @@ MODEL_ID_2 = "other-model"
 
 def _make_features_df_labeled(n: int, prefix: str = "feature") -> pd.DataFrame:
     """Like _make_features_df but with a configurable label prefix."""
-    return pd.DataFrame({
-        "feature_index": list(range(n)),
-        "density": [0.01 * (i + 1) for i in range(n)],
-        "label": [f"{prefix} {i} explanation" for i in range(n)],
-        "top_logits": [json.dumps([]) for _ in range(n)],
-        "bottom_logits": [json.dumps([]) for _ in range(n)],
-    })
+    return pd.DataFrame(
+        {
+            "feature_index": list(range(n)),
+            "density": [0.01 * (i + 1) for i in range(n)],
+            "label": [f"{prefix} {i} explanation" for i in range(n)],
+            "top_logits": [json.dumps([]) for _ in range(n)],
+            "bottom_logits": [json.dumps([]) for _ in range(n)],
+        }
+    )
 
 
 class TestCrossSaeSearch:
@@ -253,7 +264,10 @@ class TestCrossSaeSearch:
         db.insert_sae_features_batch(MODEL_ID, SAE_ID_2, _make_features_df_labeled(3, "delta"))
 
         results = db.search_sae_features(
-            model_id=MODEL_ID, sae_id=SAE_ID, sae_ids=[SAE_ID_2], query="delta",
+            model_id=MODEL_ID,
+            sae_id=SAE_ID,
+            sae_ids=[SAE_ID_2],
+            query="delta",
         )
         assert all(r["sae_id"] == SAE_ID_2 for r in results)
 
@@ -279,6 +293,7 @@ class TestCrossSaeSearch:
 # ------------------------------------------------------------------
 # Deletion
 # ------------------------------------------------------------------
+
 
 class TestSaeDeletion:
     def test_delete(self, db: DuckDBClient):

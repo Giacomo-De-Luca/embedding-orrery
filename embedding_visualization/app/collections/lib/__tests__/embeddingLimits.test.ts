@@ -3,6 +3,7 @@ import {
   commitMaxLengthDraft,
   describeModelLimit,
   embeddingModelInputFrom,
+  modelTaskKind,
   parseMaxLengthDraft,
   type EmbeddingModelFields,
 } from '../embeddingLimits';
@@ -69,15 +70,29 @@ describe('provider defaults', () => {
   });
 });
 
+describe('modelTaskKind', () => {
+  it('task prefixes win for any provider', () => {
+    expect(modelTaskKind('SENTENCE_TRANSFORMERS', true)).toBe('prefix');
+    expect(modelTaskKind('GEMINI', true)).toBe('prefix');
+  });
+
+  it('Gemini takes a task type, Qwen a query instruction, the others nothing', () => {
+    expect(modelTaskKind('GEMINI', false)).toBe('taskType');
+    expect(modelTaskKind('QWEN', false)).toBe('instruction');
+    expect(modelTaskKind('SENTENCE_TRANSFORMERS', false)).toBeNull();
+    expect(modelTaskKind('OLLAMA', false)).toBeNull();
+    expect(modelTaskKind('OPENAI', false)).toBeNull();
+  });
+});
+
 describe('embeddingModelInputFrom', () => {
-  // A local checkpoint: not in the task-prefix table, so its prompt name applies.
+  // A local checkpoint: not in the task-prefix table.
   const fields: EmbeddingModelFields = {
     embeddingProvider: 'SENTENCE_TRANSFORMERS',
     modelName: '/models/gemma-checkpoint',
     ollamaUrl: 'http://localhost:11434',
     qwenTask: 'task',
     geminiTaskType: 'SEMANTIC_SIMILARITY',
-    prompt: 'Retrieval-document',
     maxLength: 2048,
     taskPrefix: null,
   };
@@ -89,7 +104,6 @@ describe('embeddingModelInputFrom', () => {
   it('sends the cap for local providers', () => {
     const input = embeddingModelInputFrom(fields);
     expect(input.maxLength).toBe(2048);
-    expect(input.prompt).toBe('Retrieval-document');
   });
 
   it('task-prefix models send the document prefix as prompt and the query prefix as task', () => {
@@ -125,12 +139,26 @@ describe('embeddingModelInputFrom', () => {
     expect(input.task).toBeUndefined();
   });
 
-  it('sends one prompt: a prompt name or literal text as typed, or none when blank', () => {
-    // A literal prompt's trailing space is part of it ("query: ").
-    expect(embeddingModelInputFrom({ ...fields, prompt: 'query: ' }).prompt).toBe('query: ');
-    expect(embeddingModelInputFrom({ ...fields, prompt: '   ' })).toHaveProperty('prompt', undefined);
-    // Prompts are a sentence-transformers option.
-    expect(embeddingModelInputFrom({ ...fields, embeddingProvider: 'OLLAMA' }).prompt).toBeUndefined();
+  it('models without a task control send no prompt or task', () => {
+    for (const embeddingProvider of ['SENTENCE_TRANSFORMERS', 'OLLAMA'] as const) {
+      const input = embeddingModelInputFrom({ ...fields, embeddingProvider });
+      expect(input.prompt).toBeUndefined();
+      expect(input.task).toBeUndefined();
+      expect(input.taskType).toBeUndefined();
+    }
+  });
+
+  it('Qwen sends its query instruction, and the trained default when the field is cleared', () => {
+    const qwen = { ...fields, embeddingProvider: 'QWEN' as const, modelName: 'Qwen/Qwen3-Embedding-0.6B' };
+    expect(embeddingModelInputFrom({ ...qwen, qwenTask: 'Given a question, find its answer' }).task)
+      .toBe('Given a question, find its answer');
+    expect(embeddingModelInputFrom({ ...qwen, qwenTask: '  ' }).task).toBe(EMBEDDING_PROVIDERS.QWEN.queryInstruction);
+  });
+
+  it("Qwen's default is the instruction of its model card", () => {
+    expect(EMBEDDING_PROVIDERS.QWEN.queryInstruction).toBe(
+      'Given a web search query, retrieve relevant passages that answer the query',
+    );
   });
 
   it('omits an unset cap so the backend uses the model limit', () => {

@@ -20,6 +20,8 @@ class EmbedTextQWEN(EmbeddingFunction[Documents]):
         model: str = "Qwen/Qwen3-Embedding-0.6B",
         device: str = "mps",
         batch_size: int = 12,
+        # The query instruction Qwen3-Embedding was trained with (its model card);
+        # the embed form mirrors it (embedding_visualization/lib/utils/embeddingProviders.ts).
         task: str = "Given a web search query, retrieve relevant passages that answer the query",
         max_length: int = 8192,
         normalize: bool = False,

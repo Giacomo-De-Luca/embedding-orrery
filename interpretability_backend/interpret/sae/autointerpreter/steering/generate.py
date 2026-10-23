@@ -74,8 +74,7 @@ class SteeringGenerator:
 
         try:
             directions = (
-                {} if use_sae
-                else self._load_directions([f["feature_index"] for f in todo])
+                {} if use_sae else self._load_directions([f["feature_index"] for f in todo])
             )
             baseline = self._ensure_baseline(wrapper)
             for f in todo:
@@ -144,9 +143,7 @@ class SteeringGenerator:
         )
         if vec is not None:
             return SteeringOp(vector=torch.tensor(vec, dtype=torch.float32), **common)
-        return SteeringOp(
-            feature_index=idx, sae_key=(self.layer, hook_type), **common
-        )
+        return SteeringOp(feature_index=idx, sae_key=(self.layer, hook_type), **common)
 
     def _generate_one(self, wrapper: GemmaPytorchInference, question: str) -> dict:
         try:

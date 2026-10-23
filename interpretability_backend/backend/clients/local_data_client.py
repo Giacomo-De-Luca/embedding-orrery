@@ -238,9 +238,7 @@ def get_local_file_preview(file_path: str, n_rows: int = 5) -> LocalFilePreview:
                 value = row[col]
                 if col in column_kinds and not _is_missing(value):
                     kind = MediaKind(column_kinds[col])
-                    row_dict[col] = MediaReference.of(value) or MediaReference.placeholder(
-                        value, kind
-                    )
+                    row_dict[col] = MediaReference.describe(value, kind)
                 # Check array-like types BEFORE pd.isna() to avoid
                 # "truth value of array is ambiguous" error
                 elif isinstance(value, np.ndarray):
@@ -282,9 +280,11 @@ def load_local_file_portion(
     """
     Load a portion of a local data file.
 
-    Cells of ``raw_columns`` (the media columns of a multimodal job) keep their
-    value as read (bytes, ``{"bytes", "path"}`` dicts, paths); every other
-    non-primitive cell is converted to a list or string as before.
+    Cells of ``raw_columns`` (the media columns of a multimodal job), and in
+    every mode any media cell (``MediaReference.for_metadata``: bytes, media
+    dicts with or without bytes), keep their value as read: ``extract_metadata``
+    stores them as a path or a placeholder, where ``str(...)`` stored a dump of
+    the whole file. Every other non-primitive cell is converted to a list or string.
     """
     raw = set(raw_columns)
     # For embedding, we likely need to read more.
@@ -295,10 +295,7 @@ def load_local_file_portion(
     total = len(df)
 
     if sample_n is not None:
-        # Random sample
-        import random
-
-        random.seed(sample_seed)
+        # Random sample (seeded through random_state)
         n = min(sample_n, total)
         df = df.sample(n=n, random_state=sample_seed)
     elif start_row is not None or end_row is not None:
@@ -327,6 +324,9 @@ def load_local_file_portion(
             elif pd.isna(value):
                 row_dict[col] = None
             elif isinstance(value, (str, int, float, bool)):
+                row_dict[col] = value
+            elif MediaReference.for_metadata(value) is not None:
+                # Bytes or a media dict: extract_metadata stores its path or a placeholder
                 row_dict[col] = value
             else:
                 try:

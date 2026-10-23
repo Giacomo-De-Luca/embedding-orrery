@@ -8,6 +8,7 @@ from backend.clients.duckdb_client import DuckDBClient
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def db():
     """Fresh in-memory DuckDB client with test data."""
@@ -37,6 +38,7 @@ def db():
 # ---------------------------------------------------------------------------
 # Tests: document search
 # ---------------------------------------------------------------------------
+
 
 class TestDocumentSearch:
     def test_document_search_case_insensitive(self, db: DuckDBClient):
@@ -92,6 +94,7 @@ class TestDocumentSearch:
 # Tests: metadata field search
 # ---------------------------------------------------------------------------
 
+
 class TestMetadataSearch:
     def test_metadata_field_search_contains(self, db: DuckDBClient):
         result = db.text_search("test_col", "fox", fields=["word"], mode="contains")
@@ -117,11 +120,13 @@ class TestMetadataSearch:
 # Tests: multi-field and deduplication
 # ---------------------------------------------------------------------------
 
+
 class TestMultiField:
     def test_multi_field_union(self, db: DuckDBClient):
         """Searching document + metadata should union results without duplicates."""
         result = db.text_search(
-            "test_col", "python",
+            "test_col",
+            "python",
             fields=["__document__", "word"],
             mode="contains",
         )
@@ -140,33 +145,46 @@ class TestMultiField:
 # Tests: filtered items (JSON metadata filtering)
 # ---------------------------------------------------------------------------
 
+
 class TestFilteredItems:
     def test_eq_filter(self, db: DuckDBClient):
-        items = db.get_filtered_items("test_col", [
-            {"field": "category", "operator": "$eq", "value": "animal"},
-        ])
+        items = db.get_filtered_items(
+            "test_col",
+            [
+                {"field": "category", "operator": "$eq", "value": "animal"},
+            ],
+        )
         assert len(items) == 1
         assert items[0]["id"] == "id_1"
 
     def test_ne_filter(self, db: DuckDBClient):
-        items = db.get_filtered_items("test_col", [
-            {"field": "category", "operator": "$ne", "value": "animal"},
-        ])
+        items = db.get_filtered_items(
+            "test_col",
+            [
+                {"field": "category", "operator": "$ne", "value": "animal"},
+            ],
+        )
         assert len(items) == 3
         ids = {i["id"] for i in items}
         assert "id_1" not in ids
 
     def test_in_filter(self, db: DuckDBClient):
-        items = db.get_filtered_items("test_col", [
-            {"field": "category", "operator": "$in", "value": ["animal", "database"]},
-        ])
+        items = db.get_filtered_items(
+            "test_col",
+            [
+                {"field": "category", "operator": "$in", "value": ["animal", "database"]},
+            ],
+        )
         ids = {i["id"] for i in items}
         assert ids == {"id_1", "id_4"}
 
     def test_nin_filter(self, db: DuckDBClient):
-        items = db.get_filtered_items("test_col", [
-            {"field": "category", "operator": "$nin", "value": ["animal", "database"]},
-        ])
+        items = db.get_filtered_items(
+            "test_col",
+            [
+                {"field": "category", "operator": "$nin", "value": ["animal", "database"]},
+            ],
+        )
         ids = {i["id"] for i in items}
         assert ids == {"id_2", "id_3"}
 
@@ -187,20 +205,27 @@ class TestFilteredItems:
     def test_numeric_filter(self, db: DuckDBClient):
         """Numeric comparison operators on metadata fields."""
         ds_id = db.create_dataset("nums")
-        db.insert_items_batch(ds_id,
+        db.insert_items_batch(
+            ds_id,
             ["n1", "n2", "n3"],
             ["a", "b", "c"],
             [{"score": 10}, {"score": 20}, {"score": 30}],
         )
-        items = db.get_filtered_items("nums", [
-            {"field": "score", "operator": "$gt", "value": 15},
-        ])
+        items = db.get_filtered_items(
+            "nums",
+            [
+                {"field": "score", "operator": "$gt", "value": 15},
+            ],
+        )
         ids = {i["id"] for i in items}
         assert ids == {"n2", "n3"}
 
-        items = db.get_filtered_items("nums", [
-            {"field": "score", "operator": "$lte", "value": 20},
-        ])
+        items = db.get_filtered_items(
+            "nums",
+            [
+                {"field": "score", "operator": "$lte", "value": 20},
+            ],
+        )
         ids = {i["id"] for i in items}
         assert ids == {"n1", "n2"}
 
@@ -213,11 +238,13 @@ class TestFilteredItems:
 # Tests: text search with metadata filters
 # ---------------------------------------------------------------------------
 
+
 class TestTextSearchWithFilters:
     def test_eq_filter_restricts_results(self, db: DuckDBClient):
         """Text search with category=animal should only match items in that category."""
         result = db.text_search(
-            "test_col", "the",
+            "test_col",
+            "the",
             filters=[{"field": "category", "operator": "$eq", "value": "animal"}],
         )
         ids = [m["id"] for m in result["matches"]]
@@ -228,8 +255,11 @@ class TestTextSearchWithFilters:
 
     def test_in_filter(self, db: DuckDBClient):
         result = db.text_search(
-            "test_col", "is",
-            filters=[{"field": "category", "operator": "$in", "value": ["programming", "database"]}],
+            "test_col",
+            "is",
+            filters=[
+                {"field": "category", "operator": "$in", "value": ["programming", "database"]}
+            ],
         )
         ids = [m["id"] for m in result["matches"]]
         # "Python programming is fun..." and "chromadb is a vector database" match
@@ -240,7 +270,8 @@ class TestTextSearchWithFilters:
 
     def test_filter_no_matches(self, db: DuckDBClient):
         result = db.text_search(
-            "test_col", "fox",
+            "test_col",
+            "fox",
             filters=[{"field": "category", "operator": "$eq", "value": "nonexistent"}],
         )
         assert result["matches"] == []
@@ -257,7 +288,8 @@ class TestTextSearchWithFilters:
     def test_filter_with_metadata_field_search(self, db: DuckDBClient):
         """Filters should also apply when searching metadata fields."""
         result = db.text_search(
-            "test_col", "python",
+            "test_col",
+            "python",
             fields=["word"],
             filters=[{"field": "category", "operator": "$eq", "value": "programming"}],
         )
@@ -268,7 +300,8 @@ class TestTextSearchWithFilters:
     def test_filter_with_all_fields(self, db: DuckDBClient):
         """Filters apply to combined document + metadata search."""
         result = db.text_search(
-            "test_col", "fox",
+            "test_col",
+            "fox",
             fields=["__document__", "word"],
             filters=[{"field": "category", "operator": "$eq", "value": "animal"}],
         )
@@ -281,6 +314,7 @@ class TestTextSearchWithFilters:
 # Tests: _build_metadata_where helper
 # ---------------------------------------------------------------------------
 
+
 class TestBuildMetadataWhere:
     def test_empty_filters(self, db: DuckDBClient):
         where_sql, params = db._build_metadata_where([])
@@ -288,8 +322,10 @@ class TestBuildMetadataWhere:
         assert params == []
 
     def test_single_eq(self, db: DuckDBClient):
-        where_sql, params = db._build_metadata_where([
-            {"field": "category", "operator": "$eq", "value": "animal"},
-        ])
+        where_sql, params = db._build_metadata_where(
+            [
+                {"field": "category", "operator": "$eq", "value": "animal"},
+            ]
+        )
         assert "= ?" in where_sql
         assert "$.category" in params

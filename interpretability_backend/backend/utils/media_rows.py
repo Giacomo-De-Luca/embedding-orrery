@@ -113,9 +113,7 @@ class MediaRowBuilder:
             if value is None or (isinstance(value, str) and not value.strip()):
                 continue
             decoded[column.kind.value].append(self.decoder.decode(value, column.kind))
-            references[column.name] = MediaReference.of(value) or MediaReference.placeholder(
-                value, column.kind
-            )
+            references[column.name] = MediaReference.describe(value, column.kind)
             labels.append(MediaReference.label(value, column.kind))
         if not has_text and not references:
             return None

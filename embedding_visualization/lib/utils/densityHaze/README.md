@@ -10,7 +10,7 @@ Controls panel (Nebula effects → Haze renderer) and created through
 | File | Responsibility |
 |------|----------------|
 | `densityHazeMath.ts` | Pure math, unit-tested (`../__tests__/densityHazeMath.test.ts`): per-cluster kernel sigma, expected density peak, γ-weight, global exposure, point-size clamp compensation, and `buildDensityHazeBuffers` / `reweightDensityHazeBuffers` (cluster map → typed attribute arrays). |
-| `support.ts` | Three-free capability probe (`isDensityHazeSupported`, WebGL2 + `EXT_color_buffer_float`, cached) used by the renderer, the factory and the Controls panel gate. |
+| `support.ts` | Three-free capability probe (`isDensityHazeSupported`, WebGL2 + `EXT_color_buffer_float`, delegating to the shared cached `../floatRenderTargets.ts`) used by the renderer, the factory and the Controls panel gate. |
 | `DensityHazeRenderer.ts` | Three.js renderer owning the GL resources: one `THREE.Points` splat pass into a half-float target, a quarter-resolution separable blur for the halo, and a resolve pass (exposure → hue-preserving soft knee). Same `updateClusters` / `resize` / `render` / `dispose` contract as `HazeRenderer`, plus `setTuning` for live γ/exposure changes and a static `isSupported()` probe. |
 
 ## Brightness rule

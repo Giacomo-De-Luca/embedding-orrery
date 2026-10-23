@@ -121,6 +121,8 @@ function plotComponentFactory(Plotly) {
     }, {
       key: "componentDidUpdate",
       value: function componentDidUpdate(prevProps) {
+        var _this7 = this;
+
         this.unmounting = false; // frames *always* changes identity so fall back to check length only :(
 
         var numPrevFrames = prevProps.frames && prevProps.frames.length ? prevProps.frames.length : 0;
@@ -130,6 +132,21 @@ function plotComponentFactory(Plotly) {
         var revisionChanged = prevProps.revision !== this.props.revision;
 
         if (!figureChanged && (!revisionDefined || revisionDefined && !revisionChanged)) {
+          // [fork] react-plotly.js change 2: re-sync the event handlers even when the
+          // figure is unchanged, so a handler whose closure changed is never left
+          // stale. Chained on `this.p`: the graph div only gets `on` after the first
+          // Plotly.react, and loses it again on purge.
+          this.p = this.p.then(function () {
+            if (_this7.unmounting || !_this7.el || typeof _this7.el.on !== 'function') {
+              return;
+            }
+
+            _this7.syncEventHandlers();
+          })["catch"](function (err) {
+            if (_this7.props.onError) {
+              _this7.props.onError(err);
+            }
+          });
           return;
         }
 

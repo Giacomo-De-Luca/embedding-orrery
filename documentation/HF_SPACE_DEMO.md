@@ -370,8 +370,8 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
    "Inspect SAE features" (gated on both the SAE pair and the label-map
    collection being present), "Decode human ratings" (the probing tour, gated
    on the Glasgow collection), "Tour the WordNet galaxy" (gated on the
-   WordNet collection; its copy carries the heavy-load warning, and it is
-   hidden on phones), or dismiss.
+   WordNet collection; its copy carries the heavy-load warning), or dismiss.
+   On phones only the 90-second tour and dismiss are listed.
    Reopenable via `?intro=1` (any build) and the
    header `?` button. Opening it fires a one-shot warm-up query so the
    emotion search model cold-starts before the tour reaches the search step.
@@ -501,11 +501,23 @@ the frontend `CLAUDE.md` under "Demo onboarding"):
   runs). Otherwise it comes first, and `planOnboarding` records what it
   pre-empted (`afterNotice`): on a bare first visit, `?intro=1` or a
   desktop-only tour link the welcome dialog opens once the card is dismissed,
-  so phone visitors still find the tours.
-- **Tours on phones** (below 768 px). The 90-second, probing and "Inspect
-  SAE" tours run at any width; the WordNet galaxy (212,478 points in 3D with
-  haze) is desktop-only (`tourFitsViewport`): its welcome-dialog entry is
-  hidden and `?tour=wordnet` downgrades to the welcome dialog. Two layout
+  so phone visitors still find the 90-second tour.
+- **Tours on phones** (below 768 px). Only the 90-second tour runs on a phone
+  (`tourFitsViewport`, `PHONE_TOURS`); the probing, "Inspect SAE" and WordNet
+  tours are desktop-only: their welcome-dialog entries are hidden and their
+  `?tour=` links downgrade to the welcome dialog on Explore (`/sae?tour=sae`
+  is simply ignored on a phone; /sae has no onboarding plan).
+- **WordNet off phones** (demo builds, below 768 px). The 212,478-sense
+  WordNet galaxy crashed iPhone Safari, so `useCollections` drops it from the
+  manifest (`collectionFitsViewport`, `DESKTOP_ONLY_COLLECTIONS` in
+  `demoOnboarding.ts`; width latched at mount): it is not in the collection
+  picker, and `?collection=wordnet_senses_full` / `?preset=wordnet-pos` fall
+  back to the demo default through `resolveInitialCollection`. The link's
+  preset view (3D UMAP) and URL colour (`colorBy=pos`) are dropped with it
+  (`linkedCollectionsFitViewport`, latched in `page.tsx`), so the fallback
+  opens in its own default view. Self-hosted builds keep every collection at
+  any width.
+- **Tour layout on phones.** Two layout
   rules keep the map visible: (1) steps that narrate the map open their
   panel through `showPanelBesideMap` (`tourSteps.ts`), which keeps every panel
   closed on a phone (`TourRuntime.isCompactViewport`), since a phone panel is

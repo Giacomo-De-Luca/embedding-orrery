@@ -122,8 +122,7 @@ class AgentInputWriter:
 
         if not labels_dir.is_dir():
             raise FileNotFoundError(
-                f"label results folder missing: {labels_dir}. "
-                "Run the label stage first."
+                f"label results folder missing: {labels_dir}. Run the label stage first."
             )
 
         ab_records: list[dict] = []

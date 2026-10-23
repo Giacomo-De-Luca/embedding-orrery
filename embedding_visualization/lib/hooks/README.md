@@ -19,7 +19,12 @@ calculations live in `lib/utils/` or `app/utils/`.
 - Browser/layout hooks manage resizing, scrolling, theme, zoom, and URL syncing.
   `useZoomLimit.ts` caps 2D wheel zoom-out; `usePinchZoom.ts` adds two-finger
   pinch zoom to both scatter plots (`../../../documentation/MOBILE_PINCH_ZOOM.md`).
+- `useLatestRef.ts` keeps a ref on the latest value (written in a layout effect)
+  for identity-stable callbacks that run outside React's commit, such as a queued
+  `CoalescedRedraw` request or a Plotly config function.
 - `useDensityOverlay.ts` owns the 2D density renderer lifecycle.
+  `useFloatRenderTargets.ts` reads the cached `FloatRenderTargets` probe
+  (SSR-safe) that gates both density renderers' controls.
   `useDensityClusterLabels.ts` produces `DensityLabelPlacement[]` asynchronously,
   or `null` while disabled, rebuilding, or using centroid fallback.
 - `__tests__/` covers steering helpers and semantic-search abort races (the

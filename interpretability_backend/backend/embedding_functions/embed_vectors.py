@@ -99,25 +99,21 @@ def embed_vectors(
                 break
 
     if not vector_column or vector_column not in rows[0]:
-        return EmbeddingResult(
-            collection_name=config.collection_name,
-            total_embedded=0,
-            embedding_dim=0,
+        return EmbeddingResult.failed(
+            config.collection_name,
+            "No vector column found or specified",
             device=device,
-            duration_seconds=time.time() - start_time,
-            error="No vector column found or specified",
+            start_time=start_time,
         )
 
     # Get embedding dimension from first row (parse string vectors if needed)
     first_vector = _parse_vector(rows[0][vector_column])
     if first_vector is None:
-        return EmbeddingResult(
-            collection_name=config.collection_name,
-            total_embedded=0,
-            embedding_dim=0,
+        return EmbeddingResult.failed(
+            config.collection_name,
+            f"Could not parse vector from column '{vector_column}'. Value: {str(rows[0][vector_column])[:100]}",
             device=device,
-            duration_seconds=time.time() - start_time,
-            error=f"Could not parse vector from column '{vector_column}'. Value: {str(rows[0][vector_column])[:100]}",
+            start_time=start_time,
         )
     embedding_dim = len(first_vector)
 

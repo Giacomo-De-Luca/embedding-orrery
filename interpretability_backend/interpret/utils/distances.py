@@ -142,17 +142,13 @@ def resolve_distance(path: str) -> ExperimentalDistance:
     so probe configs can name a distance without the engine importing it eagerly.
     """
     if ":" not in path:
-        raise ValueError(
-            f"distance path must be 'module.path:ClassName', got {path!r}"
-        )
+        raise ValueError(f"distance path must be 'module.path:ClassName', got {path!r}")
     module_path, class_name = path.split(":", 1)
     module = importlib.import_module(module_path)
     try:
         cls = getattr(module, class_name)
     except AttributeError as e:
-        raise ImportError(
-            f"Module {module_path!r} has no attribute {class_name!r}"
-        ) from e
+        raise ImportError(f"Module {module_path!r} has no attribute {class_name!r}") from e
     return cls()
 
 

@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import random
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -308,9 +309,7 @@ def get_dataset_preview(
             for key, value in row.items():
                 if key in media_kinds and value is not None:
                     kind = MediaKind(media_kinds[key])
-                    row_dict[key] = MediaReference.of(value) or MediaReference.placeholder(
-                        value, kind
-                    )
+                    row_dict[key] = MediaReference.describe(value, kind)
                 elif isinstance(value, (str, int, float, bool, type(None))):
                     row_dict[key] = value
                 elif isinstance(value, list):
@@ -370,8 +369,6 @@ def load_dataset_portion(
     Returns:
         Tuple of (list of row dicts, total rows in split)
     """
-    import random
-
     from datasets import load_dataset
 
     if portion is None:
@@ -409,8 +406,8 @@ def load_dataset_portion(
         total = len(dataset)
         n = min(portion.n, total)
 
-        random.seed(portion.seed)
-        indices = random.sample(range(total), n)
+        # Its own generator: the same rows per seed, the global random state untouched
+        indices = random.Random(portion.seed).sample(range(total), n)
 
         rows = [dict(dataset[i]) for i in indices]
         return rows, total

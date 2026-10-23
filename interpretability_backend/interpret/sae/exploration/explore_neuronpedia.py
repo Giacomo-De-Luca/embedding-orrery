@@ -66,12 +66,8 @@ class ActivationExample:
         """
         if not self.values:
             return []
-        indexed = sorted(
-            enumerate(self.values), key=lambda it: -it[1]
-        )
-        return [
-            (i, self.tokens[i], val) for i, val in indexed[:k]
-        ]
+        indexed = sorted(enumerate(self.values), key=lambda it: -it[1])
+        return [(i, self.tokens[i], val) for i, val in indexed[:k]]
 
 
 @dataclass
@@ -254,9 +250,7 @@ class NeuronpediaExplorer:
 
     # --- feature info ---
 
-    def get_feature_info(
-        self, feature_index: int, layer: int | None = None
-    ) -> FeatureInfo | None:
+    def get_feature_info(self, feature_index: int, layer: int | None = None) -> FeatureInfo | None:
         """Return density, label, and logits for a single feature."""
 
         if not layer:
@@ -353,8 +347,7 @@ def main() -> None:
     explorer = NeuronpediaExplorer(layers=SEARCH_LAYERS)
 
     # 1. Search feature labels across layers
-    print(f"### Label search: {SEARCH_PATTERN!r} "
-          f"(min_density={SEARCH_MIN_DENSITY})\n")
+    print(f"### Label search: {SEARCH_PATTERN!r} (min_density={SEARCH_MIN_DENSITY})\n")
     results = explorer.search_labels(
         SEARCH_PATTERN,
         regex=SEARCH_IS_REGEX,
@@ -368,8 +361,10 @@ def main() -> None:
         print()
 
     # 2. Inspect a specific feature
-    print(f"### Top-{INSPECT_TOP_K} activations for "
-          f"layer {INSPECT_LAYER} / feature {INSPECT_FEATURE}\n")
+    print(
+        f"### Top-{INSPECT_TOP_K} activations for "
+        f"layer {INSPECT_LAYER} / feature {INSPECT_FEATURE}\n"
+    )
     info = explorer.get_feature_info(INSPECT_FEATURE, layer=INSPECT_LAYER)
     if info is not None:
         print(f"label: {info.label!r}")
@@ -386,8 +381,7 @@ def main() -> None:
         context_window=INSPECT_CONTEXT_WINDOW,
     )
     for i, ex in enumerate(examples):
-        print(f"-- example {i}: max={ex.max_value:.1f} "
-              f"at tok {ex.max_token_index} --")
+        print(f"-- example {i}: max={ex.max_value:.1f} at tok {ex.max_token_index} --")
         print(f"   context: {ex.context!r}")
         top_tokens = ex.top_tokens(INSPECT_TOP_TOKENS_PER_EXAMPLE)
         if top_tokens:

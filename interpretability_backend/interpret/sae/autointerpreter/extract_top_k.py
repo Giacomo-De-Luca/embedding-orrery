@@ -51,9 +51,7 @@ class TopKFeatureExtractor:
         self.topk_dir.mkdir(parents=True, exist_ok=True)
         self.linspace_dir.mkdir(parents=True, exist_ok=True)
 
-        self.matrix: sparse.csc_matrix = (
-            SparseActivationStore.load_matrix(self.run_dir).tocsc()
-        )
+        self.matrix: sparse.csc_matrix = SparseActivationStore.load_matrix(self.run_dir).tocsc()
         self.index: pd.DataFrame = SparseActivationStore.load_index(self.run_dir)
 
     # ── Feature selection ───────────────────────────────────────────────
@@ -120,7 +118,10 @@ class TopKFeatureExtractor:
         return {"word": row["word"], "definition": row["definition"]}
 
     def _topk_samples(
-        self, rows: np.ndarray, values: np.ndarray, k: int,
+        self,
+        rows: np.ndarray,
+        values: np.ndarray,
+        k: int,
     ) -> list[dict]:
         if len(values) == 0:
             return []
@@ -165,7 +166,7 @@ class TopKFeatureExtractor:
             excl = np.empty(0, dtype=np.int64)
 
         if len(values) >= n:
-            order = np.argsort(values)          # ascending
+            order = np.argsort(values)  # ascending
             pick = np.linspace(0, len(order) - 1, n).astype(int)
             chosen_local = order[pick]
             chosen_rows = rows[chosen_local]
@@ -227,7 +228,11 @@ class TopKFeatureExtractor:
             # Hold the label's source samples out of the eval set (non-circular).
             exclude = {s["row_idx"] for s in top_samples}
             lin_samples, lin_truth, padded = self._linspace_samples(
-                rows, values, feature_idx, n_rows_total, exclude,
+                rows,
+                values,
+                feature_idx,
+                n_rows_total,
+                exclude,
             )
 
             base = {
@@ -245,9 +250,7 @@ class TopKFeatureExtractor:
                 json.dumps(
                     {
                         **base,
-                        "max_activation_in_set": (
-                            float(max(lin_truth)) if lin_truth else 0.0
-                        ),
+                        "max_activation_in_set": (float(max(lin_truth)) if lin_truth else 0.0),
                         "padded_with_zeros": padded,
                         "samples": lin_samples,
                         "_true_activations": lin_truth,

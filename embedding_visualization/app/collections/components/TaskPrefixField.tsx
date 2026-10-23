@@ -16,32 +16,16 @@ import {
   queryPrefixOf,
   taskPrefixValue,
   type TaskPrefixInfo,
+  type TaskPrefixRow,
   type TaskPrefixValue,
 } from '../lib/taskPrefixes';
-import type { EmbeddingModelState } from '../lib/useEmbeddingModelState';
-
-/** A model's task prefixes and the form's choice (from useEmbeddingModelState). */
-export interface TaskPrefixControl {
-  info: TaskPrefixInfo | null;
-  value: TaskPrefixValue | null;
-  onChange: (value: TaskPrefixValue) => void;
-}
-
-export function taskPrefixControlOf(
-  model: Pick<EmbeddingModelState, 'taskPrefixInfo' | 'taskPrefix' | 'setTaskPrefix'>,
-): TaskPrefixControl {
-  return { info: model.taskPrefixInfo, value: model.taskPrefix, onChange: model.setTaskPrefix };
-}
 
 interface TaskPrefixFieldProps {
   info: TaskPrefixInfo;
   value: TaskPrefixValue;
   onChange: (value: TaskPrefixValue) => void;
-  /** Columns a prefix placeholder may name ([] = static prefixes only). */
-  columns: string[];
-  /** The text template and embedded columns, for the model-input line. */
-  template?: string;
-  embeddingColumns?: string[];
+  /** The columns the prefix may name, and the text it goes before (model-input preview). */
+  row: TaskPrefixRow;
   idPrefix?: string;
 }
 
@@ -51,25 +35,17 @@ interface TaskPrefixFieldProps {
  * document prefix, which can then be edited (`title: {title} | text: `); the
  * query prefix follows the task.
  */
-export function TaskPrefixField({
-  info,
-  value,
-  onChange,
-  columns,
-  template,
-  embeddingColumns,
-  idPrefix = '',
-}: TaskPrefixFieldProps) {
+export function TaskPrefixField({ info, value, onChange, row, idPrefix = '' }: TaskPrefixFieldProps) {
   const queryPrefix = queryPrefixOf(info, value);
   const noTask = value.taskId === NO_TASK;
-  const issues = placeholderIssues({ prefix: value.documentPrefix, prefixColumns: columns });
+  const issues = placeholderIssues({ prefix: value.documentPrefix, prefixColumns: row.columns });
   const pattern =
-    embeddingColumns && embeddingColumns.length > 0
-      ? modelInputPattern(value.documentPrefix, template ?? '', embeddingColumns)
+    row.embeddingColumns && row.embeddingColumns.length > 0
+      ? modelInputPattern(value.documentPrefix, row.template ?? '', row.embeddingColumns)
       : null;
 
   return (
-    <div className="space-y-2 rounded-md border p-3">
+    <div className="space-y-2">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-[12rem_minmax(0,1fr)]">
         <div className="space-y-2">
           <Label htmlFor={`${idPrefix}task-prefix-task`}>Task</Label>
@@ -94,7 +70,8 @@ export function TaskPrefixField({
             value={value.documentPrefix}
             onChange={(e) => onChange({ taskId: value.taskId, documentPrefix: e.target.value })}
             disabled={noTask}
-            placeholder={noTask ? 'No prefix' : 'title: {title} | text: '}
+            // Empty sends no document prefix (queries keep the task's query prefix).
+            placeholder="No prefix"
             className="font-mono text-sm"
             aria-invalid={issues.length > 0 ? true : undefined}
           />
@@ -102,8 +79,13 @@ export function TaskPrefixField({
       </div>
       <p className="text-xs text-muted-foreground">
         Added before each document for the model only: the stored text stays unchanged.
-        Use {'{column}'} for a column&apos;s value, e.g. <code className="font-mono">title: {'{title}'} | text: </code>
-        (an empty value reads <code className="font-mono">none</code>).
+        {row.columns.length > 0 && (
+          <>
+            {' '}<code className="font-mono">{'{column}'}</code> inserts a column&apos;s value, e.g.{' '}
+            <code className="font-mono">title: {'{title}'} | text: </code> (an empty value reads{' '}
+            <code className="font-mono">none</code>).
+          </>
+        )}
       </p>
       <p className="text-xs text-muted-foreground">
         Queries use:{' '}

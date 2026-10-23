@@ -109,9 +109,7 @@ def evaluate_dataset(
 
     layers = model.decoder_layers
     for condition, coeff in conditions.items():
-        manager = _condition_manager(
-            condition, direction, config.n_layers, selected_layer, coeff
-        )
+        manager = _condition_manager(condition, direction, config.n_layers, selected_layer, coeff)
         csv_path = out_dir / f"{dataset_label}_{condition}.csv"
         if csv_path.exists():
             csv_path.unlink()

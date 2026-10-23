@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Slider as SliderPrimitive } from "radix-ui"
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils/utils"
 
 /**
  * Hairline slider: a 4px track, a fill that brightens along the track (the
@@ -48,14 +48,14 @@ function Slider({
       >
         <SliderPrimitive.Range
           data-slot="slider-range"
-          className="absolute bg-primary bg-linear-to-r from-primary/55 to-primary bg-no-repeat [background-size:100cqw_100%] data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full data-[orientation=vertical]:bg-none"
+          className="absolute bg-linear-to-r from-primary/55 to-primary bg-no-repeat [background-size:100cqw_100%] data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full data-[orientation=vertical]:bg-none data-[orientation=vertical]:bg-primary"
         />
       </SliderPrimitive.Track>
       {Array.from({ length: _values.length }, (_, index) => (
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
-          className="block size-3.5 shrink-0 rounded-full border-2 border-primary bg-background ring-4 ring-primary/0 ring-offset-2 ring-offset-background outline-hidden transition-[transform,box-shadow] duration-150 motion-reduce:transition-none hover:scale-110 hover:ring-primary/20 focus-visible:ring-primary/35 active:scale-110 active:ring-primary/30 data-[disabled]:pointer-events-none"
+          className="block size-3.5 shrink-0 rounded-full border-2 border-primary bg-background ring-4 ring-primary/0 ring-offset-2 ring-offset-background outline-hidden transition-[scale,box-shadow] duration-150 motion-reduce:transition-none hover:scale-110 hover:ring-primary/20 focus-visible:ring-primary/35 active:scale-110 active:ring-primary/30 data-[disabled]:pointer-events-none"
         />
       ))}
     </SliderPrimitive.Root>

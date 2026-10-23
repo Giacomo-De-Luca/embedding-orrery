@@ -1,7 +1,7 @@
 import { SEMANTIC_SEARCH } from '../graphql/queries';
 import { MOBILE_BREAKPOINT } from '../hooks/use-mobile';
 import { IS_DEMO } from './demoMode';
-import { SPACE_LOCAL_SEARCH_COLLECTION } from './tourPresets';
+import { SPACE_LOCAL_SEARCH_COLLECTION, WORDNET_COLLECTION } from './tourPresets';
 import { stripQueryPrefix } from './urlViewParams';
 
 /**
@@ -24,8 +24,8 @@ export type OnboardingMark = 'dismissed' | 'completed';
  * Phone-sized viewports: below this width the Explore panels cover the map.
  * It IS the app's mobile breakpoint (`md`, which also collapses the legend),
  * so every small-screen rule shares one floor: the desktop-notice card, the
- * tours' panel-free map steps (`TourRuntime.isCompactViewport`), and the
- * desktop-only WordNet tour.
+ * tours' panel-free map steps (`TourRuntime.isCompactViewport`), the
+ * desktop-only tours and the desktop-only demo collections.
  */
 export const COMPACT_VIEWPORT_WIDTH = MOBILE_BREAKPOINT;
 
@@ -46,13 +46,45 @@ const TOUR_PARAM_ACTIONS: ReadonlyMap<string, TourAction> = new Map([
 ]);
 
 /**
- * Tours that need a desktop: the WordNet galaxy loads 212,478 points in 3D
- * with haze, too heavy for a phone. The others run at any width.
+ * The only tour offered on phones: the 90-second Explore tour. The others
+ * need a desktop (the WordNet galaxy loads 212,478 points in 3D with haze and
+ * crashes iPhone Safari; the probe and SAE tours lean on panels that cover a
+ * phone's map).
  */
-const DESKTOP_ONLY_TOURS: ReadonlySet<TourAction> = new Set(['wordnet-tour']);
+const PHONE_TOURS: ReadonlySet<TourAction> = new Set(['tour']);
 
 export function tourFitsViewport(tour: TourAction, viewportWidth: number): boolean {
-  return !(DESKTOP_ONLY_TOURS.has(tour) && isCompactWidth(viewportWidth));
+  return PHONE_TOURS.has(tour) || !isCompactWidth(viewportWidth);
+}
+
+/** Demo collections too heavy for a phone: the WordNet galaxy crashes iPhone Safari. */
+const DESKTOP_ONLY_COLLECTIONS: ReadonlySet<string> = new Set([WORDNET_COLLECTION]);
+
+/**
+ * Whether a collection is offered at this viewport. Demo builds only: a
+ * self-hoster on a phone keeps every collection. `useCollections` drops the
+ * rest from the manifest, so neither the picker nor a `?collection=` /
+ * `?preset=` link can load one.
+ */
+export function collectionFitsViewport(
+  name: string,
+  args: { isDemo: boolean; viewportWidth: number },
+): boolean {
+  return !(args.isDemo && isCompactWidth(args.viewportWidth) && DESKTOP_ONLY_COLLECTIONS.has(name));
+}
+
+/**
+ * Whether a deep link's view (its `?preset=` and URL colour) may apply at this
+ * viewport: false when it names a collection the viewport doesn't offer. The
+ * collection itself already falls back via `resolveInitialCollection`; this
+ * keeps the link's view (WordNet's 3D UMAP, `colorBy=pos`) from landing on
+ * the fallback collection.
+ */
+export function linkedCollectionsFitViewport(
+  names: ReadonlyArray<string | null | undefined>,
+  args: { isDemo: boolean; viewportWidth: number },
+): boolean {
+  return names.every((name) => !name || collectionFitsViewport(name, args));
 }
 
 /**
@@ -92,8 +124,8 @@ export interface OnboardingInputs {
  *   Glasgow-probing tours.
  * - Otherwise the mobile notice comes first on a phone, so the visitor is
  *   told about the layout before anything else competes for the screen.
- * - A tour too heavy for the viewport (WordNet on a phone) downgrades to the
- *   welcome dialog, which offers the tours that do fit.
+ * - A tour that doesn't fit the viewport (any but `?tour=1` on a phone)
+ *   downgrades to the welcome dialog, which offers the tours that do fit.
  * - `?intro=1` reopens the welcome dialog in any build, ignoring storage.
  * - Otherwise the intro auto-opens once per browser, demo builds only, and
  *   never on top of a deep link.

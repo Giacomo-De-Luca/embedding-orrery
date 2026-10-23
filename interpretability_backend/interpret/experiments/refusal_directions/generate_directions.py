@@ -52,9 +52,7 @@ def generate_directions(
         for intermediate in to_extract:
             diff = mean_h[intermediate] - mean_b[intermediate]
             if not torch.isfinite(diff).all():
-                raise RuntimeError(
-                    f"Non-finite values in mean_diffs[{intermediate}]"
-                )
+                raise RuntimeError(f"Non-finite values in mean_diffs[{intermediate}]")
             torch.save(diff, out_dir / f"mean_diffs_{intermediate}.pt")
             directions[intermediate] = diff
 

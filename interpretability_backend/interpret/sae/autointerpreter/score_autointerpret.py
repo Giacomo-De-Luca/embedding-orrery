@@ -96,9 +96,8 @@ class AutoInterpretScorer:
     def report_ab_split(self, scores: pd.DataFrame) -> pd.DataFrame | None:
         if not self.cfg.report_ab_split or scores.empty:
             return None
-        summary = (
-            scores.groupby("zero_hint_shown")[["pearson", "spearman", "n_samples"]]
-            .agg(["mean", "count"])
+        summary = scores.groupby("zero_hint_shown")[["pearson", "spearman", "n_samples"]].agg(
+            ["mean", "count"]
         )
         return summary
 
@@ -113,8 +112,7 @@ class AutoInterpretScorer:
         if keep.empty:
             return 0
         labels = {
-            int(row.feature_idx):
-            f"{row.short_name} (r={row.pearson:.2f})"
+            int(row.feature_idx): f"{row.short_name} (r={row.pearson:.2f})"
             for row in keep.itertuples(index=False)
         }
         store = FeatureLabelStore(self.cfg.label_store_dir)
@@ -137,7 +135,9 @@ class AutoInterpretScorer:
         if not path.exists():
             return {}
         df = pq.read_table(path).to_pandas()
-        return dict(zip(df["feature_idx"].astype(int), df["zero_hint_shown"].astype(bool), strict=True))
+        return dict(
+            zip(df["feature_idx"].astype(int), df["zero_hint_shown"].astype(bool), strict=True)
+        )
 
     @staticmethod
     def _align(eval_data: dict, linspace: dict) -> tuple[np.ndarray, np.ndarray]:

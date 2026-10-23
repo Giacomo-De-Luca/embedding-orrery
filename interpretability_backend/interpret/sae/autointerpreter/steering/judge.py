@@ -49,8 +49,14 @@ class AgentQueueDriver:
         """Init the queue, launch ``workers`` agents (``reps`` items each), poll."""
         self._queue_cmd(task_name, ["init"], check=True)
         cmd = [
-            "bash", str(LAUNCHER), "-t", task_name,
-            "-n", str(workers), "-r", str(reps),
+            "bash",
+            str(LAUNCHER),
+            "-t",
+            task_name,
+            "-n",
+            str(workers),
+            "-r",
+            str(reps),
         ]
         if self.model_override:
             cmd += ["-m", self.model_override]

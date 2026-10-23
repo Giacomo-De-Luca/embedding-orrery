@@ -4,6 +4,8 @@ import {
   planOnboarding,
   shouldShowMobileNotice,
   tourFitsViewport,
+  collectionFitsViewport,
+  linkedCollectionsFitViewport,
   warmEmotionSearch,
   resetWarmEmotionSearchForTests,
   INTRO_STORAGE_KEY,
@@ -12,6 +14,7 @@ import {
   MOBILE_NOTICE_STORAGE_KEY,
   COMPACT_VIEWPORT_WIDTH,
 } from '../demoOnboarding';
+import { TOUR_COLLECTION, WORDNET_COLLECTION } from '../tourPresets';
 
 const base = {
   isDemo: true,
@@ -59,12 +62,11 @@ describe('getOnboardingAction', () => {
     expect(getOnboardingAction({ ...base, search: '?tour=1&intro=1' })).toBe('tour');
   });
 
-  it('?tour=sae routes to the SAE tour in any build, at any viewport', () => {
+  it('?tour=sae routes to the SAE tour in any build', () => {
     expect(getOnboardingAction({ ...base, search: '?tour=sae' })).toBe('sae-tour');
     expect(
       getOnboardingAction({ ...base, search: '?tour=sae', isDemo: false, introSeen: true }),
     ).toBe('sae-tour');
-    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=sae' })).toBe('sae-tour');
   });
 
   it('?tour=sae wins over ?intro=1', () => {
@@ -77,24 +79,18 @@ describe('getOnboardingAction', () => {
     expect(
       getOnboardingAction({ ...base, search: '?tour=wordnet', isDemo: false, introSeen: true }),
     ).toBe('wordnet-tour');
-    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=probe' })).toBe(
-      'probe-tour',
-    );
   });
 
-  it('?tour=wordnet is desktop-only: a phone gets the welcome dialog instead', () => {
-    expect(getOnboardingAction({ ...base, ...narrowSeen, search: '?tour=wordnet' })).toBe('intro');
-    // Even in a non-demo build with the intro already seen: the link asked for a tour.
-    expect(
-      getOnboardingAction({
-        ...base,
-        ...narrowSeen,
-        search: '?tour=wordnet',
-        isDemo: false,
-        introSeen: true,
-      }),
-    ).toBe('intro');
-  });
+  it.each(['?tour=sae', '?tour=probe', '?tour=wordnet'])(
+    '%s is desktop-only: a phone gets the welcome dialog instead',
+    (search) => {
+      expect(getOnboardingAction({ ...base, ...narrowSeen, search })).toBe('intro');
+      // Even in a non-demo build with the intro already seen: the link asked for a tour.
+      expect(
+        getOnboardingAction({ ...base, ...narrowSeen, search, isDemo: false, introSeen: true }),
+      ).toBe('intro');
+    },
+  );
 
   it.each(['?tour=nope', '?tour=constructor', '?tour=__proto__'])(
     'unknown %s falls through to the ordinary gating',
@@ -109,21 +105,20 @@ describe('getOnboardingAction', () => {
     ).toBe('mobile-notice');
   });
 
-  it.each([
-    ['?tour=1', 'tour'],
-    ['?tour=sae', 'sae-tour'],
-    ['?tour=probe', 'probe-tour'],
-  ] as const)('a phone-fitting tour link %s wins over the mobile notice', (search, tour) => {
+  it('the phone-fitting ?tour=1 wins over the mobile notice', () => {
     expect(
-      getOnboardingAction({ ...base, search, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
-    ).toBe(tour);
+      getOnboardingAction({ ...base, search: '?tour=1', viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
+    ).toBe('tour');
   });
 
-  it.each(['?intro=1', '?tour=wordnet'])('the mobile notice pre-empts %s', (search) => {
-    expect(
-      getOnboardingAction({ ...base, search, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
-    ).toBe('mobile-notice');
-  });
+  it.each(['?intro=1', '?tour=sae', '?tour=probe', '?tour=wordnet'])(
+    'the mobile notice pre-empts %s',
+    (search) => {
+      expect(
+        getOnboardingAction({ ...base, search, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 }),
+      ).toBe('mobile-notice');
+    },
+  );
 
   it('once dismissed, narrow viewports resume the ordinary gating', () => {
     expect(getOnboardingAction({ ...base, ...narrowSeen })).toBe('intro');
@@ -174,11 +169,47 @@ describe('tourFitsViewport', () => {
     }
   });
 
-  it('keeps only the WordNet tour off phones', () => {
-    expect(tourFitsViewport('wordnet-tour', COMPACT_VIEWPORT_WIDTH - 1)).toBe(false);
-    for (const tour of ['tour', 'sae-tour', 'probe-tour'] as const) {
-      expect(tourFitsViewport(tour, 390)).toBe(true);
+  it('runs only the 90-second tour on phones', () => {
+    expect(tourFitsViewport('tour', 390)).toBe(true);
+    for (const tour of ['sae-tour', 'wordnet-tour', 'probe-tour'] as const) {
+      expect(tourFitsViewport(tour, COMPACT_VIEWPORT_WIDTH - 1)).toBe(false);
     }
+  });
+});
+
+describe('collectionFitsViewport', () => {
+  const phone = { isDemo: true, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 };
+
+  it('drops WordNet on demo phones only', () => {
+    expect(collectionFitsViewport(WORDNET_COLLECTION, phone)).toBe(false);
+    expect(
+      collectionFitsViewport(WORDNET_COLLECTION, { ...phone, viewportWidth: COMPACT_VIEWPORT_WIDTH }),
+    ).toBe(true);
+    // A self-hoster on a phone keeps every collection.
+    expect(collectionFitsViewport(WORDNET_COLLECTION, { ...phone, isDemo: false })).toBe(true);
+  });
+
+  it('keeps every other collection on demo phones', () => {
+    expect(collectionFitsViewport(TOUR_COLLECTION, phone)).toBe(true);
+    expect(collectionFitsViewport('emotion', phone)).toBe(true);
+  });
+});
+
+describe('linkedCollectionsFitViewport', () => {
+  const phone = { isDemo: true, viewportWidth: COMPACT_VIEWPORT_WIDTH - 1 };
+
+  it('rejects a link naming WordNet on a demo phone, by URL or by preset', () => {
+    expect(linkedCollectionsFitViewport([WORDNET_COLLECTION, null], phone)).toBe(false);
+    expect(linkedCollectionsFitViewport([null, WORDNET_COLLECTION], phone)).toBe(false);
+    expect(linkedCollectionsFitViewport(['emotion', WORDNET_COLLECTION], phone)).toBe(false);
+  });
+
+  it('accepts links without a desktop-only collection, and every link on desktop', () => {
+    expect(linkedCollectionsFitViewport([null, undefined], phone)).toBe(true);
+    expect(linkedCollectionsFitViewport(['emotion', TOUR_COLLECTION], phone)).toBe(true);
+    expect(
+      linkedCollectionsFitViewport([WORDNET_COLLECTION], { isDemo: true, viewportWidth: 1200 }),
+    ).toBe(true);
   });
 });
 

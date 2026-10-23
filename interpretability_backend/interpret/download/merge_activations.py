@@ -22,9 +22,7 @@ except ImportError:
     tqdm = None
 
 MODEL_ID = "gemma-3-4b-it"
-DEFAULT_LABELS_DIR = (
-    Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{MODEL_ID}"
-)
+DEFAULT_LABELS_DIR = Path.home() / "Colour_vectors/resources/sae_labels" / f"neuronpedia_{MODEL_ID}"
 
 
 def merge_source(source_dir: Path, output_file: Path) -> int:
@@ -37,10 +35,11 @@ def merge_source(source_dir: Path, output_file: Path) -> int:
     records: list[tuple[int, str]] = []
     pbar = (
         tqdm(batch_files, desc=f"  {source_dir.name}", unit="batch", ncols=80, leave=False)
-        if tqdm else None
+        if tqdm
+        else None
     )
 
-    for batch_file in (pbar or batch_files):
+    for batch_file in pbar or batch_files:
         with gzip.open(batch_file, "rt", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -67,11 +66,15 @@ def main():
         description="Merge gzipped activation batches into single JSONL per source",
     )
     parser.add_argument(
-        "--input-dir", type=str, default=str(DEFAULT_LABELS_DIR),
+        "--input-dir",
+        type=str,
+        default=str(DEFAULT_LABELS_DIR),
         help=f"Labels directory containing activations/ subdir (default: {DEFAULT_LABELS_DIR})",
     )
     parser.add_argument(
-        "--sources", nargs="+", default=None,
+        "--sources",
+        nargs="+",
+        default=None,
         help="Source IDs to merge (default: all in activations/)",
     )
     args = parser.parse_args()

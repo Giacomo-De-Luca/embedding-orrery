@@ -127,7 +127,8 @@ class AutoInterpretRunner:
                 collect_cfg = dataclasses.replace(
                     self.config.collect,
                     residual=dataclasses.replace(
-                        self.config.collect.resolve_residual(), sites=[site],
+                        self.config.collect.resolve_residual(),
+                        sites=[site],
                     ),
                 )
                 if multi:
@@ -224,17 +225,18 @@ class AutoInterpretRunner:
 
     def _stage_extract(self, unit: _SaeUnit) -> None:
         if self.config.collect.source_kind in ("embedding", "residual"):
-            print(
-                f"[2/5] extract dense ({self.config.extract.dim_mode}) "
-                f"→ {unit.sub_run_dir}"
-            )
+            print(f"[2/5] extract dense ({self.config.extract.dim_mode}) → {unit.sub_run_dir}")
             DenseFeatureExtractor(
-                unit.sub_run_dir, self.config.extract, unit.collect_cfg,
+                unit.sub_run_dir,
+                self.config.extract,
+                unit.collect_cfg,
             ).run()
             return
         print(f"[2/5] extract top-k + linspace → {unit.sub_run_dir}")
         TopKFeatureExtractor(
-            unit.sub_run_dir, self.config.extract, unit.collect_cfg,
+            unit.sub_run_dir,
+            self.config.extract,
+            unit.collect_cfg,
         ).run()
 
     def _stage_label(self, writer: AgentInputWriter, unit: _SaeUnit) -> None:
@@ -316,8 +318,7 @@ class AutoInterpretRunner:
             print("  no scored features")
             return
         print(
-            f"  scored {len(scores)} features "
-            f"(mean Pearson = {scores['pearson'].mean():.3f})",
+            f"  scored {len(scores)} features (mean Pearson = {scores['pearson'].mean():.3f})",
         )
         ab = scorer.report_ab_split(scores)
         if ab is not None:
@@ -353,9 +354,10 @@ class AutoInterpretRunner:
         if not src.is_dir():
             return
         from interpret.sae.autointerpreter.prepare_agent_inputs import TAG_SEP
+
         prefix = f"{tag}{TAG_SEP}"
         for f in src.glob(f"{prefix}feature_*.json"):
-            shutil.copy2(f, dst / f.name[len(prefix):])
+            shutil.copy2(f, dst / f.name[len(prefix) :])
 
     @staticmethod
     def _reset_queue_manifest(results_dir: Path) -> None:
@@ -385,8 +387,14 @@ class AutoInterpretRunner:
         """Init the queue, launch agents, then poll until complete."""
         self._queue_cmd(task_name, ["init"], check=True)
         cmd = [
-            "bash", str(LAUNCHER), "-t", task_name,
-            "-n", str(workers), "-r", str(reps),
+            "bash",
+            str(LAUNCHER),
+            "-t",
+            task_name,
+            "-n",
+            str(workers),
+            "-r",
+            str(reps),
         ]
         # Per-run model override (e.g. sonnet) — wins over the task JSON's model.
         if self.config.agents.model_override:
@@ -437,6 +445,7 @@ class AutoInterpretRunner:
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
+
 
 def run_from_yaml(path: Path | str) -> None:
     for cfg in load_experiments(Path(path)):

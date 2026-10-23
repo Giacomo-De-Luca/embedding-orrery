@@ -1,9 +1,9 @@
 /**
- * Prompt suggestions shared by the prompt pickers: the embed form's document
- * prompt (Collections page) and the Explore query prompt (Search panel). Both
- * accept any text; a sentence-transformers prompt name is sent as a name, any
+ * Prompt suggestions of the Explore query prompt picker (Search panel). It
+ * accepts any text; a sentence-transformers prompt name is sent as a name, any
  * other text as a literal prompt (the backend decides, see
- * documentation/EMBEDDING_TASK_PREFIXES.md).
+ * documentation/EMBEDDING_TASK_PREFIXES.md). The embed form takes no free
+ * prompt: its "Task prompt" shows only the task control a model reads.
  */
 import type { SuggestionGroup, SuggestionItem } from './suggestions';
 
@@ -29,7 +29,6 @@ export const AUTO_QUERY_PROMPT: SuggestionItem = {
 };
 
 export const COMMON_PROMPTS_GROUP = 'Common prompts';
-export const MODEL_PROMPTS_GROUP = 'Prompts of this model';
 const DEFAULT_GROUP = 'Default';
 
 export class PromptPresets {
@@ -39,20 +38,11 @@ export class PromptPresets {
     return hint ? { value: name, detail: hint } : { value: name };
   }
 
-  /**
-   * Document prompts of the embed form: the model's own prompt names when the
-   * catalog lists them, else the shared presets.
-   */
-  static documentGroups(modelPrompts?: readonly string[] | null): SuggestionGroup[] {
-    const names = [...new Set(modelPrompts ?? [])];
-    if (names.length > 0) {
-      return [{ label: MODEL_PROMPTS_GROUP, items: names.map(PromptPresets.item) }];
-    }
-    return [{ label: COMMON_PROMPTS_GROUP, items: PROMPT_PRESETS.map((p) => PromptPresets.item(p.value)) }];
-  }
-
   /** Query prompts of Explore: Auto, then the shared presets. */
   static queryGroups(): SuggestionGroup[] {
-    return [{ label: DEFAULT_GROUP, items: [AUTO_QUERY_PROMPT] }, ...PromptPresets.documentGroups(null)];
+    return [
+      { label: DEFAULT_GROUP, items: [AUTO_QUERY_PROMPT] },
+      { label: COMMON_PROMPTS_GROUP, items: PROMPT_PRESETS.map((p) => PromptPresets.item(p.value)) },
+    ];
   }
 }

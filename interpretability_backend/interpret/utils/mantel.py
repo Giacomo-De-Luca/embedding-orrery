@@ -38,9 +38,7 @@ class MantelTest:
     """
 
     @staticmethod
-    def global_spearman(
-        d1_condensed: np.ndarray, d2_condensed: np.ndarray
-    ) -> tuple[float, float]:
+    def global_spearman(d1_condensed: np.ndarray, d2_condensed: np.ndarray) -> tuple[float, float]:
         """Spearman rho + p-value over all pairwise distances.
 
         Parameters
@@ -55,9 +53,7 @@ class MantelTest:
         return float(result.statistic), float(result.pvalue)
 
     @staticmethod
-    def knn_spearman(
-        d1_square: np.ndarray, d2_square: np.ndarray, k: int
-    ) -> tuple[float, float]:
+    def knn_spearman(d1_square: np.ndarray, d2_square: np.ndarray, k: int) -> tuple[float, float]:
         """Spearman rho restricted to each item's ``k`` nearest neighbours in ``d1``.
 
         For each item ``i`` take its ``k`` closest neighbours by ``d1`` (excluding
@@ -110,9 +106,7 @@ class MantelTest:
         for i in range(n_perms):
             perm = rng.permutation(n)
             permuted = d2_square[np.ix_(perm, perm)]
-            null_rhos[i] = spearmanr(
-                d1_condensed, squareform(permuted, checks=False)
-            ).statistic
+            null_rhos[i] = spearmanr(d1_condensed, squareform(permuted, checks=False)).statistic
 
         null_mean = float(null_rhos.mean())
         null_std = float(null_rhos.std())

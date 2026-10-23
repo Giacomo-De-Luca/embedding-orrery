@@ -82,9 +82,7 @@ def _eval_signature(config: RefusalConfig) -> dict:
     }
 
 
-def _load_cached_evals(
-    out_dir: Path, signature: dict
-) -> list[dict] | None:
+def _load_cached_evals(out_dir: Path, signature: dict) -> list[dict] | None:
     """Return cached evaluation rows if the sidecar signature matches; else None."""
     evals_path = out_dir / "direction_evaluations.json"
     meta_path = out_dir / "direction_evaluations_meta.json"
@@ -108,9 +106,7 @@ def _load_cached_evals(
     return rows
 
 
-def _save_evals_with_meta(
-    out_dir: Path, rows: list[dict], signature: dict
-) -> None:
+def _save_evals_with_meta(out_dir: Path, rows: list[dict], signature: dict) -> None:
     """Atomically write both the rows and the signature sidecar."""
     with (out_dir / "direction_evaluations.json").open("w") as f:
         json.dump(rows, f, indent=2)
@@ -191,9 +187,7 @@ def _run_sweep(
                 range(n_layers),
                 desc=f"sweep[{config.bypass_mode}] {intermediate} pos={source_pos - n_pos}",
             ):
-                direction = candidate_tensor[source_pos, source_layer].to(
-                    torch.float32
-                )
+                direction = candidate_tensor[source_pos, source_layer].to(torch.float32)
                 if direction.norm().item() < _ZERO_NORM_TOL:
                     # Layer 0's pre_attn (and any other position whose mean
                     # diff happens to vanish) yields a zero direction. Score
@@ -222,9 +216,7 @@ def _run_sweep(
                         actadd_coeff=config.actadd_bypass_coeff,
                     )
                 )
-                ablated_scores, _ = _score_dataset(
-                    model, harmful_val, bypass_mgr, refusal_toks
-                )
+                ablated_scores, _ = _score_dataset(model, harmful_val, bypass_mgr, refusal_toks)
                 ablation_refusal[source_pos, source_layer] = float(
                     sum(ablated_scores) / max(len(ablated_scores), 1)
                 )
@@ -237,17 +229,11 @@ def _run_sweep(
                     _kl_div(b, a)
                     for b, a in zip(baseline_harmless_logits, ablated_harmless_logits, strict=True)
                 ]
-                kl_scores[source_pos, source_layer] = float(
-                    sum(kl_vals) / max(len(kl_vals), 1)
-                )
+                kl_scores[source_pos, source_layer] = float(sum(kl_vals) / max(len(kl_vals), 1))
 
                 # Induce: additive at the source layer, score on harmless_val.
-                induce_mgr = _make_manager(
-                    [_additive_op(direction, source_layer, coeff=1.0)]
-                )
-                induce_scores, _ = _score_dataset(
-                    model, harmless_val, induce_mgr, refusal_toks
-                )
+                induce_mgr = _make_manager([_additive_op(direction, source_layer, coeff=1.0)])
+                induce_scores, _ = _score_dataset(model, harmless_val, induce_mgr, refusal_toks)
                 induce_refusal[source_pos, source_layer] = float(
                     sum(induce_scores) / max(len(induce_scores), 1)
                 )
@@ -257,12 +243,8 @@ def _run_sweep(
                         "intermediate": intermediate,
                         "position": source_pos - n_pos,
                         "layer": source_layer,
-                        "refusal_score": ablation_refusal[
-                            source_pos, source_layer
-                        ].item(),
-                        "induce_score": induce_refusal[
-                            source_pos, source_layer
-                        ].item(),
+                        "refusal_score": ablation_refusal[source_pos, source_layer].item(),
+                        "induce_score": induce_refusal[source_pos, source_layer].item(),
                         "kl_score": kl_scores[source_pos, source_layer].item(),
                     }
                 )
@@ -361,9 +343,7 @@ def select_direction(
         # PNGs from the original sweep remain on disk.
     else:
         print("[select_direction] computing baseline refusal scores")
-        baseline_harmful_scores, _ = _score_dataset(
-            model, harmful_val, None, refusal_toks
-        )
+        baseline_harmful_scores, _ = _score_dataset(model, harmful_val, None, refusal_toks)
         baseline_harmful = torch.tensor(baseline_harmful_scores)
         baseline_harmless_scores, baseline_harmless_logits = _score_dataset(
             model, harmless_val, None, refusal_toks

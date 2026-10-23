@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useTheme } from 'next-themes';
 import type { PlotParams } from 'react-plotly.js';
@@ -18,13 +18,14 @@ import { CategoryKey } from '../../lib/utils/categoryKey';
 import { HiddenPoints } from '../../lib/utils/hiddenPoints';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
 import { useColorScaleReady } from '../../lib/hooks/useColorScaleReady';
-import { calculateMarkerStyle, calculateLuminosity, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
+import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColors } from '../../lib/utils/plotUtils';
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
+import { useLatestRef } from '../../lib/hooks/useLatestRef';
 import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
 import { CartesianPinchZoom } from '../../lib/utils/plotPinchZoom';
 import { CoalescedRedraw } from '../../lib/utils/coalescedRedraw';
-import { ZoomOpacity, type OpacityTrace } from '../../lib/utils/zoomOpacity';
+import { ZoomMarkerStyle, type OpacityTrace } from '../../lib/utils/zoomMarkerStyle';
 import { formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
@@ -44,13 +45,16 @@ import { assignCategoryChannels, type ActiveCategory } from '../../lib/utils/den
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { build2DModeBarButtons } from '../../lib/utils/plotlyIcons';
 import { capture2DPlot } from '../../lib/utils/plotCapture';
+import { plotlyLoader } from '../../lib/utils/plotlyLoader';
 import { toast } from 'sonner';
 
 // `meta` is a Plotly trace attribute that @types/plotly.js lacks
 type PlotlyData = Partial<PlotData> & { meta?: string };
-// Fork-only config option: forked/plotly_changes.md change 6
+// Fork-only config options: forked/plotly_changes.md change 6
+type MarkerScale = (trace: OpacityTrace, xRange: number[], yRange: number[]) => number;
 type ForkConfig = Partial<Config> & {
-  scatterglOpacityScale?: (trace: OpacityTrace, xRange: number[], yRange: number[]) => number;
+  scatterglOpacityScale?: MarkerScale;
+  scatterglSizeScale?: MarkerScale;
 };
 
 // Dynamically import Plot to avoid SSR issues
@@ -181,15 +185,13 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const [pinchZoom] = useState(() => new CartesianPinchZoom(graphDivRef));
   usePinchZoom(containerRef, pinchZoom);
 
-  // Points grow more opaque as you zoom in. The fork's scatterglOpacityScale config
-  // option applies it before every draw, and toImage copies it into screenshots. Read
-  // through a ref because the config memo must stay stable: a config change replots.
-  // A layout effect is early enough: react-plotly runs Plotly.react in a promise continuation.
-  const zoomOpacity = useMemo(() => new ZoomOpacity(points.length, bounds), [points.length, bounds]);
-  const zoomOpacityRef = useRef(zoomOpacity);
-  useLayoutEffect(() => {
-    zoomOpacityRef.current = zoomOpacity;
-  }, [zoomOpacity]);
+  // Points grow larger and more opaque as you zoom in. The fork's scatterglSizeScale and
+  // scatterglOpacityScale config options apply it before every draw, and toImage copies
+  // them into screenshots. Read through a ref because the config memo must stay stable:
+  // a config change replots. useLatestRef's layout effect is early enough: react-plotly
+  // runs Plotly.react in a promise continuation.
+  const zoomMarkerStyle = useMemo(() => new ZoomMarkerStyle(points.length, bounds), [points.length, bounds]);
+  const zoomMarkerStyleRef = useLatestRef(zoomMarkerStyle);
 
   // --- Cluster labels: canvas overlay refs and state ---
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -203,11 +205,12 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const theme = resolvedTheme ?? 'light';
   const isDark = theme === 'dark';
 
-  // Load Plotly lib reference (cache hit since react-plotly.js already loaded the module)
+  // Load Plotly lib reference through the shared loader (the Explore page
+  // preloads it; react-plotly.js requires the same module, so this is a cache hit)
   const plotlyLibRef = useRef<any>(null);
   const [plotlyReady, setPlotlyReady] = useState(false);
   useEffect(() => {
-    import('plotly.js').then((lib) => { plotlyLibRef.current = lib.default; setPlotlyReady(true); });
+    plotlyLoader.load().then((lib) => { plotlyLibRef.current = lib; setPlotlyReady(true); });
   }, []);
 
   // Modebar screenshot: routed through a ref (reassigned every render) because
@@ -483,11 +486,15 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   // `relayouting` fires continuously during drag/scroll so the density map and
   // labels track the gesture live; `relayout` fires once at the end. A pinch
   // frame emits several, so both overlays coalesce them into one redraw.
+  // The handler stays stable (no rebinding) and reads the label state through a
+  // ref, which the queued redraw also reads when it runs.
+  const labelStateRef = useLatestRef({ labelsActive, renderClusterLabels });
   const [labelRedraw] = useState(() => new CoalescedRedraw());
+  const renderLatestLabels = useCallback(() => labelStateRef.current.renderClusterLabels(), [labelStateRef]);
   const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
     scheduleDensityRender();
-    if (labelsActive) labelRedraw.request(renderClusterLabels);
-  }, [labelsActive, labelRedraw, renderClusterLabels, scheduleDensityRender]);
+    if (labelStateRef.current.labelsActive) labelRedraw.request(renderLatestLabels);
+  }, [labelStateRef, labelRedraw, renderLatestLabels, scheduleDensityRender]);
 
   // Re-render labels when cluster data, size, or theme changes
   useEffect(() => {
@@ -936,40 +943,26 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         if (otherHighlights.length > 0) {
           // OPTIMIZED: Collect all highlight data into arrays, then create 3 traces total
           // Instead of 3 traces per point (O(n) → O(1) trace count)
+          // Colours vary with similarity; every glow point has the same size, so
+          // sizes stay single values (the fork scales those for zoom by direct write)
           const hX: number[] = [];
           const hY: number[] = [];
-          const outerSizes: number[] = [];
           const outerColors: string[] = [];
-          const outerOpacities: number[] = [];
-          const innerSizes: number[] = [];
           const innerColors: string[] = [];
-          const innerOpacities: number[] = [];
-          const coreSizes: number[] = [];
           const coreColors: string[] = [];
-          const coreOpacities: number[] = [];
           const coreLineColors: string[] = [];
           const coreTexts: string[] = [];
           const coreCustomData: any[] = [];
 
           otherHighlights.forEach(point => {
             const similarity = highlightedIndices!.get(point.index) ?? 1.0;
-            const luminosity = calculateLuminosity(similarity);
             const colors = calculateSimilarityColors(similarity, isDark);
 
             hX.push(point.x);
             hY.push(point.y);
-
-            outerSizes.push(markerStyle.size * highlightScale.outerMultiplier);
             outerColors.push(colors.outerGlow);
-            outerOpacities.push(luminosity.outer);
-
-            innerSizes.push(markerStyle.size * highlightScale.innerMultiplier);
             innerColors.push(colors.glowColor);
-            innerOpacities.push(luminosity.inner);
-
-            coreSizes.push(Math.max(markerStyle.size * highlightScale.coreMultiplier, 3));
             coreColors.push(colors.coreColor);
-            coreOpacities.push(luminosity.core);
             coreLineColors.push(colors.glowColor);
             coreTexts.push(formatHoverText(point));
             coreCustomData.push(point);
@@ -982,9 +975,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
-              size: outerSizes,
+              size: markerStyle.size * highlightScale.outerMultiplier,
               color: outerColors,
               opacity: 0.15, // Use average, scattergl doesn't support per-point opacity arrays well
               line: { width: 0 },
@@ -999,9 +992,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
-              size: innerSizes,
+              size: markerStyle.size * highlightScale.innerMultiplier,
               color: innerColors,
               opacity: 0.3,
               line: { width: 0 },
@@ -1016,9 +1009,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Search results',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
-              size: coreSizes,
+              size: Math.max(markerStyle.size * highlightScale.coreMultiplier, 3),
               color: coreColors,
               opacity: 1,
               line: { color: coreLineColors, width: 1 },
@@ -1039,7 +1032,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
               size: markerStyle.size * highlightScale.selectedOuterMultiplier,
               color: 'rgba(255, 215, 140, 0.15)',
@@ -1056,7 +1049,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             hoverinfo: 'skip',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
               size: Math.max(markerStyle.size * highlightScale.selectedInnerMultiplier, 8),
               color: 'rgba(255, 223, 160, 0.35)',
@@ -1073,7 +1066,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             mode: 'markers' as const,
             type: 'scattergl' as const,
             name: 'Selected',
-            meta: ZoomOpacity.FIXED_META,
+            meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
               size: Math.max(markerStyle.size * highlightScale.selectedCoreMultiplier, 4),
               color: '#fff8e8',
@@ -1439,10 +1432,13 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     responsive: true,
     scrollZoom: true,
     modeBarButtons: build2DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
-    scatterglOpacityScale: (trace, xRange, yRange) => zoomOpacityRef.current.traceScale(trace, xRange, yRange),
+    scatterglOpacityScale: (trace, xRange, yRange) => zoomMarkerStyleRef.current.opacityScale(trace, xRange, yRange),
+    scatterglSizeScale: (_trace, xRange, yRange) => zoomMarkerStyleRef.current.sizeScale(xRange, yRange),
   }), [plotlyReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleClick = (event: PlotMouseEvent) => {
+  // Plotly handlers: react-plotly rebinds a handler whenever its identity changes
+  // (fork change 2), so they are memoized to rebind only when their inputs change.
+  const handleClick = useCallback((event: PlotMouseEvent) => {
     if (!onPointClick || !event.points || event.points.length === 0) {
       return;
     }
@@ -1452,11 +1448,11 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (point.customdata && typeof point.customdata === 'object') {
       onPointClick(point.customdata as unknown as Point2D);
     }
-  };
+  }, [onPointClick]);
 
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
 
-  const handleHover = (event: PlotHoverEvent) => {
+  const handleHover = useCallback((event: PlotHoverEvent) => {
     if (event.points && event.points.length > 0) {
       const pt = event.points[0];
       // Only show tooltip for points with valid customdata (skip glow layers)
@@ -1479,12 +1475,12 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
         });
       }
     }
-  };
+  }, [tooltipFields]);
 
-  const handleUnhover = () => {
+  const handleUnhover = useCallback(() => {
     hoveredPointRef.current = null;
     setTooltipData(null);
-  };
+  }, []);
 
   const hasClusterLabels = labelsActive;
 

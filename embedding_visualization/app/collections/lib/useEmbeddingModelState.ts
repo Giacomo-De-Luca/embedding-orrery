@@ -24,10 +24,9 @@ export interface EmbeddingModelState {
   /** The model the job runs: the typed name, else the fallback (the multimodal default). */
   effectiveModelName: string;
   ollamaUrl: string;
+  /** Qwen's query instruction ('' = the one the model was trained with). */
   qwenTask: string;
   geminiTaskType: GeminiTaskType;
-  /** Sentence-transformers prompt: a prompt name of the model, or literal prompt text ('' = none). */
-  prompt: string;
   batchSize: number;
   /** Input-length cap in tokens; null = the model's own limit (local providers only). */
   maxLength: number | null;
@@ -43,7 +42,6 @@ export interface EmbeddingModelState {
   setOllamaUrl: (u: string) => void;
   setQwenTask: (t: string) => void;
   setGeminiTaskType: (t: GeminiTaskType) => void;
-  setPrompt: (p: string) => void;
   setBatchSize: (b: number) => void;
   setMaxLength: (m: number | null) => void;
   setTaskPrefix: (v: TaskPrefixValue) => void;
@@ -80,9 +78,8 @@ export function useEmbeddingModelState(options: EmbeddingModelStateOptions = {})
   const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider>('SENTENCE_TRANSFORMERS');
   const [modelName, setModelNameState] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultModel);
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
-  const [qwenTask, setQwenTask] = useState('Given a web search query, retrieve relevant passages that answer the query');
+  const [qwenTask, setQwenTask] = useState(EMBEDDING_PROVIDERS.QWEN.queryInstruction ?? '');
   const [geminiTaskType, setGeminiTaskType] = useState<GeminiTaskType>('SEMANTIC_SIMILARITY');
-  const [prompt, setPrompt] = useState('');
   const [batchSize, setBatchSize] = useState(EMBEDDING_PROVIDERS.SENTENCE_TRANSFORMERS.defaultBatchSize);
   const [maxLength, setMaxLength] = useState<number | null>(null);
   // null until a task is picked: the model's default task applies.
@@ -119,10 +116,9 @@ export function useEmbeddingModelState(options: EmbeddingModelStateOptions = {})
     ollamaUrl,
     qwenTask,
     geminiTaskType,
-    prompt,
     maxLength,
     taskPrefix: taskPrefixInput(taskPrefixInfo, taskPrefixChoice),
-  }), [embeddingProvider, modelName, ollamaUrl, qwenTask, geminiTaskType, prompt, maxLength, taskPrefixInfo, taskPrefixChoice]);
+  }), [embeddingProvider, modelName, ollamaUrl, qwenTask, geminiTaskType, maxLength, taskPrefixInfo, taskPrefixChoice]);
 
   const getTopicParams = useCallback(() => ({
     extractTopics: enableTopics || undefined,
@@ -141,7 +137,6 @@ export function useEmbeddingModelState(options: EmbeddingModelStateOptions = {})
     ollamaUrl,
     qwenTask,
     geminiTaskType,
-    prompt,
     batchSize,
     maxLength,
     taskPrefixInfo,
@@ -152,7 +147,6 @@ export function useEmbeddingModelState(options: EmbeddingModelStateOptions = {})
     setOllamaUrl,
     setQwenTask,
     setGeminiTaskType,
-    setPrompt,
     setBatchSize,
     setMaxLength,
     setTaskPrefix,

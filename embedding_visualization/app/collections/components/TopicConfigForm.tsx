@@ -1,6 +1,7 @@
 'use client';
 
 import { Label } from '@/lib/ui-primitives/label';
+import { dotControlIndentClassName } from '@/lib/ui-primitives/dot-control';
 import { Separator } from '@/lib/ui-primitives/separator';
 import { Slider } from '@/lib/ui-primitives/slider';
 import { Checkbox } from '@/lib/ui-primitives/checkbox';
@@ -211,7 +212,7 @@ export function TopicConfigForm({ value, onChange }: TopicConfigFormProps) {
         </div>
 
         {value.useLlmLabels && (
-          <div className="space-y-3 pl-6">
+          <div className={`space-y-3 ${dotControlIndentClassName}`}>
             <div className="space-y-2">
               <Label htmlFor="llm-provider">Provider</Label>
               <Select value={value.llmProvider} onValueChange={(v) => update({ llmProvider: v })}>
@@ -258,7 +259,7 @@ export function TopicConfigForm({ value, onChange }: TopicConfigFormProps) {
         </div>
 
         {value.enableReduction && (
-          <div className="pl-6">
+          <div className={dotControlIndentClassName}>
             <ReductionStrategyFields
               value={value.reduction}
               onChange={(reduction) => update({ reduction })}

@@ -51,6 +51,14 @@ renderers are in `experimental/`, and the density renderer has its own README.
   fails when a committed palette no longer matches its recipe.
   See `../../../documentation/CATEGORICAL_PALETTES.md`.
 
+## Plot loading
+
+- `plotlyLoader.ts`: `PlotlyLoader`, the one import of the forked Plotly bundle
+  (instance `plotlyLoader`): `preload()` starts the download when the Explore page
+  mounts, so it overlaps the manifest and data queries instead of waiting for
+  `DashboardPanel`; `load()` hands both scatter plots the same library; a failed
+  import is retried on the next call. See `../../../documentation/EXPLORE_FIRST_LOAD.md`.
+
 ## Plot memory
 
 - `stackglBufferPool.ts`: `StackglBufferPool` releases the large idle buffers from
@@ -58,6 +66,15 @@ renderers are in `experimental/`, and the density renderer has its own README.
   parks its vertex arrays after every upload and nothing else ever frees them.
   `ScatterPlot3D` calls `release()` when the point count changes and on unmount.
   See `../../../documentation/RENDER_PERFORMANCE.md`, "Typed-array pool release".
+
+## WebGL capability
+
+- `floatRenderTargets.ts`: `FloatRenderTargets`, the float render-target check
+  both density renderers share (`densityRenderer/` 2D overlay, `densityHaze/` 3D
+  haze). `enable(gl)` returns `float32` (RGBA32F that blends and filters:
+  desktop), `float16` (RGBA16F: phones, whose GPUs can't blend or filter 32-bit
+  floats) or null; `probe()` / `available()` cache the answer for this browser.
+  See `../../../documentation/DENSITY_OVERLAY_MOBILE.md`.
 
 ## Plot gestures
 
@@ -74,12 +91,14 @@ renderers are in `experimental/`, and the density renderer has its own README.
   synchronous burst (the `plotly_relayouting` events of a pinch frame) into one
   redraw, run in a microtask so it is painted in the same frame as the points.
   Used by the 2D cluster labels (`ScatterPlot2D`) and `useDensityOverlay`.
-- `zoomOpacity.ts`: `ZoomOpacity`, the 2D plot's zoom-dependent opacity. Zoomed
-  in, each trace's opacity is multiplied by `calculateMarkerStyle`'s opacity for the
-  visible share of the points over its opacity for all of them, capped at 1;
-  `traceScale` is the factor the Plotly fork's `scatterglOpacityScale`
-  config option applies before every draw. Traces marked `FIXED_META` (search glow,
-  selected point) keep theirs. See `../../../documentation/ZOOM_OPACITY.md`.
+- `zoomMarkerStyle.ts`: `ZoomMarkerStyle`, the 2D plot's zoom-dependent marker
+  size and opacity. Zoomed in, each trace's size and opacity are multiplied by
+  `calculateMarkerStyle`'s values for the visible share of the points over its
+  values for all of them (opacity capped at 1). `sizeScale` and `opacityScale` are
+  the factors the Plotly fork's `scatterglSizeScale` and `scatterglOpacityScale`
+  config options apply before every draw. Traces marked `FIXED_OPACITY_META`
+  (search glow, selected point) keep their opacity but still grow.
+  See `../../../documentation/ZOOM_MARKER_STYLE.md`.
 
 ## Screenshot export
 
@@ -115,8 +134,13 @@ their corresponding hooks.
   provider and modalities, each model once; hints (modalities, dimension, use);
   the multimodal default (`defaultFor`) and catalog modality lookups.
 - `promptPresets.ts`: `PROMPT_PRESETS`, the one prompt preset list, and
-  `PromptPresets` groups: a model's own catalog prompt names when known, else the
-  presets (embed form), or Auto plus the presets (Explore query prompt).
+  `PromptPresets.queryGroups` (Auto plus the presets) for Explore's query prompt.
+  The embed form has no prompt picker: its "Task prompt" shows only the task
+  control a model reads (`documentation/COLLECTIONS_EMBED_FORM.md`).
+- `embeddingProviders.ts`: `EMBEDDING_PROVIDERS`, per provider its default
+  model, description, whether it runs in-process (`local`), the form's batch
+  size and, for Qwen, `queryInstruction` (the query instruction the model was
+  trained with, mirrored by the backend's `embed_qwen.py`).
 - `queryPrompt.ts`: `resolveQueryPrompt` ("Auto", empty and blank send no
   prompt: the backend uses the collection's own; typed text is sent as typed,
   spaces included) and `textQueryUnavailableReason` (a collection that records
@@ -146,3 +170,10 @@ their corresponding hooks.
   `categoryKey.ts` `CategoryKey.subtopicKey` (nested colouring keys),
   `fieldAnalysis.ts` `TopicFieldOptions` (topic-field colour options after a reduction).
   See `../../../documentation/TOPIC_MERGE_TREES.md`.
+
+## Class names
+
+- `utils.ts`: `cn`, the one `clsx` + `tailwind-merge` class joiner; import it from
+  `@/lib/utils/utils`. `../utils.ts` re-exports it only because shadcn's generator
+  writes `import { cn } from "@/lib/utils"` (`components.json`); `__tests__/cn.test.ts`
+  pins that both paths resolve to the same function.

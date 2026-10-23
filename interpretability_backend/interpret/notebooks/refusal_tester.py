@@ -215,9 +215,7 @@ def main() -> None:
     wrapper = GemmaPytorchInference(cfg.model_name)
     print(f"loaded {cfg.model_name}")
 
-    direction, n_layers = load_direction(
-        cfg, args.intermediate, args.position, args.layer
-    )
+    direction, n_layers = load_direction(cfg, args.intermediate, args.position, args.layer)
 
     if args.dump_csv:
         import csv

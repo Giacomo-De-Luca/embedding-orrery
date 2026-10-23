@@ -12,13 +12,14 @@ an overlay canvas positioned over the Plotly plot area.
 |------|----------------|
 | `densityMath.ts` | Pure math (unit-tested, no GL): `Matrix3` helpers, `buildPositionMatrix` (Plotly axis ranges → clip space), `approximateMaxDensity2D` (peak density estimate, statistics.ts port), `computeViewingParams` (zoom-adaptive crossfade, `viewingParameters` port), `assignCategoryChannels` (category → RGBA channel, muted fallback), `buildColorMatrix` (gamma-linearized channel colors). |
 | `shaders.ts` | GLSL ES 3.0 sources, near-verbatim from embedding-atlas: point splat (category / plain), R20 separable gaussian blur (+ pre-baked filter constants), density-band paint, contour paint, gamma correction. |
-| `glResources.ts` | Raw-WebGL2 helpers (program/buffer/float-framebuffer), de-dataflowed from their `utils.ts`. |
+| `glResources.ts` | Raw-WebGL2 helpers (program/buffer/float-framebuffer at the detected precision), de-dataflowed from their `utils.ts`. Framebuffer formats unit-tested (`__tests__/glResources.test.ts`). |
 | `DensityRenderer.ts` | The renderer class: `setData` → `setSize` → `render(props)` per frame; `dispose()`. Lifecycle/content split mirrors `lib/utils/hazeRenderer.ts`. |
 
 ## Pipeline (per frame)
 
 1. **Splat**: every visible point drawn as a 1px `GL_POINTS` with additive
-   blending into an RGBA32F count buffer. Three modes (`assignCategoryChannels`):
+   blending into a float count buffer (RGBA32F, RGBA16F on phones; see
+   Requirements). Three modes (`assignCategoryChannels`):
    - **categorical** (≤4 active categories): category index selects one of
      the 4 one-hot channels — exact per-category density, Apple's design;
    - **meanColor** (>4 categories): each point splats its category's
@@ -68,12 +69,23 @@ multi-million-point datasets — near-invisible on 1k-150k collections.)
 
 ## Requirements
 
-WebGL2 plus three extensions, gated by `DensityRenderer.isSupported()`:
-`EXT_color_buffer_float` (render to float FBOs — load-bearing),
-`EXT_float_blend` (additive blending into RGBA32F), and
-`OES_texture_float_linear` (LINEAR sampling of float textures, used by the
-blur's fractional taps). Unsupported environments simply don't get the
-overlay; the scatter plot is unaffected.
+WebGL2 with `EXT_color_buffer_float` (render to float FBOs), gated by
+`DensityRenderer.isSupported()` through the shared
+`../floatRenderTargets.ts` probe. The buffers come in two precisions:
+
+- **float32** (RGBA32F, Apple's choice) where the GPU also offers
+  `EXT_float_blend` (additive blending into RGBA32F) and
+  `OES_texture_float_linear` (LINEAR sampling for the blur's fractional taps):
+  desktops.
+- **float16** (RGBA16F) otherwise. Core WebGL2 filters half floats and
+  `EXT_float_blend` only concerns 32-bit targets, so this runs on phones,
+  whose GPUs (every iPhone, many Android) lack one of the two extensions.
+  Exact counts stop at 2048 points per device pixel (the densest peak
+  flattens beyond that); the buffers take half the memory.
+
+Without float targets at all, the Controls checkbox is disabled, a persisted
+"on" is reset, and the main tour drops its density step; the scatter plot is
+unaffected. See `documentation/DENSITY_OVERLAY_MOBILE.md`.
 
 ## Consumers
 

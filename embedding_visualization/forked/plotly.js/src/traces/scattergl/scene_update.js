@@ -10,15 +10,21 @@ function isReady(component) {
     return component && component !== true;
 }
 
-// [fork] change 6: scale each trace's marker opacity by config.scatterglOpacityScale
-// before a draw. Always from the base opacity in markerOptions, so draws never compound.
-// The group's uniform is written directly: scatter2d.update() re-parses every option
-// alias per trace, which costs milliseconds per frame with thousands of traces.
-function applyOpacityScale(gd, scene) {
-    var scale = gd._context && gd._context.scatterglOpacityScale;
-    if(typeof scale !== 'function' || !isReady(scene.scatter2d)) return;
+// [fork] change 6: scale each trace's markers by config.scatterglOpacityScale and
+// config.scatterglSizeScale before a draw, always from the base values in markerOptions,
+// so draws never compound. The opacity uniform and a single marker size are written to
+// the group directly: scatter2d.update() re-parses every option alias per trace, which
+// costs milliseconds per frame with thousands of traces. Per-point sizes live in a GPU
+// buffer, so they go through update(), and only when their factor changes.
+function applyMarkerScale(gd, scene) {
+    var context = gd._context || {};
+    var opacityScale = typeof context.scatterglOpacityScale === 'function' ? context.scatterglOpacityScale : null;
+    var sizeScale = typeof context.scatterglSizeScale === 'function' ? context.scatterglSizeScale : null;
+    if(!(opacityScale || sizeScale) || !isReady(scene.scatter2d)) return;
 
     var groups = scene.scatter2d.groups;
+    var scaledSizes = scene.scaledSizes || (scene.scaledSizes = []);
+    var sizeUpdates = null;
     var calcdata = gd.calcdata || [];
     for(var k = 0; k < calcdata.length; k++) {
         var cd0 = calcdata[k] && calcdata[k][0];
@@ -27,12 +33,51 @@ function applyOpacityScale(gd, scene) {
 
         var i = stash.index;
         var options = scene.markerOptions[i];
-        // a trace with a selection keeps plotly's selected/unselected styling
-        if(!options || !groups[i] || scene.selectBatch[i].length || scene.unselectBatch[i].length) continue;
+        var group = groups[i];
+        if(!options || !group) continue;
+        // A trace with a selection keeps plotly's selected/unselected opacity; its
+        // selected points are drawn by select2d, so a single size is scaled there too.
+        var selected = scene.selectBatch[i].length || scene.unselectBatch[i].length;
 
         var trace = cd0.trace;
-        groups[i].opacity = options.opacity * scale(trace, trace._xA.range, trace._yA.range);
+        var xRange = trace._xA.range;
+        var yRange = trace._yA.range;
+        if(opacityScale && !selected) group.opacity = options.opacity * opacityScale(trace, xRange, yRange);
+        if(!sizeScale) continue;
+
+        var factor = sizeScale(trace, xRange, yRange);
+        if(!Lib.isArrayOrTypedArray(options.sizes)) {
+            group.size = options.size * factor;
+            var selectedGroup = selected && isReady(scene.select2d) && scene.select2d.groups[i];
+            if(selectedGroup) {
+                var selectedOptions = scene.markerSelectedOptions[i];
+                selectedGroup.size = ((selectedOptions && selectedOptions.size) || options.size) * factor;
+            }
+            continue;
+        }
+        // select2d's per-point sizes are not scaled, so a selection keeps these at the base to match
+        if(selected) factor = 1;
+        if(appliedSizeFactor(scaledSizes[i], group, options) !== factor) {
+            var sizes = factor === 1 ? options.sizes : scaleSizes(options.sizes, factor);
+            sizeUpdates = sizeUpdates || Lib.repeat(undefined, groups.length);
+            sizeUpdates[i] = {size: sizes};
+            scaledSizes[i] = {base: options.sizes, sizes: sizes, factor: factor};
+        }
     }
+    if(sizeUpdates) scene.scatter2d.update(sizeUpdates);
+}
+
+// The factor a group's per-point sizes carry: 1 while it holds the base sizes (plotly
+// resets it on every plot call), else the factor last uploaded, if those sizes are current.
+function appliedSizeFactor(scaled, group, options) {
+    if(group.size === options.sizes) return 1;
+    return scaled && scaled.sizes === group.size && scaled.base === options.sizes ? scaled.factor : NaN;
+}
+
+function scaleSizes(sizes, factor) {
+    var out = new Array(sizes.length);
+    for(var j = 0; j < sizes.length; j++) out[j] = sizes[j] * factor;
+    return out;
 }
 
 // make sure scene exists on subplot, return it
@@ -107,7 +152,7 @@ module.exports = function sceneUpdate(gd, subplot) {
             var selectBatch = scene.selectBatch;
             var unselectBatch = scene.unselectBatch;
 
-            applyOpacityScale(gd, scene);
+            applyMarkerScale(gd, scene);
 
             for(var i = 0; i < count; i++) {
                 if(isReady(fill2d) && scene.fillOrder[i]) {

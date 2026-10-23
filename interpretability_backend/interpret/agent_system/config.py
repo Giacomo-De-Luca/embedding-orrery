@@ -56,9 +56,8 @@ def find_task_config(task_name):
         if candidate.exists():
             return candidate
     searched = ", ".join(str(d) for d in _tasks_search_dirs())
-    raise FileNotFoundError(
-        f"Task config not found: {task_name}.json (searched: {searched})"
-    )
+    raise FileNotFoundError(f"Task config not found: {task_name}.json (searched: {searched})")
+
 
 REQUIRED_FIELDS = {"task_name", "agent", "input_folder", "jobs_folder"}
 DEFAULTS = {

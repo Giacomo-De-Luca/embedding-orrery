@@ -90,6 +90,4 @@ def _bypass_ops(
         return _ablation_ops(direction, n_layers)
     if bypass_mode == "actadd":
         return [_additive_op(direction, source_layer, coeff=actadd_coeff)]
-    raise ValueError(
-        f"Unknown bypass_mode: {bypass_mode!r}. Valid: 'ablation', 'actadd'."
-    )
+    raise ValueError(f"Unknown bypass_mode: {bypass_mode!r}. Valid: 'ablation', 'actadd'.")

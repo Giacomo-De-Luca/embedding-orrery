@@ -75,17 +75,23 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 
 **Tests:** `forked/__tests__/plotlyEntry.test.ts`.
 
-### 6. scattergl: per-trace opacity scale before every draw
+### 6. scattergl: per-trace opacity and size scale before every draw
 
 **Files:** `src/plot_api/plot_config.js`, `src/traces/scattergl/scene_update.js`
 
-**Problem:** the 2D plot should grow more opaque as you zoom in. For scattergl, `marker.opacity` is a `calc` attribute, so changing it through `Plotly.react` or `restyle` recalculates every trace on every wheel tick.
+**Problem:** the 2D plot should grow larger and more opaque as you zoom in. For scattergl, `marker.size` and `marker.opacity` are `calc` attributes, so changing them through `Plotly.react` or `restyle` recalculates every trace on every wheel tick.
 
-**Fix:** a new config option, `scatterglOpacityScale(fullTrace, xRange, yRange) → factor` (`valType: 'any'`, default `null`, like `setBackground`). `scene.draw` starts with `applyOpacityScale`, which sets each marker trace's regl-scatter2d group opacity to its base opacity (`scene.markerOptions[i].opacity`) × the factor. It always starts from the base, so draws never compound, and Plotly's own `scatter2d.update(scene.markerOptions)` on each plot call outside select mode keeps resetting it. The uniform is written to `group.opacity` directly: `scatter2d.update()` re-parses every option alias per trace, which costs milliseconds per frame with thousands of traces. Traces with a selection (`selectBatch` / `unselectBatch`) are skipped, so they keep Plotly's selected/unselected styling at the unscaled opacity (selected points are drawn by `select2d`, which the patch doesn't touch). Every redraw passes through `scene.draw` (drag and wheel frames, relayouts, `Plotly.react`), so the opacity follows the ranges in the same frame. `toImage` copies `gd._context` into its clone's config, so exported images are scaled too.
+**Fix:** two new config options, `scatterglOpacityScale` and `scatterglSizeScale`, each `(fullTrace, xRange, yRange) → factor` (`valType: 'any'`, default `null`, like `setBackground`). `scene.draw` starts with `applyMarkerScale`, which multiplies each marker trace's base values in `scene.markerOptions[i]` by the factors. It always starts from the base, so draws never compound, and Plotly's own `scatter2d.update(scene.markerOptions)` on each plot call outside select mode keeps resetting the groups.
 
-**Contract:** regl-scatter2d reads `opacity` from the group at draw time (`opacity: regl.prop('opacity')`). The app's rule is `lib/utils/zoomOpacity.ts`. Details: `documentation/ZOOM_OPACITY.md`.
+- The opacity uniform and a single marker size (`options.size`, drawn as a constant attribute) are written to `group.opacity` / `group.size` directly: `scatter2d.update()` re-parses every option alias per trace, which costs milliseconds per frame with thousands of traces.
+- Per-point sizes (`options.sizes`) live in a GPU buffer, so they go through one `scatter2d.update()` call per draw (`undefined` for every other group), only for groups whose factor changed. `scene.scaledSizes[i]` remembers the uploaded array with its base array and factor; a group holding its base array counts as factor 1, and at factor 1 the base array itself is uploaded. Marker line widths are not scaled.
+- Traces with a selection (`selectBatch` / `unselectBatch`) keep Plotly's selected/unselected opacity. Their selected points are drawn by `select2d`, so a single size is also written to `scene.select2d.groups[i].size` (base: `markerSelectedOptions[i].size`, else the trace's size). `select2d`'s per-point sizes are not scaled, so per-point sizes of a selected trace go back to factor 1 to match.
 
-**Tests:** `forked/__tests__/scatterglOpacityScale.test.ts`.
+Every redraw passes through `scene.draw` (drag and wheel frames, relayouts, `Plotly.react`), so the style follows the ranges in the same frame. `toImage` copies `gd._context` into its clone's config, so exported images are scaled too.
+
+**Contract:** regl-scatter2d reads `opacity` (`opacity: regl.prop('opacity')`) and a single `size` (`constant: [Math.round(prop.size * 255 / _this.maxSize)]`) from the group at draw time, and its `update()` leaves a group alone when its options entry is `undefined`. Per-point sizes are stored as Uint8 fractions of regl-scatter2d's `maxSize` (100 px), so larger ones wrap (single sizes go through a float constant and can't). The app gives every trace a single size (the search glow included), so it never reaches that path. The app's rule is `lib/utils/zoomMarkerStyle.ts`. Details: `documentation/ZOOM_MARKER_STYLE.md`.
+
+**Tests:** `forked/__tests__/scatterglMarkerScale.test.ts`.
 
 ---
 
@@ -98,6 +104,18 @@ If both hold, skip the update and just refresh the data pointer for hover lookup
 **Change:** `require("plotly.js/dist/plotly")` → `require("plotly.js")`
 
 **Reason:** The original entry point hardcodes the pre-built `dist/plotly.js` bundle (11 MB), which is a standalone IIFE that bypasses the source tree entirely — meaning none of the patches above would take effect for the 2D Plot component. By importing `plotly.js` (which resolves to `lib/index.js` → `src/`), both 2D and 3D components use the same patched source build. This also allowed us to drop the entire `dist/` directory (90 MB) from the fork.
+
+### 2. Re-sync event handlers after every update
+
+**File:** `factory.js` (`componentDidUpdate`)
+
+**Problem:** upstream re-syncs the Plotly event handlers (`onClick`, `onHover`, `onRelayout`, …) only after a `Plotly.react`, which runs only when `data`, `layout`, `config`, `revision` or the frame count change. A handler whose closure changed for any other reason stayed bound to its old copy. In `ScatterPlot2D`, the tooltip kept showing the old Tooltip Fields, a point click searched with the old distance metric and filters, and `onClick`, passed only once the plot reports it is ready, could stay unbound until some later figure change.
+
+**Fix:** when the figure is unchanged, `componentDidUpdate` chains `syncEventHandlers()` on `this.p`, skipped if the component is unmounting or the graph div has no `on` (Plotly installs it on the first plot and `purge` removes it); errors go to `onError`. Chaining on `this.p` also orders the sync after any `Plotly.react` still pending. Handlers are compared by identity, so `ScatterPlot2D` memoizes them with `useCallback` (the React Compiler skips that component) to keep rebinding rare. `onUpdate`, `onInitialized` and `onPurge` were never affected: they are read from props when called.
+
+`factory.js.map` still describes the upstream source.
+
+**Tests:** `forked/__tests__/reactPlotlyHandlers.test.ts`.
 
 ---
 

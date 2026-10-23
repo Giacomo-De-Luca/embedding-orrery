@@ -69,8 +69,8 @@ class DenseFeatureExtractor:
         self.linspace_dir.mkdir(parents=True, exist_ok=True)
 
         src = self._resolve_activations_dir()
-        self.matrix: np.ndarray = (
-            DenseActivationStore.load_matrix(src).astype(np.float32, copy=False)
+        self.matrix: np.ndarray = DenseActivationStore.load_matrix(src).astype(
+            np.float32, copy=False
         )
         self.index: pd.DataFrame = DenseActivationStore.load_index(src)
         self.n_rows, self.n_dims = self.matrix.shape
@@ -131,7 +131,11 @@ class DenseFeatureExtractor:
     # ── Sample extraction ────────────────────────────────────────────────
 
     def _one_sided_topk(
-        self, rows: np.ndarray, values: np.ndarray, k: int, pole: str | None = None,
+        self,
+        rows: np.ndarray,
+        values: np.ndarray,
+        k: int,
+        pole: str | None = None,
     ) -> list[dict]:
         """Top-k by descending value (most-activating). Optional ``pole`` tag."""
         if len(values) == 0:
@@ -198,7 +202,7 @@ class DenseFeatureExtractor:
             excl = np.empty(0, dtype=np.int64)
 
         if len(values) >= n:
-            order = np.argsort(values)          # ascending (signed-aware)
+            order = np.argsort(values)  # ascending (signed-aware)
             pick = np.linspace(0, len(order) - 1, n).astype(int)
             chosen_local = order[pick]
             chosen_rows = rows[chosen_local]
@@ -230,8 +234,7 @@ class DenseFeatureExtractor:
         samples = []
         for sample_id, row_idx in enumerate(chosen_rows):
             samples.append(
-                {"sample_id": sample_id, "row_idx": int(row_idx),
-                 **self._row_meta(int(row_idx))},
+                {"sample_id": sample_id, "row_idx": int(row_idx), **self._row_meta(int(row_idx))},
             )
         return samples, [float(v) for v in chosen_vals], padded
 
@@ -243,9 +246,7 @@ class DenseFeatureExtractor:
             return {
                 "source": "residual",
                 "model_name": self.collect_cfg.resolve_base_model().checkpoint,
-                "layer": (
-                    -1 if site.intermediate == "final_norm" else site.layer_index
-                ),
+                "layer": (-1 if site.intermediate == "final_norm" else site.layer_index),
                 "intermediate": site.intermediate,
                 "aggregation": self.collect_cfg.aggregation,
                 "n_dims": int(self.n_dims),
@@ -276,9 +277,7 @@ class DenseFeatureExtractor:
             json.dumps(
                 {
                     **base,
-                    "max_activation_in_set": (
-                        float(max(lin_truth)) if lin_truth else 0.0
-                    ),
+                    "max_activation_in_set": (float(max(lin_truth)) if lin_truth else 0.0),
                     "padded_with_zeros": padded,
                     "samples": lin_samples,
                     "_true_activations": lin_truth,
@@ -298,7 +297,10 @@ class DenseFeatureExtractor:
         # Hold the label's source samples out of the eval set (non-circular).
         exclude = {s["row_idx"] for s in top_samples}
         lin_samples, lin_truth, padded = self._linspace_samples(
-            all_rows, col, dim, exclude,
+            all_rows,
+            col,
+            dim,
+            exclude,
         )
         base_extra = {
             "variance": float(stats_row["variance"]),
@@ -324,7 +326,10 @@ class DenseFeatureExtractor:
             # Hold the label's source samples out of the eval set (non-circular).
             exclude = {s["row_idx"] for s in top_samples}
             lin_samples, lin_truth, padded = self._linspace_samples(
-                rows, values, feature_idx, exclude,
+                rows,
+                values,
+                feature_idx,
+                exclude,
             )
             base_extra = {
                 "dim": int(dim),
@@ -334,7 +339,12 @@ class DenseFeatureExtractor:
                 "mean_nonzero_activation": mean_nonzero,
             }
             self._write_feature(
-                feature_idx, base_extra, top_samples, lin_samples, lin_truth, padded,
+                feature_idx,
+                base_extra,
+                top_samples,
+                lin_samples,
+                lin_truth,
+                padded,
             )
 
     # ── Run ─────────────────────────────────────────────────────────────

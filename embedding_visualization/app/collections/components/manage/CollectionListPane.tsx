@@ -8,7 +8,7 @@ import { Button } from '@/lib/ui-primitives/button';
 import { Spinner } from '@/lib/ui-primitives/spinner';
 import { ScrollArea } from '@/lib/ui-primitives/scroll-area';
 import { RefreshCw, Search, Tags } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/utils/utils';
 import type { CollectionInfo } from '../CollectionManagerTab';
 import { filterCollections, providerShortLabel, formatItemCount } from '../../lib/collectionFilter';
 

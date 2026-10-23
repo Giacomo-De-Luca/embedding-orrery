@@ -9,6 +9,7 @@ because encoding into an ``Audio()`` feature would import torchcodec.
 """
 
 import io
+import random
 from types import SimpleNamespace
 
 import datasets
@@ -89,6 +90,38 @@ class TestLoading:
         assert preview.error is None
         assert preview.rows[0]["image"] == "cat.png"
         assert preview.rows[0]["speech"] == "a.wav"
+
+
+class TestRandomSample:
+    @pytest.fixture(autouse=True)
+    def fake_hub(self, monkeypatch):
+        captions = [f"row {i}" for i in range(20)]
+        monkeypatch.setattr(
+            datasets,
+            "load_dataset",
+            lambda dataset_id, name=None, split=None, streaming=False: datasets.Dataset.from_dict(
+                {"caption": captions}
+            ),
+        )
+
+    def _sample(self, seed):
+        portion = huggingface_client.PortionConfig(
+            huggingface_client.PortionStrategy.RANDOM_SAMPLE, n=5, seed=seed
+        )
+        rows, total = huggingface_client.load_dataset_portion("org/rows", portion=portion)
+        assert total == 20
+        return [row["caption"] for row in rows]
+
+    def test_same_seed_same_rows_as_before(self):
+        """The rows a seed picked before the change, so re-runs embed the same portion."""
+        expected = [f"row {i}" for i in (10, 4, 12, 1, 2)]  # what random.seed(7) picked
+        assert self._sample(7) == expected == self._sample(7)
+
+    def test_the_global_random_state_is_left_alone(self):
+        random.seed(123)
+        before = random.getstate()
+        self._sample(7)
+        assert random.getstate() == before
 
 
 class TestMediaColumnKinds:

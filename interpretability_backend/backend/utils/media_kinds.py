@@ -189,6 +189,16 @@ class MediaReference:
         return cls.of(value) or cls.placeholder(value, kind)
 
     @classmethod
+    def for_metadata(cls, value: object, detector: "MediaKindDetector | None" = None) -> str | None:
+        """What metadata stores for a media cell (recognisable media, or bytes of
+        any kind), or None for any other value. The local loader keeps such
+        cells as read, and ``extract_metadata`` stores this instead of them."""
+        kind = (detector or _DEFAULT_DETECTOR).kind_of(value)
+        if kind is None and not cls.holds_bytes(value):
+            return None
+        return cls.describe(value, kind)
+
+    @classmethod
     def label(cls, value: object, kind: MediaKind) -> str:
         """A document label for a media-only row: ``image: cat.jpg``, or just the kind."""
         reference = cls.of(value)
@@ -203,3 +213,7 @@ class MediaReference:
         if n_bytes < 1024 * 1024:
             return f"{n_bytes / 1024:.0f} KB"
         return f"{n_bytes / (1024 * 1024):.1f} MB"
+
+
+# Detects with the default extensions (MediaReference.for_metadata)
+_DEFAULT_DETECTOR = MediaKindDetector()

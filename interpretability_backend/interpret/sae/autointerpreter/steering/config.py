@@ -62,9 +62,7 @@ class SteeringDirectionSpec:
     """
 
     kind: DirectionKind = "w_dec_parquet"
-    w_dec_parquet_path: str | None = (
-        "resources/sae_vectors/w_dec_layer9_resid_post_w16384.parquet"
-    )
+    w_dec_parquet_path: str | None = "resources/sae_vectors/w_dec_layer9_resid_post_w16384.parquet"
 
 
 @dataclass
@@ -197,15 +195,10 @@ class SteeringInterpretConfig:
                 indices = [int(i) for i in sel.feature_indices]
         else:
             if not sel.feature_indices:
-                raise ValueError(
-                    "features needs either `feature_indices` or `from_scores_parquet`"
-                )
+                raise ValueError("features needs either `feature_indices` or `from_scores_parquet`")
             indices = [int(i) for i in sel.feature_indices]
 
-        return [
-            {"feature_index": i, "activation_label": label_lookup.get(i)}
-            for i in indices
-        ]
+        return [{"feature_index": i, "activation_label": label_lookup.get(i)} for i in indices]
 
     def _resolve_random_features(self) -> list[dict]:
         """Seeded-random features from the decoder parquet within a density band.
@@ -234,10 +227,7 @@ class SteeringInterpretConfig:
             mask &= density <= sel.density_max
         pool = df[mask]
         if pool.empty:
-            raise ValueError(
-                f"no features in density band "
-                f"[{sel.density_min}, {sel.density_max}]"
-            )
+            raise ValueError(f"no features in density band [{sel.density_min}, {sel.density_max}]")
         n = min(sel.random_sample, len(pool))
         rng = np.random.default_rng(sel.random_seed)
         picks = np.sort(rng.choice(len(pool), size=n, replace=False))
@@ -265,6 +255,7 @@ def _to_float(value) -> float | None:
 
 
 # ── Loader ─────────────────────────────────────────────────────────────────
+
 
 def _validate(cfg: SteeringInterpretConfig) -> None:
     g = cfg.generation

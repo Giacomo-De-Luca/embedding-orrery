@@ -255,12 +255,8 @@ class TestDocActivationsFeatureIndicesSearch:
     @pytest.fixture(autouse=True)
     def _setup(self, db: DuckDBClient):
         _seed_dataset_and_collection(db, n_items=3)
-        db.insert_document_activations_batch(
-            COLLECTION, "item_0", [(0, 5.0), (1, 3.0)]
-        )
-        db.insert_document_activations_batch(
-            COLLECTION, "item_1", [(0, 1.0), (2, 8.0)]
-        )
+        db.insert_document_activations_batch(COLLECTION, "item_0", [(0, 5.0), (1, 3.0)])
+        db.insert_document_activations_batch(COLLECTION, "item_1", [(0, 1.0), (2, 8.0)])
         db.insert_document_activations_batch(COLLECTION, "item_2", [(2, 4.0)])
 
     def test_single_feature(self, db: DuckDBClient):
@@ -273,9 +269,9 @@ class TestDocActivationsFeatureIndicesSearch:
 
     def test_multiple_features(self, db: DuckDBClient):
         # MAX ranking: item_1 has MAX(1.0, 8.0)=8.0, item_0 has MAX(5.0)=5.0
-        results = db.search_documents_by_feature_indices(
-            COLLECTION, [0, 2], ranking="max"
-        )["results"]
+        results = db.search_documents_by_feature_indices(COLLECTION, [0, 2], ranking="max")[
+            "results"
+        ]
         assert results[0]["item_id"] == "item_1"
         assert results[0]["score"] == pytest.approx(8.0)
         assert results[0]["matching_features"] == 2
@@ -298,9 +294,7 @@ class TestDocActivationsFeatureIndicesSearch:
         assert res["total_matches"] == 3
 
     def test_enriches_document(self, db: DuckDBClient):
-        results = db.search_documents_by_feature_indices(COLLECTION, [0], limit=1)[
-            "results"
-        ]
+        results = db.search_documents_by_feature_indices(COLLECTION, [0], limit=1)["results"]
         assert results[0]["document"] is not None
         assert "Document number 0" in results[0]["document"]
 
@@ -316,40 +310,38 @@ class TestDocActivationsRankingModes:
     @pytest.fixture(autouse=True)
     def _setup(self, db: DuckDBClient):
         _seed_dataset_and_collection(db, n_items=3)
-        db.insert_document_activations_batch(
-            COLLECTION, "item_0", [(0, 10.0), (1, 500.0)]
-        )
+        db.insert_document_activations_batch(COLLECTION, "item_0", [(0, 10.0), (1, 500.0)])
         db.insert_document_activations_batch(COLLECTION, "item_1", [(1, 1000.0)])
         db.insert_document_activations_batch(COLLECTION, "item_2", [(0, 8.0)])
 
     def test_max_lets_strong_feature_dominate(self, db: DuckDBClient):
-        results = db.search_documents_by_feature_indices(
-            COLLECTION, [0, 1], ranking="max"
-        )["results"]
+        results = db.search_documents_by_feature_indices(COLLECTION, [0, 1], ranking="max")[
+            "results"
+        ]
         assert [r["item_id"] for r in results] == ["item_1", "item_0", "item_2"]
         assert results[0]["score"] == pytest.approx(1000.0)
 
     def test_sum_is_raw_sum(self, db: DuckDBClient):
-        results = db.search_documents_by_feature_indices(
-            COLLECTION, [0, 1], ranking="sum"
-        )["results"]
+        results = db.search_documents_by_feature_indices(COLLECTION, [0, 1], ranking="sum")[
+            "results"
+        ]
         assert [r["item_id"] for r in results] == ["item_1", "item_0", "item_2"]
         assert results[1]["score"] == pytest.approx(510.0)
 
     def test_scaled_sum_rewards_multi_feature_match(self, db: DuckDBClient):
         # item_0: 10/10 + 500/1000 = 1.5 beats item_1: 1000/1000 = 1.0
-        results = db.search_documents_by_feature_indices(
-            COLLECTION, [0, 1], ranking="scaled_sum"
-        )["results"]
+        results = db.search_documents_by_feature_indices(COLLECTION, [0, 1], ranking="scaled_sum")[
+            "results"
+        ]
         assert [r["item_id"] for r in results] == ["item_0", "item_1", "item_2"]
         assert results[0]["score"] == pytest.approx(1.5)
         assert results[1]["score"] == pytest.approx(1.0)
         assert results[2]["score"] == pytest.approx(0.8)
 
     def test_scaled_sum_is_default(self, db: DuckDBClient):
-        explicit = db.search_documents_by_feature_indices(
-            COLLECTION, [0, 1], ranking="scaled_sum"
-        )["results"]
+        explicit = db.search_documents_by_feature_indices(COLLECTION, [0, 1], ranking="scaled_sum")[
+            "results"
+        ]
         default = db.search_documents_by_feature_indices(COLLECTION, [0, 1])["results"]
         assert [r["item_id"] for r in default] == [r["item_id"] for r in explicit]
         assert default[0]["score"] == pytest.approx(explicit[0]["score"])
@@ -366,9 +358,7 @@ class TestDocActivationsRankingModes:
 
     def test_invalid_mode_raises(self, db: DuckDBClient):
         with pytest.raises(ValueError, match="ranking mode"):
-            db.search_documents_by_feature_indices(
-                COLLECTION, [0, 1], ranking="bogus"
-            )
+            db.search_documents_by_feature_indices(COLLECTION, [0, 1], ranking="bogus")
 
 
 # ------------------------------------------------------------------

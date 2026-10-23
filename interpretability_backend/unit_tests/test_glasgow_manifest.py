@@ -21,8 +21,15 @@ CONCRETENESS_TSV = PSYCO / "concreteness.tsv"
 EXPERIMENT_YAML = BACKEND / "experiments" / "glasgow_psycholinguistic" / "experiment.yaml"
 
 GLASGOW_TARGETS = [
-    "concreteness", "imageability", "valence", "arousal", "dominance",
-    "familiarity", "aoa", "semsize", "gender",
+    "concreteness",
+    "imageability",
+    "valence",
+    "arousal",
+    "dominance",
+    "familiarity",
+    "aoa",
+    "semsize",
+    "gender",
 ]
 
 pytestmark = pytest.mark.skipif(

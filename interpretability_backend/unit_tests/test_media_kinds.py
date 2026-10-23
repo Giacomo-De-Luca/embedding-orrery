@@ -195,6 +195,16 @@ class TestDescribe:
         )
         assert MediaReference.describe(PNG, MediaKind.IMAGE) == "[image 24 B]"
 
+    def test_for_metadata_covers_every_media_cell(self):
+        assert MediaReference.for_metadata({"bytes": None, "path": "a/cat.png"}) == "a/cat.png"
+        assert MediaReference.for_metadata(PNG) == "[image 24 B]"
+        assert MediaReference.for_metadata(b"\x00\x01") == "[binary 2 B]"
+        assert MediaReference.for_metadata(FakePilImage()) == "[image 640x480]"
+
+    def test_for_metadata_leaves_other_values(self):
+        for value in ({"lang": "en"}, {"path": "notes.txt"}, 3, [1, 2], np.zeros(3)):
+            assert MediaReference.for_metadata(value) is None
+
     def test_unrecognised_bytes_are_binary(self):
         assert MediaReference.describe(b"\x00" * 2048, None) == "[binary 2 KB]"
         assert MediaReference.describe({"bytes": b"\x01\x02", "path": None}, None) == "[binary 2 B]"

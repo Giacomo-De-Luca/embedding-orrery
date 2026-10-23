@@ -56,6 +56,7 @@ from tqdm import tqdm
 @dataclass
 class SynsetRelation:
     """Represents a relationship between synsets."""
+
     relation_type: str
     target_synset_id: str
 
@@ -63,6 +64,7 @@ class SynsetRelation:
 @dataclass
 class Synset:
     """Represents a synset (synonym set) with its definition and examples."""
+
     id: str
     definition: str
     part_of_speech: str
@@ -74,6 +76,7 @@ class Synset:
 @dataclass
 class Sense:
     """Represents a sense (meaning) of a word."""
+
     synset_id: str
     definition: str
     part_of_speech: str
@@ -83,6 +86,7 @@ class Sense:
 @dataclass
 class Word:
     """Represents a word with all its senses/meanings."""
+
     word: str
     part_of_speech: str
     senses: list[Sense] = field(default_factory=list)
@@ -91,7 +95,11 @@ class Word:
 class WordNetParser:
     """Parser for English WordNet XML files."""
 
-    def __init__(self, xml_file_path: str = "resources/english-wordnet-2024.xml", cache_dir: str | None = None):
+    def __init__(
+        self,
+        xml_file_path: str = "resources/english-wordnet-2024.xml",
+        cache_dir: str | None = None,
+    ):
         """
         Initialize the parser with the path to the WordNet XML file.
 
@@ -148,17 +156,20 @@ class WordNetParser:
                         "Accept": "application/xml,text/xml,*/*",
                     },
                 )
-                with urllib.request.urlopen(request, timeout=60) as response, open(output_path, 'wb') as output_file:
-                    total_size = int(response.headers.get('Content-Length', 0))
+                with (
+                    urllib.request.urlopen(request, timeout=60) as response,
+                    open(output_path, "wb") as output_file,
+                ):
+                    total_size = int(response.headers.get("Content-Length", 0))
                     chunk_size = 1024 * 1024
-                    is_gzip = url.endswith('.gz')
+                    is_gzip = url.endswith(".gz")
 
                     with tqdm(
                         total=total_size if total_size > 0 else None,
-                        unit='B',
+                        unit="B",
                         unit_scale=True,
                         unit_divisor=1024,
-                        desc='english-wordnet-2024.xml',
+                        desc="english-wordnet-2024.xml",
                     ) as progress_bar:
                         if is_gzip:
                             with gzip.GzipFile(fileobj=response) as gz:
@@ -186,7 +197,9 @@ class WordNetParser:
 
                 if attempt < retries:
                     wait_seconds = 2 ** (attempt - 1)
-                    print(f"Download failed (attempt {attempt}/{retries}): {error}. Retrying in {wait_seconds}s...")
+                    print(
+                        f"Download failed (attempt {attempt}/{retries}): {error}. Retrying in {wait_seconds}s..."
+                    )
                     time.sleep(wait_seconds)
                 else:
                     break
@@ -202,19 +215,23 @@ class WordNetParser:
         """
         if os.path.exists(self._pickle_path):
             # Check if pickle is newer than XML file
-            xml_mtime = os.path.getmtime(self.xml_file_path) if os.path.exists(self.xml_file_path) else 0
+            xml_mtime = (
+                os.path.getmtime(self.xml_file_path) if os.path.exists(self.xml_file_path) else 0
+            )
             pickle_mtime = os.path.getmtime(self._pickle_path)
 
             if pickle_mtime >= xml_mtime:
                 try:
                     print(f"Loading WordNet from cache: {self._pickle_path}")
-                    with open(self._pickle_path, 'rb') as f:
+                    with open(self._pickle_path, "rb") as f:
                         data = pickle.load(f)
-                    self.synsets = data['synsets']
-                    self.words = data['words']
-                    self.synset_to_words = data['synset_to_words']
+                    self.synsets = data["synsets"]
+                    self.words = data["words"]
+                    self.synset_to_words = data["synset_to_words"]
                     self._parsed = True
-                    print(f"Loaded {len(self.words):,} words and {len(self.synsets):,} synsets from cache.")
+                    print(
+                        f"Loaded {len(self.words):,} words and {len(self.synsets):,} synsets from cache."
+                    )
                     return True
                 except Exception as e:
                     print(f"Failed to load pickle cache: {e}")
@@ -228,11 +245,11 @@ class WordNetParser:
         try:
             print(f"Saving WordNet to cache: {self._pickle_path}")
             data = {
-                'synsets': self.synsets,
-                'words': self.words,
-                'synset_to_words': self.synset_to_words
+                "synsets": self.synsets,
+                "words": self.words,
+                "synset_to_words": self.synset_to_words,
             }
-            with open(self._pickle_path, 'wb') as f:
+            with open(self._pickle_path, "wb") as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
             print("Cache saved successfully.")
         except Exception as e:
@@ -247,44 +264,43 @@ class WordNetParser:
         print("Step 1: Parsing synsets...")
 
         # First pass: collect all synsets
-        context = ET.iterparse(self.xml_file_path, events=('start', 'end'))
+        context = ET.iterparse(self.xml_file_path, events=("start", "end"))
         context = iter(context)
 
         synset_count = 0
         for event, elem in context:
-            if event == 'end' and elem.tag == 'Synset':
-                synset_id = elem.get('id')
-                pos = elem.get('partOfSpeech', '')
+            if event == "end" and elem.tag == "Synset":
+                synset_id = elem.get("id")
+                pos = elem.get("partOfSpeech", "")
 
                 # Get definition
-                definition_elem = elem.find('Definition')
-                definition = definition_elem.text if definition_elem is not None else ''
+                definition_elem = elem.find("Definition")
+                definition = definition_elem.text if definition_elem is not None else ""
 
                 # Get examples
-                examples = [ex.text for ex in elem.findall('Example') if ex.text]
+                examples = [ex.text for ex in elem.findall("Example") if ex.text]
 
                 # Get members
-                members_attr = elem.get('members', '')
+                members_attr = elem.get("members", "")
                 members = members_attr.split() if members_attr else []
 
                 # Get synset relations
                 relations = []
-                for rel_elem in elem.findall('SynsetRelation'):
-                    rel_type = rel_elem.get('relType', '')
-                    target = rel_elem.get('target', '')
+                for rel_elem in elem.findall("SynsetRelation"):
+                    rel_type = rel_elem.get("relType", "")
+                    target = rel_elem.get("target", "")
                     if rel_type and target:
-                        relations.append(SynsetRelation(
-                            relation_type=rel_type,
-                            target_synset_id=target
-                        ))
+                        relations.append(
+                            SynsetRelation(relation_type=rel_type, target_synset_id=target)
+                        )
                 ## TODO check types, at the moment is on ignore as it's working and it's not critica
-                self.synsets[synset_id] = Synset( # type: ignore
-                    id=synset_id, # type: ignore
-                    definition=definition, # type: ignore
+                self.synsets[synset_id] = Synset(  # type: ignore
+                    id=synset_id,  # type: ignore
+                    definition=definition,  # type: ignore
                     part_of_speech=pos,
                     examples=examples,
                     members=members,
-                    relations=relations
+                    relations=relations,
                 )
 
                 synset_count += 1
@@ -298,30 +314,32 @@ class WordNetParser:
         print("\nStep 2: Parsing lexical entries...")
 
         # Second pass: collect all lexical entries
-        context = ET.iterparse(self.xml_file_path, events=('start', 'end'))
+        context = ET.iterparse(self.xml_file_path, events=("start", "end"))
         context = iter(context)
 
         entry_count = 0
         for event, elem in context:
-            if event == 'end' and elem.tag == 'LexicalEntry':
+            if event == "end" and elem.tag == "LexicalEntry":
                 # Get the lemma (word form)
-                lemma_elem = elem.find('Lemma')
+                lemma_elem = elem.find("Lemma")
                 if lemma_elem is not None:
-                    word_form = lemma_elem.get('writtenForm', '')
-                    pos = lemma_elem.get('partOfSpeech', '')
+                    word_form = lemma_elem.get("writtenForm", "")
+                    pos = lemma_elem.get("partOfSpeech", "")
 
                     # Get all senses
                     senses = []
-                    for sense_elem in elem.findall('Sense'):
-                        synset_id = sense_elem.get('synset')
+                    for sense_elem in elem.findall("Sense"):
+                        synset_id = sense_elem.get("synset")
                         if synset_id and synset_id in self.synsets:
                             synset = self.synsets[synset_id]
-                            senses.append(Sense(
-                                synset_id=synset_id,
-                                definition=synset.definition,
-                                part_of_speech=synset.part_of_speech,
-                                examples=synset.examples
-                            ))
+                            senses.append(
+                                Sense(
+                                    synset_id=synset_id,
+                                    definition=synset.definition,
+                                    part_of_speech=synset.part_of_speech,
+                                    examples=synset.examples,
+                                )
+                            )
 
                             # Map synset to word for synonym lookups
                             if synset_id not in self.synset_to_words:
@@ -330,11 +348,7 @@ class WordNetParser:
                                 self.synset_to_words[synset_id].append(word_form)
 
                     # Create Word object
-                    word_obj = Word(
-                        word=word_form,
-                        part_of_speech=pos,
-                        senses=senses
-                    )
+                    word_obj = Word(word=word_form, part_of_speech=pos, senses=senses)
 
                     # Store in dictionary (a word can have multiple entries for different POS)
                     if word_form not in self.words:
@@ -380,7 +394,7 @@ class WordNetParser:
             self.parse()
         return self.words.get(word)
 
-    def get_definitions(self, word: str) -> list[dict[str, any]]: #type: ignore
+    def get_definitions(self, word: str) -> list[dict[str, any]]:  # type: ignore
         """
         Get all definitions for a word in a simple format.
 
@@ -400,12 +414,14 @@ class WordNetParser:
         definitions = []
         for word_entry in word_entries:
             for i, sense in enumerate(word_entry.senses, 1):
-                definitions.append({
-                    'sense_number': i,
-                    'part_of_speech': sense.part_of_speech,
-                    'definition': sense.definition,
-                    'examples': sense.examples
-                })
+                definitions.append(
+                    {
+                        "sense_number": i,
+                        "part_of_speech": sense.part_of_speech,
+                        "definition": sense.definition,
+                        "examples": sense.examples,
+                    }
+                )
 
         return definitions
 
@@ -437,9 +453,9 @@ class WordNetParser:
         total_senses = sum(len(word.senses) for words in self.words.values() for word in words)
 
         return {
-            'total_words': len(self.words),
-            'total_synsets': len(self.synsets),
-            'total_senses': total_senses
+            "total_words": len(self.words),
+            "total_synsets": len(self.synsets),
+            "total_senses": total_senses,
         }
 
     # ========== Synset-related methods ==========
@@ -576,7 +592,7 @@ class WordNetParser:
         Returns:
             List of hypernym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'hypernym')
+        return self.get_related_synsets(synset_id, "hypernym")
 
     def get_hyponyms(self, synset_id: str) -> list[Synset]:
         """
@@ -589,7 +605,7 @@ class WordNetParser:
         Returns:
             List of hyponym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'hyponym')
+        return self.get_related_synsets(synset_id, "hyponym")
 
     def get_instance_hypernyms(self, synset_id: str) -> list[Synset]:
         """
@@ -602,7 +618,7 @@ class WordNetParser:
         Returns:
             List of instance hypernym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'instance_hypernym')
+        return self.get_related_synsets(synset_id, "instance_hypernym")
 
     def get_instance_hyponyms(self, synset_id: str) -> list[Synset]:
         """
@@ -615,7 +631,7 @@ class WordNetParser:
         Returns:
             List of instance hyponym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'instance_hyponym')
+        return self.get_related_synsets(synset_id, "instance_hyponym")
 
     # ========== Meronyms (part-of relationships) ==========
 
@@ -630,7 +646,7 @@ class WordNetParser:
         Returns:
             List of member meronym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'mero_member')
+        return self.get_related_synsets(synset_id, "mero_member")
 
     def get_part_meronyms(self, synset_id: str) -> list[Synset]:
         """
@@ -643,7 +659,7 @@ class WordNetParser:
         Returns:
             List of part meronym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'mero_part')
+        return self.get_related_synsets(synset_id, "mero_part")
 
     def get_substance_meronyms(self, synset_id: str) -> list[Synset]:
         """
@@ -656,7 +672,7 @@ class WordNetParser:
         Returns:
             List of substance meronym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'mero_substance')
+        return self.get_related_synsets(synset_id, "mero_substance")
 
     # ========== Holonyms (whole-of relationships) ==========
 
@@ -671,7 +687,7 @@ class WordNetParser:
         Returns:
             List of member holonym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'holo_member')
+        return self.get_related_synsets(synset_id, "holo_member")
 
     def get_part_holonyms(self, synset_id: str) -> list[Synset]:
         """
@@ -684,7 +700,7 @@ class WordNetParser:
         Returns:
             List of part holonym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'holo_part')
+        return self.get_related_synsets(synset_id, "holo_part")
 
     def get_substance_holonyms(self, synset_id: str) -> list[Synset]:
         """
@@ -697,7 +713,7 @@ class WordNetParser:
         Returns:
             List of substance holonym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'holo_substance')
+        return self.get_related_synsets(synset_id, "holo_substance")
 
     # ========== Other semantic relationships ==========
 
@@ -712,7 +728,7 @@ class WordNetParser:
         Returns:
             List of antonym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'antonym')
+        return self.get_related_synsets(synset_id, "antonym")
 
     def get_similar(self, synset_id: str) -> list[Synset]:
         """
@@ -724,7 +740,7 @@ class WordNetParser:
         Returns:
             List of similar Synset objects
         """
-        return self.get_related_synsets(synset_id, 'similar')
+        return self.get_related_synsets(synset_id, "similar")
 
     def get_also_sees(self, synset_id: str) -> list[Synset]:
         """
@@ -736,7 +752,7 @@ class WordNetParser:
         Returns:
             List of related Synset objects
         """
-        return self.get_related_synsets(synset_id, 'also')
+        return self.get_related_synsets(synset_id, "also")
 
     def get_attributes(self, synset_id: str) -> list[Synset]:
         """
@@ -749,7 +765,7 @@ class WordNetParser:
         Returns:
             List of attribute Synset objects
         """
-        return self.get_related_synsets(synset_id, 'attribute')
+        return self.get_related_synsets(synset_id, "attribute")
 
     def get_entailments(self, synset_id: str) -> list[Synset]:
         """
@@ -762,7 +778,7 @@ class WordNetParser:
         Returns:
             List of entailed Synset objects
         """
-        return self.get_related_synsets(synset_id, 'entails')
+        return self.get_related_synsets(synset_id, "entails")
 
     def get_causes(self, synset_id: str) -> list[Synset]:
         """
@@ -775,7 +791,7 @@ class WordNetParser:
         Returns:
             List of caused Synset objects
         """
-        return self.get_related_synsets(synset_id, 'causes')
+        return self.get_related_synsets(synset_id, "causes")
 
     def get_derivations(self, synset_id: str) -> list[Synset]:
         """
@@ -788,7 +804,7 @@ class WordNetParser:
         Returns:
             List of derivationally related Synset objects
         """
-        return self.get_related_synsets(synset_id, 'derivation')
+        return self.get_related_synsets(synset_id, "derivation")
 
     def get_pertainyms(self, synset_id: str) -> list[Synset]:
         """
@@ -801,7 +817,7 @@ class WordNetParser:
         Returns:
             List of pertainym Synset objects
         """
-        return self.get_related_synsets(synset_id, 'pertainym')
+        return self.get_related_synsets(synset_id, "pertainym")
 
     # ========== Domain relationships ==========
 
@@ -816,7 +832,7 @@ class WordNetParser:
         Returns:
             List of domain topic Synset objects
         """
-        return self.get_related_synsets(synset_id, 'domain_topic')
+        return self.get_related_synsets(synset_id, "domain_topic")
 
     def get_domain_regions(self, synset_id: str) -> list[Synset]:
         """
@@ -828,7 +844,7 @@ class WordNetParser:
         Returns:
             List of domain region Synset objects
         """
-        return self.get_related_synsets(synset_id, 'domain_region')
+        return self.get_related_synsets(synset_id, "domain_region")
 
     def get_exemplifies(self, synset_id: str) -> list[Synset]:
         """
@@ -840,7 +856,7 @@ class WordNetParser:
         Returns:
             List of exemplified Synset objects
         """
-        return self.get_related_synsets(synset_id, 'exemplifies')
+        return self.get_related_synsets(synset_id, "exemplifies")
 
     def get_examples_of(self, synset_id: str) -> list[Synset]:
         """
@@ -852,7 +868,7 @@ class WordNetParser:
         Returns:
             List of example Synset objects
         """
-        return self.get_related_synsets(synset_id, 'is_exemplified_by')
+        return self.get_related_synsets(synset_id, "is_exemplified_by")
 
     def get_synsets_in_domain(self, synset_id: str) -> list[Synset]:
         """
@@ -865,7 +881,7 @@ class WordNetParser:
         Returns:
             List of Synset objects in this domain
         """
-        return self.get_related_synsets(synset_id, 'has_domain_topic')
+        return self.get_related_synsets(synset_id, "has_domain_topic")
 
     def get_synsets_in_region(self, synset_id: str) -> list[Synset]:
         """
@@ -877,7 +893,7 @@ class WordNetParser:
         Returns:
             List of Synset objects in this region
         """
-        return self.get_related_synsets(synset_id, 'has_domain_region')
+        return self.get_related_synsets(synset_id, "has_domain_region")
 
     def get_all_domain_topics(self) -> list[Synset]:
         """
@@ -893,7 +909,7 @@ class WordNetParser:
         domain_topics = set()
         for synset in self.synsets.values():
             for relation in synset.relations:
-                if relation.relation_type == 'domain_topic':
+                if relation.relation_type == "domain_topic":
                     domain_topics.add(relation.target_synset_id)
 
         return [self.synsets[sid] for sid in sorted(domain_topics) if sid in self.synsets]
@@ -912,7 +928,7 @@ class WordNetParser:
         domain_regions = set()
         for synset in self.synsets.values():
             for relation in synset.relations:
-                if relation.relation_type == 'domain_region':
+                if relation.relation_type == "domain_region":
                     domain_regions.add(relation.target_synset_id)
         return [self.synsets[sid] for sid in sorted(domain_regions) if sid in self.synsets]
 
@@ -961,7 +977,9 @@ class WordNetParser:
 
         return sorted(list(set(rel.relation_type for rel in synset.relations)))
 
-    def explore_synset_chain(self, synset_id: str, relation_type: str, max_depth: int = 3) -> list[list[Synset]]:
+    def explore_synset_chain(
+        self, synset_id: str, relation_type: str, max_depth: int = 3
+    ) -> list[list[Synset]]:
         """
         Explore a chain of synset relationships up to a certain depth.
         E.g., explore all hypernyms up to 3 levels.
@@ -981,7 +999,9 @@ class WordNetParser:
         if not start_synset:
             return []
 
-        def explore_recursive(current_synset: Synset, depth: int, path: list[Synset]) -> list[list[Synset]]:
+        def explore_recursive(
+            current_synset: Synset, depth: int, path: list[Synset]
+        ) -> list[list[Synset]]:
             if depth >= max_depth:
                 return [path]
 
@@ -999,9 +1019,9 @@ class WordNetParser:
         return explore_recursive(start_synset, 0, [start_synset])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Example usage
-    parser = WordNetParser('english-wordnet-2024.xml')
+    parser = WordNetParser("english-wordnet-2024.xml")
     parser.parse()
 
     # Show statistics
@@ -1011,22 +1031,22 @@ if __name__ == '__main__':
         print(f"  {key}: {value:,}")
 
     # Example: Look up a word
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example: Looking up the word 'run'")
-    print("="*60)
+    print("=" * 60)
 
-    definitions = parser.get_definitions('run')
+    definitions = parser.get_definitions("run")
     for i, defn in enumerate(definitions, 1):
         print(f"\n{i}. [{defn['part_of_speech']}] {defn['definition']}")
-        if defn['examples']:
+        if defn["examples"]:
             print("   Examples:")
-            for ex in defn['examples'][:2]:  # Show max 2 examples
+            for ex in defn["examples"][:2]:  # Show max 2 examples
                 print(f"     - {ex}")
 
     # Example: Search for words
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example: Words starting with 'aard'")
-    print("="*60)
-    words = parser.search_words('aard')
+    print("=" * 60)
+    words = parser.search_words("aard")
     for word in words[:10]:  # Show first 10
         print(f"  - {word}")

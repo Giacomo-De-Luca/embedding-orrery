@@ -4,6 +4,7 @@ import {
   TOUR_ANCHORS,
   TOUR_FOCUS_TOPIC,
   FINALE_PRESET_ID,
+  mainTourSteps,
   waitFor,
   type TourRuntime,
 } from '../tourSteps';
@@ -291,6 +292,22 @@ describe('TOUR_STEPS', () => {
     for (const id of ['search', 'density', 'finale']) {
       expect(step(id).prepareTimeoutMs).toBeGreaterThan(20000);
     }
+  });
+});
+
+describe('mainTourSteps', () => {
+  it('runs every step where the 2D density overlay can draw', () => {
+    expect(mainTourSteps(true)).toBe(TOUR_STEPS);
+  });
+
+  it('drops only the density step where it cannot (no float render targets)', () => {
+    expect(mainTourSteps(false).map((s) => s.id)).toEqual([
+      'map', 'search', 'feature-search', 'focus-topic', 'temporal', 'finale',
+    ]);
+  });
+
+  it('returns the same array every call (a stable TourController prop)', () => {
+    expect(mainTourSteps(false)).toBe(mainTourSteps(false));
   });
 });
 

@@ -71,11 +71,13 @@ which is for URLs in your own data. It returns:
 Hugging Face Image, Audio and Video features are always read with `decode=False`
 (`HFMediaFeatures`), in every mode. `datasets` 4.x decodes Audio and Video with torchcodec,
 which needs a system FFmpeg and is not installed, so such datasets used to fail to load even in
-text mode. In a text-mode HF job, a media column (or any bytes cell) that lands in the metadata is
+text mode. In a text-mode job, a media column (or any bytes cell) that lands in the metadata is
 stored as its path or a placeholder such as `[image 34 KB]` or `[binary 2 KB]`
-(`extract_metadata` → `MediaReference.describe`); its bytes used to crash `json.dumps`. Local text
-jobs still turn such cells into a `str(bytes)` dump before that point (pre-existing,
-`local_data_client.load_local_file_portion`).
+(`extract_metadata` → `MediaReference.for_metadata`). In HF jobs its bytes used to crash
+`json.dumps`; local files used to store them as a `str(...)` dump of the whole file, because
+`local_data_client.load_local_file_portion` stringified them. It now keeps every such cell (bytes,
+media dicts with or without bytes) as read, in every mode, so a text job without chosen columns
+no longer auto-picks a binary column as text and embeds its dump.
 
 ### Input order and prompts
 

@@ -11,7 +11,8 @@
  *
  * The canvas overlays the Plotly plot area (pointer-events: none), so the
  * intermediate buffer is cleared to transparent rather than Apple's opaque
- * white/black. See README.md.
+ * white/black. Buffers are RGBA32F where the GPU blends and filters them,
+ * RGBA16F otherwise (phones; see ../floatRenderTargets.ts). See README.md.
  */
 
 import {
@@ -39,6 +40,7 @@ import {
   gaussianBlurR20PixelRadius,
 } from './shaders';
 import { matrix3Multiply, type Matrix3 } from './densityMath';
+import { FloatRenderTargets, type FloatPrecision } from '../floatRenderTargets';
 
 const DENSITY_BANDWIDTH = 20; // device px; the R20 blur is hardcoded to this
 const SAFE_MARGIN = gaussianBlurR20PixelRadius(DENSITY_BANDWIDTH) + 1;
@@ -56,13 +58,11 @@ export interface DensityRenderProps {
   isDark: boolean;
 }
 
-const REQUIRED_EXTENSIONS = ['EXT_color_buffer_float', 'EXT_float_blend', 'OES_texture_float_linear'];
-
-let supportCache: boolean | null = null;
-
 export class DensityRenderer {
   private gl: WebGL2RenderingContext;
   private canvas: HTMLCanvasElement;
+  /** float32 on desktop; float16 where 32-bit targets can't blend or filter (phones). */
+  private precision: FloatPrecision;
 
   private quadBuffer: WebGLBuffer;
   private fillCategoryProgram: GlProgram;
@@ -93,15 +93,7 @@ export class DensityRenderer {
 
   /** True when the environment can run the float-framebuffer pipeline. */
   static isSupported(): boolean {
-    if (supportCache !== null) return supportCache;
-    try {
-      const probe = document.createElement('canvas');
-      const gl = probe.getContext('webgl2');
-      supportCache = gl != null && REQUIRED_EXTENSIONS.every((ext) => gl.getExtension(ext) != null);
-    } catch {
-      supportCache = false;
-    }
-    return supportCache;
+    return FloatRenderTargets.available();
   }
 
   constructor(canvas: HTMLCanvasElement) {
@@ -113,11 +105,11 @@ export class DensityRenderer {
       preserveDrawingBuffer: true,
     });
     if (!gl) throw new Error('WebGL2 not available');
-    for (const ext of REQUIRED_EXTENSIONS) {
-      if (!gl.getExtension(ext)) throw new Error(`Missing WebGL extension: ${ext}`);
-    }
+    const precision = FloatRenderTargets.enable(gl);
+    if (!precision) throw new Error('Missing WebGL extension: EXT_color_buffer_float');
     this.canvas = canvas;
     this.gl = gl;
+    this.precision = precision;
 
     this.quadBuffer = createStaticBuffer(gl, new Float32Array([-1, -1, -1, 1, 1, -1, 1, 1]));
     this.fillCategoryProgram = createProgram(gl, FILL_COUNT_VERTEX_CATEGORY, FILL_COUNT_FRAGMENT);
@@ -172,10 +164,10 @@ export class DensityRenderer {
     this.deleteFramebuffers();
     const fbW = w + SAFE_MARGIN * 2;
     const fbH = h + SAFE_MARGIN * 2;
-    this.countFB = createFramebuffer(gl, fbW, fbH, 4);
-    this.tempFB1 = createFramebuffer(gl, fbW, fbH, 4);
-    this.tempFB2 = createFramebuffer(gl, fbW, fbH, 4);
-    this.linearFB = createFramebuffer(gl, fbW, fbH, 4);
+    this.countFB = createFramebuffer(gl, fbW, fbH, 4, this.precision);
+    this.tempFB1 = createFramebuffer(gl, fbW, fbH, 4, this.precision);
+    this.tempFB2 = createFramebuffer(gl, fbW, fbH, 4, this.precision);
+    this.linearFB = createFramebuffer(gl, fbW, fbH, 4, this.precision);
   }
 
   render(props: DensityRenderProps): void {

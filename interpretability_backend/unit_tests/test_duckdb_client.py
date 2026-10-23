@@ -1,6 +1,5 @@
 """Unit tests for DuckDBClient — all tables, CRUD, and search."""
 
-
 import duckdb
 import numpy as np
 import pandas as pd
@@ -12,6 +11,7 @@ from backend.clients.duckdb_client import DuckDBClient
 # Schema
 # ------------------------------------------------------------------
 
+
 class TestSchema:
     def test_tables_created(self, db: DuckDBClient):
         tables = db._conn.execute(
@@ -19,8 +19,13 @@ class TestSchema:
         ).fetchall()
         table_names = {t[0] for t in tables}
         expected = {
-            "datasets", "vector_collections", "projections",
-            "projection_metadata", "topic_extractions", "topic_info", "topic_assignments",
+            "datasets",
+            "vector_collections",
+            "projections",
+            "projection_metadata",
+            "topic_extractions",
+            "topic_info",
+            "topic_assignments",
             "topic_centroids",
         }
         assert expected.issubset(table_names)
@@ -35,6 +40,7 @@ class TestSchema:
 # ------------------------------------------------------------------
 # Datasets
 # ------------------------------------------------------------------
+
 
 class TestDatasets:
     def test_create_and_get(self, db: DuckDBClient):
@@ -83,9 +89,12 @@ class TestDatasets:
         assert db._conn.execute("SELECT COUNT(*) FROM projections").fetchone()[0] == 0
         assert db._conn.execute("SELECT COUNT(*) FROM vector_collections").fetchone()[0] == 0
         # Items table should be dropped
-        tables = {t[0] for t in db._conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
-        ).fetchall()}
+        tables = {
+            t[0]
+            for t in db._conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()
+        }
         assert "items_ds" not in tables
 
     def test_get_nonexistent(self, db: DuckDBClient):
@@ -101,8 +110,13 @@ class TestDeleteCollection:
     # A source collection and a re-embed of the same dataset (shared items).
     COLLECTIONS = ("ds", "ds_gemini")
     TABLES = (
-        "vector_collections", "projections", "projection_metadata", "topic_extractions",
-        "sae_document_activations", "probes", "probe_scores",
+        "vector_collections",
+        "projections",
+        "projection_metadata",
+        "topic_extractions",
+        "sae_document_activations",
+        "probes",
+        "probe_scores",
     )
     # Keyed by extraction, not collection.
     EXTRACTION_TABLES = ("topic_info", "topic_assignments", "topic_centroids")
@@ -125,9 +139,18 @@ class TestDeleteCollection:
             )
             db.insert_document_activations_batch(name, "i1", [(7, 0.5)])
             db.upsert_probe(
-                name, "a", "ridge", config={}, metrics={}, direction=[0.1],
-                scaler_mean=[0.0], scaler_scale=[1.0], intercept=0.0,
-                artifact_path="/tmp/probe", n_train=1, n_val=1,
+                name,
+                "a",
+                "ridge",
+                config={},
+                metrics={},
+                direction=[0.1],
+                scaler_mean=[0.0],
+                scaler_scale=[1.0],
+                intercept=0.0,
+                artifact_path="/tmp/probe",
+                n_train=1,
+                n_val=1,
             )
             db.insert_probe_scores_bulk(
                 name, "a", "ridge", pd.DataFrame({"item_id": ["i1"], "score": [1.0]})
@@ -183,9 +206,12 @@ class TestDeleteCollection:
 
         self._assert_only(db, set())
         assert db.get_dataset("ds") is None
-        tables = {t[0] for t in db._conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
-        ).fetchall()}
+        tables = {
+            t[0]
+            for t in db._conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()
+        }
         assert "items_ds" not in tables
 
     def test_failed_dataset_row_delete_keeps_the_items(self, db: DuckDBClient, monkeypatch):
@@ -219,7 +245,8 @@ class TestDeleteCollection:
         self._setup(db)
         db._rebuild_fts_for_dataset("ds")
         schemas = lambda: {  # noqa: E731
-            row[0] for row in db._conn.execute(
+            row[0]
+            for row in db._conn.execute(
                 "SELECT schema_name FROM information_schema.schemata"
             ).fetchall()
         }
@@ -263,12 +290,13 @@ class TestDeleteCollection:
 # Items (per-dataset tables)
 # ------------------------------------------------------------------
 
+
 class TestItems:
     def test_insert_and_get_ids(self, db: DuckDBClient):
         db.create_dataset("ds")
-        count = db.insert_items_batch("ds", ["a", "b", "c"],
-                                      ["doc a", "doc b", "doc c"],
-                                      [{"x": 1}, {"x": 2}, {"x": 3}])
+        count = db.insert_items_batch(
+            "ds", ["a", "b", "c"], ["doc a", "doc b", "doc c"], [{"x": 1}, {"x": 2}, {"x": 3}]
+        )
         assert count == 3
         ids = db.get_item_ids("ds")
         assert ids == {"a", "b", "c"}
@@ -322,11 +350,15 @@ class TestItems:
 # Vector Collections
 # ------------------------------------------------------------------
 
+
 class TestVectorCollections:
     def test_register_and_get(self, db: DuckDBClient):
         db.create_dataset("ds")
         vc_name = db.register_vector_collection(
-            "ds", "chromadb", "ds_dense", "dense",
+            "ds",
+            "chromadb",
+            "ds_dense",
+            "dense",
             embedding_provider="sentence_transformers",
             embedding_model="all-MiniLM-L6-v2",
             embedding_dim=384,
@@ -346,10 +378,10 @@ class TestVectorCollections:
 
     def test_multiple_collections_per_dataset(self, db: DuckDBClient):
         db.create_dataset("ds")
-        db.register_vector_collection("ds", "chromadb", "ds_bge", "dense",
-                                      embedding_model="bge-m3")
-        db.register_vector_collection("ds", "chromadb", "ds_gemini", "dense",
-                                      embedding_model="gemini-embedding")
+        db.register_vector_collection("ds", "chromadb", "ds_bge", "dense", embedding_model="bge-m3")
+        db.register_vector_collection(
+            "ds", "chromadb", "ds_gemini", "dense", embedding_model="gemini-embedding"
+        )
         vcs = db.get_vector_collections("ds")
         assert len(vcs) == 2
         models = {vc["embedding_model"] for vc in vcs}
@@ -359,6 +391,7 @@ class TestVectorCollections:
 # ------------------------------------------------------------------
 # Projections
 # ------------------------------------------------------------------
+
 
 class TestProjections:
     def test_insert_and_read(self, db: DuckDBClient):
@@ -398,7 +431,7 @@ class TestProjections:
 
         row = db._conn.execute(
             "SELECT variance FROM projection_metadata WHERE collection_name = ? AND projection_type = ?",
-            ["ds_dense", "pca_2d"]
+            ["ds_dense", "pca_2d"],
         ).fetchone()
         assert row is not None
         assert list(row[0]) == pytest.approx([0.45, 0.32])
@@ -411,10 +444,12 @@ class TestProjections:
 # Text Search
 # ------------------------------------------------------------------
 
+
 class TestTextSearch:
     def _setup_docs(self, db: DuckDBClient):
         db.create_dataset("docs")
-        db.insert_items_batch("docs",
+        db.insert_items_batch(
+            "docs",
             ["d1", "d2", "d3"],
             [
                 "The mallard is a dabbling duck that breeds in temperate regions",
@@ -514,6 +549,7 @@ class TestTextSearch:
 # Topics
 # ------------------------------------------------------------------
 
+
 class TestTopics:
     def _setup(self, db: DuckDBClient):
         db.create_dataset("ds")
@@ -524,18 +560,32 @@ class TestTopics:
         self._setup(db)
         ext_id = db.create_topic_extraction("ds_dense", "ds", config={"min_topic_size": 10})
 
-        db.insert_topic_info_batch(ext_id, [
-            {"topic_id": -1, "label": "Unclustered", "count": 1,
-             "keywords": [{"word": "noise", "score": 0.5}]},
-            {"topic_id": 0, "label": "Topic A", "count": 2,
-             "keywords": [{"word": "alpha", "score": 0.9}]},
-        ])
+        db.insert_topic_info_batch(
+            ext_id,
+            [
+                {
+                    "topic_id": -1,
+                    "label": "Unclustered",
+                    "count": 1,
+                    "keywords": [{"word": "noise", "score": 0.5}],
+                },
+                {
+                    "topic_id": 0,
+                    "label": "Topic A",
+                    "count": 2,
+                    "keywords": [{"word": "alpha", "score": 0.9}],
+                },
+            ],
+        )
 
-        db.insert_topic_assignments_batch(ext_id, [
-            {"item_id": "a", "topic_id": -1, "topic_label": "Unclustered"},
-            {"item_id": "b", "topic_id": 0, "topic_label": "Topic A"},
-            {"item_id": "c", "topic_id": 0, "topic_label": "Topic A"},
-        ])
+        db.insert_topic_assignments_batch(
+            ext_id,
+            [
+                {"item_id": "a", "topic_id": -1, "topic_label": "Unclustered"},
+                {"item_id": "b", "topic_id": 0, "topic_label": "Topic A"},
+                {"item_id": "c", "topic_id": 0, "topic_label": "Topic A"},
+            ],
+        )
 
         topics = db.get_active_topics("ds_dense")
         assert topics is not None
@@ -545,13 +595,14 @@ class TestTopics:
     def test_update_topic_label(self, db: DuckDBClient):
         self._setup(db)
         ext_id = db.create_topic_extraction("ds_dense", "ds")
-        db.insert_topic_info_batch(ext_id, [
-            {"topic_id": 0, "label": "old_label", "count": 2}
-        ])
-        db.insert_topic_assignments_batch(ext_id, [
-            {"item_id": "a", "topic_id": 0, "topic_label": "old_label"},
-            {"item_id": "b", "topic_id": 0, "topic_label": "old_label"},
-        ])
+        db.insert_topic_info_batch(ext_id, [{"topic_id": 0, "label": "old_label", "count": 2}])
+        db.insert_topic_assignments_batch(
+            ext_id,
+            [
+                {"item_id": "a", "topic_id": 0, "topic_label": "old_label"},
+                {"item_id": "b", "topic_id": 0, "topic_label": "old_label"},
+            ],
+        )
 
         db.update_topic_label(ext_id, 0, "new_label")
 
@@ -560,18 +611,21 @@ class TestTopics:
 
         row = db._conn.execute(
             "SELECT topic_label FROM topic_assignments WHERE extraction_id = ? AND item_id = 'a'",
-            [ext_id]
+            [ext_id],
         ).fetchone()
         assert row[0] == "new_label"
 
     def test_get_items_for_topic(self, db: DuckDBClient):
         self._setup(db)
         ext_id = db.create_topic_extraction("ds_dense", "ds")
-        db.insert_topic_assignments_batch(ext_id, [
-            {"item_id": "a", "topic_id": 0},
-            {"item_id": "b", "topic_id": 1},
-            {"item_id": "c", "topic_id": 0},
-        ])
+        db.insert_topic_assignments_batch(
+            ext_id,
+            [
+                {"item_id": "a", "topic_id": 0},
+                {"item_id": "b", "topic_id": 1},
+                {"item_id": "c", "topic_id": 0},
+            ],
+        )
         items = db.get_items_for_topic(ext_id, 0)
         assert set(items) == {"a", "c"}
 
@@ -684,16 +738,39 @@ class TestTopicFilters:
         )
 
         active = db.create_topic_extraction("ds_dense", "ds")
-        db.insert_topic_assignments_batch(active, [
-            {"item_id": "a", "topic_id": 0, "topic_label": "Cats",
-             "subtopic_id": 10, "subtopic_label": "Lions"},
-            {"item_id": "b", "topic_id": 0, "topic_label": "Cats",
-             "subtopic_id": 11, "subtopic_label": "Tabbies"},
-            {"item_id": "c", "topic_id": 1, "topic_label": "Dogs",
-             "subtopic_id": 12, "subtopic_label": "Pugs"},
-            {"item_id": "d", "topic_id": -1, "topic_label": "Unclustered",
-             "subtopic_id": -1, "subtopic_label": "Unclustered"},
-        ])
+        db.insert_topic_assignments_batch(
+            active,
+            [
+                {
+                    "item_id": "a",
+                    "topic_id": 0,
+                    "topic_label": "Cats",
+                    "subtopic_id": 10,
+                    "subtopic_label": "Lions",
+                },
+                {
+                    "item_id": "b",
+                    "topic_id": 0,
+                    "topic_label": "Cats",
+                    "subtopic_id": 11,
+                    "subtopic_label": "Tabbies",
+                },
+                {
+                    "item_id": "c",
+                    "topic_id": 1,
+                    "topic_label": "Dogs",
+                    "subtopic_id": 12,
+                    "subtopic_label": "Pugs",
+                },
+                {
+                    "item_id": "d",
+                    "topic_id": -1,
+                    "topic_label": "Unclustered",
+                    "subtopic_id": -1,
+                    "subtopic_label": "Unclustered",
+                },
+            ],
+        )
         return active
 
     def _ids(self, db: DuckDBClient, filters: list[dict], collection: str = "ds_dense"):
@@ -775,10 +852,12 @@ class TestTopicFilters:
 # Field Analysis
 # ------------------------------------------------------------------
 
+
 class TestFieldAnalysis:
     def test_compute_analysis(self, db: DuckDBClient):
         db.create_dataset("ds")
-        db.insert_items_batch("ds",
+        db.insert_items_batch(
+            "ds",
             ["a", "b", "c"],
             ["x", "y", "z"],
             [

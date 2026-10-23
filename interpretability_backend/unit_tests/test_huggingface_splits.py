@@ -44,7 +44,5 @@ class TestLoadRowsForSplits:
 
     def test_preserves_split_order(self):
         per_split = {"validation": [{"id": 1}], "train": [{"id": 2}]}
-        rows, _ = _load_rows_for_splits(
-            ["validation", "train"], _fake_loader(per_split)
-        )
+        rows, _ = _load_rows_for_splits(["validation", "train"], _fake_loader(per_split))
         assert [r[_SPLIT_KEY] for r in rows] == ["validation", "train"]

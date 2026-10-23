@@ -640,7 +640,8 @@ class FeatureLabelStore:
         labels_map = self.get_labels(indices, model_id, layer, hook, width, method)
 
         return [
-            (idx, val, labels_map.get(idx, "(unlabelled)")) for idx, val in zip(indices, values, strict=True)
+            (idx, val, labels_map.get(idx, "(unlabelled)"))
+            for idx, val in zip(indices, values, strict=True)
         ]
 
     def label_top_k_per_token(

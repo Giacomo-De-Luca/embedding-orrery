@@ -42,8 +42,9 @@ catalog query): the factory records each newly probed model there.
 their dimensions (`suggested: true`), then the models existing collections use
 (`DuckDBClient.embedding_models_in_use()`) with their `collectionCount`; models that are only used,
 such as local checkpoint paths, come with `suggested: false`. The read-only demo returns the
-catalog only, so local paths never reach visitors. The embed forms use it for the model-name and
-prompt pickers ("Suggested" / "Used in your collections").
+catalog only, so local paths never reach visitors. The embed forms use it for the model-name
+picker ("Suggested" / "Used in your collections"). They have no prompt picker any more: the model
+card's "Task prompt" shows only the task control a model reads (`COLLECTIONS_EMBED_FORM.md`).
 
 ## Prompt resolution
 

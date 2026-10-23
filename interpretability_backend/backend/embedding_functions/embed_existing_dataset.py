@@ -71,15 +71,12 @@ def embed_existing_dataset(
 
         dataset = db.get_dataset(dataset_name)
         if not dataset:
-            return EmbeddingResult(
-                collection_name=config.collection_name,
-                total_embedded=0,
-                embedding_dim=0,
+            return EmbeddingResult.failed(
+                config.collection_name,
+                f"Dataset '{dataset_name}' not found in DuckDB",
                 device=device,
-                duration_seconds=time.time() - start_time,
-                error=f"Dataset '{dataset_name}' not found in DuckDB",
-                embedding_provider=model_config.provider.value,
-                embedding_model=model_config.model_name,
+                start_time=start_time,
+                model_config=model_config,
             )
         # Its documents are the text columns or file-name labels, not the media
         if dataset.get("data_type") == DataType.MULTIMODAL.value:
@@ -94,15 +91,12 @@ def embed_existing_dataset(
 
         all_items = db.get_filtered_items(dataset_name, filters=[], limit=1_000_000)
         if not all_items:
-            return EmbeddingResult(
-                collection_name=config.collection_name,
-                total_embedded=0,
-                embedding_dim=0,
+            return EmbeddingResult.failed(
+                config.collection_name,
+                f"Dataset '{dataset_name}' has no items",
                 device=device,
-                duration_seconds=time.time() - start_time,
-                error=f"Dataset '{dataset_name}' has no items",
-                embedding_provider=model_config.provider.value,
-                embedding_model=model_config.model_name,
+                start_time=start_time,
+                model_config=model_config,
             )
 
         print(f"Re-embedding {len(all_items)} items from dataset '{dataset_name}'")

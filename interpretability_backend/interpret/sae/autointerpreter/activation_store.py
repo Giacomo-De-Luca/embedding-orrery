@@ -50,7 +50,7 @@ class ActivationStore(ABC):
     BATCH_PAD = 6
     # Subclasses override:
     ACTIVATIONS_FILE: str = "activations"  # legacy single-file base shard
-    SHARD_EXT: str = ""                    # shard extension without the dot
+    SHARD_EXT: str = ""  # shard extension without the dot
 
     def __init__(
         self,
@@ -93,9 +93,7 @@ class ActivationStore(ABC):
     def append(self, vector: np.ndarray, meta: dict[str, Any]) -> int:
         """Buffer one sample. Returns the assigned row index."""
         if vector.shape != (self.n_features,):
-            raise ValueError(
-                f"expected shape ({self.n_features},), got {vector.shape}"
-            )
+            raise ValueError(f"expected shape ({self.n_features},), got {vector.shape}")
         self._buffer_row(vector)
         row_idx = self.n_rows
         enriched = dict(meta)
@@ -129,7 +127,8 @@ class ActivationStore(ABC):
         if not self.index_path.exists():
             return set()
         tbl = pq.read_table(
-            self.index_path, columns=["word", "synset_id"],
+            self.index_path,
+            columns=["word", "synset_id"],
         ).to_pandas()
         return set(zip(tbl["word"].tolist(), tbl["synset_id"].tolist(), strict=True))
 
@@ -159,15 +158,11 @@ class ActivationStore(ABC):
     # ── Shared internals ─────────────────────────────────────────────────
 
     def _batch_path(self, idx: int) -> Path:
-        return self.run_dir / (
-            f"{self.BATCH_PREFIX}{idx:0{self.BATCH_PAD}d}.{self.SHARD_EXT}"
-        )
+        return self.run_dir / (f"{self.BATCH_PREFIX}{idx:0{self.BATCH_PAD}d}.{self.SHARD_EXT}")
 
     @classmethod
     def _batch_regex(cls) -> re.Pattern[str]:
-        return re.compile(
-            rf"^{re.escape(cls.BATCH_PREFIX)}(\d+)\.{cls.SHARD_EXT}$"
-        )
+        return re.compile(rf"^{re.escape(cls.BATCH_PREFIX)}(\d+)\.{cls.SHARD_EXT}$")
 
     @classmethod
     def _discover_shard_paths(cls, run_dir: Path) -> list[Path]:
@@ -197,10 +192,7 @@ class ActivationStore(ABC):
         return (max(existing) + 1) if existing else 1
 
     def _count_existing_rows(self) -> int:
-        return sum(
-            self._shard_n_rows(p)
-            for p in self._discover_shard_paths(self.run_dir)
-        )
+        return sum(self._shard_n_rows(p) for p in self._discover_shard_paths(self.run_dir))
 
     def _append_index(self, rows: list[dict[str, Any]]) -> None:
         df_new = pd.DataFrame(rows)
@@ -213,7 +205,8 @@ class ActivationStore(ABC):
         # parquet that desyncs against the shard files.
         tmp_index = self.index_path.with_name(self.index_path.name + ".tmp")
         pq.write_table(
-            pa.Table.from_pandas(df, preserve_index=False), tmp_index,
+            pa.Table.from_pandas(df, preserve_index=False),
+            tmp_index,
         )
         os.replace(tmp_index, self.index_path)
 

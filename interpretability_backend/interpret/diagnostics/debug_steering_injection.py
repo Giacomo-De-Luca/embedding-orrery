@@ -81,19 +81,20 @@ def main() -> None:
     print(f"max |h_out - h_in|   = {delta.abs().max().item():.4f}")
     print()
     print(f"||v||                = {v.norm().item():.4f}  (expected ~1 after normalise)")
-    print(f"expected delta norm  = strength * sqrt(seq_len) = "
-          f"{STRENGTH * (h_in.shape[1] ** 0.5):.3f}")
+    print(
+        f"expected delta norm  = strength * sqrt(seq_len) = {STRENGTH * (h_in.shape[1] ** 0.5):.3f}"
+    )
     print()
 
     # Per-token: each row of delta should equal strength * v
     if delta.abs().sum() > 0:
         per_token = delta[0, 0]
-        cos = torch.nn.functional.cosine_similarity(
-            per_token.unsqueeze(0), v.unsqueeze(0)
-        ).item()
+        cos = torch.nn.functional.cosine_similarity(per_token.unsqueeze(0), v.unsqueeze(0)).item()
         print(f"cosine(delta_token0, v) = {cos:.4f}  (expected ~1.0)")
-        print(f"||delta_token0|| / strength = {per_token.norm().item() / STRENGTH:.4f}  "
-              "(expected ~1.0)")
+        print(
+            f"||delta_token0|| / strength = {per_token.norm().item() / STRENGTH:.4f}  "
+            "(expected ~1.0)"
+        )
     else:
         print("ERROR: delta is all zeros — steering had no effect on the tensor.")
 

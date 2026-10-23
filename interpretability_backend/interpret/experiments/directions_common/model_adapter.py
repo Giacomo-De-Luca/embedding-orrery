@@ -143,9 +143,7 @@ class GemmaDirectionModel(_BaseDirectionModel):
 
         names = {site.value for site in sites}  # fork-cache intermediate names
         accum = {
-            site.value: torch.zeros(
-                (n_eoi, n_layers, d_model), dtype=torch.float64, device="cpu"
-            )
+            site.value: torch.zeros((n_eoi, n_layers, d_model), dtype=torch.float64, device="cpu")
             for site in sites
         }
         with self.wrapper.cache_activations(
@@ -153,9 +151,7 @@ class GemmaDirectionModel(_BaseDirectionModel):
         ) as get_cache:
             for instruction in tqdm(instructions, desc=f"gemma capture {sorted(names)}"):
                 self.wrapper.reset_prefill_cache()
-                self.wrapper.generate_from_template(
-                    self.format_chat(instruction), output_len=1
-                )
+                self.wrapper.generate_from_template(self.format_chat(instruction), output_len=1)
                 prefill = get_cache()["prefill"]
                 for layer_idx in range(n_layers):
                     layer_cache = prefill[layer_idx]
@@ -177,9 +173,7 @@ class GemmaDirectionModel(_BaseDirectionModel):
             layers={0}, intermediates={"final_norm"}, prefill=True
         ) as get_cache:
             self.wrapper.reset_prefill_cache()
-            self.wrapper.generate_from_template(
-                self.format_chat(prompt), output_len=1
-            )
+            self.wrapper.generate_from_template(self.format_chat(prompt), output_len=1)
             cache = get_cache()
 
         final_norm = cache["prefill"]["final_norm"]  # (1, seq_len, d_model), CPU
@@ -285,9 +279,7 @@ class QwenDirectionModel(_BaseDirectionModel):
 
         hook_types: set[HookType] = {QWEN_SITE_MAP[site][0] for site in sites}
         accum = {
-            site.value: torch.zeros(
-                (n_eoi, n_layers, d_model), dtype=torch.float64, device="cpu"
-            )
+            site.value: torch.zeros((n_eoi, n_layers, d_model), dtype=torch.float64, device="cpu")
             for site in sites
         }
         layers_all = set(range(n_layers))
@@ -296,9 +288,7 @@ class QwenDirectionModel(_BaseDirectionModel):
             with self.wrapper.cache_activations(
                 layers=layers_all, hook_types=hook_types, prefill_only=True
             ) as get_cache:
-                self.wrapper.generate_from_template(
-                    self.format_chat(instruction), output_len=1
-                )
+                self.wrapper.generate_from_template(self.format_chat(instruction), output_len=1)
                 cache = get_cache()  # {layer: {HookType: (1, seq, d)}}
             for site in sites:
                 hook_type, offset = QWEN_SITE_MAP[site]
@@ -309,8 +299,7 @@ class QwenDirectionModel(_BaseDirectionModel):
                     layer_cache = cache.get(src)
                     if layer_cache is None or hook_type not in layer_cache:
                         raise RuntimeError(
-                            f"missing capture for layer {src} {hook_type} "
-                            f"(site {site.value})"
+                            f"missing capture for layer {src} {hook_type} (site {site.value})"
                         )
                     acts = layer_cache[hook_type]  # (1, seq_len, d_model)
                     # MPS doesn't support float64 — move to CPU before casting.

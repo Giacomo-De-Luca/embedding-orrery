@@ -95,9 +95,7 @@ def test_appending_to_legacy_null_indices_preserves_existing_physical_order(db):
     )
     existing_ids = [
         row[0]
-        for row in db._conn.execute(
-            "SELECT id FROM items_legacy_order ORDER BY rowid"
-        ).fetchall()
+        for row in db._conn.execute("SELECT id FROM items_legacy_order ORDER BY rowid").fetchall()
     ]
 
     db.insert_items_batch(

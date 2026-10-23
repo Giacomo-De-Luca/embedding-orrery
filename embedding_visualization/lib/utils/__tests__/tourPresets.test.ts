@@ -138,6 +138,18 @@ describe('resolveInitialCollection', () => {
     ).toBe('other');
   });
 
+  it('falls back to the demo default when a phone manifest lacks WordNet', () => {
+    const phoneKeys = keys.filter((k) => k !== WORDNET_COLLECTION);
+    for (const link of [
+      { urlCollection: WORDNET_COLLECTION, presetCollection: null },
+      { urlCollection: null, presetCollection: WORDNET_COLLECTION },
+    ]) {
+      expect(
+        resolveInitialCollection({ ...link, isDemo: true, manifestKeys: phoneKeys }),
+      ).toBe(DEMO_DEFAULT_COLLECTION);
+    }
+  });
+
   it('returns null on an empty manifest', () => {
     expect(
       resolveInitialCollection({

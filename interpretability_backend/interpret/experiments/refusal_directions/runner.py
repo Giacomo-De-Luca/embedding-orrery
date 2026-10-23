@@ -30,9 +30,7 @@ class RefusalRunner:
     Each phase is idempotent: artifacts on disk are reused on rerun.
     """
 
-    def __init__(
-        self, config: RefusalConfig, model: DirectionModel | None = None
-    ) -> None:
+    def __init__(self, config: RefusalConfig, model: DirectionModel | None = None) -> None:
         self.config = config
         self._model = model
         self.config.output_dir.mkdir(parents=True, exist_ok=True)

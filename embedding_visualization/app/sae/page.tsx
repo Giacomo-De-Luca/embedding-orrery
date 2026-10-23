@@ -140,7 +140,7 @@ function FeaturesPageContent() {
   }), []);
 
   // "Inspect SAE" tour — latched from ?tour=sae at mount, at any viewport it
-  // fits (phones included: only the WordNet tour is desktop-only).
+  // fits (desktop only: phones get just the 90-second Explore tour).
   const [tourRequested, setTourRequested] = useState(
     () =>
       urlParams.tour === 'sae' &&

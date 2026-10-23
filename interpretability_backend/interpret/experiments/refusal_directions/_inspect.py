@@ -30,9 +30,9 @@ from interpret.sae import HookManager
 # ---- Tweak these -----------------------------------------------------------
 
 INTERMEDIATE = "pre_attn"
-SOURCE_POSITION = -3       # negative index into the EOI window
-SOURCE_LAYER = 14          # 0..33 for Gemma-3-4b
-ACTADD_COEFF_HARMFUL = -1.0   # subtract direction → bypass refusal
+SOURCE_POSITION = -3  # negative index into the EOI window
+SOURCE_LAYER = 14  # 0..33 for Gemma-3-4b
+ACTADD_COEFF_HARMFUL = -1.0  # subtract direction → bypass refusal
 ACTADD_COEFF_HARMLESS = +1.0  # add direction → induce refusal
 MAX_NEW_TOKENS = 128
 
@@ -115,8 +115,7 @@ def main() -> None:
     candidates_path = cfg.generate_dir / f"mean_diffs_{INTERMEDIATE}.pt"
     if not candidates_path.exists():
         raise FileNotFoundError(
-            f"No candidate tensor at {candidates_path}. "
-            "Run phase 2 first (RefusalRunner)."
+            f"No candidate tensor at {candidates_path}. Run phase 2 first (RefusalRunner)."
         )
     candidates = torch.load(candidates_path, map_location="cpu")
     n_pos, n_layers, _ = candidates.shape
@@ -145,9 +144,7 @@ def main() -> None:
     actadd_h = _generate_under(
         wrapper,
         HARMFUL_PROMPTS,
-        _build_manager(
-            "actadd", direction, n_layers, SOURCE_LAYER, ACTADD_COEFF_HARMFUL
-        ),
+        _build_manager("actadd", direction, n_layers, SOURCE_LAYER, ACTADD_COEFF_HARMFUL),
         MAX_NEW_TOKENS,
     )
     for prompt, b, a, x in zip(HARMFUL_PROMPTS, baseline_h, ablation_h, actadd_h, strict=True):
@@ -167,9 +164,7 @@ def main() -> None:
     actadd_b = _generate_under(
         wrapper,
         HARMLESS_PROMPTS,
-        _build_manager(
-            "actadd", direction, n_layers, SOURCE_LAYER, ACTADD_COEFF_HARMLESS
-        ),
+        _build_manager("actadd", direction, n_layers, SOURCE_LAYER, ACTADD_COEFF_HARMLESS),
         MAX_NEW_TOKENS,
     )
     for prompt, b, x in zip(HARMLESS_PROMPTS, baseline_b, actadd_b, strict=True):

@@ -332,8 +332,6 @@ export interface EmbeddingModelCatalogEntry {
   description: string | null;
   /** What the model embeds: "text", "image", "audio", "video" */
   modalities: string[];
-  /** Its sentence-transformers prompt names */
-  prompts: string[];
   dimension: number | null;
   /** Data types whose default model this is ("multimodal") */
   defaultFor: string[];

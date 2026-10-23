@@ -44,9 +44,7 @@ def isolated_directions(tmp_path: Path, monkeypatch):
     poetry_vec = torch.arange(2560, dtype=torch.float32)
     torch.save(poetry_vec, directions_dir / "poetry_direction.pt")
 
-    monkeypatch.setattr(
-        "backend.services.interpret_service.DIRECTIONS_DIR", directions_dir
-    )
+    monkeypatch.setattr("backend.services.interpret_service.DIRECTIONS_DIR", directions_dir)
     return directions_dir
 
 
@@ -145,9 +143,7 @@ def test_generate_steered_direction_path_builds_vector_op(service_with_mock_mode
     mock_manager.session.return_value.__enter__ = MagicMock(return_value=None)
     mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
 
-    with patch(
-        "backend.services.interpret_service.HookManager", return_value=mock_manager
-    ):
+    with patch("backend.services.interpret_service.HookManager", return_value=mock_manager):
         specs = [
             SteeringSpec(
                 feature_index=0,  # unused for direction path
@@ -183,9 +179,7 @@ def test_generate_steered_mixed_specs(service_with_mock_model):
     mock_manager.session.return_value.__enter__ = MagicMock(return_value=None)
     mock_manager.session.return_value.__exit__ = MagicMock(return_value=False)
 
-    with patch(
-        "backend.services.interpret_service.HookManager", return_value=mock_manager
-    ):
+    with patch("backend.services.interpret_service.HookManager", return_value=mock_manager):
         specs = [
             SteeringSpec(
                 feature_index=197,

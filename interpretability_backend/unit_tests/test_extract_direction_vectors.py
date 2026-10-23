@@ -149,7 +149,9 @@ def test_poetry_metadata_idempotent(
     assert first == second
 
 
-def test_poetry_does_not_modify_tensor(directions_dir: Path, poetry_pt: Path, poetry_metadata_json: Path):
+def test_poetry_does_not_modify_tensor(
+    directions_dir: Path, poetry_pt: Path, poetry_metadata_json: Path
+):
     """Poetry tensor is already 1-D — script must not touch it."""
     before = torch.load(poetry_pt, map_location="cpu", weights_only=False).clone()
     process_poetry(directions_dir)

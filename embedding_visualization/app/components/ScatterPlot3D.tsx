@@ -13,6 +13,7 @@ import { calculateMarkerStyle, calculateHighlightScale, calculateSimilarityColor
 import { useContainerDimensions } from '../../lib/hooks/useContainerDimensions';
 import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
 import { CameraPinchZoom } from '../../lib/utils/plotPinchZoom';
+import { plotlyLoader } from '../../lib/utils/plotlyLoader';
 import { FrostedTooltip, type TooltipData } from './FrostedTooltip';
 import { useCameraFlyTo, animateCameraToRegion } from '../../lib/hooks/cameraAnimation';
 import type { CameraViewAdjustment } from '../../lib/utils/tourSteps';
@@ -315,13 +316,12 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   // which does an O(n) deep-equality diff of all trace data on every React render)
   useEffect(() => {
     let cancelled = false;
-    // NOTE: importing from 'plotly.js' (source build) rather than 'plotly.js-dist-min'
-    // so that our patch to plotly.js/src/plots/gl3d/scene.js (fast-path skip of
-    // trace.update when input refs unchanged) actually takes effect. The minified
-    // pre-built bundle would bypass it.
-    import('plotly.js').then((lib) => {
+    // The shared loader imports the fork's source build (so its gl3d scene
+    // fast-path patch runs, not plotly.js-dist-min) and the Explore page
+    // preloads it, so this usually resolves from the module cache.
+    plotlyLoader.load().then((lib) => {
       if (cancelled) return;
-      plotlyLibRef.current = lib.default;
+      plotlyLibRef.current = lib;
       // Trigger initial plot creation via the base-trace effect
       setPlotReady(false);   // reset so newPlot runs
       setPlotlyLoaded(true);

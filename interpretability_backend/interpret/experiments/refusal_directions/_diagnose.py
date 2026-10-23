@@ -46,9 +46,7 @@ def main() -> None:
     print(f"loading model: {cfg.model_name}")
     wrapper = GemmaPytorchInference(cfg.model_name)
 
-    candidates = torch.load(
-        cfg.generate_dir / "mean_diffs_pre_attn.pt", map_location="cpu"
-    )
+    candidates = torch.load(cfg.generate_dir / "mean_diffs_pre_attn.pt", map_location="cpu")
     print(f"candidate tensor shape: {tuple(candidates.shape)}")
 
     # Pick the candidate the sweep flagged as "best so far" (lowest KL):
@@ -56,10 +54,7 @@ def main() -> None:
     pos_idx = candidates.shape[0] - 3  # -3 from end
     layer_idx = 14
     direction = candidates[pos_idx, layer_idx].to(torch.float32)
-    print(
-        f"chosen candidate: pos=-3 layer={layer_idx}, "
-        f"|v|={direction.norm().item():.4f}"
-    )
+    print(f"chosen candidate: pos=-3 layer={layer_idx}, |v|={direction.norm().item():.4f}")
 
     harmless = data.instructions_only(
         data.sample(
@@ -80,9 +75,7 @@ def main() -> None:
     print(f"  {'layers ablated':>20s} | {'mean KL':>10s} | {'median KL':>10s}")
     print(f"  {'-' * 20} | {'-' * 10} | {'-' * 10}")
     for n in [1, 4, 8, 16, 34]:
-        ops = _ablation_ops_subset(
-            direction, list(range(n)), [HookType.RESID_POST]
-        )
+        ops = _ablation_ops_subset(direction, list(range(n)), [HookType.RESID_POST])
         manager = _make_manager(ops)
         with manager.session(wrapper.model.model.layers):
             kls = []
@@ -90,10 +83,7 @@ def main() -> None:
                 ablated = _last_position_logits(wrapper, p)
                 kls.append(_kl_div(base, ablated))
         kls_t = torch.tensor(kls)
-        print(
-            f"  {n:>20d} | {kls_t.mean().item():>10.4f} | "
-            f"{kls_t.median().item():>10.4f}"
-        )
+        print(f"  {n:>20d} | {kls_t.mean().item():>10.4f} | {kls_t.median().item():>10.4f}")
 
     # Three-site, all 34 layers (the actual sweep configuration).
     print("\nKL with three-site ablation at all 34 layers:")

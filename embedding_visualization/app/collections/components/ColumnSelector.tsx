@@ -16,7 +16,6 @@ import {
 import type { DataType } from '@/lib/graphql/mutations';
 import { placeholderIssues, templateFields } from '../lib/taskPrefixes';
 import { MEDIA_KIND_LABELS, MediaColumns, type ColumnInfo, type MediaKind } from '../lib/mediaColumns';
-import { TaskPrefixField, type TaskPrefixControl } from './TaskPrefixField';
 
 interface ColumnSelectorProps {
   columns: ColumnInfo[];
@@ -25,6 +24,8 @@ interface ColumnSelectorProps {
   selectedMetadataColumns: string[];
   onEmbeddingColumnsChange: (columns: string[]) => void;
   onMetadataColumnsChange: (columns: string[]) => void;
+  /** Why the embedding column was pre-selected (useEmbedFormState.selectionNote). */
+  selectionNote?: string | null;
   textTemplate: string;
   onTemplateChange: (template: string) => void;
   idColumn: string;
@@ -40,8 +41,6 @@ interface ColumnSelectorProps {
    */
   showMetadataColumns?: boolean;
   showIdColumn?: boolean;
-  /** Task prefix of the selected model (text mode); its placeholders may name any column. */
-  taskPrefix?: TaskPrefixControl;
   /** Prefix of the element ids, unique per form (several tabs stay mounted). */
   idPrefix?: string;
 }
@@ -94,6 +93,7 @@ export function ColumnSelector({
   selectedMetadataColumns,
   onEmbeddingColumnsChange,
   onMetadataColumnsChange,
+  selectionNote = null,
   textTemplate,
   onTemplateChange,
   idColumn,
@@ -104,7 +104,6 @@ export function ColumnSelector({
   onMediaColumnsChange,
   showMetadataColumns = true,
   showIdColumn = true,
-  taskPrefix,
   idPrefix = '',
 }: ColumnSelectorProps) {
   const isVectorMode = dataType === 'VECTOR';
@@ -211,6 +210,7 @@ export function ColumnSelector({
                 {isVectorMode ? 'Select a vector column' : 'Select at least one column'}
               </p>
             )}
+            {selectionNote && <p className="text-xs text-muted-foreground">{selectionNote}</p>}
           </div>
         </div>
 
@@ -259,35 +259,6 @@ export function ColumnSelector({
               Multiple columns selected: <strong>{selectedEmbeddingColumns.join(', ')}</strong> will be
               embedded and <strong>also added to metadata</strong> to preserve original data
             </>
-          )}
-        </div>
-      )}
-
-      {/* Task prefix of the model, before the text it prefixes (text and
-          multimodal: queries use its query prefix even for media-only rows) */}
-      {!isVectorMode && taskPrefix && (
-        <div className="space-y-2">
-          <Label className="text-base">Task Prefix</Label>
-          {taskPrefix.info && taskPrefix.value ? (
-            <TaskPrefixField
-              info={taskPrefix.info}
-              value={taskPrefix.value}
-              onChange={taskPrefix.onChange}
-              columns={columns.map((col) => col.name)}
-              template={textTemplate}
-              embeddingColumns={selectedEmbeddingColumns}
-              idPrefix={idPrefix}
-            />
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Not used by the selected model. EmbeddingGemma and Gemini Embedding 2 read their task
-              from a prefix: pick one of them under Embedding Model to set it here.
-            </p>
-          )}
-          {isMultimodal && taskPrefix.info && (
-            <p className="text-xs text-muted-foreground">
-              The document prefix applies to a row&apos;s text only; images, audio and video get none.
-            </p>
           )}
         </div>
       )}
