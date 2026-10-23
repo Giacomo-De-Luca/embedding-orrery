@@ -1,5 +1,7 @@
 """Unit tests for first-run seed bootstrap."""
 
+import stat
+
 import pytest
 
 from backend.utils import seed_bootstrap
@@ -46,6 +48,22 @@ def test_copies_seed_when_live_db_absent(seed_env):
     assert result is True
     assert seed_env["live_duckdb"].read_bytes() == b"SEED_DB"
     assert (seed_env["live_vector_db"] / "chroma.sqlite3").read_bytes() == b"SEED_VEC"
+
+
+def test_live_stores_are_writable_when_seed_is_read_only(seed_env):
+    """huggingface_hub >= 1.33 keeps xet downloads read-only (0o444), so a seed
+    downloaded from the Hub is read-only; the live stores must not inherit that
+    (DuckDB then fails with "Permission denied", Chroma with a readonly database)."""
+    _write_seed(seed_env)
+    seed_env["seed_duckdb"].chmod(0o444)
+    (seed_env["seed_vector_db"] / "chroma.sqlite3").chmod(0o444)
+
+    result = seed_bootstrap.ensure_seed_loaded()
+
+    assert result is True
+    # Mode bit, not os.access: root may write to anything.
+    assert seed_env["live_duckdb"].stat().st_mode & stat.S_IWUSR
+    assert (seed_env["live_vector_db"] / "chroma.sqlite3").stat().st_mode & stat.S_IWUSR
 
 
 def test_noop_when_live_db_exists(seed_env):

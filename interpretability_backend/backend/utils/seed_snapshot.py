@@ -25,6 +25,7 @@ from chromadb.config import Settings
 from huggingface_hub import HfApi, snapshot_download
 
 from ..clients.duckdb_client import DuckDBClient
+from .writable_copy import WritableCopy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "interpretability_backend/config/seed_snapshots/default.json"
@@ -1349,5 +1350,6 @@ class HuggingFaceSnapshotDownloader:
             )
         )
         shutil.rmtree(staged)
-        shutil.copytree(source, staged)
+        # Hub (xet) downloads are read-only; the installed seed must not be.
+        WritableCopy.tree(source, staged)
         return staged

@@ -1,6 +1,7 @@
 """Tests for configuration-driven seed snapshots."""
 
 import json
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,6 +70,22 @@ def _snapshot_metadata(config: SeedSnapshotConfig, counts: dict | None = None) -
         "config_sha256": config.config_sha256,
         "counts": counts or {},
     }
+
+
+def _write_lock(config: SeedSnapshotConfig, manifest_hash: str) -> None:
+    config.publish.lock_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "snapshot_name": "demo",
+                "repo_id": "owner/private-seed",
+                "path": "snapshots/demo",
+                "revision": "hub-commit-123",
+                "manifest_sha256": manifest_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _disable_all_sae_payloads(payload: dict) -> None:
@@ -859,6 +876,34 @@ def test_downloader_verifies_lock_and_installs_snapshot_atomically(tmp_path: Pat
     assert calls[0]["revision"] == "hub-commit-123"
     assert (config.output_dir / "payload.txt").read_text(encoding="utf-8") == "downloaded"
     assert not (config.output_dir / "old.txt").exists()
+
+
+def test_downloader_installs_writable_files_from_a_read_only_hub_cache(tmp_path: Path) -> None:
+    """huggingface_hub >= 1.33 stores xet-backed files read-only (0o444); the
+    installed seed must not keep that mode, or every copy made from it is read-only."""
+    config = SeedSnapshotConfig.from_file(
+        _write_config(tmp_path, _payload()), project_root=tmp_path
+    )
+    remote_root = tmp_path / "remote"
+    remote_snapshot = remote_root / "snapshots/demo"
+    (remote_snapshot / "vector_db").mkdir(parents=True)
+    (remote_snapshot / "main.duckdb").write_text("db", encoding="utf-8")
+    (remote_snapshot / "vector_db/chroma.sqlite3").write_text("vectors", encoding="utf-8")
+    _write_lock(
+        config, SnapshotIntegrity.write_manifest(remote_snapshot, _snapshot_metadata(config))
+    )
+    remote_files = [path for path in remote_snapshot.rglob("*") if path.is_file()]
+    for path in remote_files:
+        path.chmod(0o444)
+
+    HuggingFaceSnapshotDownloader(download_function=lambda **kwargs: str(remote_root)).download(
+        config, token="read-token"
+    )
+
+    installed = [path for path in config.output_dir.rglob("*") if path.is_file()]
+    assert len(installed) == len(remote_files)
+    # Mode bit, not os.access: root may write to anything.
+    assert all(path.stat().st_mode & stat.S_IWUSR for path in installed)
 
 
 def test_downloader_uses_committed_seed_before_first_lock(tmp_path: Path) -> None:

@@ -101,3 +101,27 @@ verifies every checksum before baking the seed into the image. Until the first
 lock exists, local demo builds use the small committed seed as a migration
 fallback; the automated Space job remains disabled so the current public demo
 is not downgraded accidentally.
+
+## Read-only Hub downloads
+
+huggingface_hub ≥ 1.33 (with hf-xet 1.7) keeps xet-backed files in a shared,
+content-addressed blob store (`<cache>/blobs/xx/<sha256>`) with mode `0o444`,
+read-only even for their owner; plain git files still come down `0o644`. The
+demo seed's `main.duckdb`, HNSW files and Chroma sqlite are xet-backed.
+
+`shutil.copy2` / `shutil.copytree` copy permission bits, so before the fix the
+downloader's staging copy baked a read-only seed into the image and the first-run
+bootstrap copied it into `/home/user/data` read-only. The Space then started
+normally (`/health` healthy) but every DuckDB query failed with
+`IO Error: Cannot open file "/home/user/data/main.duckdb": Permission denied`
+and Chroma with `attempt to write a readonly database` (outage on 2026-10-23,
+after the `uv.lock` bump from huggingface-hub 1.16.0 to 1.33.0).
+
+Both copies now go through `backend/utils/writable_copy.WritableCopy`, which
+writes every file as a new file with the process umask (an existing
+destination file is replaced, so a read-only leftover never keeps its mode),
+follows the Hub cache's snapshot symlinks, and gives copied directories owner
+rwx even when the copy fails part-way (a retry can then write into them).
+Guarded by `unit_tests/test_writable_copy.py`, the read-only cases in
+`test_seed_bootstrap.py` and `test_seed_snapshot.py`. Any new code that copies
+Hub downloads into a store that must be writable should use it too.

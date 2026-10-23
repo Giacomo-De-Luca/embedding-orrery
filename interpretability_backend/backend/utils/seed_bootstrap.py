@@ -12,10 +12,10 @@ an existing database, so a developer's real (large) data store is always safe.
 
 import logging
 import os
-import shutil
 from pathlib import Path
 
 from .resource_paths import CHROMA_DB_PATH, DUCKDB_PATH, SEED_DIR
+from .writable_copy import WritableCopy
 
 logger = logging.getLogger("orrery." + __name__)
 
@@ -47,11 +47,12 @@ def ensure_seed_loaded() -> bool:
     # the LAST step. Since the never-clobber guard keys off main.duckdb's
     # existence, this ensures a crash mid-copy can never leave a half-seeded DB
     # that is mistaken for complete (it would just be retried next startup).
+    # WritableCopy: a seed downloaded from the Hub can be read-only.
     if SEED_VECTOR_DB.exists():
-        shutil.copytree(SEED_VECTOR_DB, Path(CHROMA_DB_PATH), dirs_exist_ok=True)
+        WritableCopy.tree(SEED_VECTOR_DB, Path(CHROMA_DB_PATH), dirs_exist_ok=True)
 
     tmp_duckdb = live_duckdb.with_name(live_duckdb.name + ".seedtmp")
-    shutil.copy2(SEED_DUCKDB_PATH, tmp_duckdb)
+    WritableCopy.file(SEED_DUCKDB_PATH, tmp_duckdb)
     os.replace(tmp_duckdb, live_duckdb)
 
     logger.info("Seed snapshot loaded into %s and %s", live_duckdb, CHROMA_DB_PATH)
