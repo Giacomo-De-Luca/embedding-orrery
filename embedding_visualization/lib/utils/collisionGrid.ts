@@ -1,7 +1,10 @@
 /**
  * Spatial grid for fast label collision detection.
- * Ported from TensorBoard's embedding projector (Apache 2.0).
+ * Ported from TensorBoard's embedding projector (Copyright 2016 The TensorFlow
+ * Authors, Apache 2.0) and modified; notice in THIRD_PARTY_NOTICES.md (frontend root).
  */
+
+import { LabelBox } from './labels/labelBox';
 
 export interface BoundingBox {
   loX: number;
@@ -32,14 +35,25 @@ export class CollisionGrid {
     this.grid = new Array(this.numHorizCells * this.numVertCells);
   }
 
+  /** A grid over a `width` × `height` px viewport, in 25 columns and 50 rows of at least 1 px. */
+  static forViewport(width: number, height: number): CollisionGrid {
+    return new CollisionGrid(
+      { loX: 0, loY: 0, hiX: width, hiY: height },
+      Math.max(width / 25, 1),
+      Math.max(height / 50, 1),
+    );
+  }
+
   /**
    * Checks if a bounding box can be placed without collisions.
    * If `justTest` is false (default), inserts it on success.
    * Returns true if no collision was found.
    */
   insert(bound: BoundingBox, justTest = false): boolean {
-    // Reject out-of-bounds labels
+    // Reject out-of-bounds labels, and boxes no cell can hold (a NaN coordinate
+    // would index no cell and so collide with nothing)
     if (
+      !LabelBox.isFinite(bound) ||
       bound.hiX < this.bound.loX ||
       bound.loX > this.bound.hiX ||
       bound.hiY < this.bound.loY ||

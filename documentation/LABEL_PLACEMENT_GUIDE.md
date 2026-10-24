@@ -2,6 +2,8 @@
 
 A guide to TensorBoard's two label rendering strategies and how to adapt them for the Plotly-based `ScatterPlot3D` component.
 
+> This is the design note written before the implementation. How labels are placed and drawn now, in both plots, is in `PLOT_LABELS.md`. The code follows Strategy A.
+
 ---
 
 ## TensorBoard's Two Modes

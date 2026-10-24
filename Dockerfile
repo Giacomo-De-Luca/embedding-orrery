@@ -155,6 +155,10 @@ FROM runner-base AS runner
 COPY --from=frontend-builder --chown=user:user /fe/public ./frontend/public
 COPY --from=frontend-builder --chown=user:user /fe/.next/standalone ./frontend/
 COPY --from=frontend-builder --chown=user:user /fe/.next/static ./frontend/.next/static
+# License notices ship with the built code: the project's license and the
+# frontend's third-party notices
+COPY --chown=user:user LICENSE ./LICENSE
+COPY --from=frontend-builder --chown=user:user /fe/THIRD_PARTY_NOTICES.md ./frontend/THIRD_PARTY_NOTICES.md
 
 COPY deploy/hf-space/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=user:user deploy/hf-space/start.sh /app/start.sh

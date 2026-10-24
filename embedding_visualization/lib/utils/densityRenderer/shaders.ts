@@ -6,6 +6,7 @@
  *   (fill_count_buffer.ts, gaussian_blur_2.ts, paint_density_map.ts,
  *    paint_contours.ts, gamma_correction.ts)
  * Copyright (c) 2025 Apple Inc. Licensed under MIT License.
+ * License notice in THIRD_PARTY_NOTICES.md (frontend root).
  *
  * The one intentional change: the gamma-correction fragment is made
  * alpha-preserving (unpremultiply → linear→sRGB → re-premultiply) because our

@@ -1,29 +1,17 @@
 /**
- * 2D label placement utilities using Apple's dynamic map labeling algorithm.
- *
- * Bridges Plotly 2D axis ranges to the scale-aware placement system from
- * `dynamicMapPlacement.ts`. Labels smoothly appear/disappear as the user
- * zooms, with larger clusters visible at lower zoom levels.
+ * 2D cluster-label placement with Apple's dynamic map labeling
+ * (`dynamicMapPlacement.ts`). Each label is laid out once at the initial view and
+ * gets the zoom band in which it shows without overlapping a higher-priority
+ * label, so labels appear and disappear smoothly as the user zooms, with larger
+ * clusters visible further out, instead of flickering while panning.
  */
 
 import { dynamicLabelPlacement, type Label, type Placement } from './dynamicMapPlacement';
 import type { ClusterData } from '../../lib/utils/clusterGeometry';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface PlotArea {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-export interface AxisRanges {
-  xRange: [number, number];
-  yRange: [number, number];
-}
+import type { AxisRanges, CartesianView } from '../../lib/utils/cartesianView';
+import { ClusterLabelOrder, type ClusterLabelDraw } from '../../lib/utils/labels/clusterLabels';
+import { LabelBox } from '../../lib/utils/labels/labelBox';
+import { LabelFonts, type TextMeasurer } from '../../lib/utils/labels/labelStyle';
 
 export interface ClusterLabelPlacement {
   label: string;
@@ -37,173 +25,115 @@ export interface ClusterLabelPlacement {
   placement: Placement | null;
   /** Priority (cluster point count) */
   priority: number;
-  /** Font size in px; renderers default to 13 when absent */
+  /** Font size in px; renderers default to `LabelFonts.CLUSTER_SIZE` when absent */
   fontSize?: number;
   /** Topic label backing this text, when it differs from `label` semantics
    *  (density labels use it to keep topic-click behavior) */
   topicLabel?: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Plot area
-// ---------------------------------------------------------------------------
+/** One label to place: its text, data-space anchor, priority and font size. */
+export interface ZoomBandEntry {
+  label: string;
+  dataX: number;
+  dataY: number;
+  priority: number;
+  fontSize: number;
+}
 
-/**
- * Extract the plot-area rect (CSS px within the plot div) from Plotly's
- * internal `_fullLayout`. Prefers the exact `_size` object, falling back to
- * margins when the plot hasn't fully laid out yet.
- */
-export function plotAreaFromFullLayout(
-  fl: any,
-  fallbackWidth: number,
-  fallbackHeight: number,
-): PlotArea {
-  const size = fl?._size;
-  if (size && typeof size.l === 'number' && typeof size.w === 'number') {
-    return { left: size.l, top: size.t, width: size.w, height: size.h };
+/** An entry with its measured text width and its zoom band (null = never visible). */
+export type ZoomBandPlaced<E extends ZoomBandEntry> = E & { textWidth: number; placement: Placement | null };
+
+/** The zoom-band placement both the centroid and the density cluster labels go through. */
+export class ZoomBandPlacement {
+  /** The furthest zoom-out (span ratio to the initial view) a band is computed for. */
+  static readonly GLOBAL_MAX_SCALE = 2;
+  /** Labels are drawn while their anchor is within this many px of the plot area. */
+  static readonly CLIP_MARGIN = 20;
+
+  /**
+   * The cluster labels to draw in `view`: those whose zoom band holds its scale
+   * relative to `initial`, or every label with "show all" (the collision grid then
+   * declutters them), near the plot area. Runs every pan/zoom frame, so it keeps
+   * the order it is given: `place` already returns placements by priority.
+   */
+  static visibleAt(
+    placements: readonly ClusterLabelPlacement[],
+    view: CartesianView,
+    initial: AxisRanges,
+    showAll: boolean,
+  ): ClusterLabelDraw[] {
+    const scale = view.scaleRelativeTo(initial);
+    const draws: ClusterLabelDraw[] = [];
+    for (const label of placements) {
+      const band = label.placement;
+      if (!showAll && (!band || scale < band.minScale || scale > band.maxScale)) continue;
+      const screen = view.project(label.dataX, label.dataY);
+      if (!view.contains(screen, ZoomBandPlacement.CLIP_MARGIN)) continue;
+      draws.push({
+        text: label.label,
+        x: screen.x,
+        y: screen.y,
+        width: label.textWidth,
+        fontSize: label.fontSize ?? LabelFonts.CLUSTER_SIZE,
+        color: label.color,
+        alpha: 1,
+        // Explicit null disables topic clicks for other fields and summaries,
+        // even when their text happens to match a topic name.
+        hitLabel: label.topicLabel === undefined ? label.label : label.topicLabel,
+      });
+    }
+    return draws;
   }
-  const ml = fl?.margin?.l ?? 50;
-  const mr = fl?.margin?.r ?? 50;
-  const mt = fl?.margin?.t ?? 50;
-  const mb = fl?.margin?.b ?? 50;
-  return {
-    left: ml,
-    top: mt,
-    width: Math.max((fl?.width ?? fallbackWidth) - ml - mr, 1),
-    height: Math.max((fl?.height ?? fallbackHeight) - mt - mb, 1),
-  };
-}
 
-// ---------------------------------------------------------------------------
-// Coordinate projection
-// ---------------------------------------------------------------------------
+  /** The placement algorithm's label for an entry: its centred box at the initial view. */
+  static labelFor(entry: ZoomBandEntry, textWidth: number, initial: CartesianView): Label {
+    const anchor = initial.project(entry.dataX, entry.dataY);
+    const box = LabelBox.centered(anchor.x, anchor.y, textWidth, entry.fontSize);
+    return {
+      bounds: { xMin: box.loX, yMin: box.loY, xMax: box.hiX, yMax: box.hiY },
+      locationAtZero: anchor,
+      priority: entry.priority,
+    };
+  }
 
-/**
- * Project a data-space coordinate to CSS pixel coordinates within the plot area.
- */
-export function projectDataToScreen(
-  dataX: number,
-  dataY: number,
-  ranges: AxisRanges,
-  plotArea: PlotArea,
-): { x: number; y: number } {
-  const xSpan = ranges.xRange[1] - ranges.xRange[0];
-  const ySpan = ranges.yRange[1] - ranges.yRange[0];
-  if (xSpan === 0 || ySpan === 0) return { x: plotArea.left, y: plotArea.top };
-
-  const normX = (dataX - ranges.xRange[0]) / xSpan;
-  // Plotly Y axis goes bottom-to-top, screen Y goes top-to-bottom
-  const normY = 1 - (dataY - ranges.yRange[0]) / ySpan;
-
-  return {
-    x: plotArea.left + normX * plotArea.width,
-    y: plotArea.top + normY * plotArea.height,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Scale computation
-// ---------------------------------------------------------------------------
-
-/**
- * Compute the Apple algorithm's "scale" from the current view ranges vs. the
- * initial (full-extent) ranges.
- *
- * In Apple's model, scale controls label size on screen:
- *   scale = 0 → labels are points (no overlap, all visible)
- *   scale = 1 → labels at full size (max overlap, fewest visible)
- *
- * We map: scale = currentSpan / initialSpan
- *   Zoomed all the way out → scale ≈ 1 (full overlap, few labels)
- *   Zoomed in             → scale < 1 (less overlap, more labels appear)
- */
-export function computeCurrentScale(
-  currentRanges: AxisRanges,
-  initialRanges: AxisRanges,
-): number {
-  const curXSpan = Math.abs(currentRanges.xRange[1] - currentRanges.xRange[0]) || 1;
-  const curYSpan = Math.abs(currentRanges.yRange[1] - currentRanges.yRange[0]) || 1;
-  const iniXSpan = Math.abs(initialRanges.xRange[1] - initialRanges.xRange[0]) || 1;
-  const iniYSpan = Math.abs(initialRanges.yRange[1] - initialRanges.yRange[0]) || 1;
-
-  const scaleX = curXSpan / iniXSpan;
-  const scaleY = curYSpan / iniYSpan;
-  return Math.sqrt(scaleX * scaleY);
-}
-
-// ---------------------------------------------------------------------------
-// Placement computation
-// ---------------------------------------------------------------------------
-
-/**
- * Build Apple `Label[]` descriptors from cluster data and run the placement
- * algorithm. Returns an array of `ClusterLabelPlacement` objects, one per
- * cluster, with pre-computed placement visibility ranges.
- *
- * @param clusterDataMap - Map of cluster name → ClusterData (from groupPointsByCluster)
- * @param ctx - A canvas 2D context for measuring text
- * @param font - The CSS font string used for cluster labels
- * @param initialRanges - The full-extent axis ranges (at scale=1)
- * @param plotArea - The plot's pixel area within the container
- * @param globalMaxScale - The maximum zoom scale the user can reach
- */
-export function computeClusterLabelPlacements(
-  clusterDataMap: Map<string, ClusterData>,
-  ctx: CanvasRenderingContext2D,
-  font: string,
-  initialRanges: AxisRanges,
-  plotArea: PlotArea,
-  globalMaxScale: number = 2,
-): ClusterLabelPlacement[] {
-  if (clusterDataMap.size === 0) return [];
-
-  ctx.font = font;
-  const pad = 4; // px padding around text
-
-  // Build label descriptors
-  const entries: { label: string; color: string; dataX: number; dataY: number; textWidth: number; priority: number }[] = [];
-  const appleLabels: Label[] = [];
-
-  for (const [name, cluster] of clusterDataMap) {
-    const textWidth = ctx.measureText(name).width;
-    const halfW = textWidth / 2 + pad;
-    const halfH = 8 + pad; // ~fontSize * 0.6 + padding
-
-    // Project centroid to screen at scale=1 (initial full view)
-    const screen = projectDataToScreen(
-      cluster.centroid.x,
-      cluster.centroid.y,
-      initialRanges,
-      plotArea,
+  /**
+   * Measures every entry in the cluster font at its size and computes its zoom
+   * band; returns them highest priority first (ties in their order), the order
+   * they then claim space in.
+   */
+  static place<E extends ZoomBandEntry>(entries: E[], ctx: TextMeasurer, initial: CartesianView): ZoomBandPlaced<E>[] {
+    if (entries.length === 0) return [];
+    const widths = entries.map(entry => {
+      ctx.font = LabelFonts.cluster(entry.fontSize);
+      return ctx.measureText(entry.label).width;
+    });
+    const placements = dynamicLabelPlacement(
+      entries.map((entry, i) => ZoomBandPlacement.labelFor(entry, widths[i], initial)),
+      { globalMaxScale: ZoomBandPlacement.GLOBAL_MAX_SCALE },
     );
+    return ClusterLabelOrder.byPriority(
+      entries.map((entry, i) => ({ ...entry, textWidth: widths[i], placement: placements[i] })),
+    );
+  }
 
-    entries.push({
+  /**
+   * One label per cluster at its centroid, prioritised by point count, at the
+   * default cluster font size.
+   */
+  static forClusters(
+    clusterDataMap: Map<string, ClusterData>,
+    ctx: TextMeasurer,
+    initial: CartesianView,
+  ): ClusterLabelPlacement[] {
+    const entries = Array.from(clusterDataMap, ([name, cluster]) => ({
       label: name,
       color: cluster.color,
       dataX: cluster.centroid.x,
       dataY: cluster.centroid.y,
-      textWidth,
       priority: cluster.points.length,
-    });
-
-    appleLabels.push({
-      bounds: {
-        xMin: screen.x - halfW,
-        yMin: screen.y - halfH,
-        xMax: screen.x + halfW,
-        yMax: screen.y + halfH,
-      },
-      locationAtZero: { x: screen.x, y: screen.y },
-      priority: cluster.points.length,
-    });
+      fontSize: LabelFonts.CLUSTER_SIZE,
+    }));
+    return ZoomBandPlacement.place(entries, ctx, initial);
   }
-
-  // Run Apple's dynamic placement algorithm
-  const placements = dynamicLabelPlacement(appleLabels, { globalMaxScale });
-
-  // Combine into result
-  return entries.map((entry, i) => ({
-    ...entry,
-    placement: placements[i],
-  }));
 }

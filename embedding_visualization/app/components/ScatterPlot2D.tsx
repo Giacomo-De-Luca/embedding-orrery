@@ -10,10 +10,9 @@ import type {
   Config,
   PlotMouseEvent,
   PlotHoverEvent,
-  PlotRelayoutEvent,
 } from 'plotly.js';
 import type { Point2D, HighlightMap, NestedColorMap, ColorScale, CustomNumericRange } from '../../lib/types/types';
-import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
+import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, type SequentialScaleName, type DivergingScaleName } from '../../lib/utils/categoryColors';
 import { CategoryKey } from '../../lib/utils/categoryKey';
 import { HiddenPoints } from '../../lib/utils/hiddenPoints';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
@@ -24,20 +23,25 @@ import { useZoomLimit } from '../../lib/hooks/useZoomLimit';
 import { useLatestRef } from '../../lib/hooks/useLatestRef';
 import { usePinchZoom } from '../../lib/hooks/usePinchZoom';
 import { CartesianPinchZoom } from '../../lib/utils/plotPinchZoom';
-import { CoalescedRedraw } from '../../lib/utils/coalescedRedraw';
+import { useCoalescedRedraw } from '../../lib/hooks/useCoalescedRedraw';
+import { useDebounceValue } from '../../lib/hooks/use-debounce-value';
 import { ZoomMarkerStyle, type OpacityTrace } from '../../lib/utils/zoomMarkerStyle';
 import { formatHoverText } from '../utils/rendeding';
 import { groupPointsByCluster, type ClusterData } from '../../lib/utils/clusterGeometry';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
-import {
-  computeClusterLabelPlacements,
-  computeCurrentScale,
-  plotAreaFromFullLayout,
-  projectDataToScreen,
-  type AxisRanges,
-  type ClusterLabelPlacement,
-} from '../utils/labelPlacement2D';
+import { ZoomBandPlacement, type ClusterLabelPlacement } from '../utils/labelPlacement2D';
+import { CartesianView, type AxisRanges, type PlotArea } from '../../lib/utils/cartesianView';
+import { CollisionGrid } from '../../lib/utils/collisionGrid';
+import { HighlightedPoints } from '../../lib/utils/highlightedPoints';
+import { LabelCanvas, type LabelTarget } from '../../lib/utils/labels/labelCanvas';
+import { ClusterLabelPainter } from '../../lib/utils/labels/clusterLabels';
+import { LabelHitBoxes } from '../../lib/utils/labels/labelHitBoxes';
+import { useClusterLabelClicks } from '../../lib/hooks/useClusterLabelClicks';
+import { LabelStyle } from '../../lib/utils/labels/labelStyle';
+import { PointLabelPass } from '../../lib/utils/labels/pointLabels';
+import { useSearchLabels } from '../../lib/hooks/useSearchLabels';
+import { useLabelMeasurer } from '../../lib/hooks/useLabelMeasurer';
 import { useDensityOverlay } from '../../lib/hooks/useDensityOverlay';
 import { useDensityClusterLabels } from '../../lib/hooks/useDensityClusterLabels';
 import { assignCategoryChannels, type ActiveCategory } from '../../lib/utils/densityRenderer/densityMath';
@@ -59,6 +63,26 @@ type ForkConfig = Partial<Config> & {
 
 // Dynamically import Plot to avoid SSR issues
 const Plot = dynamic<PlotParams>(() => import('react-plotly.js'), { ssr: false });
+
+/** What the cluster labels are placed from. */
+interface ClusterLabelInputs {
+  visiblePoints: Point2D[];
+  clusters: Map<string, ClusterData>;
+  plotArea: PlotArea | null;
+  initialRanges: AxisRanges | null;
+}
+
+// Cluster labels are placed again once their inputs have been still this long.
+// The options object must stay the same: useDebounceCallback starts a new
+// debounce when it changes.
+const CLUSTER_LABEL_SETTLE_MS = 150;
+const CLUSTER_LABEL_SETTLE = {
+  equalityFn: (a: ClusterLabelInputs, b: ClusterLabelInputs) =>
+    a.visiblePoints === b.visiblePoints
+    && a.clusters === b.clusters
+    && a.initialRanges === b.initialRanges
+    && CartesianView.sameArea(a.plotArea, b.plotArea),
+};
 
 interface ScatterPlot2DProps {
   points: Point2D[];
@@ -168,11 +192,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   // Block zoom-out when visible axes exceed 2x the data extent
   const MAX_RANGE_MULTIPLIER = 2.0;
   const isAtZoomOutLimit2D = useCallback(() => {
-    const gd = graphDivRef.current;
-    if (!gd?._fullLayout || !bounds) return false;
-    const xRange = gd._fullLayout.xaxis?.range;
-    const yRange = gd._fullLayout.yaxis?.range;
-    if (!xRange || !yRange) return false;
+    const ranges = CartesianView.rangesOf(graphDivRef.current?._fullLayout);
+    if (!ranges || !bounds) return false;
+    const { xRange, yRange } = ranges;
     const visibleX = Math.abs(xRange[1] - xRange[0]);
     const visibleY = Math.abs(yRange[1] - yRange[0]);
     const dataX = (bounds.maxX - bounds.minX) || 1;
@@ -193,13 +215,10 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   const zoomMarkerStyle = useMemo(() => new ZoomMarkerStyle(points.length, bounds), [points.length, bounds]);
   const zoomMarkerStyleRef = useLatestRef(zoomMarkerStyle);
 
-  // --- Cluster labels: canvas overlay refs and state ---
+  // --- Labels: canvas overlay refs and state ---
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
-  const clusterPlacementsRef = useRef<ClusterLabelPlacement[]>([]);
-  const initialRangesRef = useRef<AxisRanges | null>(null);
-  const currentRangesRef = useRef<AxisRanges | null>(null);
-  // Store drawn label bounding boxes for click hit-testing
-  const drawnLabelBoxesRef = useRef<{ loX: number; loY: number; hiX: number; hiY: number; label: string | null }[]>([]);
+  // The clickable cluster labels drawn last, for hit-testing clicks
+  const [labelHits] = useState(() => new LabelHitBoxes());
 
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme ?? 'light';
@@ -212,26 +231,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   useEffect(() => {
     plotlyLoader.load().then((lib) => { plotlyLibRef.current = lib; setPlotlyReady(true); });
   }, []);
-
-  // Modebar screenshot: routed through a ref (reassigned every render) because
-  // the config memo only rebuilds on [plotlyReady], so a plain closure would go stale.
-  const screenshotHandlerRef = useRef<((gd: any) => void) | null>(null);
-  screenshotHandlerRef.current = (gd: any) => {
-    if (!onScreenshot || !containerRef.current || !plotlyLibRef.current) return;
-    capture2DPlot({
-      gd: gd ?? graphDivRef.current,
-      plotlyLib: plotlyLibRef.current,
-      container: containerRef.current,
-      densityCanvas: densityCanvasRef.current,
-      labelCanvas: labelCanvasRef.current,
-      isDark,
-    })
-      .then(onScreenshot)
-      .catch((err) => {
-        console.error('Screenshot failed:', err);
-        toast.error('Screenshot failed');
-      });
-  };
 
   const axisColor = isDark ? '#e2e8f0' : '#0f172a';
   const gridColor = isDark ? '#334155' : '#e5e7eb';
@@ -298,17 +297,37 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
   const densityCanvasRef = useRef<HTMLCanvasElement>(null);
   const [plotReady, setPlotReady] = useState(false);
+  // The plot area Plotly has laid out: it moves with the margins (Show axes) and
+  // the size, and cluster labels are placed for it
+  const [plotArea, setPlotArea] = useState<PlotArea | null>(null);
+  const plotAreaRef = useRef<PlotArea | null>(null);
 
-  // Initial (full-extent) axis ranges: data bounds + Plotly's ~5% auto-pad.
+  // Initial (full-extent) axis ranges: data bounds + Plotly's ~5% auto-pad. Keyed
+  // on the bounds' values, so new points over the same extent (a topic-tree
+  // preview step) keep them, and the cluster labels placed for them.
+  const minX = bounds?.minX;
+  const maxX = bounds?.maxX;
+  const minY = bounds?.minY;
+  const maxY = bounds?.maxY;
   const initialRanges = useMemo((): AxisRanges | null => {
-    if (!bounds) return null;
-    const padX = (bounds.maxX - bounds.minX) * 0.05 || 0.5;
-    const padY = (bounds.maxY - bounds.minY) * 0.05 || 0.5;
+    if (minX === undefined || maxX === undefined || minY === undefined || maxY === undefined) return null;
+    const padX = (maxX - minX) * 0.05 || 0.5;
+    const padY = (maxY - minY) * 0.05 || 0.5;
     return {
-      xRange: [bounds.minX - padX, bounds.maxX + padX],
-      yRange: [bounds.minY - padY, bounds.maxY + padY],
+      xRange: [minX - padX, maxX + padX],
+      yRange: [minY - padY, maxY + padY],
     };
-  }, [bounds]);
+  }, [minX, maxX, minY, maxY]);
+
+  // The zoom-band placement takes about 0.1 s for thousands of topics, so the
+  // cluster labels are placed from inputs that have settled: a burst of changes
+  // (dragging the temporal brush, resizing the panel) places them once, after the
+  // change itself has painted.
+  const [settledLabelInputs] = useDebounceValue<ClusterLabelInputs>(
+    { visiblePoints, clusters: clusterDataMap, plotArea, initialRanges },
+    CLUSTER_LABEL_SETTLE_MS,
+    CLUSTER_LABEL_SETTLE,
+  );
 
   const { scheduleRender: scheduleDensityRender, supported: densitySupported } = useDensityOverlay({
     enabled: densityMode && plotReady,
@@ -324,6 +343,9 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     height,
   });
 
+  // Measures label text; a new one once the label fonts have loaded, so labels are re-placed
+  const labelMeasurer = useLabelMeasurer();
+
   // Density-blob cluster labels (hybrid text): only attempted in density mode;
   // null falls back to the category-centroid placements below.
   const hasTopicLabels = useMemo(
@@ -332,209 +354,29 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   );
   const densityPlacements = useDensityClusterLabels({
     enabled: densityMode && showClusterLabels && plotReady,
-    visiblePoints,
+    visiblePoints: settledLabelInputs.visiblePoints,
     labelField: colorScale.type === 'categorical' && categoryField
       ? categoryField
       : hasTopicLabels ? 'topic_label' : null,
     colorMap,
     nestedColorMap,
     isDark,
-    initialRanges,
-    graphDivRef,
-    width,
-    height,
+    initialRanges: settledLabelInputs.initialRanges,
+    plotArea: settledLabelInputs.plotArea,
+    measurer: labelMeasurer,
   });
 
-  // --- Cluster label font constant ---
-  const CLUSTER_FONT = 'bold 13px Geist Mono, monospace';
-  const CLUSTER_FONT_SIZE = 13;
-
-  // --- Recompute Apple placements when clusters or layout change ---
-  useEffect(() => {
-    if (!showClusterLabels || !initialRanges) {
-      clusterPlacementsRef.current = [];
-      return;
-    }
-    initialRangesRef.current = initialRanges;
-
+  // --- Zoom-band placements of the cluster labels, for the laid-out plot area ---
+  const clusterPlacements = useMemo((): ClusterLabelPlacement[] => {
+    const { clusters, plotArea: area } = settledLabelInputs;
+    // None while the settled inputs are another extent's (a new projection or
+    // collection): its labels would land in the wrong places.
+    if (!showClusterLabels || !initialRanges || !area || settledLabelInputs.initialRanges !== initialRanges) return [];
     // Density-blob labels take over when the pipeline produced them.
-    if (densityPlacements && densityPlacements.length > 0) {
-      clusterPlacementsRef.current = densityPlacements;
-      return;
-    }
-
-    if (clusterDataMap.size === 0) {
-      clusterPlacementsRef.current = [];
-      return;
-    }
-
-    // Use a temporary canvas for text measurement
-    const canvas = labelCanvasRef.current ?? document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const plotArea = plotAreaFromFullLayout(graphDivRef.current?._fullLayout, width, height);
-
-    clusterPlacementsRef.current = computeClusterLabelPlacements(
-      clusterDataMap,
-      ctx,
-      CLUSTER_FONT,
-      initialRanges,
-      plotArea,
-    );
-  }, [showClusterLabels, clusterDataMap, densityPlacements, initialRanges, width, height]);
-
-  // --- Render cluster labels on the canvas overlay ---
-  const renderClusterLabels = useCallback(() => {
-    const canvas = labelCanvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = width;
-    const cssH = height;
-
-    // Resize canvas backing store
-    const bw = Math.round(cssW * dpr);
-    const bh = Math.round(cssH * dpr);
-    if (canvas.width !== bw || canvas.height !== bh) {
-      canvas.width = bw;
-      canvas.height = bh;
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-
-    // Clear hit-test boxes
-    drawnLabelBoxesRef.current = [];
-
-    const placements = clusterPlacementsRef.current;
-    const initRanges = initialRangesRef.current;
-    if (!placements.length || !initRanges) return;
-
-    // Get current axis ranges from Plotly's internal layout
-    const gd = graphDivRef.current;
-    const xRange = gd?._fullLayout?.xaxis?.range;
-    const yRange = gd?._fullLayout?.yaxis?.range;
-    if (!xRange || !yRange) return;
-
-    const curRanges: AxisRanges = {
-      xRange: [xRange[0], xRange[1]],
-      yRange: [yRange[0], yRange[1]],
-    };
-    currentRangesRef.current = curRanges;
-
-    const scale = computeCurrentScale(curRanges, initRanges);
-
-    // Get the plot area from Plotly's internal layout for accurate coordinate mapping
-    const plotArea = plotAreaFromFullLayout(gd?._fullLayout, cssW, cssH);
-
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-
-    const boxes: { loX: number; loY: number; hiX: number; hiY: number; label: string | null }[] = [];
-
-    for (const cl of placements) {
-      // Check Apple visibility: placement must exist and current scale must be in range
-      if (!cl.placement) continue;
-      if (scale < cl.placement.minScale || scale > cl.placement.maxScale) continue;
-
-      // Project data centroid to current screen position
-      const screen = projectDataToScreen(cl.dataX, cl.dataY, curRanges, plotArea);
-
-      // Clip to plot area
-      if (screen.x < plotArea.left - 20 || screen.x > plotArea.left + plotArea.width + 20) continue;
-      if (screen.y < plotArea.top - 20 || screen.y > plotArea.top + plotArea.height + 20) continue;
-
-      // Density labels carry per-level font sizes; topic-centroid labels use the default
-      const fontSize = cl.fontSize ?? CLUSTER_FONT_SIZE;
-      ctx.font = fontSize === CLUSTER_FONT_SIZE ? CLUSTER_FONT : `bold ${fontSize}px Geist Mono, monospace`;
-
-      const textWidth = ctx.measureText(cl.label).width;
-      const pad = 4;
-      const box = {
-        loX: screen.x - textWidth / 2 - pad,
-        loY: screen.y - fontSize * 0.6 - pad,
-        hiX: screen.x + textWidth / 2 + pad,
-        hiY: screen.y + fontSize * 0.6 + pad,
-        // Explicit null disables topic clicks for other fields and summaries,
-        // even when their text happens to match a topic name.
-        label: cl.topicLabel === undefined ? cl.label : cl.topicLabel,
-      };
-
-      // Draw label with stroke outline for readability (same style as 3D)
-      ctx.globalAlpha = 1.0;
-      ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.6)';
-      ctx.lineWidth = isDark ? 4 : 3;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(cl.label, screen.x, screen.y);
-      ctx.fillStyle = desaturateHex(cl.color, isDark ? 0.3 : 0.45, isDark);
-      ctx.fillText(cl.label, screen.x, screen.y);
-
-      boxes.push(box);
-    }
-
-    drawnLabelBoxesRef.current = boxes;
-    ctx.globalAlpha = 1.0;
-  }, [width, height, isDark]);
-
-  const labelsActive = showClusterLabels &&
-    (clusterDataMap.size > 0 || (densityPlacements?.length ?? 0) > 0);
-
-  // --- Handle Plotly relayout (zoom/pan) to re-render the overlays.
-  // `relayouting` fires continuously during drag/scroll so the density map and
-  // labels track the gesture live; `relayout` fires once at the end. A pinch
-  // frame emits several, so both overlays coalesce them into one redraw.
-  // The handler stays stable (no rebinding) and reads the label state through a
-  // ref, which the queued redraw also reads when it runs.
-  const labelStateRef = useLatestRef({ labelsActive, renderClusterLabels });
-  const [labelRedraw] = useState(() => new CoalescedRedraw());
-  const renderLatestLabels = useCallback(() => labelStateRef.current.renderClusterLabels(), [labelStateRef]);
-  const handleRelayout = useCallback((_event: PlotRelayoutEvent) => {
-    scheduleDensityRender();
-    if (labelStateRef.current.labelsActive) labelRedraw.request(renderLatestLabels);
-  }, [labelStateRef, labelRedraw, renderLatestLabels, scheduleDensityRender]);
-
-  // Re-render labels when cluster data, size, or theme changes
-  useEffect(() => {
-    if (labelsActive) {
-      // Small delay to ensure Plotly has laid out
-      const timer = setTimeout(() => renderClusterLabels(), 50);
-      return () => clearTimeout(timer);
-    } else if (labelCanvasRef.current) {
-      const ctx = labelCanvasRef.current.getContext('2d');
-      if (ctx) ctx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
-      drawnLabelBoxesRef.current = [];
-    }
-  }, [labelsActive, clusterDataMap, densityPlacements, width, height, renderClusterLabels]);
-
-  // --- Click handler for cluster labels (intercept before Plotly) ---
-  const handleContainerClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const topicClicks = !!onClusterLabelClick && !!topicLabelToIdMap;
-    if ((!topicClicks && !onClusterCategoryClick) || drawnLabelBoxesRef.current.length === 0) return;
-
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    for (const box of drawnLabelBoxesRef.current) {
-      if (box.label === null) continue;
-      if (x >= box.loX && x <= box.hiX && y >= box.loY && y <= box.hiY) {
-        const topicId = topicLabelToIdMap?.get(box.label);
-        if (onClusterLabelClick && topicId !== undefined) {
-          e.stopPropagation();
-          onClusterLabelClick(topicId);
-          return;
-        }
-        if (onClusterCategoryClick?.(box.label, e.shiftKey)) {
-          e.stopPropagation();
-          return;
-        }
-      }
-    }
-  }, [onClusterLabelClick, topicLabelToIdMap, onClusterCategoryClick]);
+    if (densityPlacements && densityPlacements.length > 0) return densityPlacements;
+    if (!labelMeasurer || clusters.size === 0) return [];
+    return ZoomBandPlacement.forClusters(clusters, labelMeasurer, new CartesianView(initialRanges, area));
+  }, [showClusterLabels, initialRanges, settledLabelInputs, densityPlacements, labelMeasurer]);
 
   // Extract raw numeric data for native Plotly colorscales
   const numericData = useMemo(() => {
@@ -653,6 +495,114 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     return calculateHighlightScale(points.length);
   }, [points.length]);
 
+  // Inner glow diameters of the search results and the selected point: drawn by
+  // the glow traces, and cleared by the search labels beside them
+  const resultGlowSize = markerStyle.size * highlightScale.innerMultiplier;
+  const selectedGlowSize = Math.max(markerStyle.size * highlightScale.selectedInnerMultiplier, 8);
+
+  // Highlighted points by index lookup — O(k) not O(n) — in highlight order
+  const highlightedPoints = useMemo(
+    () => HighlightedPoints.lookup(points, highlightedIndices),
+    [points, highlightedIndices],
+  );
+
+  // --- Labels on the canvas overlay ---
+  // Search labels follow the live selected point: drawn on the canvas only, they
+  // cost no replot.
+  const searchLabels = useSearchLabels(showLabels, highlightedPoints, highlightedIndices, selectedPoint?.index, labelMeasurer);
+  const showAllClusterLabels = useVisualizationStore((s) => s.showAllClusterLabels);
+  const hasClusterLabels = clusterPlacements.length > 0;
+  const labelsActive = hasClusterLabels || searchLabels !== null;
+
+  // Draws every label through one CollisionGrid: the selected point's label claims
+  // space first, then the cluster labels in their zoom bands (all of them with
+  // "show all"), then the other search labels beside their points by similarity.
+  // On the overlay (renderLabels) or a screenshot's own canvas.
+  const drawLabelsOn = useCallback(({ canvas, pixelRatio, hits }: LabelTarget) => {
+    const ctx = LabelCanvas.prepare(canvas, width, height, pixelRatio);
+    const view = CartesianView.fromFullLayout(graphDivRef.current?._fullLayout, width, height);
+    if (!ctx || !view || !initialRanges) return;
+
+    const grid = CollisionGrid.forViewport(width, height);
+    const style = new LabelStyle(isDark, '2d');
+    const searchPass = new PointLabelPass(style);
+    // Search labels only for points inside the plot area
+    const project = (point: Point2D) => {
+      const screen = view.project(point.x, point.y);
+      return view.contains(screen) ? screen : null;
+    };
+    // The glow markers grow as you zoom in, and their labels move out with them
+    const zoom = zoomMarkerStyleRef.current.sizeScale(view.ranges.xRange, view.ranges.yRange);
+
+    if (searchLabels?.selected) {
+      searchPass.draw(ctx, grid, [searchLabels.selected], project, PointLabelPass.offsetBeside(selectedGlowSize * zoom));
+    }
+    const draws = ZoomBandPlacement.visibleAt(clusterPlacements, view, initialRanges, showAllClusterLabels);
+    new ClusterLabelPainter(style).paint(ctx, grid, draws, hits);
+    if (searchLabels) {
+      searchPass.draw(ctx, grid, searchLabels.others, project, PointLabelPass.offsetBeside(resultGlowSize * zoom));
+    }
+  }, [width, height, isDark, initialRanges, searchLabels, clusterPlacements, showAllClusterLabels, resultGlowSize, selectedGlowSize, zoomMarkerStyleRef]);
+
+  // The overlay's labels; their click targets are cleared even while the canvas is unmounted
+  const renderLabels = useCallback(() => {
+    labelHits.clear();
+    const overlay = LabelCanvas.overlay(labelCanvasRef.current, labelHits);
+    if (overlay) drawLabelsOn(overlay);
+  }, [drawLabelsOn, labelHits]);
+
+  // One label redraw per burst of requests (pan/zoom frames, data changes), after
+  // Plotly has drawn them
+  const renderLabelsRef = useLatestRef(renderLabels);
+  const requestLabelRedraw = useCoalescedRedraw(renderLabelsRef);
+
+  // Redraw when the labels' inputs change (the canvas mounts with the first label)
+  useEffect(() => {
+    requestLabelRedraw();
+  }, [renderLabels, requestLabelRedraw]);
+
+  // Modebar screenshot: routed through a ref because the config memo only rebuilds
+  // when Plotly loads or a screenshot handler appears, so a plain closure would go stale.
+  const screenshotHandlerRef = useLatestRef((gd: any) => {
+    if (!onScreenshot || !containerRef.current || !plotlyLibRef.current) return;
+    capture2DPlot({
+      gd: gd ?? graphDivRef.current,
+      plotlyLib: plotlyLibRef.current,
+      container: containerRef.current,
+      densityCanvas: densityCanvasRef.current,
+      drawLabels: labelsActive ? (pixelRatio) => LabelCanvas.renderOffscreen(pixelRatio, drawLabelsOn) : undefined,
+      isDark,
+    })
+      .then(onScreenshot)
+      .catch((err) => {
+        console.error('Screenshot failed:', err);
+        toast.error('Screenshot failed');
+      });
+  });
+
+  // --- Cluster-label clicks (intercepted before Plotly) ---
+  const labelClicks = useClusterLabelClicks({
+    containerRef,
+    hits: labelHits,
+    enabled: hasClusterLabels,
+    topicLabelToIdMap,
+    onTopic: onClusterLabelClick,
+    onCategory: onClusterCategoryClick,
+  });
+
+  // After every Plotly.react, relayout and relayouting frame (react-plotly calls
+  // onUpdate for each, reading it from props): the overlays follow the view, and
+  // a moved plot area (margins, size) re-places the cluster labels.
+  const handlePlotUpdate = useCallback(() => {
+    scheduleDensityRender();
+    requestLabelRedraw();
+    const area = CartesianView.plotAreaOf(graphDivRef.current?._fullLayout, width, height);
+    if (!CartesianView.sameArea(plotAreaRef.current, area)) {
+      plotAreaRef.current = area;
+      setPlotArea(area);
+    }
+  }, [scheduleDensityRender, requestLabelRedraw, width, height]);
+
   const plotData = useMemo((): PlotlyData[] => {
     let traces: PlotlyData[] = [];
 
@@ -662,8 +612,6 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
 
       // Apply the hide toggles (unclustered noise, missing values) to background points
       const filteredUnhighlightedPoints = HiddenPoints.filter(unhighlightedPoints, categoryField, hiddenOptions);
-
-      const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
 
       // A. Background Points (dimmed) - skip if showOnlyHighlighted is true
       // Color priority: numericData > categorical > default gold
@@ -994,7 +942,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             hoverinfo: 'skip',
             meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
-              size: markerStyle.size * highlightScale.innerMultiplier,
+              size: resultGlowSize,
               color: innerColors,
               opacity: 0.3,
               line: { width: 0 },
@@ -1051,7 +999,7 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
             hoverinfo: 'skip',
             meta: ZoomMarkerStyle.FIXED_OPACITY_META,
             marker: {
-              size: Math.max(markerStyle.size * highlightScale.selectedInnerMultiplier, 8),
+              size: selectedGlowSize,
               color: 'rgba(255, 223, 160, 0.35)',
               opacity: 0.5,
               line: { width: 0 },
@@ -1349,29 +1297,10 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
       }
     }
 
-    // E. Text Labels for highlighted points (rendered last, on top)
-    if (showLabels && highlightedIndices && highlightedIndices.size > 0) {
-      const highlightedPoints = points.filter(p => highlightedIndices.has(p.index));
-      if (highlightedPoints.length > 0) {
-        traces.push({
-          x: highlightedPoints.map(p => p.x),
-          y: highlightedPoints.map(p => p.y),
-          mode: 'text' as const,
-          type: 'scattergl' as const,
-          text: highlightedPoints.map(p => p.label || p.id),
-          textposition: 'top center' as const,
-          textfont: {
-            size: 11,
-            color: isDark ? '#e2e8f0' : '#1e293b',
-          },
-          hoverinfo: 'skip' as const,
-          showlegend: false,
-        } satisfies PlotlyData);
-      }
-    }
+    // Search-result labels are drawn on the label canvas (renderLabels)
 
     return traces;
-  }, [points, categoryField, categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, highlightedIndices, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, showOnlyHighlighted, showLabels, mutedCategories, hiddenOptions, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, missingPointOpacity]);
+  }, [points, categoryField, categoryValues, colorMap, activeNumericData, effectiveRange, plotlyColorScale, highlightedIndices, highlightedPoints, renderedSelectedPoint, isDark, markerStyle.size, markerStyle.opacity, highlightScale, resultGlowSize, selectedGlowSize, showOnlyHighlighted, mutedCategories, hiddenOptions, nestedColorMap, combinedMutedIndices, hideFilteredPoints, mutedPointOpacity, missingPointOpacity]);
 
   const layout = useMemo<Partial<Layout>>(
     () => ({
@@ -1426,15 +1355,16 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
   );
 
    
+  const hasScreenshot = !!onScreenshot;
   const config = useMemo<ForkConfig>(() => ({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
     scrollZoom: true,
-    modeBarButtons: build2DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
+    modeBarButtons: build2DModeBarButtons(plotlyLibRef.current, hasScreenshot ? screenshotHandlerRef : undefined),
     scatterglOpacityScale: (trace, xRange, yRange) => zoomMarkerStyleRef.current.opacityScale(trace, xRange, yRange),
     scatterglSizeScale: (_trace, xRange, yRange) => zoomMarkerStyleRef.current.sizeScale(xRange, yRange),
-  }), [plotlyReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [plotlyReady, hasScreenshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Plotly handlers: react-plotly rebinds a handler whenever its identity changes
   // (fork change 2), so they are memoized to rebind only when their inputs change.
@@ -1442,13 +1372,17 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     if (!onPointClick || !event.points || event.points.length === 0) {
       return;
     }
+    // Plotly reports the click before the DOM click a cluster label takes: a click
+    // on a clickable label selects no point
+    const mouse = event.event as MouseEvent | undefined;
+    if (mouse && labelClicks.isOnLabel(mouse.clientX, mouse.clientY)) return;
 
     const point = event.points[0];
     // Skip glow layers and lines (they don't have valid customdata)
     if (point.customdata && typeof point.customdata === 'object') {
       onPointClick(point.customdata as unknown as Point2D);
     }
-  }, [onPointClick]);
+  }, [onPointClick, labelClicks]);
 
   const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
 
@@ -1482,15 +1416,13 @@ export const ScatterPlot2D = React.memo(function ScatterPlot2D({
     setTooltipData(null);
   }, []);
 
-  const hasClusterLabels = labelsActive;
-
 return (
   <div
     ref={containerRef}
     className={className ?? 'h-full w-full'}
     // touch-action: the plot handles every gesture (pan, pinch), never the page
     style={{ position: 'relative', touchAction: 'none' }}
-    onClickCapture={hasClusterLabels ? handleContainerClick : undefined}
+    onClickCapture={labelClicks.onClickCapture}
     onContextMenu={(e) => {
       if (onPointContextMenu && hoveredPointRef.current) {
         e.preventDefault();
@@ -1505,13 +1437,9 @@ return (
       onClick={plotReady ? handleClick : undefined}
       onHover={handleHover}
       onUnhover={handleUnhover}
-      onRelayout={handleRelayout}
-      // Fires continuously during pan/zoom gestures; supported by react-plotly
-      // at runtime but missing from its type declarations.
-      {...({ onRelayouting: handleRelayout } as Partial<PlotParams>)}
-      // After every Plotly.react: the density effects can run before a queued react lands
-      onUpdate={scheduleDensityRender}
-      onInitialized={(_figure, graphDiv) => { graphDivRef.current = graphDiv; setPlotReady(true); }}
+      // After every Plotly.react, relayout and relayouting frame: the overlays follow
+      onUpdate={handlePlotUpdate}
+      onInitialized={(_figure, graphDiv) => { graphDivRef.current = graphDiv; setPlotReady(true); handlePlotUpdate(); }}
     />
     {densityMode && densitySupported && (
       <canvas
@@ -1525,7 +1453,7 @@ return (
         }}
       />
     )}
-    {hasClusterLabels && (
+    {labelsActive && (
       <canvas
         ref={labelCanvasRef}
         style={{

@@ -617,6 +617,7 @@ export function DashboardPanel({
       showClusterLabels={showClusterLabels}
       onClusterLabelClick={topicIdMuting ? onToggleTopic : undefined}
       topicLabelToIdMap={topicIdMuting ? topicLabelToIdMap : undefined}
+      onClusterCategoryClick={topicPreviewActive ? handleClusterCategoryClick : undefined}
       combinedMutedIndices={combinedMutedIndices}
       hideFilteredPoints={hideFilteredPoints}
       mutedPointOpacity={mutedPointOpacity}

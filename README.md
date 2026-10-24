@@ -134,3 +134,5 @@ The pages below are also published as a documentation website built from [`docs/
 ## License
 
 [Apache 2.0](LICENSE)
+
+The frontend includes code adapted from Apple's Embedding Atlas (MIT), forked plotly.js and react-plotly.js (MIT) and TensorBoard's embedding projector (Apache 2.0). Their notices are in [embedding_visualization/THIRD_PARTY_NOTICES.md](embedding_visualization/THIRD_PARTY_NOTICES.md).

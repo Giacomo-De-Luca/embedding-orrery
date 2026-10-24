@@ -353,4 +353,4 @@ When contributing to this frontend:
 
 ## License
 
-See main project LICENSE file.
+See main project LICENSE file. Code adapted from other projects, and their license notices, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

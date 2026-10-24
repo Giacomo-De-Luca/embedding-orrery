@@ -1,20 +1,25 @@
 /**
  * Async pipeline driver for density-based cluster labels (see
- * app/utils/densityClusterLabels.ts). Debounced and generation-token
- * cancelled; on any failure (e.g. WASM fetch) it warns once, permanently
- * falls back, and the caller keeps using category-centroid placements.
+ * app/utils/densityClusterLabels.ts). Clustering is debounced and
+ * generation-token cancelled; on any failure (e.g. WASM fetch) it warns once,
+ * permanently falls back, and the caller keeps using category-centroid placements.
+ * Placement runs separately on the latest clusters, so a new plot area, label font,
+ * palette or theme re-places and recolours the labels without clustering again.
  */
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Point2D, NestedColorMap } from '../types/types';
 import {
   computeDensityLabelPlacements,
   dedupeLabeledClusters,
+  DensityLabelColors,
   generateDensityClusters,
   resolveClusterLabelTexts,
   type DensityLabelPlacement,
+  type LabeledDensityCluster,
 } from '../../app/utils/densityClusterLabels';
-import { plotAreaFromFullLayout, type AxisRanges } from '../../app/utils/labelPlacement2D';
+import { CartesianView, type AxisRanges, type PlotArea } from '../utils/cartesianView';
+import type { TextMeasurer } from '../utils/labels/labelStyle';
 
 const DEBOUNCE_MS = 300;
 
@@ -28,9 +33,17 @@ interface UseDensityClusterLabelsArgs {
   nestedColorMap?: NestedColorMap | null;
   isDark: boolean;
   initialRanges: AxisRanges | null;
-  graphDivRef: RefObject<any>;
-  width: number;
-  height: number;
+  /** The plot area Plotly has laid out, or null before it has. */
+  plotArea: PlotArea | null;
+  /** `useLabelMeasurer`: replaced once the label fonts load, so labels are measured again. */
+  measurer: TextMeasurer | null;
+}
+
+/** Titled clusters, with the points and field they were made from. */
+interface TitledClusters {
+  points: Point2D[];
+  field: string | null;
+  clusters: LabeledDensityCluster[];
 }
 
 export function useDensityClusterLabels({
@@ -41,37 +54,17 @@ export function useDensityClusterLabels({
   nestedColorMap,
   isDark,
   initialRanges,
-  graphDivRef,
-  width,
-  height,
+  plotArea,
+  measurer,
 }: UseDensityClusterLabelsArgs): DensityLabelPlacement[] | null {
-  const [placements, setPlacements] = useState<DensityLabelPlacement[] | null>(null);
+  const [titled, setTitled] = useState<TitledClusters | null>(null);
   const generationRef = useRef(0);
   const failedRef = useRef(false);
 
-  // Neutral color for summarizer-derived labels.
-  const neutralColor = isDark ? '#94a3b8' : '#475569';
-
-  // Latest lookup values via refs so the async effect doesn't re-fire on
-  // every colorMap identity change (colors are applied at compute time).
-  const lookupRef = useRef({ colorMap, nestedColorMap, neutralColor });
-  lookupRef.current = { colorMap, nestedColorMap, neutralColor };
-
-  const measureCtx = useMemo(() => {
-    if (typeof document === 'undefined') return null;
-    return document.createElement('canvas').getContext('2d');
-  }, []);
-
+  // Cluster the visible points and title each blob; the result lands asynchronously
   useEffect(() => {
     const generation = ++generationRef.current;
-
-    if (!enabled || failedRef.current || !initialRanges || !measureCtx || visiblePoints.length === 0) {
-      setPlacements(null);
-      return;
-    }
-
-    // Do not keep the previous field's titles during the debounced rebuild.
-    setPlacements(null);
+    if (!enabled || failedRef.current || visiblePoints.length === 0) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -88,37 +81,31 @@ export function useDensityClusterLabels({
         // Blobs sharing a resolved title (same category surfaced at both
         // bandwidths or across a multimodal region) collapse to their densest.
         const labeled = dedupeLabeledClusters(clusters.map((c, i) => ({ ...c, ...texts[i] })));
-
-        const { colorMap: cm, nestedColorMap: ncm, neutralColor: neutral } = lookupRef.current;
-        const plotArea = plotAreaFromFullLayout(graphDivRef.current?._fullLayout, width, height);
-        const result = computeDensityLabelPlacements(
-          labeled,
-          measureCtx,
-          initialRanges,
-          plotArea,
-          (category) => {
-            if (category === null) return neutral;
-            // Nested subtopic colours are keyed by (topic, subtopic), which a
-            // blob's category alone cannot name: only the topic level applies.
-            const nestedColors = labelField === 'topic_label' ? ncm?.topicColors : undefined;
-            return nestedColors?.[category] ?? cm[category] ?? neutral;
-          },
-        );
-        if (generationRef.current !== generation) return;
-        setPlacements(result);
+        setTitled({ points: visiblePoints, field: labelField, clusters: labeled });
       } catch (err) {
         if (!failedRef.current) {
           failedRef.current = true;
           console.warn('Density cluster labels unavailable, falling back to category centroids:', err);
         }
-        if (generationRef.current === generation) setPlacements(null);
+        if (generationRef.current === generation) setTitled(null);
       }
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-    // graphDivRef is a ref; width/height changes only affect screen-space
-    // measurement, which the debounce re-run covers.
-  }, [enabled, visiblePoints, labelField, initialRanges, measureCtx, graphDivRef, width, height]);
+  }, [enabled, visiblePoints, labelField]);
 
-  return placements;
+  // Titles made from other points or another field are not shown while their
+  // rebuild runs: the caller falls back to the centroid labels meanwhile.
+  const current = enabled && titled?.points === visiblePoints && titled.field === labelField ? titled : null;
+
+  // Place and colour the titled clusters for the current plot area and fonts
+  return useMemo(() => {
+    if (!current || !initialRanges || !plotArea || !measurer) return null;
+    return computeDensityLabelPlacements(
+      current.clusters,
+      measurer,
+      new CartesianView(initialRanges, plotArea),
+      (category) => DensityLabelColors.resolve(category, current.field, colorMap, nestedColorMap, isDark),
+    );
+  }, [current, initialRanges, plotArea, measurer, colorMap, nestedColorMap, isDark]);
 }

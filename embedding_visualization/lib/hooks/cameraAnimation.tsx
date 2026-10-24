@@ -4,6 +4,7 @@ import { useRef, useCallback, useEffect } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import type { Point3D } from '../types/types';
 import { easeInOutCubic, lerp, cartesianToSpherical, sphericalToCartesian, getSceneNormalization, type DataBounds } from '../../app/utils/rendeding';
+import { LabelCanvas } from '../utils/labels/labelCanvas';
 
 interface CameraState {
   eye: { x: number; y: number; z: number };
@@ -151,10 +152,7 @@ export function useCameraFlyTo(
     };
 
     isAnimatingRef.current = true;
-    const labelCtx = labelCanvasRef.current?.getContext('2d');
-    if (labelCtx && labelCanvasRef.current) {
-      labelCtx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
-    }
+    LabelCanvas.clear(labelCanvasRef.current);
     animationFrameRef.current = requestAnimationFrame(animate);
   }, [bounds]);
 
@@ -190,10 +188,7 @@ export function animateCameraToRegion(opts: {
   if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 
   isAnimatingRef.current = true;
-  const labelCtx = labelCanvasRef.current?.getContext('2d');
-  if (labelCtx && labelCanvasRef.current) {
-    labelCtx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
-  }
+  LabelCanvas.clear(labelCanvasRef.current);
 
   // Defer by one frame so Plotly.react() from the trace update effect has settled
   animationFrameRef.current = requestAnimationFrame(() => {

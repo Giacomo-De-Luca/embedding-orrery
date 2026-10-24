@@ -8,9 +8,8 @@
  * `CoalescedRedraw`).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import type { Point2D } from '../types/types';
-import { CoalescedRedraw } from '../utils/coalescedRedraw';
 import { DensityRenderer } from '../utils/densityRenderer/DensityRenderer';
 import {
   approximateMaxDensity2D,
@@ -20,8 +19,10 @@ import {
   linearizedColorBytes,
   type ChannelAssignment,
 } from '../utils/densityRenderer/densityMath';
-import { plotAreaFromFullLayout, type AxisRanges } from '../../app/utils/labelPlacement2D';
+import { CartesianView, type AxisRanges } from '../utils/cartesianView';
 import { CategoryKey } from '../utils/categoryKey';
+import { useLatestRef } from './useLatestRef';
+import { useCoalescedRedraw } from './useCoalescedRedraw';
 
 const GAMMA = 2.2;
 
@@ -75,17 +76,14 @@ export function useDensityOverlay({
   const renderFrame = useCallback(() => {
     const renderer = rendererRef.current;
     const canvas = canvasRef.current;
-    const fl = graphDivRef.current?._fullLayout;
-    if (!renderer || !canvas || !fl) return;
-
-    const xRange = fl.xaxis?.range;
-    const yRange = fl.yaxis?.range;
-    if (!xRange || !yRange) return;
+    const view = CartesianView.fromFullLayout(graphDivRef.current?._fullLayout, width, height);
+    if (!renderer || !canvas || !view) return;
+    const { xRange, yRange } = view.ranges;
 
     // Position the canvas over the plot area only, so the density clips to the
     // axes region automatically and the position matrix stays a plain
     // range→clip mapping.
-    const area = plotAreaFromFullLayout(fl, width, height);
+    const area = view.plotArea;
     const style = canvas.style;
     const left = `${area.left}px`;
     const top = `${area.top}px`;
@@ -112,30 +110,23 @@ export function useDensityOverlay({
     });
 
     renderer.render({
-      positionMatrix: buildPositionMatrix({
-        xRange: [xRange[0], xRange[1]],
-        yRange: [yRange[0], yRange[1]],
-      }),
+      positionMatrix: buildPositionMatrix(view.ranges),
       colorMatrix,
       ...params,
       isDark,
     });
   }, [canvasRef, graphDivRef, colorMatrix, initialRanges, intensity, isDark, width, height]);
 
-  // Keep a stable scheduleRender identity while always invoking the latest
-  // renderFrame (same anti-staleness pattern as screenshotHandlerRef).
-  const renderFrameRef = useRef(renderFrame);
-  renderFrameRef.current = renderFrame;
-
-  // One render per burst of requests, in the frame that drew the points. The
-  // render reads the live layout, so the settled range of a pan/zoom is never
-  // left on a stale frame.
-  const [redraw] = useState(() => new CoalescedRedraw());
-  const renderLatestFrame = useCallback(() => renderFrameRef.current(), []);
+  // A stable scheduleRender always invoking the latest renderFrame, once per burst
+  // of requests, in the frame that drew the points. The render reads the live
+  // layout, so the settled range of a pan/zoom is never left on a stale frame.
+  // A render still queued when the renderer goes away finds no renderer and stops.
+  const renderFrameRef = useLatestRef(renderFrame);
+  const requestRender = useCoalescedRedraw(renderFrameRef);
 
   const scheduleRender = useCallback(() => {
-    if (rendererRef.current) redraw.request(renderLatestFrame);
-  }, [redraw, renderLatestFrame]);
+    if (rendererRef.current) requestRender();
+  }, [requestRender]);
 
   // --- Renderer lifecycle ---
   useEffect(() => {
@@ -153,7 +144,6 @@ export function useDensityOverlay({
     return () => {
       renderer.dispose();
       rendererRef.current = null;
-      redraw.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, supported]);

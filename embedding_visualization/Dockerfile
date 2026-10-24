@@ -38,6 +38,9 @@ ENV PORT=3000
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+# Third-party license notices ship with the built code (the project's own LICENSE
+# is outside this build context; the notices link to it)
+COPY --from=builder /app/THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 
 EXPOSE 3000
 

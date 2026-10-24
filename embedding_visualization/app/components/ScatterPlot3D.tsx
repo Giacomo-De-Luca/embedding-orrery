@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } from 'react';
 import type { PlotData, Layout, Config, PlotMouseEvent, PlotRelayoutEvent } from 'plotly.js';
 import type { Point3D, HighlightMap, NestedColorMap, ColorScale, CustomNumericRange } from '../../lib/types/types';
 import { useTheme } from 'next-themes';
-import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale, desaturateHex } from '../../lib/utils/categoryColors';
+import { getCategoryLabel, getSequentialScale, getDivergingScale, getMonochromeScale } from '../../lib/utils/categoryColors';
 import { CategoryKey } from '../../lib/utils/categoryKey';
 import { HiddenPoints } from '../../lib/utils/hiddenPoints';
 import { isCrameriScale, getCrameriPlotlyScale } from '../../lib/colorMaps/crameriScales';
@@ -23,7 +23,18 @@ import { createHazeRenderer, hazeTuningFromPrefs, type HazeRendererLike } from '
 import { computeMVP, projectToScreen, multiplyMat4Vec4 } from '../utils/labelPlacement';
 import { buildDataToSceneMatrix, getSceneNormalization } from '../utils/rendeding';
 import { computeOverlayLayout, overlayLayoutEqual, type OverlayLayout } from '../../lib/utils/overlayLayout';
-import { CollisionGrid, type BoundingBox } from '../../lib/utils/collisionGrid';
+import { CollisionGrid } from '../../lib/utils/collisionGrid';
+import { useCoalescedRedraw } from '../../lib/hooks/useCoalescedRedraw';
+import { HighlightedPoints } from '../../lib/utils/highlightedPoints';
+import { LabelCanvas, type LabelTarget } from '../../lib/utils/labels/labelCanvas';
+import { ClusterLabelOrder, ClusterLabelPainter, type ClusterLabelDraw } from '../../lib/utils/labels/clusterLabels';
+import { LabelHitBoxes } from '../../lib/utils/labels/labelHitBoxes';
+import { LabelFonts, LabelStyle } from '../../lib/utils/labels/labelStyle';
+import { PointLabelPass } from '../../lib/utils/labels/pointLabels';
+import { useSearchLabels } from '../../lib/hooks/useSearchLabels';
+import { useLabelMeasurer } from '../../lib/hooks/useLabelMeasurer';
+import { useLatestRef } from '../../lib/hooks/useLatestRef';
+import { useClusterLabelClicks } from '../../lib/hooks/useClusterLabelClicks';
 import { useVisualizationStore } from '../../lib/stores/useVisualizationStore';
 import { useCategoryColorMap } from '../../lib/hooks/useCategoryColorMap';
 import { build3DModeBarButtons } from '../../lib/utils/plotlyIcons';
@@ -33,6 +44,9 @@ import { StackglBufferPool } from '../../lib/utils/stackglBufferPool';
 import { toast } from 'sonner';
 
 type PlotlyData = Partial<PlotData>;
+
+/** Search labels start this many px right of their point (3D markers keep their size). */
+const SEARCH_LABEL_OFFSET = 8;
 
 /** Build a scatter3d trace from a point subset with the given marker options. */
 function buildScatter3dTrace(
@@ -146,6 +160,11 @@ interface ScatterPlot3DProps {
   onClusterLabelClick?: (topicId: number) => void;
   /** Map from topic label string → topic ID for click handling */
   topicLabelToIdMap?: Map<string, number> | null;
+  /**
+   * Cluster-label clicks without a topic id (e.g. a topic-tree preview's
+   * groups): toggle the category; returns whether the label was one.
+   */
+  onClusterCategoryClick?: (category: string, shiftKey: boolean) => boolean;
   /** Combined indices to mute (temporal + text search) */
   combinedMutedIndices?: Set<number> | null;
   /** Remove muted points entirely instead of graying out */
@@ -206,6 +225,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   nestedColorMap,
   nebulaMode = false,
   showClusterLabels = false,
+  onClusterLabelClick,
+  topicLabelToIdMap,
+  onClusterCategoryClick,
   combinedMutedIndices,
   hideFilteredPoints = false,
   mutedPointOpacity,
@@ -301,11 +323,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
 
   const labelCanvasRef = useRef<HTMLCanvasElement>(null);
   const hazeCanvasRef = useRef<HTMLCanvasElement>(null);
-  const labelRenderDataRef = useRef<{
-    points: { x: number; y: number; z: number; label: string; index: number }[];
-    similarities: Map<number, number>;
-    selectedIndex: number | null;
-  } | null>(null);
   const renderLabelsRef = useRef<(() => void) | null>(null);
 
   const { startFlyTo, isAnimatingRef, animationFrameRef } = useCameraFlyTo(
@@ -334,21 +351,29 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   const boundsRef = useRef(bounds);
   boundsRef.current = bounds;
 
-  // Lazy cache for the data→scene model matrix. Axis ranges are pinned
-  // (autorange:false), so this matrix is constant during camera interaction and
-  // only changes when `bounds` changes. Recompute only on a bounds-identity miss,
-  // avoiding a Float32Array alloc + layout read + cbrt on every rendered frame.
-  const modelMatrixCacheRef = useRef<{ bounds: DataBounds | null; matrix: Float32Array } | null>(null);
+  // Lazy cache for the data→scene model matrix, keyed on the scene axis ranges it
+  // is built from. They are pinned (autorange:false), so the matrix is constant
+  // during camera interaction, and a hit avoids a Float32Array alloc + cbrt on
+  // every rendered frame. Keying on the ranges, not `bounds`, keeps a redraw that
+  // runs between a projection switch and the Plotly.react applying its new ranges
+  // from caching the old ranges' matrix.
+  const modelMatrixCacheRef = useRef<{ ranges: number[]; matrix: Float32Array } | null>(null);
   const getModelMatrix = useCallback((currentBounds: DataBounds | null): Float32Array => {
+    const scene = (graphDivRef.current as any)?._fullLayout?.scene;
+    const xRange = scene?.xaxis?.range;
+    const yRange = scene?.yaxis?.range;
+    const zRange = scene?.zaxis?.range;
+    // Before Plotly has scene ranges, buildDataToSceneMatrix falls back to the
+    // unpadded raw bounds: rebuild that (cheaply) each frame instead of caching it.
+    if (!xRange || !yRange || !zRange) return buildDataToSceneMatrix(graphDivRef.current, currentBounds ?? undefined);
+
+    // Compared in place: the haze asks on every GL frame, so a hit allocates nothing
     const cache = modelMatrixCacheRef.current;
-    if (cache && cache.bounds === currentBounds) return cache.matrix;
+    const r = cache?.ranges;
+    if (cache && r && r[0] === xRange[0] && r[1] === xRange[1] && r[2] === yRange[0]
+      && r[3] === yRange[1] && r[4] === zRange[0] && r[5] === zRange[1]) return cache.matrix;
     const matrix = buildDataToSceneMatrix(graphDivRef.current, currentBounds ?? undefined);
-    // Only cache once Plotly's scene axis ranges exist: before that,
-    // buildDataToSceneMatrix falls back to unpadded raw bounds, and caching that
-    // would lock in a ~5%-off matrix until `bounds` next changes. Recompute
-    // (cheaply) each frame until the ranges are populated.
-    const rangesReady = !!(graphDivRef.current as any)?._fullLayout?.scene?.xaxis?.range;
-    if (rangesReady) modelMatrixCacheRef.current = { bounds: currentBounds, matrix };
+    modelMatrixCacheRef.current = { ranges: [xRange[0], xRange[1], yRange[0], yRange[1], zRange[0], zRange[1]], matrix };
     return matrix;
   }, []);
 
@@ -638,7 +663,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         mode: 'text' as const, type: 'scatter3d' as const,
         text: [String(dims[0]), String(dims[1]), String(dims[2])],
         textposition: 'top center' as any,
-        textfont: { family: 'Geist Mono, monospace', size: 14, color: lineColor },
+        textfont: { family: LabelFonts.family(), size: 14, color: lineColor },
         hoverinfo: 'skip' as any, showlegend: false,
       });
     }
@@ -816,14 +841,10 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }, [cameraResetSignal, cameraResetView, plotReady, defaultEye, defaultCenter]);
 
   // Pre-compute highlighted points via direct index lookup — O(k) not O(n)
-  const highlightedPoints = useMemo(() => {
-    if (!highlightedIndices || highlightedIndices.size === 0) return [];
-    const result: Point3D[] = [];
-    for (const idx of highlightedIndices.keys()) {
-      if (points[idx]) result.push(points[idx]);
-    }
-    return result;
-  }, [highlightedIndices, points]);
+  const highlightedPoints = useMemo(
+    () => HighlightedPoints.lookup(points, highlightedIndices),
+    [highlightedIndices, points],
+  );
 
   // All overlay traces in a single memo — search result glows, selected point, and
   // connection lines are computed atomically so Plotly.redraw() fires once.
@@ -927,28 +948,6 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     pendingFlyToRef.current = selectedPoint ?? null;
   }, [selectedPoint]);
 
-  // Populate label render data (no React state — just a ref for the canvas renderer)
-  useEffect(() => {
-    if (!showLabels || !highlightedIndices || highlightedIndices.size === 0) {
-      labelRenderDataRef.current = null;
-      return;
-    }
-    if (highlightedPoints.length === 0) {
-      labelRenderDataRef.current = null;
-      return;
-    }
-
-    labelRenderDataRef.current = {
-      points: highlightedPoints.map(p => ({
-        x: p.x, y: p.y, z: p.z,
-        label: p.label || p.id,
-        index: p.index,
-      })),
-      similarities: highlightedIndices,
-      selectedIndex: selectedPoint?.index ?? null,
-    };
-  }, [showLabels, highlightedIndices, highlightedPoints, selectedPoint]);
-
   // --- NEBULA / CLUSTER: Cluster data for nebula effects and cluster labels ---
   const clusterDataMap = useMemo(() => {
     if ((!nebulaMode && !showClusterLabels) || !categoryField) return new Map<string, ClusterData>();
@@ -969,63 +968,49 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     return groupPointsByCluster(clusterPoints, categoryField, colorMap, nestedColorMap);
   }, [nebulaMode, showClusterLabels, displayPoints, categoryField, colorMap, nestedColorMap, mutedCategories, combinedMutedIndices]);
 
-  // --- Cluster label data for canvas overlay ---
-  const clusterLabelDataRef = useRef<{
-    labels: { x: number; y: number; z: number; label: string; color: string; pointCount: number }[];
-  } | null>(null);
-
-  useEffect(() => {
-    if (!showClusterLabels || clusterDataMap.size === 0) {
-      clusterLabelDataRef.current = null;
-      return;
-    }
-    const labels: { x: number; y: number; z: number; label: string; color: string; pointCount: number }[] = [];
-    for (const [key, cluster] of clusterDataMap) {
-      labels.push({
-        x: cluster.centroid.x,
-        y: cluster.centroid.y,
-        z: cluster.centroid.z,
-        label: key,
-        color: cluster.color,
-        pointCount: cluster.points.length,
-      });
-    }
-    clusterLabelDataRef.current = { labels };
-  }, [showClusterLabels, clusterDataMap]);
-
   // --- Canvas label overlay ---
-  const hasPointLabels = showLabels && highlightedIndices && highlightedIndices.size > 0;
-  const hasClusterLabels = showClusterLabels && clusterDataMap.size > 0;
-  const hasAnyLabels = hasPointLabels || hasClusterLabels;
+  // Label text is measured once per change of the labels, not per camera frame; a
+  // new measurer means the label fonts have loaded, so it is measured again
+  const labelMeasurer = useLabelMeasurer();
+  // Search labels, ranked once per change of the highlights
+  const searchLabels = useSearchLabels(showLabels, highlightedPoints, highlightedIndices, selectedPoint?.index, labelMeasurer);
+  // Cluster labels at the cluster centroids
+  const clusterLabels = useMemo(() => {
+    if (!showClusterLabels) return [];
+    if (labelMeasurer) labelMeasurer.font = LabelFonts.cluster(LabelFonts.CLUSTER_SIZE);
+    return Array.from(clusterDataMap, ([label, cluster]) => ({
+      ...cluster.centroid, label, color: cluster.color, pointCount: cluster.points.length,
+      width: labelMeasurer?.measureText(label).width,
+    }));
+  }, [showClusterLabels, clusterDataMap, labelMeasurer]);
+  const showAllClusterLabels = useVisualizationStore(state => state.showAllClusterLabels);
+  const hasClusterLabels = clusterLabels.length > 0;
+  const hasAnyLabels = searchLabels !== null || hasClusterLabels;
+  // A fly-to clears the labels and redraws them only when it lands
+  const isAnimating = useCallback(() => isAnimatingRef.current, [isAnimatingRef]);
+  // The clickable cluster labels drawn last, for hit-testing clicks
+  const [labelHits] = useState(() => new LabelHitBoxes());
+  // Cluster-label clicks (intercepted before Plotly); none on the labels a fly-to hid
+  const labelClicks = useClusterLabelClicks({
+    containerRef,
+    hits: labelHits,
+    enabled: hasClusterLabels,
+    topicLabelToIdMap,
+    onTopic: onClusterLabelClick,
+    onCategory: onClusterCategoryClick,
+    isSuspended: isAnimating,
+  });
 
-  // Imperative: draw labels on the canvas overlay using CollisionGrid
-  const renderLabels = useCallback(() => {
-    const canvas = labelCanvasRef.current;
+  // Imperative: draw labels on the canvas overlay through one CollisionGrid. The
+  // selected point's label claims space first, then the cluster labels nearest the
+  // camera, then the other search labels by similarity. On the overlay
+  // (renderLabels) or a screenshot's own canvas.
+  const drawLabelsOn = useCallback(({ canvas, pixelRatio, hits }: LabelTarget) => {
     const container = containerRef.current;
-    if (!canvas || !container) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const cssW = width;
-    const cssH = height;
-
-    // Resize canvas backing store to match CSS size * DPR
-    const bw = Math.round(cssW * dpr);
-    const bh = Math.round(cssH * dpr);
-    if (canvas.width !== bw || canvas.height !== bh) {
-      canvas.width = bw;
-      canvas.height = bh;
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-
-    const pointData = labelRenderDataRef.current;
-    const clusterData = clusterLabelDataRef.current;
+    if (!container) return;
+    const ctx = LabelCanvas.prepare(canvas, width, height, pixelRatio);
     const currentBounds = boundsRef.current;
-    const hasPointData = pointData && pointData.points.length > 0;
-    const hasClusterData = clusterData && clusterData.labels.length > 0;
-    if ((!hasPointData && !hasClusterData) || !currentBounds) return;
+    if (!ctx || !hasAnyLabels || !currentBounds) return;
 
     // Get MVP from glplot internals
     const sceneLayout = (graphDivRef.current as any)?._fullLayout?.scene;
@@ -1038,170 +1023,79 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const model = getModelMatrix(currentBounds);
     const mvp = computeMVP(projection, view, model);
 
-    // Get the actual GL canvas position relative to our overlay container.
+    // Offset + viewport size of the GL canvas within our overlay container (CSS px):
     // Plotly's GL canvas may be offset within the plot div (margins, modebar, etc.)
     const gl = glplot?.gl as WebGLRenderingContext | null;
     const glCanvas = gl?.canvas as HTMLCanvasElement | undefined;
+    const glLayout = glCanvas && gl
+      ? computeOverlayLayout(container.getBoundingClientRect(), glCanvas.getBoundingClientRect())
+      : null;
+    const glOffsetX = glLayout?.offsetX ?? 0;
+    const glOffsetY = glLayout?.offsetY ?? 0;
+    const viewportW = glLayout?.cssW ?? width;
+    const viewportH = glLayout?.cssH ?? height;
+    const project = (p: { x: number; y: number; z: number }) => {
+      const screen = projectToScreen(p.x, p.y, p.z, mvp, viewportW, viewportH);
+      return screen && { x: screen.x + glOffsetX, y: screen.y + glOffsetY };
+    };
 
-    let glOffsetX = 0;
-    let glOffsetY = 0;
-    let vpW: number;
-    let vpH: number;
+    const grid = CollisionGrid.forViewport(width, height);
+    const style = new LabelStyle(isDark, '3d');
+    const searchPass = new PointLabelPass(style);
 
-    if (glCanvas && gl) {
-      // Offset + viewport size of the GL canvas within our overlay container (CSS px)
-      const layout = computeOverlayLayout(container.getBoundingClientRect(), glCanvas.getBoundingClientRect());
-      glOffsetX = layout.offsetX;
-      glOffsetY = layout.offsetY;
-      vpW = layout.cssW;
-      vpH = layout.cssH;
-    } else {
-      vpW = cssW;
-      vpH = cssH;
-    }
+    if (searchLabels?.selected) searchPass.draw(ctx, grid, [searchLabels.selected], project, SEARCH_LABEL_OFFSET);
 
-    // Create collision grid over the full overlay canvas
-    const gridBound: BoundingBox = { loX: 0, loY: 0, hiX: cssW, hiY: cssH };
-    const grid = new CollisionGrid(gridBound, Math.max(cssW / 25, 1), Math.max(cssH / 50, 1));
-
-    // --- Pass 1: Cluster labels (highest priority — inserted first) ---
-    if (hasClusterData) {
-      const clusterFontSize = 13;
-      const clusterFontStr = `bold ${clusterFontSize}px Geist Mono, monospace`;
-      ctx.font = clusterFontStr;
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'center';
-
-      const showAll = useVisualizationStore.getState().showAllClusterLabels;
-
-      // In "show all" mode, iterate all labels at full opacity; otherwise sort by distance and cap
-      const camEye = glplot.camera.eye as number[];
-      const sorted = showAll
-        ? clusterData!.labels.map(cl => ({ ...cl, dist: 0 }))
-        : clusterData!.labels
-            .map(cl => {
-              const sp = multiplyMat4Vec4(model, [cl.x, cl.y, cl.z, 1]);
-              const dx = sp[0] - camEye[0], dy = sp[1] - camEye[1], dz = sp[2] - camEye[2];
-              return { ...cl, dist: Math.sqrt(dx * dx + dy * dy + dz * dz) };
-            })
-            .sort((a, b) => a.dist - b.dist || b.pointCount - a.pointCount);
-
-      const total = sorted.length;
-      const maxLabels = showAll ? total : Math.min(total, Math.max(8, Math.floor(Math.sqrt(total) * 2.5)));
-
-      const minD = sorted[0]?.dist ?? 0;
-      const maxD = sorted[Math.min(maxLabels, total) - 1]?.dist ?? 1;
-      const dRange = maxD - minD || 1;
-
-      for (let i = 0; i < maxLabels; i++) {
-        const cl = sorted[i];
-        const screen = projectToScreen(cl.x, cl.y, cl.z, mvp, vpW, vpH);
-        if (!screen) continue;
-
-        const sx = screen.x + glOffsetX;
-        const sy = screen.y + glOffsetY - clusterFontSize * 1.5;
-
-        const textWidth = ctx.measureText(cl.label).width;
-        const pad = 4;
-        const realBox: BoundingBox = {
-          loX: sx - textWidth / 2 - pad,
-          loY: sy - clusterFontSize * 0.6 - pad,
-          hiX: sx + textWidth / 2 + pad,
-          hiY: sy + clusterFontSize * 0.6 + pad,
-        };
-        if (!grid.insert(realBox)) continue;
-
-        ctx.globalAlpha = showAll ? 1.0 : 1.0 - 0.35 * ((cl.dist - minD) / dRange);
-        ctx.font = clusterFontStr;
-        ctx.textAlign = 'center';
-        ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.6)';
-        ctx.lineWidth = isDark ? 4 : 3;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(cl.label, sx, sy);
-        ctx.fillStyle = desaturateHex(cl.color, isDark ? 0.1 : 0.35, isDark);
-        ctx.fillText(cl.label, sx, sy);
-      }
-    }
-
-    // --- Pass 2: Point labels (existing behavior) ---
-    if (hasPointData) {
-      const data = pointData!;
-      // Sort candidates: selected first, then by similarity descending
-      const sorted = data.points.map((p, i) => ({ ...p, i }));
-      sorted.sort((a, b) => {
-        const aSelected = a.index === data.selectedIndex ? 1 : 0;
-        const bSelected = b.index === data.selectedIndex ? 1 : 0;
-        if (aSelected !== bSelected) return bSelected - aSelected;
-        return (data.similarities.get(b.index) ?? 0) - (data.similarities.get(a.index) ?? 0);
+    if (hasClusterLabels) {
+      const eye = glplot.camera.eye;
+      const [ex, ey, ez] = Array.isArray(eye) ? eye : [eye.x, eye.y, eye.z];
+      const chosen = ClusterLabelOrder.nearest(clusterLabels, cl => {
+        const scene = multiplyMat4Vec4(model, [cl.x, cl.y, cl.z, 1]);
+        return Math.hypot(scene[0] - ex, scene[1] - ey, scene[2] - ez);
+      }, showAllClusterLabels);
+      const fontSize = LabelFonts.CLUSTER_SIZE;
+      const draws = chosen.flatMap(({ label: cl, alpha }): ClusterLabelDraw[] => {
+        const screen = project(cl);
+        // Drawn above the centroid, clear of the haze core
+        return screen
+          ? [{ text: cl.label, x: screen.x, y: screen.y - fontSize * 1.5, width: cl.width, fontSize, color: cl.color, alpha, hitLabel: cl.label }]
+          : [];
       });
-
-      const fontSize = 11;
-      const fontStr = `${fontSize}px Geist Mono, monospace`;
-      ctx.font = fontStr;
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'left';
-      const offsetX = 8; // px right of projected point
-
-      for (const candidate of sorted) {
-        // Project to GL viewport coordinates, then shift by GL canvas offset
-        const screen = projectToScreen(candidate.x, candidate.y, candidate.z, mvp, vpW, vpH);
-        if (!screen) continue;
-
-        // Convert from GL-viewport-local coords to overlay-canvas coords
-        const sx = screen.x + glOffsetX;
-        const sy = screen.y + glOffsetY;
-
-        const isSelected = candidate.index === data.selectedIndex;
-        const similarity = data.similarities.get(candidate.index) ?? 0;
-
-        // Two-pass collision test (TensorBoard pattern):
-        // Pass 1: thin box (width=1px) to cheaply reject dense areas
-        const thinBox: BoundingBox = {
-          loX: sx + offsetX,
-          loY: sy - fontSize * 0.6,
-          hiX: sx + offsetX + 1,
-          hiY: sy + fontSize * 0.6,
-        };
-        if (!grid.insert(thinBox, true)) continue;
-
-        // Pass 2: measure actual text width, build real bounding box
-        const textWidth = ctx.measureText(candidate.label).width;
-        const realBox: BoundingBox = {
-          loX: sx + offsetX - 2,
-          loY: sy - fontSize * 0.6 - 1,
-          hiX: sx + offsetX + textWidth + 2,
-          hiY: sy + fontSize * 0.6 + 1,
-        };
-        if (!grid.insert(realBox)) continue;
-
-        // Draw label with stroke outline for contrast
-        const alpha = isSelected ? 1.0 : 0.4 + similarity * 0.6;
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = isDark ? 'rgba(15, 23, 42, 0.8)' : 'rgba(255, 255, 255, 0.8)';
-        ctx.lineWidth = 3;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(candidate.label, sx + offsetX, sy);
-        ctx.fillStyle = isDark ? '#e2e8f0' : '#1e293b';
-        ctx.fillText(candidate.label, sx + offsetX, sy);
-      }
+      new ClusterLabelPainter(style).paint(ctx, grid, draws, hits);
     }
 
-    ctx.globalAlpha = 1.0;
-  }, [width, height, isDark, showClusterLabels, clusterDataMap, getModelMatrix]);
+    if (searchLabels) searchPass.draw(ctx, grid, searchLabels.others, project, SEARCH_LABEL_OFFSET);
+  }, [width, height, isDark, hasAnyLabels, hasClusterLabels, searchLabels, clusterLabels, showAllClusterLabels, getModelMatrix]);
 
-  // Keep ref in sync so the camera animation can call renderLabels on completion
-  renderLabelsRef.current = renderLabels;
+  // The overlay's labels; their click targets are cleared even while the canvas is unmounted
+  const renderLabels = useCallback(() => {
+    labelHits.clear();
+    const overlay = LabelCanvas.overlay(labelCanvasRef.current, labelHits);
+    if (overlay) drawLabelsOn(overlay);
+  }, [drawLabelsOn, labelHits]);
 
-  // Modebar screenshot: routed through a ref (reassigned every render) because
-  // the config memo only rebuilds on [plotlyLoaded], so a plain closure would go stale.
-  const screenshotHandlerRef = useRef<((gd: any) => void) | null>(null);
-  screenshotHandlerRef.current = (gd: any) => {
+  // Keep ref in sync so the camera animation can call renderLabels on completion.
+  // Written here, not through useLatestRef: useCameraFlyTo needs the ref before
+  // renderLabels exists.
+  useLayoutEffect(() => {
+    renderLabelsRef.current = renderLabels;
+  }, [renderLabels]);
+
+  // Data, size and font changes redraw the labels once, after this commit's
+  // Plotly.react has applied any new scene ranges, and not while a fly-to hides them.
+  const requestLabelRedraw = useCoalescedRedraw(renderLabelsRef, isAnimating);
+
+  // Modebar screenshot: routed through a ref because the config memo only rebuilds
+  // when Plotly loads or a screenshot handler appears, so a plain closure would go stale.
+  const screenshotHandlerRef = useLatestRef((gd: any) => {
     if (!onScreenshot || !containerRef.current) return;
     capture3DPlot({
       gd: gd ?? graphDivRef.current,
       container: containerRef.current,
       hazeCanvas: hazeCanvasRef.current,
-      labelCanvas: labelCanvasRef.current,
+      // A fly-to hides the labels until it lands, so the export leaves them out too
+      drawLabels: hasAnyLabels && !isAnimating()
+        ? (pixelRatio) => LabelCanvas.renderOffscreen(pixelRatio, drawLabelsOn)
+        : undefined,
       isDark,
     })
       .then(onScreenshot)
@@ -1209,7 +1103,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
         console.error('Screenshot failed:', err);
         toast.error('Screenshot failed');
       });
-  };
+  });
 
   // rAF-based camera polling: detect camera changes during 3D rotation/zoom/pan
   // (onRelayout does NOT fire during 3D mouse interaction)
@@ -1256,24 +1150,13 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       rafId = requestAnimationFrame(pollCamera);
     };
 
-    // Render once immediately (unless animating), then start polling
-    if (!isAnimatingRef.current) renderLabels();
+    // Render once, then start polling. This also redraws whenever the labels, the
+    // size or "show all" change (renderLabels), including when the label fonts have
+    // loaded and the labels are measured again.
+    requestLabelRedraw();
     rafId = requestAnimationFrame(pollCamera);
     return () => cancelAnimationFrame(rafId);
-  }, [hasAnyLabels, plotReady, renderLabels]);
-
-  // Clear canvas when labels toggled off
-  useEffect(() => {
-    if (!hasAnyLabels && labelCanvasRef.current) {
-      const ctx = labelCanvasRef.current.getContext('2d');
-      if (ctx) ctx.clearRect(0, 0, labelCanvasRef.current.width, labelCanvasRef.current.height);
-    }
-  }, [hasAnyLabels]);
-
-  // Re-render labels on resize or when label data changes (e.g. search results arrive while camera is stationary)
-  useEffect(() => {
-    if (hasAnyLabels && !isAnimatingRef.current) renderLabels();
-  }, [width, height, hasAnyLabels, renderLabels, showLabels, highlightedIndices, selectedPoint]);
+  }, [hasAnyLabels, plotReady, renderLabels, requestLabelRedraw]);
 
   // Pin axis ranges to full bounds so Plotly doesn't auto-rerange when filtered traces shrink.
   // This keeps the scene coordinate space stable — only camera animation controls framing.
@@ -1309,12 +1192,13 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   }), [axisColor, axisRange, defaultEye, height, paperBg, sceneBg, width, showAxes]);
 
    
+  const hasScreenshot = !!onScreenshot;
   const config = useMemo<Partial<Config>>(() => ({
     displayModeBar: true,
     displaylogo: false,
     responsive: true,
-    modeBarButtons: build3DModeBarButtons(plotlyLibRef.current, onScreenshot ? screenshotHandlerRef : undefined),
-  }), [plotlyLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+    modeBarButtons: build3DModeBarButtons(plotlyLibRef.current, hasScreenshot ? screenshotHandlerRef : undefined),
+  }), [plotlyLoaded, hasScreenshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- FULLY IMPERATIVE PLOTLY MANAGEMENT ---
   // Bypasses react-plotly.js which does an O(n) deep-equality diff on every React render.
@@ -1480,6 +1364,9 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
       const dy = (event.event as MouseEvent).clientY - downPos.y;
       if (dx * dx + dy * dy > 25) return; // >5px movement = drag
     }
+    // gl3d reports the click during the press a cluster label takes, with no pointer
+    // event, so the press position decides: a press on a clickable label selects no point
+    if (downPos && labelClicks.isOnLabel(downPos.x, downPos.y)) return;
 
     const point = event.points[0];
     if (point.customdata == null) return;
@@ -1498,7 +1385,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
     const clickedPoint = pointsRef.current[idx];
     if (!clickedPoint) return;
     onPointClick(clickedPoint);
-  }, [onPointClick]);
+  }, [onPointClick, labelClicks]);
 
   useEffect(() => {
     if (!plotReady || !graphDivRef.current) return;
@@ -1686,6 +1573,7 @@ export const ScatterPlot3D = React.memo(function ScatterPlot3D({
   return (
     // touch-action: the plot handles every gesture (rotate, pinch), never the page
     <div ref={containerRef} className={className ?? 'h-full w-full'} style={{ position: 'relative', touchAction: 'none' }}
+      onClickCapture={labelClicks.onClickCapture}
       onContextMenu={(e) => {
         if (onPointContextMenu && hoveredPointRef.current) {
           e.preventDefault();

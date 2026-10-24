@@ -90,7 +90,8 @@ renderers are in `experimental/`, and the density renderer has its own README.
 - `coalescedRedraw.ts`: `CoalescedRedraw` merges the redraw requests of one
   synchronous burst (the `plotly_relayouting` events of a pinch frame) into one
   redraw, run in a microtask so it is painted in the same frame as the points.
-  Used by the 2D cluster labels (`ScatterPlot2D`) and `useDensityOverlay`.
+  Used by the 2D labels (`ScatterPlot2D`), the 3D labels' data redraws
+  (`ScatterPlot3D`, after the commit's `Plotly.react`) and `useDensityOverlay`.
 - `zoomMarkerStyle.ts`: `ZoomMarkerStyle`, the 2D plot's zoom-dependent marker
   size and opacity. Zoomed in, each trace's size and opacity are multiplied by
   `calculateMarkerStyle`'s values for the visible share of the points over its
@@ -100,10 +101,31 @@ renderers are in `experimental/`, and the density renderer has its own README.
   (search glow, selected point) keep their opacity but still grow.
   See `../../../documentation/ZOOM_MARKER_STYLE.md`.
 
+## Plot labels
+
+- `cartesianView.ts`: `CartesianView`, a 2D Plotly view (axis ranges and plot area read
+  from `_fullLayout`). It projects data to CSS pixels, tests the plot area, and gives
+  the zoom relative to the initial view. The 2D labels, the density overlay and the
+  zoom limit use it.
+- `labels/`: label boxes, fonts, styles and drawing passes shared by both plots
+  (see its README).
+- `collisionGrid.ts`: `CollisionGrid`, the greedy screen-space label packing
+  (TensorBoard's embedding projector); `forViewport` sizes the grid the labels use.
+- `highlightedPoints.ts`: `HighlightedPoints.lookup`, the highlighted points in
+  highlight order by index (O(k)), shared by both plots.
+
+See `../../../documentation/PLOT_LABELS.md`.
+
 ## Screenshot export
 
 - `plotCapture.ts`: `capture2DPlot` / `capture3DPlot` composite each plot with its
-  overlay canvases; `drawLegendOverlay` rasterizes the live legend on top.
+  overlay canvases, re-rendering the plot and its labels at the export resolution;
+  `drawLegendOverlay` rasterizes the live legend on top.
+- `screenshotScale.ts`: `ScreenshotScale.of`, the export's pixels per CSS pixel: a
+  3840 px (4K) long side, or the screen's own ratio when that is higher.
+- `exportPixelRatio.ts`: `ExportPixelRatio.plotToImage` (2D `plotGlPixelRatio`
+  raised around `Plotly.toImage`) and `ExportPixelRatio.redrawAt` (gl-plot3d's
+  `pixelRatio` raised for one redraw and read), each restoring the live ratio.
 - `premultipliedPixels.ts`: `PremultipliedPixels.flattenOnto` composites the 3D
   scene's raw `gl.readPixels` output (premultiplied, bottom-up, RGB can exceed
   alpha) onto the screenshot background the way the browser does, so the search
@@ -112,7 +134,7 @@ renderers are in `experimental/`, and the density renderer has its own README.
 See `../../../documentation/SCREENSHOT_EXPORT.md`.
 
 Other colour and scatter utilities include `plotUtils.ts` (shared highlight palette/size
-rules), colour scales, `collisionGrid.ts`, and `overlayLayout.ts`.
+rules), colour scales, and `overlayLayout.ts`.
 Dataset loading, temporal filtering and membership helpers remain reusable by
 their corresponding hooks.
 

@@ -1,4 +1,5 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
+// Adapted from Embedding Atlas; license notice in THIRD_PARTY_NOTICES.md (frontend root).
 
 // Default stopwords are from NLTK (https://www.nltk.org/)
 // Generated with the following for each language in Python:

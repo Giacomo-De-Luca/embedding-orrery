@@ -9,7 +9,7 @@
  * No WebGL here — everything is unit-testable. See README.md in this folder.
  */
 
-import type { AxisRanges } from '../../../app/utils/labelPlacement2D';
+import type { AxisRanges } from '../cartesianView';
 
 /**
  * 3×3 matrix, embedding-atlas layout: 9 elements, columns first — the

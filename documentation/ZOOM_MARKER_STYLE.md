@@ -40,9 +40,10 @@ larger and more opaque as you zoom in, without slowing the zoom.
 - **Box and lasso selections** keep growing with the zoom: selected and unselected
   points both scale in size, and keep Plotly's own selected/unselected opacity.
 - **Screenshots** show the same sizes and opacities as the screen.
-- **Known limits.** Search-result text labels are a text-only trace whose offset
-  ignores marker size, so labels sit closer to the grown points (they are drawn on
-  top, so they stay readable). The hover label's anchor uses the original marker
+- **Search-result labels** move out with the grown points: they start right of
+  each result's inner glow, sized by `sizeScale` at the current zoom
+  (`PLOT_LABELS.md`).
+- **Known limits.** The hover label's anchor uses the original marker
   radius; hover hit-testing searches a fixed 20 px around the cursor, so it is
   unaffected. regl-scatter2d stores sizes in steps of 0.39 px, so a smooth zoom
   changes sizes in small steps.

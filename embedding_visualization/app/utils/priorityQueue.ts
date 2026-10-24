@@ -1,4 +1,5 @@
 // Copyright (c) 2025 Apple Inc. Licensed under MIT License.
+// Adapted from Embedding Atlas; license notice in THIRD_PARTY_NOTICES.md (frontend root).
 
 export class PriorityQueue {
   private heap: [number, number][];

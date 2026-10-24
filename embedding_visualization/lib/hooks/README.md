@@ -22,6 +22,16 @@ calculations live in `lib/utils/` or `app/utils/`.
 - `useLatestRef.ts` keeps a ref on the latest value (written in a layout effect)
   for identity-stable callbacks that run outside React's commit, such as a queued
   `CoalescedRedraw` request or a Plotly config function.
+- Plot labels (`../../../documentation/PLOT_LABELS.md`), shared by both plots:
+  - `useSearchLabels.ts`: the ranked search-result labels, or null for none, with
+    their text widths measured once per change of the labels.
+  - `useLabelMeasurer.ts`: a text measurer for label placement and widths, replaced
+    once the canvas label fonts have loaded, so text measured with a fallback font
+    is measured again.
+  - `useClusterLabelClicks.ts`: clicks on cluster labels (topic, else category;
+    drags, the modebar and labels hidden by a fly-to excluded).
+  - `useCoalescedRedraw.ts`: one coalesced request of the latest render
+    (`CoalescedRedraw`), also used by the density overlay.
 - `useDensityOverlay.ts` owns the 2D density renderer lifecycle.
   `useFloatRenderTargets.ts` reads the cached `FloatRenderTargets` probe
   (SSR-safe) that gates both density renderers' controls.

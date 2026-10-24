@@ -19,10 +19,13 @@ color; the latter enables topic selection only for labels derived from
 even if their text matches a topic. Nested topic/subtopic colors are consulted
 only for the corresponding field.
 
-When inputs change, the hook clears its previous placements while its debounced
-calculation runs. The plot can show current category-centroid labels during
-that interval. Blob detection, density thresholds, and title deduplication are
-unchanged.
+When the points or the field change, the hook stops showing titles made from
+the old ones while its debounced clustering runs. The plot can show current
+category-centroid labels during that interval. Placement and colour are a
+separate step on the latest titles (`DensityLabelColors.resolve` picks the
+colour), so a new plot area, label font, palette or theme re-places and
+recolours the labels without clustering again (`PLOT_LABELS.md`). Blob
+detection, density thresholds, and title deduplication are unchanged.
 
 ## Verification
 

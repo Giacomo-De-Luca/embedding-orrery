@@ -9,10 +9,13 @@ import {
   resolveClusterLabelTexts,
   dedupeLabeledClusters,
   computeDensityLabelPlacements,
+  DensityLabelColors,
   type DensityCluster,
   type LabeledDensityCluster,
 } from '../densityClusterLabels';
+import type { NestedColorMap } from '../../../lib/types/types';
 import type { Cluster } from '../../../lib/density-clustering';
+import { CartesianView } from '../../../lib/utils/cartesianView';
 import type { DensityMapResult } from '../densityUtils';
 
 // ---------------------------------------------------------------------------
@@ -278,8 +281,10 @@ const fakeCtx = {
   measureText: (text: string) => ({ width: text.length * 7 }),
 } as unknown as CanvasRenderingContext2D;
 
-const ranges = { xRange: [0, 100] as [number, number], yRange: [0, 100] as [number, number] };
-const plotArea = { left: 0, top: 0, width: 800, height: 600 };
+const initialView = new CartesianView(
+  { xRange: [0, 100], yRange: [0, 100] },
+  { left: 0, top: 0, width: 800, height: 600 },
+);
 
 const labeled = (
   overrides: Partial<LabeledDensityCluster> & { x: number; y: number },
@@ -300,7 +305,7 @@ describe('computeDensityLabelPlacements', () => {
         labeled({ x: 20, y: 20, level: 0, text: 'Coarse' }),
         labeled({ x: 80, y: 80, level: 1, text: 'Fine' }),
       ],
-      fakeCtx, ranges, plotArea, () => '#888888',
+      fakeCtx, initialView, () => '#888888',
     );
     // Far apart → no conflicts → both span the full zoom range regardless of
     // level (no maxScale=0.5 cutoff that would hide the fine label at scale≈1).
@@ -314,7 +319,7 @@ describe('computeDensityLabelPlacements', () => {
   it('non-overlapping labels are all visible across the full zoom range', () => {
     const placements = computeDensityLabelPlacements(
       [labeled({ x: 20, y: 20, level: 0 }), labeled({ x: 80, y: 80, level: 0, text: 'Other' })],
-      fakeCtx, ranges, plotArea, () => '#888888',
+      fakeCtx, initialView, () => '#888888',
     );
     for (const p of placements) {
       expect(p.placement).not.toBeNull();
@@ -329,7 +334,7 @@ describe('computeDensityLabelPlacements', () => {
         labeled({ x: 20, y: 20, level: 0, sumDensity: 500, categoryLabel: 'Poetry', topicLabel: 'Poetry', text: 'Poetry' }),
         labeled({ x: 80, y: 80, level: 1, sumDensity: 50, text: 'fine words' }),
       ],
-      fakeCtx, ranges, plotArea, (topic) => (topic === 'Poetry' ? '#ff0000' : '#888888'),
+      fakeCtx, initialView, (topic) => (topic === 'Poetry' ? '#ff0000' : '#888888'),
     );
     const coarse = placements.find((p) => p.level === 0)!;
     const fine = placements.find((p) => p.level === 1)!;
@@ -345,10 +350,34 @@ describe('computeDensityLabelPlacements', () => {
   it('colors a source label by its category while leaving topic clicks disabled', () => {
     const [placement] = computeDensityLabelPlacements(
       [labeled({ x: 20, y: 20, text: 'EMNLP', categoryLabel: 'EMNLP', topicLabel: null })],
-      fakeCtx, ranges, plotArea, (category) => category === 'EMNLP' ? '#00ff00' : '#888888',
+      fakeCtx, initialView, (category) => category === 'EMNLP' ? '#00ff00' : '#888888',
     );
     expect(placement.label).toBe('EMNLP');
     expect(placement.color).toBe('#00ff00');
     expect(placement.topicLabel).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DensityLabelColors — label colour from the blob's category
+// ---------------------------------------------------------------------------
+
+describe('DensityLabelColors', () => {
+  const colorMap = { Poetry: '#ff0000', EMNLP: '#00ff00' };
+  const nested = { topicColors: { Poetry: '#0000ff' }, subtopicColors: { Poetry: '#ffff00' } } as unknown as NestedColorMap;
+
+  it('gives keyword summaries (no category) the neutral colour of the theme', () => {
+    expect(DensityLabelColors.resolve(null, 'topic_label', colorMap, nested, true)).toBe('#94a3b8');
+    expect(DensityLabelColors.resolve(null, null, colorMap, null, false)).toBe('#475569');
+  });
+
+  it('uses the nested topic colour for topic labels only, never a subtopic colour', () => {
+    expect(DensityLabelColors.resolve('Poetry', 'topic_label', colorMap, nested, false)).toBe('#0000ff');
+    expect(DensityLabelColors.resolve('Poetry', 'venue', colorMap, nested, false)).toBe('#ff0000');
+  });
+
+  it('falls back to the colour map, then to the neutral colour', () => {
+    expect(DensityLabelColors.resolve('EMNLP', 'topic_label', colorMap, nested, false)).toBe('#00ff00');
+    expect(DensityLabelColors.resolve('Unknown', 'venue', colorMap, null, true)).toBe('#94a3b8');
   });
 });

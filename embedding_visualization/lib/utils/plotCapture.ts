@@ -1,20 +1,27 @@
 /**
  * Composite the on-screen visualization (Plotly plot + overlay canvases) into a
- * single canvas at screen resolution × devicePixelRatio.
+ * single canvas with a 4K long side, or at the screen's resolution when that is
+ * higher (ScreenshotScale).
  *
  * The on-screen image is a stack of layers that no single API captures:
- *  - the Plotly plot (2D: WebGL points + SVG axes; 3D: everything in one GL canvas)
- *  - the 3D haze/nebula overlay (Three.js WebGL canvas, CSS mix-blend-mode)
- *  - the label overlay (2D canvas, cluster/point labels)
+ *  - the Plotly plot (2D: WebGL points + SVG axes; 3D: everything in one GL canvas),
+ *    rendered again at the export resolution
+ *  - the 2D density / 3D haze overlay (WebGL canvas), upscaled from its screen pixels
+ *  - the label overlay (cluster/point labels), redrawn by the plot at the export resolution
  * The legend is composited separately by the caller (see drawLegendOverlay).
  */
 
+import { ExportPixelRatio } from './exportPixelRatio';
 import { PremultipliedPixels, type Rgb255 } from './premultipliedPixels';
+import { ScreenshotScale } from './screenshotScale';
 
 /** The plot/paper backgrounds are transparent in dark mode, so the export fills its own. */
 function exportBackground(isDark: boolean): Rgb255 {
   return isDark ? [0, 0, 0] : [255, 255, 255];
 }
+
+/** Redraws the plot's labels onto a canvas of their own at the given pixel ratio. */
+type LabelRedraw = (pixelRatio: number) => HTMLCanvasElement;
 
 interface Capture2DOptions {
   gd: any;
@@ -22,7 +29,8 @@ interface Capture2DOptions {
   container: HTMLElement;
   /** 2D density overlay canvas (covers the plot area only), if active */
   densityCanvas?: HTMLCanvasElement | null;
-  labelCanvas: HTMLCanvasElement | null;
+  /** Absent when the plot shows no labels */
+  drawLabels?: LabelRedraw;
   isDark: boolean;
 }
 
@@ -30,7 +38,8 @@ interface Capture3DOptions {
   gd: any;
   container: HTMLElement;
   hazeCanvas: HTMLCanvasElement | null;
-  labelCanvas: HTMLCanvasElement | null;
+  /** Absent when the plot shows no labels */
+  drawLabels?: LabelRedraw;
   isDark: boolean;
 }
 
@@ -44,21 +53,22 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 }
 
 function createOutputCanvas(
-  container: HTMLElement,
+  containerRect: DOMRect,
   isDark: boolean,
-): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; cssW: number; cssH: number; dpr: number } {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = container.getBoundingClientRect();
-  const cssW = rect.width;
-  const cssH = rect.height;
+): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; cssW: number; cssH: number; scale: number } {
+  const cssW = containerRect.width;
+  const cssH = containerRect.height;
+  const scale = ScreenshotScale.of(cssW, cssH, window.devicePixelRatio || 1);
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  canvas.width = Math.round(cssW * scale);
+  canvas.height = Math.round(cssH * scale);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not create 2D context for screenshot');
+  // The density and haze overlays are upscaled from their screen pixels
+  ctx.imageSmoothingQuality = 'high';
   ctx.fillStyle = `rgb(${exportBackground(isDark).join(', ')})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  return { canvas, ctx, cssW, cssH, dpr };
+  return { canvas, ctx, cssW, cssH, scale };
 }
 
 /** Copy a live canvas into a detached snapshot synchronously (WebGL buffers may be cleared after the current task). */
@@ -87,34 +97,31 @@ function readDrawingBuffer(gl: WebGLRenderingContext): { pixels: Uint8Array; wid
  * then the label overlay is drawn on top.
  */
 export async function capture2DPlot(opts: Capture2DOptions): Promise<HTMLCanvasElement> {
-  const { gd, plotlyLib, container, densityCanvas, labelCanvas, isDark } = opts;
-  // Snapshot GL-backed pixels synchronously, before any await, and record the
-  // overlay's on-screen rect (it covers the plot area only, not the container).
-  const densitySnapshot = densityCanvas ? snapshotCanvas(densityCanvas) : null;
+  const { gd, plotlyLib, container, densityCanvas, drawLabels, isDark } = opts;
   const containerRect = container.getBoundingClientRect();
+  const { canvas, ctx, cssW, cssH, scale } = createOutputCanvas(containerRect, isDark);
+  // Every layer is read in this task, before any await: the density's GL buffer may
+  // be cleared after it, and the labels must match the layout toImage clones (so
+  // interaction during the await is safe). The density overlay covers the plot
+  // area only, not the container.
+  const densitySnapshot = densityCanvas ? snapshotCanvas(densityCanvas) : null;
   const densityRect = densityCanvas?.getBoundingClientRect() ?? null;
+  const labels = drawLabels?.(scale) ?? null;
+  const dataUrl = ExportPixelRatio.plotToImage(plotlyLib, gd, Math.round(cssW), Math.round(cssH), scale);
 
-  const { canvas, ctx, cssW, cssH, dpr } = createOutputCanvas(container, isDark);
-  // toImage clones gd synchronously at call time, so interaction during the await is safe
-  const dataUrl = await plotlyLib.toImage(gd, {
-    format: 'png',
-    width: Math.round(cssW),
-    height: Math.round(cssH),
-    scale: dpr,
-  });
-  const plotImg = await loadImage(dataUrl);
+  const plotImg = await loadImage(await dataUrl);
   ctx.drawImage(plotImg, 0, 0, canvas.width, canvas.height);
   if (densitySnapshot && densityRect) {
     ctx.drawImage(
       densitySnapshot,
-      (densityRect.left - containerRect.left) * dpr,
-      (densityRect.top - containerRect.top) * dpr,
-      densityRect.width * dpr,
-      densityRect.height * dpr,
+      (densityRect.left - containerRect.left) * scale,
+      (densityRect.top - containerRect.top) * scale,
+      densityRect.width * scale,
+      densityRect.height * scale,
     );
   }
-  if (labelCanvas) {
-    ctx.drawImage(labelCanvas, 0, 0, canvas.width, canvas.height);
+  if (labels) {
+    ctx.drawImage(labels, 0, 0, canvas.width, canvas.height);
   }
   return canvas;
 }
@@ -186,23 +193,29 @@ export async function drawLegendOverlay(canvas: HTMLCanvasElement, legendEl: HTM
  */
 // async on purpose: the not-ready throw and GL errors must reject into the caller's .catch (ScatterPlot3D's screenshot handler)
 export async function capture3DPlot(opts: Capture3DOptions): Promise<HTMLCanvasElement> {
-  const { gd, container, hazeCanvas, labelCanvas, isDark } = opts;
+  const { gd, container, hazeCanvas, drawLabels, isDark } = opts;
   const glplot = gd?._fullLayout?.scene?._scene?.glplot;
   const gl = (glplot?.gl as WebGLRenderingContext | undefined) ?? null;
   if (!glplot || !gl) throw new Error('3D scene is not ready for capture');
   const glCanvas = gl.canvas as HTMLCanvasElement;
+  const containerRect = container.getBoundingClientRect();
+  const { canvas, ctx, scale } = createOutputCanvas(containerRect, isDark);
 
   // --- Synchronous phase: read all GL-backed pixels in the task that draws them ---
-  glplot.redraw();
-  const glPixels = readDrawingBuffer(gl);
-  // The redraw fired onrender → the haze canvas was just repainted
-  const hazeSnapshot = hazeCanvas ? snapshotCanvas(hazeCanvas) : null;
-  const containerRect = container.getBoundingClientRect();
+  const { glPixels, hazeSnapshot } = ExportPixelRatio.redrawAt(glplot, scale, () => {
+    // A context lost at the export size would read back as a blank image
+    if (gl.isContextLost()) throw new Error('The 3D scene lost its WebGL context at the export resolution');
+    return {
+      glPixels: readDrawingBuffer(gl),
+      // The redraw fired onrender → the haze canvas was just repainted
+      hazeSnapshot: hazeCanvas ? snapshotCanvas(hazeCanvas) : null,
+    };
+  });
   const glRect = glCanvas.getBoundingClientRect();
   const hazeRect = hazeCanvas?.getBoundingClientRect() ?? null;
+  const labels = drawLabels?.(scale) ?? null;
 
   // --- Compositing ---
-  const { canvas, ctx, dpr } = createOutputCanvas(container, isDark);
   if (glPixels.width > 0 && glPixels.height > 0) {
     const flat = PremultipliedPixels.flattenOnto(glPixels.pixels, glPixels.width, glPixels.height, exportBackground(isDark));
     const glImage = document.createElement('canvas');
@@ -211,10 +224,10 @@ export async function capture3DPlot(opts: Capture3DOptions): Promise<HTMLCanvasE
     glImage.getContext('2d')?.putImageData(new ImageData(flat, glPixels.width, glPixels.height), 0, 0);
     ctx.drawImage(
       glImage,
-      (glRect.left - containerRect.left) * dpr,
-      (glRect.top - containerRect.top) * dpr,
-      glRect.width * dpr,
-      glRect.height * dpr,
+      (glRect.left - containerRect.left) * scale,
+      (glRect.top - containerRect.top) * scale,
+      glRect.width * scale,
+      glRect.height * scale,
     );
   }
   if (hazeSnapshot && hazeRect) {
@@ -222,15 +235,15 @@ export async function capture3DPlot(opts: Capture3DOptions): Promise<HTMLCanvasE
     ctx.globalCompositeOperation = isDark ? 'screen' : 'multiply';
     ctx.drawImage(
       hazeSnapshot,
-      (hazeRect.left - containerRect.left) * dpr,
-      (hazeRect.top - containerRect.top) * dpr,
-      hazeRect.width * dpr,
-      hazeRect.height * dpr,
+      (hazeRect.left - containerRect.left) * scale,
+      (hazeRect.top - containerRect.top) * scale,
+      hazeRect.width * scale,
+      hazeRect.height * scale,
     );
     ctx.globalCompositeOperation = 'source-over';
   }
-  if (labelCanvas) {
-    ctx.drawImage(labelCanvas, 0, 0, canvas.width, canvas.height);
+  if (labels) {
+    ctx.drawImage(labels, 0, 0, canvas.width, canvas.height);
   }
   return canvas;
 }

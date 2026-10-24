@@ -4,7 +4,8 @@
  * generateClusters/generateLabels + labels.ts layoutLabels, Apple MIT),
  * adapted to Plotly axis ranges and this app's hybrid label-text rule:
  * majority value of the selected categorical field, with topic/keyword
- * fallback when no categorical field is selected.
+ * fallback when no categorical field is selected. License notice in
+ * THIRD_PARTY_NOTICES.md (frontend root).
  *
  * Pipeline (once per data change, in useDensityClusterLabels):
  *   computeDensityMap (CPU, 500², σ 5 / 2.5 → levels 0 / 1)
@@ -18,13 +19,10 @@ import { computeDensityMap, type DensityMapResult } from './densityUtils';
 import { findClusters, type Cluster } from '../../lib/density-clustering';
 import { CategoryKey } from '../../lib/utils/categoryKey';
 import { TextSummarizer, type Rectangle } from './text_summarizer';
-import { dynamicLabelPlacement, type Label } from './dynamicMapPlacement';
-import {
-  projectDataToScreen,
-  type AxisRanges,
-  type PlotArea,
-  type ClusterLabelPlacement,
-} from './labelPlacement2D';
+import { ZoomBandPlacement, type ClusterLabelPlacement } from './labelPlacement2D';
+import type { CartesianView } from '../../lib/utils/cartesianView';
+import type { TextMeasurer } from '../../lib/utils/labels/labelStyle';
+import type { NestedColorMap } from '../../lib/types/types';
 
 export interface DensityCluster {
   /** Density-weighted cluster center, data space. */
@@ -285,11 +283,9 @@ export function dedupeLabeledClusters(labeled: LabeledDensityCluster[]): Labeled
 // ---------------------------------------------------------------------------
 
 const LEVEL_FONT_SIZES: [number, number] = [14, 12];
-const GLOBAL_MAX_SCALE = 2;
-const PAD = 4;
 
 /**
- * Run dynamic label placement over the (deduped) cluster labels.
+ * Run dynamic label placement (`ZoomBandPlacement`) over the (deduped) cluster labels.
  *
  * Every label is a candidate at every zoom; `dynamicLabelPlacement` alone
  * declutters — at the overview it shows the highest-priority (densest) labels
@@ -299,55 +295,51 @@ const PAD = 4;
  * zoom-in, but our hybrid labels reuse the same topic name at both bandwidths,
  * so the band's only effect would be to hard-hide the fine-level labels at the
  * overview. Level still drives font size for a coarse/fine visual hierarchy.
- * (computeCurrentScale = current span / initial span; 1 = full view.)
+ * (`CartesianView.scaleRelativeTo` = current span / initial span; 1 = full view.)
  */
 export function computeDensityLabelPlacements(
   labeled: LabeledDensityCluster[],
-  ctx: CanvasRenderingContext2D,
-  initialRanges: AxisRanges,
-  plotArea: PlotArea,
+  ctx: TextMeasurer,
+  initial: CartesianView,
   colorFor: (categoryLabel: string | null) => string,
 ): DensityLabelPlacement[] {
-  const visible = labeled.filter((c) => c.text.length > 0);
-  if (visible.length === 0) return [];
-
-  const entries: DensityLabelPlacement[] = [];
-  const appleLabels: Label[] = [];
-
-  for (const cluster of visible) {
-    const fontSize = LEVEL_FONT_SIZES[cluster.level];
-    ctx.font = `bold ${fontSize}px Geist Mono, monospace`;
-    const textWidth = ctx.measureText(cluster.text).width;
-    const halfW = textWidth / 2 + PAD;
-    const halfH = fontSize * 0.6 + PAD;
-
-    const screen = projectDataToScreen(cluster.x, cluster.y, initialRanges, plotArea);
-
-    entries.push({
+  const entries = labeled
+    .filter((c) => c.text.length > 0)
+    .map((cluster) => ({
       label: cluster.text,
       color: colorFor(cluster.categoryLabel),
       dataX: cluster.x,
       dataY: cluster.y,
-      textWidth,
-      placement: null,
       priority: cluster.sumDensity,
-      fontSize,
+      fontSize: LEVEL_FONT_SIZES[cluster.level],
       level: cluster.level,
       topicLabel: cluster.topicLabel,
-    });
+    }));
+  return ZoomBandPlacement.place(entries, ctx, initial);
+}
 
-    appleLabels.push({
-      bounds: {
-        xMin: screen.x - halfW,
-        yMin: screen.y - halfH,
-        xMax: screen.x + halfW,
-        yMax: screen.y + halfH,
-      },
-      locationAtZero: { x: screen.x, y: screen.y },
-      priority: cluster.sumDensity,
-    });
+/** The colour of a density label. */
+export class DensityLabelColors {
+  /** Keyword summaries have no category: a neutral grey for the theme. */
+  static neutral(isDark: boolean): string {
+    return isDark ? '#94a3b8' : '#475569';
   }
 
-  const placements = dynamicLabelPlacement(appleLabels, { globalMaxScale: GLOBAL_MAX_SCALE });
-  return entries.map((entry, i) => ({ ...entry, placement: placements[i] }));
+  /**
+   * The blob's category colour, else the neutral colour. Nested subtopic colours
+   * are keyed by (topic, subtopic), which a blob's category alone cannot name, so
+   * only the topic level of a nested map applies, and only to topic labels.
+   */
+  static resolve(
+    category: string | null,
+    labelField: string | null,
+    colorMap: Record<string, string>,
+    nestedColorMap: NestedColorMap | null | undefined,
+    isDark: boolean,
+  ): string {
+    const neutral = DensityLabelColors.neutral(isDark);
+    if (category === null) return neutral;
+    const nestedColors = labelField === 'topic_label' ? nestedColorMap?.topicColors : undefined;
+    return nestedColors?.[category] ?? colorMap[category] ?? neutral;
+  }
 }

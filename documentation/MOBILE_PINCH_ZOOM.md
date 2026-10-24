@@ -84,9 +84,11 @@ fails a test.
 
 #### Overlay redraws
 
-The cluster-label canvas and the density map redraw through `CoalescedRedraw`
-(`lib/utils/coalescedRedraw.ts`): every request made before the redraw runs shares
-it, and it runs in a microtask. The wheel events of one pinch frame are dispatched
+The label canvas (cluster and search labels) and the density map redraw through
+`CoalescedRedraw` (`lib/utils/coalescedRedraw.ts`), requested from react-plotly's
+`onUpdate`, which fires for every `plotly_relayouting` / `plotly_relayout` and after
+every `Plotly.react` (`PLOT_LABELS.md`): every request made before the redraw runs
+shares it, and it runs in a microtask. The wheel events of one pinch frame are dispatched
 inside `PinchZoomSession`'s animation-frame callback, so they get one overlay
 redraw, painted in the same frame as the points. Before, the labels queued a
 `requestAnimationFrame` per event and redrew two or three times per fast pinch
@@ -94,8 +96,8 @@ frame; the density map already coalesced to one frame (plus a trailing one). Bot
 ran one frame behind the points, because a frame requested from inside a frame
 callback runs on the next frame. Mouse wheel and drag events arrive outside frame
 callbacks, so there the redraw keeps the cadence of Plotly's own viewport redraws.
-The density map also redraws on react-plotly's `onUpdate`, after every
-`Plotly.react`, so a resize never leaves it on the old plot area.
+Because `onUpdate` also follows every `Plotly.react`, a resize or a margin change
+never leaves the overlays on the old plot area.
 
 Plotly started a one-finger drag when the first finger landed. `start` hands it
 over to the pinch:
