@@ -82,7 +82,7 @@ The directory is reused across runs; sub-phases overwrite their own artifacts so
 ## Known divergences from the reference
 
 - **Ablation site offset.** The reference attaches forward-pre-hooks on each decoder layer (operating on the layer *input*); this project attaches forward-hooks on layer *output*, plus the same on `attn_out` and `mlp_out` sub-modules. The two coincide on every inter-layer boundary; they differ only at layer-0 input (reference ablates, we don't) and the residual after the final layer (we ablate, reference doesn't). Net effect on Gemma-3-4b is a 1-of-34 site shift. See the docstring on `_ablation_ops` in [select_direction.py](select_direction.py).
-- **Chat-template suffix.** The reference encodes `<end_of_turn>\n<start_of_turn>model\n`. `GemmaPytorchInference.format_prompt` matches this; `GemmaPytorchInference.generate` strips the trailing newline. We always feed the model via `generate_from_template(format_prompt(...))` to keep the suffix consistent with the paper.
+- **Chat-template suffix.** The reference encodes `<end_of_turn>\n<start_of_turn>model\n`. `GemmaPytorchInference.format_prompt` matches this, and since 2026-10-24 so does every other Gemma generation path (`generate`, `generate_stream`, `format_chat`, `generate_with_image`, which used to drop the trailing newline). We always feed the model via `generate_from_template(format_prompt(...))` to keep the suffix consistent with the paper.
 
 ## Falling back if a single direction is weak
 

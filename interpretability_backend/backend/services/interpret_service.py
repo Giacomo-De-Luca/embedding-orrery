@@ -543,8 +543,8 @@ class InterpretService:
         """Find the start/end indices of the actual user prompt tokens.
 
         For IT models, the chat template wraps the prompt, e.g.:
-          Gemma: <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model
-          Qwen:  <|im_start|>user\\n{prompt}<|im_end|>\\n<|im_start|>assistant (no BOS)
+          Gemma: <bos><start_of_turn>user\\n{prompt}<end_of_turn>\\n<start_of_turn>model\\n
+          Qwen:  <|im_start|>user\\n{prompt}<|im_end|>\\n<|im_start|>assistant\\n (no BOS)
 
         For base (pt) models — or when ``skip_chat_template`` forces raw-token
         mode — there's no template: just an optional BOS + prompt.

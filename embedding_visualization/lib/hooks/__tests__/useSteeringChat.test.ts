@@ -12,9 +12,10 @@ import {
   configKey,
   buildSteeringInputs,
   buildStreamInput,
+  buildStreamTurns,
   parseMessageParts,
 } from '../useSteeringChat';
-import type { SteeringConfig, SteeringFeature } from '@/lib/types/types';
+import type { ChatMessage, SteeringConfig, SteeringFeature } from '@/lib/types/types';
 
 const SAE_PRESET: SteeringFeature = {
   modelId: 'gemma-3-4b-it',
@@ -208,6 +209,38 @@ describe('parseMessageParts — empty think block', () => {
   it('drops an empty closed <think></think> and keeps only the answer', () => {
     expect(parseMessageParts('<think>  </think>  Hi there!')).toEqual([
       { type: 'text', text: '  Hi there!' },
+    ]);
+  });
+});
+
+describe('buildStreamTurns', () => {
+  const message = (role: ChatMessage['role'], content: string): ChatMessage => ({
+    id: `${role}-${content}`,
+    role,
+    content,
+    timestamp: 0,
+  });
+
+  it('maps assistant messages to the model role', () => {
+    expect(
+      buildStreamTurns([message('user', 'Hi'), message('assistant', 'Hello.')])
+    ).toEqual([
+      { role: 'user', content: 'Hi' },
+      { role: 'model', content: 'Hello.' },
+    ]);
+  });
+
+  it('drops the leading newline of replies generated before the template fix', () => {
+    // The backend template now ends with "<start_of_turn>model\n"; a reply that
+    // kept its own leading newline would put two newlines in the history.
+    expect(buildStreamTurns([message('assistant', '\n\nHello.\nBye.')])).toEqual([
+      { role: 'model', content: 'Hello.\nBye.' },
+    ]);
+  });
+
+  it('leaves user messages untouched', () => {
+    expect(buildStreamTurns([message('user', '\nindented')])).toEqual([
+      { role: 'user', content: '\nindented' },
     ]);
   });
 });

@@ -141,6 +141,21 @@ interface StreamTurn {
   content: string;
 }
 
+/** Map chat messages to the backend's (role, content) turns.
+ *
+ * Assistant replies drop their leading newlines: the backend's chat template
+ * already opens each model turn with one, and replies generated before it did
+ * (saved chats) start with the newline the model emitted to make up for it.
+ *
+ * Exported for unit testing. */
+export function buildStreamTurns(messages: ChatMessage[]): StreamTurn[] {
+  return messages.map((m) =>
+    m.role === 'user'
+      ? { role: 'user', content: m.content }
+      : { role: 'model', content: m.content.replace(/^\n+/, '') }
+  );
+}
+
 /** Assemble the GraphQL `GenerateStreamInput` payload.
  *
  * `seed` is coalesced to `null` (omit → non-deterministic sampling). Passing a
@@ -248,11 +263,7 @@ export function useSteeringChat(
       };
 
       // Build conversation turns
-      const allMessages = [...messagesRef.current, userMsg];
-      const turns = allMessages.map((m) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        content: m.content,
-      }));
+      const turns = buildStreamTurns([...messagesRef.current, userMsg]);
 
       // Create placeholder assistant message. Tag it with the current steering
       // config so its avatar renders the right identicon immediately (rather than

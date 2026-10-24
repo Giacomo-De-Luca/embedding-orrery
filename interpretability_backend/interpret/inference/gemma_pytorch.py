@@ -161,18 +161,24 @@ class GemmaPytorchInference:
         sp = self.tokenizer.sp_model
         return [sp.IdToPiece(tid) for tid in self.tokenize(text, bos=True)]
 
-    @staticmethod
-    def format_prompt(text: str) -> str:
-        return f"<start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n"
+    @classmethod
+    def format_prompt(cls, text: str) -> str:
+        """Format a single user prompt into the Gemma chat template."""
+        return cls.format_chat([("user", text)])
 
     @staticmethod
     def format_chat(turns: list[tuple[str, str]]) -> str:
-        """Format multi-turn conversation into the Gemma chat template."""
+        """Format multi-turn conversation into the Gemma chat template.
+
+        Ends with Gemma's generation prompt ``<start_of_turn>model\\n``: without
+        the newline the model spends its first sampled token on it. A trailing
+        ``("model", ...)`` turn is left open instead, as a prefill to continue.
+        """
         parts = []
         for role, content in turns:
             parts.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
         if turns[-1][0] != "model":
-            parts.append("<start_of_turn>model")
+            parts.append("<start_of_turn>model\n")
         else:
             parts[-1] = f"<start_of_turn>model\n{turns[-1][1]}"
         return "".join(parts)
@@ -536,7 +542,7 @@ class GemmaPytorchInference:
         top_k: int = 64,
     ) -> str:
         """Generate a text response from a text-only prompt."""
-        formatted = f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
+        formatted = self.format_prompt(prompt)
         return self._generate([formatted], output_len, temperature, top_p, top_k)
 
     def generate_from_template(
@@ -596,10 +602,12 @@ class GemmaPytorchInference:
         """Generate a text response from a prompt with an image."""
         with Image.open(image_path) as img:
             image = img.convert("RGB")
+        # The image opens the user turn, ahead of the prompt text.
+        user_turn = "<start_of_turn>user\n"
         interleaved = [
-            "<start_of_turn>user\n",
+            user_turn,
             image,
-            f"{prompt}<end_of_turn>\n<start_of_turn>model",
+            self.format_prompt(prompt).removeprefix(user_turn),
         ]
         return self._generate(interleaved, output_len, temperature, top_p, top_k)
 
@@ -657,7 +665,7 @@ class GemmaPytorchInference:
         cancel_event: threading.Event | None = None,
     ) -> Generator[TokenStreamEvent, None, None]:
         """Stream tokens from a single-turn text prompt."""
-        formatted = f"<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>model"
+        formatted = self.format_prompt(prompt)
         yield from self._generate_stream(
             [formatted],
             output_len,
