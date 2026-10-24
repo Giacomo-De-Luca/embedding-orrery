@@ -38,6 +38,13 @@ def test_format_prompt_ends_with_generation_prompt():
     )
 
 
+def test_template_constants_match_the_formatted_turns():
+    formatted = GemmaPytorchInference.format_prompt("Hi")
+    assert formatted.startswith(GemmaPytorchInference.USER_TURN)
+    assert formatted.endswith(GemmaPytorchInference.GENERATION_PROMPT)
+    assert GemmaPytorchInference.GENERATION_PROMPT == GENERATION_PROMPT
+
+
 def test_format_chat_single_user_turn_matches_format_prompt():
     assert GemmaPytorchInference.format_chat(
         [("user", "Hi")]
@@ -73,6 +80,21 @@ def test_generate_stream_sends_the_newline_terminated_template():
     assert _sequence_sent(wrapper.model.generate_stream) == [
         GemmaPytorchInference.format_prompt("Hi")
     ]
+
+
+def test_generate_chat_sends_the_newline_terminated_template():
+    wrapper = _wrapper_with_fake_model()
+    turns = [("user", "Hi"), ("model", "Hello."), ("user", "Bye")]
+    wrapper.generate_chat(turns, output_len=1)
+    sequence = _sequence_sent(wrapper.model.generate)
+    assert sequence == [GemmaPytorchInference.format_chat(turns)]
+    assert sequence[0].endswith(GENERATION_PROMPT)
+
+
+def test_generate_chat_continues_a_trailing_model_turn():
+    wrapper = _wrapper_with_fake_model()
+    wrapper.generate_chat([("user", "Count"), ("model", "One, two,")], output_len=1)
+    assert _sequence_sent(wrapper.model.generate)[0].endswith(f"{GENERATION_PROMPT}One, two,")
 
 
 def test_generate_chat_stream_sends_the_newline_terminated_template():

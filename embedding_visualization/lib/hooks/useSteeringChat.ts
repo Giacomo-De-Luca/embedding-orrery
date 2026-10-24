@@ -263,7 +263,8 @@ export function useSteeringChat(
       };
 
       // Build conversation turns
-      const turns = buildStreamTurns([...messagesRef.current, userMsg]);
+      const allMessages = [...messagesRef.current, userMsg];
+      const turns = buildStreamTurns(allMessages);
 
       // Create placeholder assistant message. Tag it with the current steering
       // config so its avatar renders the right identicon immediately (rather than

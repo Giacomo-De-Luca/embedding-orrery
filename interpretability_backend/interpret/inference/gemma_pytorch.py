@@ -78,6 +78,11 @@ class GemmaPytorchInference:
         device: The torch.device the model runs on (mps).
     """
 
+    # Gemma chat-template openers. The model turn's opener is also the
+    # generation prompt, newline included, as in Gemma's own template.
+    USER_TURN = "<start_of_turn>user\n"
+    GENERATION_PROMPT = "<start_of_turn>model\n"
+
     def __init__(
         self,
         checkpoint_path: str,
@@ -166,8 +171,8 @@ class GemmaPytorchInference:
         """Format a single user prompt into the Gemma chat template."""
         return cls.format_chat([("user", text)])
 
-    @staticmethod
-    def format_chat(turns: list[tuple[str, str]]) -> str:
+    @classmethod
+    def format_chat(cls, turns: list[tuple[str, str]]) -> str:
         """Format multi-turn conversation into the Gemma chat template.
 
         Ends with Gemma's generation prompt ``<start_of_turn>model\\n``: without
@@ -178,9 +183,9 @@ class GemmaPytorchInference:
         for role, content in turns:
             parts.append(f"<start_of_turn>{role}\n{content}<end_of_turn>\n")
         if turns[-1][0] != "model":
-            parts.append("<start_of_turn>model\n")
+            parts.append(cls.GENERATION_PROMPT)
         else:
-            parts[-1] = f"<start_of_turn>model\n{turns[-1][1]}"
+            parts[-1] = f"{cls.GENERATION_PROMPT}{turns[-1][1]}"
         return "".join(parts)
 
     @staticmethod
@@ -603,18 +608,18 @@ class GemmaPytorchInference:
         with Image.open(image_path) as img:
             image = img.convert("RGB")
         # The image opens the user turn, ahead of the prompt text.
-        user_turn = "<start_of_turn>user\n"
         interleaved = [
-            user_turn,
+            self.USER_TURN,
             image,
-            self.format_prompt(prompt).removeprefix(user_turn),
+            self.format_prompt(prompt).removeprefix(self.USER_TURN),
         ]
         return self._generate(interleaved, output_len, temperature, top_p, top_k)
 
-    @staticmethod
-    def _strip_prompt(text: str) -> str:
+    @classmethod
+    def _strip_prompt(cls, text: str) -> str:
         """Strip the prompt template from generated output."""
-        marker = "<start_of_turn>model"
+        # Without the newline: custom templates (generate_from_template) may omit it.
+        marker = cls.GENERATION_PROMPT.rstrip("\n")
         idx = text.rfind(marker)
         if idx != -1:
             return text[idx + len(marker) :].strip()
